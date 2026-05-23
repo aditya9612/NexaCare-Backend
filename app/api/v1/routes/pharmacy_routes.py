@@ -1,0 +1,223 @@
+from fastapi import APIRouter, Depends
+
+from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.models.user_model import User
+from app.schemas.common_schema import APIResponse, MessageResponse
+from app.schemas.pharmacy_schema import (
+    ExpiryAlert,
+    LowStockAlert,
+    MedicineCreate,
+    MedicineResponse,
+    MedicineUpdate,
+    PharmacyInvoiceCreate,
+    PharmacyInvoiceResponse,
+    PrescriptionCreate,
+    PrescriptionResponse,
+    PurchaseCreate,
+    PurchaseResponse,
+    SalesReport,
+    SupplierCreate,
+    SupplierResponse,
+)
+from app.services.pharmacy_service import PharmacyService
+from app.utils.pagination import PaginatedResult
+
+router = APIRouter()
+
+
+# --- Medicines ---
+@router.post("/medicines", response_model=APIResponse[MedicineResponse], status_code=201)
+async def create_medicine(
+    data: MedicineCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    medicine = await PharmacyService(db).create_medicine(data, current_user.id)
+    return APIResponse(message="Medicine created", data=medicine)
+
+
+@router.get("/medicines", response_model=APIResponse[PaginatedResult[MedicineResponse]])
+async def list_medicines(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    category: str | None = None,
+    q: str | None = None,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    service = PharmacyService(db)
+    if q:
+        result = await service.search_medicines(q, page=page, size=size)
+    else:
+        result = await service.list_medicines(
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category
+        )
+    return APIResponse(message="Medicines retrieved", data=result)
+
+
+@router.get("/medicines/{medicine_id}", response_model=APIResponse[MedicineResponse])
+async def get_medicine(
+    medicine_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    medicine = await PharmacyService(db).get_medicine(medicine_id)
+    return APIResponse(message="Medicine retrieved", data=medicine)
+
+
+@router.put("/medicines/{medicine_id}", response_model=APIResponse[MedicineResponse])
+async def update_medicine(
+    medicine_id: int,
+    data: MedicineUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    medicine = await PharmacyService(db).update_medicine(medicine_id, data, current_user.id)
+    return APIResponse(message="Medicine updated", data=medicine)
+
+
+@router.delete("/medicines/{medicine_id}", response_model=APIResponse[MessageResponse])
+async def delete_medicine(
+    medicine_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "delete")),
+):
+    await PharmacyService(db).delete_medicine(medicine_id, current_user.id)
+    return APIResponse(message="Medicine deleted", data=MessageResponse(message="Soft deleted"))
+
+
+# --- Prescriptions ---
+@router.post("/prescriptions", response_model=APIResponse[PrescriptionResponse], status_code=201)
+async def create_prescription(
+    data: PrescriptionCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    prescription = await PharmacyService(db).create_prescription(data, current_user.id)
+    return APIResponse(message="Prescription created", data=prescription)
+
+
+@router.get("/prescriptions", response_model=APIResponse[PaginatedResult[PrescriptionResponse]])
+async def list_prescriptions(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    status: str | None = None,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    result = await PharmacyService(db).list_prescriptions(page=page, size=size, status=status)
+    return APIResponse(message="Prescriptions retrieved", data=result)
+
+
+# --- Invoices ---
+@router.post("/invoices", response_model=APIResponse[PharmacyInvoiceResponse], status_code=201)
+async def create_pharmacy_invoice(
+    data: PharmacyInvoiceCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    invoice = await PharmacyService(db).create_invoice(data, current_user.id)
+    return APIResponse(message="Pharmacy invoice created", data=invoice)
+
+
+@router.get("/invoices", response_model=APIResponse[PaginatedResult[PharmacyInvoiceResponse]])
+async def list_pharmacy_invoices(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    result = await PharmacyService(db).list_invoices(page=page, size=size)
+    return APIResponse(message="Pharmacy invoices retrieved", data=result)
+
+
+# --- Suppliers ---
+@router.post("/suppliers", response_model=APIResponse[SupplierResponse], status_code=201)
+async def create_supplier(
+    data: SupplierCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    supplier = await PharmacyService(db).create_supplier(data, current_user.id)
+    return APIResponse(message="Supplier created", data=supplier)
+
+
+@router.get("/suppliers", response_model=APIResponse[PaginatedResult[SupplierResponse]])
+async def list_suppliers(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    result = await PharmacyService(db).list_suppliers(page=page, size=size)
+    return APIResponse(message="Suppliers retrieved", data=result)
+
+
+# --- Purchases ---
+@router.post("/purchases", response_model=APIResponse[PurchaseResponse], status_code=201)
+async def create_purchase(
+    data: PurchaseCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    purchase = await PharmacyService(db).create_purchase(data, current_user.id)
+    return APIResponse(message="Purchase created", data=purchase)
+
+
+@router.get("/purchases", response_model=APIResponse[PaginatedResult[PurchaseResponse]])
+async def list_purchases(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    result = await PharmacyService(db).list_purchases(page=page, size=size)
+    return APIResponse(message="Purchases retrieved", data=result)
+
+
+# --- Alerts & Reports ---
+@router.get("/low-stock", response_model=APIResponse[list[LowStockAlert]])
+async def low_stock_alerts(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    alerts = await PharmacyService(db).get_low_stock()
+    return APIResponse(message="Low stock alerts", data=alerts)
+
+
+@router.get("/expiry-alerts", response_model=APIResponse[list[ExpiryAlert]])
+async def expiry_alerts(
+    db: DbSession,
+    current_user: CurrentUser,
+    days: int = 30,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    alerts = await PharmacyService(db).get_expiry_alerts(days=days)
+    return APIResponse(message="Expiry alerts", data=alerts)
+
+
+@router.get("/sales-reports", response_model=APIResponse[SalesReport])
+async def sales_report(
+    db: DbSession,
+    current_user: CurrentUser,
+    period: str = "monthly",
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    report = await PharmacyService(db).get_sales_report(period=period)
+    return APIResponse(message="Sales report", data=report)

@@ -1,0 +1,74 @@
+from functools import lru_cache
+from typing import List
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    APP_NAME: str = "NesaCare HMS"
+    APP_ENV: str = "development"
+    DEBUG: bool = True
+    API_V1_PREFIX: str = "/api/v1"
+
+    DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
+    DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
+
+    SECRET_KEY: str = "change-me"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "noreply@nesacare.com"
+
+    SMS_API_KEY: str = ""
+    WHATSAPP_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_PHONE_NUMBER: str = ""
+    TWILIO_WHATSAPP_NUMBER: str = ""
+
+    CELERY_BROKER_URL: str = ""
+    CELERY_RESULT_BACKEND: str = ""
+
+    CHAT_SESSION_TTL_SECONDS: int = 3600
+    ANALYTICS_CACHE_TTL_SECONDS: int = 300
+
+    UPLOAD_DIR: str = "app/uploads"
+    MAX_UPLOAD_SIZE_MB: int = 10
+
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+
+    OTP_EXPIRE_MINUTES: int = 10
+    # Dev helper: if set, this OTP always works in non-production envs.
+    STATIC_OTP_CODE: str = "123456"
+
+    # Create a default Super Admin on startup if that email is not registered yet.
+    # Override SEED_SUPER_ADMIN_PASSWORD in production.
+    SEED_SUPER_ADMIN: bool = True
+    SEED_SUPER_ADMIN_EMAIL: str = "admin@nesacare1234.com"
+    SEED_SUPER_ADMIN_PASSWORD: str = "admin@1234"
+    # When true, always re-hash bootstrap admin password from SEED_SUPER_ADMIN_PASSWORD on startup
+    # (use once to fix a bad row, or in dev). Ignored when APP_ENV is production unless you set this.
+    SEED_SUPER_ADMIN_RESYNC_PASSWORD: bool = False
+
+    # Allow Super Admin / Hospital Admin via POST /auth/register (disable in production).
+    ALLOW_ADMIN_SELF_REGISTER: bool = True
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

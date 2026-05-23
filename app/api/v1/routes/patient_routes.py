@@ -1,0 +1,181 @@
+from typing import List
+
+from fastapi import APIRouter, Depends, File, UploadFile
+
+from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.models.user_model import User
+from app.schemas.common_schema import APIResponse, MessageResponse
+from app.schemas.patient_schema import (
+    FamilyMemberCreate,
+    FamilyMemberResponse,
+    PatientCreate,
+    PatientDocumentResponse,
+    PatientResponse,
+    PatientUpdate,
+)
+from app.services.patient_service import PatientService
+from app.utils.pagination import PaginatedResult
+
+router = APIRouter()
+
+
+@router.post("", response_model=APIResponse[PatientResponse], status_code=201)
+async def create_patient(
+    data: PatientCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "create")),
+):
+    patient = await PatientService(db).create(data, current_user.id)
+    return APIResponse(message="Patient created", data=patient)
+
+
+@router.get("", response_model=APIResponse[PaginatedResult[PatientResponse]])
+async def list_patients(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    _: User = Depends(require_permission("patients", "read")),
+):
+    result = await PatientService(db).list_patients(page=page, size=size, sort_by=sort_by, sort_order=sort_order)
+    return APIResponse(message="Patients retrieved", data=result)
+
+
+@router.get("/search", response_model=APIResponse[PaginatedResult[PatientResponse]])
+async def search_patients(
+    q: str,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    result = await PatientService(db).search(q, page=page, size=size)
+    return APIResponse(message="Search results", data=result)
+
+
+@router.get("/filter", response_model=APIResponse[PaginatedResult[PatientResponse]])
+async def filter_patients(
+    db: DbSession,
+    current_user: CurrentUser,
+    gender: str | None = None,
+    blood_group: str | None = None,
+    city: str | None = None,
+    state: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    result = await PatientService(db).filter_patients(
+        gender=gender, blood_group=blood_group, city=city, state=state, status=status, page=page, size=size
+    )
+    return APIResponse(message="Filtered patients", data=result)
+
+
+@router.get("/{patient_id}", response_model=APIResponse[PatientResponse])
+async def get_patient(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    patient = await PatientService(db).get_by_id(patient_id)
+    return APIResponse(message="Patient retrieved", data=patient)
+
+
+@router.put("/{patient_id}", response_model=APIResponse[PatientResponse])
+async def update_patient(
+    patient_id: int,
+    data: PatientUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "update")),
+):
+    patient = await PatientService(db).update(patient_id, data, current_user.id)
+    return APIResponse(message="Patient updated", data=patient)
+
+
+@router.delete("/{patient_id}", response_model=APIResponse[MessageResponse])
+async def delete_patient(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "delete")),
+):
+    await PatientService(db).delete(patient_id, current_user.id)
+    return APIResponse(message="Patient deleted", data=MessageResponse(message="Soft deleted"))
+
+
+@router.get("/{patient_id}/appointments", response_model=APIResponse[List])
+async def patient_appointments(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    from app.schemas.appointment_schema import AppointmentResponse
+
+    appointments = await PatientService(db).get_appointments(patient_id)
+    return APIResponse(message="Appointments retrieved", data=appointments)
+
+
+@router.get("/{patient_id}/history", response_model=APIResponse[List])
+async def patient_history(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    history = await PatientService(db).get_history(patient_id)
+    return APIResponse(message="Visit history retrieved", data=history)
+
+
+@router.post("/{patient_id}/documents", response_model=APIResponse[PatientDocumentResponse], status_code=201)
+async def upload_document(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    document_type: str = "general",
+    _: User = Depends(require_permission("patients", "update")),
+):
+    doc = await PatientService(db).upload_document(patient_id, file, document_type, current_user.id)
+    return APIResponse(message="Document uploaded", data=doc)
+
+
+@router.get("/{patient_id}/documents", response_model=APIResponse[List[PatientDocumentResponse]])
+async def list_documents(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    docs = await PatientService(db).list_documents(patient_id)
+    return APIResponse(message="Documents retrieved", data=docs)
+
+
+@router.post("/{patient_id}/family-members", response_model=APIResponse[FamilyMemberResponse], status_code=201)
+async def add_family_member(
+    patient_id: int,
+    data: FamilyMemberCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "update")),
+):
+    member = await PatientService(db).add_family_member(patient_id, data, current_user.id)
+    return APIResponse(message="Family member added", data=member)
+
+
+@router.get("/{patient_id}/family-members", response_model=APIResponse[List[FamilyMemberResponse]])
+async def list_family_members(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    members = await PatientService(db).list_family_members(patient_id)
+    return APIResponse(message="Family members retrieved", data=members)

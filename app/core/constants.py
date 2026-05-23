@@ -1,0 +1,202 @@
+class UserRole:
+    SUPER_ADMIN = "Super Admin"
+    HOSPITAL_ADMIN = "Hospital Admin"
+    DOCTOR = "Doctor"
+    NURSE = "Nurse"
+    RECEPTIONIST = "Receptionist"
+    ACCOUNTANT = "Accountant"
+    PHARMACIST = "Pharmacist"
+    LAB_TECHNICIAN = "Lab Technician"
+    PATIENT = "Patient"
+
+    ADMIN_ROLES = {SUPER_ADMIN, HOSPITAL_ADMIN}
+    CLINICAL_ROLES = {DOCTOR, NURSE, RECEPTIONIST}
+    ALL = {
+        SUPER_ADMIN,
+        HOSPITAL_ADMIN,
+        DOCTOR,
+        NURSE,
+        RECEPTIONIST,
+        ACCOUNTANT,
+        PHARMACIST,
+        LAB_TECHNICIAN,
+        PATIENT,
+    }
+
+
+class PermissionAction:
+    CREATE = "create"
+    READ = "read"
+    UPDATE = "update"
+    DELETE = "delete"
+    EXPORT = "export"
+    APPROVE = "approve"
+    ASSIGN = "assign"
+
+
+class AppointmentStatus:
+    PENDING = "Pending"
+    CONFIRMED = "Confirmed"
+    COMPLETED = "Completed"
+    CANCELLED = "Cancelled"
+    NO_SHOW = "No Show"
+
+    ACTIVE = {PENDING, CONFIRMED}
+    TERMINAL = {COMPLETED, CANCELLED, NO_SHOW}
+
+
+class PatientStatus:
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    DECEASED = "deceased"
+
+
+class DoctorAvailability:
+    AVAILABLE = "available"
+    BUSY = "busy"
+    ON_LEAVE = "on_leave"
+    UNAVAILABLE = "unavailable"
+
+
+class BillingStatus:
+    PENDING = "pending"
+    PAID = "paid"
+    PARTIAL = "partial"
+    OVERDUE = "overdue"
+    CANCELLED = "cancelled"
+    REFUNDED = "refunded"
+
+
+class PaymentMethod:
+    CASH = "cash"
+    CARD = "card"
+    UPI = "upi"
+    BANK_TRANSFER = "bank_transfer"
+    INSURANCE = "insurance"
+
+
+class PharmacyStatus:
+    PENDING = "pending"
+    DISPENSED = "dispensed"
+    CANCELLED = "cancelled"
+
+
+class PurchaseStatus:
+    ORDERED = "ordered"
+    RECEIVED = "received"
+    CANCELLED = "cancelled"
+
+
+class LabOrderStatus:
+    ORDERED = "ordered"
+    SAMPLE_COLLECTED = "sample_collected"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class LabReportStatus:
+    DRAFT = "draft"
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class SampleStatus:
+    PENDING = "pending"
+    COLLECTED = "collected"
+    REJECTED = "rejected"
+
+
+class StockTransactionType:
+    INWARD = "inward"
+    OUTWARD = "outward"
+    TRANSFER = "transfer"
+    ADJUSTMENT = "adjustment"
+    CONSUMPTION = "consumption"
+
+
+class ReorderAlertStatus:
+    ACTIVE = "active"
+    RESOLVED = "resolved"
+
+
+class ChatSessionStatus:
+    ACTIVE = "Active"
+    CLOSED = "Closed"
+    ESCALATED = "Escalated"
+
+
+class ChatSenderType:
+    USER = "User"
+    BOT = "Bot"
+    AGENT = "Agent"
+
+
+class ChatMessageType:
+    TEXT = "Text"
+    VOICE = "Voice"
+    IMAGE = "Image"
+    FILE = "File"
+
+
+class VoiceCallStatus:
+    PENDING = "Pending"
+    CALLING = "Calling"
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    BUSY = "Busy"
+    CANCELLED = "Cancelled"
+
+
+class VoiceCallType:
+    REMINDER = "reminder"
+    CONFIRMATION = "confirmation"
+    FOLLOW_UP = "follow_up"
+
+
+class VoiceResponseType:
+    DTMF = "DTMF"
+    VOICE = "Voice"
+
+
+class WhatsAppMessageType:
+    TEXT = "Text"
+    IMAGE = "Image"
+    PDF = "PDF"
+    VIDEO = "Video"
+    AUDIO = "Audio"
+
+
+class WhatsAppDeliveryStatus:
+    PENDING = "Pending"
+    SENT = "Sent"
+    DELIVERED = "Delivered"
+    READ = "Read"
+    FAILED = "Failed"
+
+
+class CampaignStatus:
+    DRAFT = "draft"
+    SCHEDULED = "scheduled"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class KPIStatus:
+    ON_TRACK = "on_track"
+    AT_RISK = "at_risk"
+    BEHIND = "behind"
+
+
+class ReportExportStatus:
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReportExportFormat:
+    PDF = "pdf"
+    EXCEL = "excel"

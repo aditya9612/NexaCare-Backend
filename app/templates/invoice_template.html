@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Invoice {{ invoice_number }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    h1 { color: #2563eb; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f3f4f6; }
+  </style>
+</head>
+<body>
+  <h1>Nexa-Care Invoice</h1>
+  <p><strong>Invoice #:</strong> {{ invoice_number }}</p>
+  <p><strong>Patient:</strong> {{ patient_name }}</p>
+  <p><strong>Date:</strong> {{ date }}</p>
+  <table>
+    <tr><th>Description</th><th>Amount</th></tr>
+    {% for item in items %}
+    <tr><td>{{ item.description }}</td><td>{{ item.amount }}</td></tr>
+    {% endfor %}
+  </table>
+  <p><strong>Total:</strong> {{ total_amount }}</p>
+</body>
+</html>

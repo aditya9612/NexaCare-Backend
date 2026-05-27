@@ -78,7 +78,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     resources = [
         "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
-        "ai_chat", "voice_reminder", "whatsapp", "analytics",
+        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
     ]
     actions = [
         PermissionAction.CREATE,
@@ -111,7 +111,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     admin_resources = {
         "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
-        "ai_chat", "voice_reminder", "whatsapp", "analytics",
+        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
     }
     for perm in permissions:
         if perm.resource in admin_resources:

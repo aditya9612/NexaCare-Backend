@@ -1,11 +1,10 @@
-from datetime import datetime
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ReorderAlertStatus, StockTransactionType
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Vendor, Warehouse
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.department_repository import DepartmentRepository
 from app.repositories.inventory_repository import (
     InventoryRepository,
     ReorderAlertRepository,
@@ -41,8 +40,16 @@ class InventoryService:
         self.warehouse_repo = WarehouseRepository(db)
         self.alert_repo = ReorderAlertRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.dept_repo = DepartmentRepository(db)
+
+    async def _validate_department(self, department_id: int | None) -> None:
+        if department_id is not None:
+            dept = await self.dept_repo.get_by_id(department_id)
+            if not dept:
+                raise NotFoundException(f"Department with ID {department_id} not found")
 
     async def create_item(self, data: InventoryItemCreate, user_id: int) -> InventoryItemResponse:
+        await self._validate_department(data.department_id)
         sku = data.sku or generate_code("SKU")
         item = InventoryItem(sku=sku, **data.model_dump(exclude={"sku"}))
         item = await self.item_repo.create(item)
@@ -78,6 +85,7 @@ class InventoryService:
         item = await self.item_repo.get_by_id(item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
+        await self._validate_department(data.department_id)
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(item, key, value)
         item = await self.item_repo.update(item)

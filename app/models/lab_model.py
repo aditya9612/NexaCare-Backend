@@ -22,8 +22,10 @@ class LabTest(Base, TimestampMixin, SoftDeleteMixin):
     turnaround_hours: Mapped[int] = mapped_column(Integer, default=24)
     normal_range: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.department_id"), nullable=True, index=True)
 
     orders: Mapped[list["TestOrder"]] = relationship(back_populates="lab_test")
+    department = relationship("Department", back_populates="lab_tests")
 
 
 class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
@@ -35,6 +37,7 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     doctor_id: Mapped[int | None] = mapped_column(ForeignKey("doctors.id"), nullable=True)
     lab_test_id: Mapped[int] = mapped_column(ForeignKey("lab_tests.id"), index=True)
     appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id"), nullable=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.department_id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="ordered", index=True)
     priority: Mapped[str] = mapped_column(String(20), default="normal")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -45,6 +48,7 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     samples: Mapped[list["Sample"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     results: Mapped[list["TestResult"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     reports: Mapped[list["LabReport"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
+    department = relationship("Department", back_populates="test_orders")
 
 
 class Sample(Base, TimestampMixin):

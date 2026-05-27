@@ -13,7 +13,7 @@ class DoctorCreate(BaseSchema):
     experience: int | None = None
     phone: str | None = None
     email: EmailStr | None = None
-    department: str | None = None
+    department_id: int | None = None
     consultation_fee: float | None = None
     license_number: str
     availability_status: str = "available"
@@ -30,7 +30,7 @@ class DoctorUpdate(BaseSchema):
     experience: int | None = None
     phone: str | None = None
     email: EmailStr | None = None
-    department: str | None = None
+    department_id: int | None = None
     consultation_fee: float | None = None
     license_number: str | None = None
     availability_status: str | None = None
@@ -48,7 +48,7 @@ class DoctorResponse(BaseSchema):
     experience: int | None
     phone: str | None
     email: str | None
-    department: str | None
+    department_id: int | None
     consultation_fee: float | None
     license_number: str
     availability_status: str

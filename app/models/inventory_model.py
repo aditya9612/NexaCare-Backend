@@ -22,11 +22,13 @@ class InventoryItem(Base, TimestampMixin, SoftDeleteMixin):
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     warehouse_id: Mapped[int | None] = mapped_column(ForeignKey("warehouses.id"), nullable=True, index=True)
     vendor_id: Mapped[int | None] = mapped_column(ForeignKey("vendors.id"), nullable=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.department_id"), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     warehouse: Mapped["Warehouse | None"] = relationship(back_populates="items")
     transactions: Mapped[list["StockTransaction"]] = relationship(back_populates="item")
+    department = relationship("Department", back_populates="inventory_items")
 
 
 class StockTransaction(Base, TimestampMixin):

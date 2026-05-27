@@ -22,6 +22,10 @@ def generate_doctor_code() -> str:
     return generate_code("DOC")
 
 
+def generate_nurse_code() -> str:
+    return generate_code("NRS")
+
+
 def generate_appointment_number() -> str:
     return generate_code("APT")
 

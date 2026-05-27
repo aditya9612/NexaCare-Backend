@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import FileResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -176,5 +176,21 @@ async def download_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "export")),
 ):
-    path = await BillingService(db).generate_invoice(billing_id, current_user.id)
-    return FileResponse(path, media_type="text/html", filename=f"invoice_{billing_id}.html")
+    _, pdf_bytes = await BillingService(db).generate_invoice(billing_id, current_user.id)
+    print("DEBUG: type(pdf_bytes) =", type(pdf_bytes))
+    if isinstance(pdf_bytes, bytes):
+        print("DEBUG: len(pdf_bytes) =", len(pdf_bytes))
+        print("DEBUG: pdf_bytes starts with:", pdf_bytes[:20])
+    else:
+        print("DEBUG: pdf_bytes value:", str(pdf_bytes)[:100])
+
+    response = Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=invoice_{billing_id}.pdf"
+        }
+    )
+    print("DEBUG: response.media_type =", response.media_type)
+    print("DEBUG: response.headers =", dict(response.headers))
+    return response

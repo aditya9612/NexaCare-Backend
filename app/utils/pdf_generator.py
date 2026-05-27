@@ -14,6 +14,17 @@ def _ensure_output_dir(subdir: str) -> Path:
     return path
 
 
+from io import BytesIO
+from xhtml2pdf import pisa
+
+def html_to_pdf(html_content: str) -> bytes:
+    result = BytesIO()
+    pdf = pisa.pisaDocument(BytesIO(html_content.encode("utf-8")), result)
+    if not pdf.err:
+        return result.getvalue()
+    raise Exception("PDF generation failed")
+
+
 async def generate_invoice_html(bill_number: str, data: dict) -> str:
     template = env.get_template("invoice_template.html")
     html = template.render(invoice_number=bill_number, **data)
@@ -22,6 +33,17 @@ async def generate_invoice_html(bill_number: str, data: dict) -> str:
     file_path.write_text(html, encoding="utf-8")
     logger.info("Invoice generated: %s", file_path)
     return str(file_path)
+
+
+async def generate_invoice_pdf(bill_number: str, data: dict) -> tuple[str, bytes]:
+    template = env.get_template("invoice_template.html")
+    html = template.render(invoice_number=bill_number, **data)
+    pdf_bytes = html_to_pdf(html)
+    output_dir = _ensure_output_dir("invoices")
+    file_path = output_dir / f"{bill_number}.pdf"
+    file_path.write_bytes(pdf_bytes)
+    logger.info("Invoice PDF generated: %s", file_path)
+    return str(file_path), pdf_bytes
 
 
 async def generate_lab_report_html(report_number: str, data: dict) -> str:

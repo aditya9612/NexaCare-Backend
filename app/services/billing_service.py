@@ -32,7 +32,7 @@ from app.utils.helpers import (
     utc_now,
 )
 from app.utils.pagination import build_paginated_result
-from app.utils.pdf_generator import generate_invoice_html
+from app.utils.pdf_generator import generate_invoice_pdf
 
 
 class BillingService:
@@ -48,6 +48,11 @@ class BillingService:
         return data
 
     async def _recalculate_billing(self, billing: Billing) -> Billing:
+        from sqlalchemy import inspect
+        state = inspect(billing)
+        if "items" in state.unloaded and billing.id is not None:
+            billing = await self.repo.get_by_id(billing.id)
+
         subtotal = sum(
             (item.quantity * item.unit_price) for item in billing.items
         ) if billing.items else billing.subtotal
@@ -143,6 +148,17 @@ class BillingService:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
             raise NotFoundException("Billing record not found")
+
+        non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount", "status"]
+        for field in non_nullable_fields:
+            if field in data.model_fields_set and getattr(data, field) is None:
+                raise BadRequestException(f"Field '{field}' cannot be null")
+
+        if data.insurance_id is not None:
+            insurance = await InsuranceRepository(self.db).get_by_id(data.insurance_id)
+            if not insurance:
+                raise NotFoundException(f"Insurance record with ID {data.insurance_id} not found")
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(billing, key, value)
         billing = await self._recalculate_billing(billing)
@@ -205,7 +221,7 @@ class BillingService:
         await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
         return PaymentResponse.model_validate(payment)
 
-    async def generate_invoice(self, billing_id: int, user_id: int) -> str:
+    async def generate_invoice(self, billing_id: int, user_id: int) -> tuple[str, bytes]:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
             raise NotFoundException("Billing record not found")
@@ -215,7 +231,7 @@ class BillingService:
             {"description": i.description, "amount": f"{i.line_total:.2f}"}
             for i in billing.items
         ]
-        path = await generate_invoice_html(
+        path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
                 "patient_name": patient_name,
@@ -227,7 +243,7 @@ class BillingService:
         billing.invoice_path = path
         await self.repo.update(billing)
         await self.audit_repo.create("export", "billing", user_id=user_id, resource_id=str(billing.id))
-        return path
+        return path, pdf_bytes
 
     async def get_pending_payments(self, page: int = 1, size: int = 20):
         skip = (page - 1) * size

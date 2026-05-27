@@ -26,6 +26,12 @@ class VoiceRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_call_by_provider_sid(self, provider_sid: str) -> VoiceCall | None:
+        result = await self.db.execute(
+            select(VoiceCall).where(VoiceCall.provider_call_id == provider_sid)
+        )
+        return result.scalar_one_or_none()
+
     async def update_call(self, call: VoiceCall) -> VoiceCall:
         await self.db.flush()
         await self.db.refresh(call)

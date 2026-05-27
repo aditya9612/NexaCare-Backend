@@ -19,8 +19,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/v1/auth/refresh-token",
     }
 
+    PUBLIC_PREFIXES = (
+        "/api/v1/whatsapp/webhook",
+        "/api/v1/voice-reminder/twiml",
+        "/api/v1/voice-reminder/status-callback",
+        "/api/v1/voice-assistant/twiml",
+    )
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path in self.PUBLIC_PATHS or path.startswith("/static"):
+        if (
+            path in self.PUBLIC_PATHS
+            or path.startswith("/static")
+            or any(path.startswith(p) for p in self.PUBLIC_PREFIXES)
+        ):
             return await call_next(request)
         return await call_next(request)

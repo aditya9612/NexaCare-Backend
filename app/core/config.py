@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import List
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,12 +38,29 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = ""
     TWILIO_WHATSAPP_NUMBER: str = ""
+    TWILIO_TEST_TO_NUMBER: str = Field(
+        default="",
+        validation_alias=AliasChoices("TWILIO_TEST_TO_NUMBER", "TWILIO_TO_NUMBER"),
+    )
 
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
     CHAT_SESSION_TTL_SECONDS: int = 3600
     ANALYTICS_CACHE_TTL_SECONDS: int = 300
+    CHAT_RATE_LIMIT_PER_MINUTE: int = 30
+
+    # Public URL for Twilio webhooks (use ngrok in local dev)
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
+
+    # Hospital info surfaced in FAQ / chatbot prompts
+    HOSPITAL_NAME: str = "NesaCare Hospital"
+    HOSPITAL_HOURS: str = "Mon-Sat 8:00 AM - 8:00 PM"
+    HOSPITAL_LOCATION: str = "123 Healthcare Avenue"
+    HOSPITAL_CONTACT: str = "+1-800-NESACARE"
+
+    # Voice reminders: schedule calls this many hours before appointment
+    VOICE_REMINDER_HOURS_BEFORE: int = 24
 
     UPLOAD_DIR: str = "app/uploads"
     MAX_UPLOAD_SIZE_MB: int = 10

@@ -56,6 +56,7 @@ async def init_db():
     async with AsyncSessionLocal() as session:
         await _seed_roles_and_permissions(session)
         await _seed_phase3_permissions(session)
+        await _seed_patient_permissions(session)
         await _seed_default_super_admin(session)
         await session.commit()
 
@@ -168,6 +169,46 @@ async def _seed_phase3_permissions(session: AsyncSession) -> None:
                 )
                 if not rp.scalar_one_or_none():
                     session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+
+
+async def _seed_patient_permissions(session: AsyncSession) -> None:
+    """Grant Patient role permissions for chat, appointments, and voice read."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    result = await session.execute(select(Role).where(Role.name == UserRole.PATIENT))
+    patient_role = result.scalar_one_or_none()
+    if not patient_role:
+        return
+
+    patient_grants = [
+        ("ai_chat", PermissionAction.CREATE),
+        ("ai_chat", PermissionAction.READ),
+        ("ai_chat", PermissionAction.UPDATE),
+        ("appointments", PermissionAction.CREATE),
+        ("appointments", PermissionAction.READ),
+        ("appointments", PermissionAction.UPDATE),
+        ("dashboard", PermissionAction.READ),
+        ("patients", PermissionAction.READ),
+        ("doctors", PermissionAction.READ),
+        ("voice_reminder", PermissionAction.READ),
+    ]
+
+    for resource, action in patient_grants:
+        perm_name = f"{resource}:{action}"
+        result = await session.execute(select(Permission).where(Permission.name == perm_name))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            continue
+        rp = await session.execute(
+            select(RolePermission).where(
+                RolePermission.role_id == patient_role.id,
+                RolePermission.permission_id == perm.id,
+            )
+        )
+        if not rp.scalar_one_or_none():
+            session.add(RolePermission(role_id=patient_role.id, permission_id=perm.id))
 
 
 async def _seed_default_super_admin(session: AsyncSession) -> None:

@@ -71,7 +71,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 try:
                     service = ChatService(db)
                     result = await service.send_message(
-                        SendMessageRequest(session_id=session_id, message=message_text)
+                        SendMessageRequest(session_id=session_id, message=message_text),
+                        user_id=user["user_id"],
                     )
                     await db.commit()
                     payload = {
@@ -79,6 +80,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         "user_message": result.user_message.model_dump(mode="json"),
                         "bot_message": result.bot_message.model_dump(mode="json"),
                         "intent": result.intent.model_dump(mode="json") if result.intent else None,
+                        "booking_state": result.booking_state,
+                        "suggested_slots": result.suggested_slots,
+                        "appointment": result.appointment,
                     }
                 except Exception as exc:
                     await db.rollback()

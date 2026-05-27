@@ -16,6 +16,7 @@ from app.api.v1.routes import (
     patient_routes,
     pharmacy_routes,
     rbac_routes,
+    voice_assistant_routes,
     voice_routes,
     whatsapp_routes,
 )
@@ -37,5 +38,10 @@ api_router.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 api_router.include_router(ai_routes.router, prefix="/ai", tags=["AI"])
 api_router.include_router(chat_routes.router, prefix="/ai/chat", tags=["AI Chatbot"])
 api_router.include_router(voice_routes.router, prefix="/voice-reminder", tags=["Voice Reminder"])
+api_router.include_router(
+    voice_assistant_routes.router,
+    prefix="/voice-assistant",
+    tags=["Voice Appointment Assistant"],
+)
 api_router.include_router(whatsapp_routes.router, prefix="/whatsapp", tags=["WhatsApp"])
 api_router.include_router(analytics_routes.router, prefix="/analytics", tags=["Analytics"])

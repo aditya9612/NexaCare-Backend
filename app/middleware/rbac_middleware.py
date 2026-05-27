@@ -23,6 +23,9 @@ class RBACMiddleware(BaseHTTPMiddleware):
         "/api/v1/auth/verify-otp",
         "/api/v1/auth/activate",
         "/api/v1/whatsapp/webhook",
+        "/api/v1/voice-reminder/twiml",
+        "/api/v1/voice-reminder/status-callback",
+        "/api/v1/voice-assistant/twiml",
         "/ws/",
     )
 

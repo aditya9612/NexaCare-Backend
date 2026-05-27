@@ -91,6 +91,22 @@ class SendMessageResponse(BaseSchema):
     bot_message: ChatMessageResponse
     intent: Optional[ChatIntentResponse] = None
     ai_response: Optional[AIResponseSchema] = None
+    booking_state: Optional[Dict[str, Any]] = None
+    suggested_slots: Optional[List[Dict[str, Any]]] = None
+    appointment: Optional[Dict[str, Any]] = None
+
+
+class BookingStateResponse(BaseSchema):
+    step: str
+    patient_id: int
+    symptoms: Optional[str] = None
+    recommended_specialist: Optional[str] = None
+    doctor_id: Optional[int] = None
+    doctor_name: Optional[str] = None
+    department_id: Optional[int] = None
+    appointment_date: Optional[str] = None
+    appointment_time: Optional[str] = None
+    consultation_type: Optional[str] = None
 
 
 class ChatAnalyticsResponse(BaseSchema):
@@ -100,3 +116,5 @@ class ChatAnalyticsResponse(BaseSchema):
     total_messages: int
     top_intents: List[Dict[str, Any]]
     avg_messages_per_session: float
+    booking_conversions: int = 0
+    booking_conversion_rate: float = 0.0

@@ -19,7 +19,12 @@ class TwilioClient:
     def is_configured(self) -> bool:
         return bool(self.account_sid and self.auth_token)
 
-    async def initiate_call(self, to: str, twiml_url: Optional[str] = None) -> Dict[str, Any]:
+    async def initiate_call(
+        self,
+        to: str,
+        twiml_url: Optional[str] = None,
+        status_callback_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if not self.is_configured:
             logger.warning("Twilio not configured; simulating call to %s", to)
             return {"sid": f"SIM-{to[-4:]}", "status": "queued", "simulated": True}
@@ -28,6 +33,9 @@ class TwilioClient:
         data = {"To": to, "From": self.phone_number}
         if twiml_url:
             data["Url"] = twiml_url
+        if status_callback_url:
+            data["StatusCallback"] = status_callback_url
+            data["StatusCallbackEvent"] = "initiated ringing answered completed"
         async with httpx.AsyncClient() as client:
             response = await client.post(url, data=data, auth=(self.account_sid, self.auth_token))
             response.raise_for_status()

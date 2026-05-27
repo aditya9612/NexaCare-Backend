@@ -14,6 +14,7 @@ celery_app = Celery(
         "app.tasks.whatsapp_tasks",
         "app.tasks.analytics_tasks",
         "app.tasks.chat_tasks",
+        "app.tasks.reminder_tasks",
     ],
 )
 
@@ -34,6 +35,10 @@ celery_app.conf.update(
         "refresh-analytics-cache": {
             "task": "app.tasks.analytics_tasks.refresh_dashboard_cache",
             "schedule": 600.0,
+        },
+        "schedule-voice-reminders": {
+            "task": "app.tasks.reminder_tasks.schedule_appointment_voice_reminders",
+            "schedule": 3600.0,
         },
     },
 )

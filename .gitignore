@@ -23,3 +23,4 @@ app/uploads/**/*
 alembic/versions/*.pyc
 .DS_Store
 Thumbs.db
+.env

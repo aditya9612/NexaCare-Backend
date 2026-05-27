@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.schemas.chat_schema import (
+    BookingStateResponse,
     ChatAnalyticsResponse,
     ChatBookAppointmentRequest,
     ChatHistoryResponse,
@@ -39,8 +40,19 @@ async def send_message(
     current_user: CurrentUser,
     _: User = Depends(require_permission("ai_chat", "create")),
 ):
-    result = await ChatService(db).send_message(data)
+    result = await ChatService(db).send_message(data, user_id=current_user.id)
     return APIResponse(message="Message processed", data=result)
+
+
+@router.get("/booking-state/{session_id}", response_model=APIResponse[BookingStateResponse])
+async def get_booking_state(
+    session_id: str,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("ai_chat", "read")),
+):
+    state = await ChatService(db).get_booking_state(session_id)
+    return APIResponse(message="Booking state retrieved", data=state)
 
 
 @router.get("/history/{session_id}", response_model=APIResponse[ChatHistoryResponse])

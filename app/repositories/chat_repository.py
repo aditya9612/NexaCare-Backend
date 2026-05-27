@@ -138,3 +138,11 @@ class ChatRepository:
 
     async def save_entities_json(self, session_pk: int, entities: dict) -> None:
         await self.upsert_memory(session_pk, "entities", json.dumps(entities))
+
+    async def count_booking_conversions(self) -> int:
+        result = await self.db.scalar(
+            select(func.count(func.distinct(ConversationMemory.session_id))).where(
+                ConversationMemory.memory_key == "last_appointment_id"
+            )
+        )
+        return result or 0

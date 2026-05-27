@@ -1,0 +1,25 @@
+import asyncio
+from datetime import date, timedelta
+
+from app.celery_app import celery_app
+from app.core.database import AsyncSessionLocal
+from app.core.logger import logger
+from app.services.reminder_orchestrator import ReminderOrchestrator
+
+
+@celery_app.task(name="app.tasks.reminder_tasks.schedule_appointment_voice_reminders")
+def schedule_appointment_voice_reminders():
+    asyncio.run(_schedule_voice_reminders())
+
+
+async def _schedule_voice_reminders() -> None:
+    target = date.today() + timedelta(days=1)
+    async with AsyncSessionLocal() as db:
+        try:
+            count = await ReminderOrchestrator(db).schedule_voice_reminders_for_date(target)
+            await db.commit()
+            logger.info("Scheduled %s voice reminders for %s", count, target)
+        except Exception as exc:
+            await db.rollback()
+            logger.error("Voice reminder scheduling failed: %s", exc)
+            raise

@@ -20,11 +20,39 @@ class LLMService:
         return self._fallback_response(message, language)
 
     async def detect_intent(self, message: str, language: str = "en") -> Dict[str, Any]:
+        if settings.OPENAI_API_KEY:
+            llm_intent = await self._openai_detect_intent(message, language)
+            if llm_intent:
+                return llm_intent
+        return self._keyword_detect_intent(message, language)
+
+    async def extract_booking_entities(
+        self, message: str, language: str = "en"
+    ) -> Dict[str, Any]:
+        if settings.OPENAI_API_KEY:
+            entities = await self._openai_extract_booking(message, language)
+            if entities:
+                return entities
+        return self._keyword_extract_booking(message)
+
+    async def analyze_sentiment(self, message: str) -> float:
+        negative = ["angry", "frustrated", "terrible", "worst", "hate"]
+        positive = ["thank", "great", "good", "helpful", "excellent"]
+        lowered = message.lower()
+        score = 0.5
+        if any(w in lowered for w in negative):
+            score = 0.2
+        elif any(w in lowered for w in positive):
+            score = 0.8
+        return score
+
+    def _keyword_detect_intent(self, message: str, language: str) -> Dict[str, Any]:
         lowered = message.lower()
         intents = {
             "book_appointment": ["appointment", "book", "schedule", "visit"],
+            "reschedule_appointment": ["reschedule", "change appointment", "move appointment"],
             "symptom_check": ["symptom", "pain", "fever", "headache", "cough"],
-            "faq": ["hours", "location", "cost", "insurance", "contact"],
+            "faq": ["hours", "location", "cost", "insurance", "contact", "address", "open"],
             "escalate": ["human", "agent", "speak to", "representative"],
             "cancel_appointment": ["cancel"],
         }
@@ -41,16 +69,75 @@ class LLMService:
             "detected_entities": json.dumps({"language": language}),
         }
 
-    async def analyze_sentiment(self, message: str) -> float:
-        negative = ["angry", "frustrated", "terrible", "worst", "hate"]
-        positive = ["thank", "great", "good", "helpful", "excellent"]
+    def _keyword_extract_booking(self, message: str) -> Dict[str, Any]:
         lowered = message.lower()
-        score = 0.5
-        if any(w in lowered for w in negative):
-            score = 0.2
-        elif any(w in lowered for w in positive):
-            score = 0.8
-        return score
+        entities: Dict[str, Any] = {}
+        if any(w in lowered for w in ["fever", "pain", "cough", "headache", "symptom"]):
+            entities["symptoms"] = message.strip()
+        return entities
+
+    async def _openai_detect_intent(self, message: str, language: str) -> Optional[Dict[str, Any]]:
+        try:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Classify user intent for a hospital chatbot. "
+                            "Return JSON only: "
+                            '{"intent_name": one of book_appointment, reschedule_appointment, '
+                            'symptom_check, faq, escalate, cancel_appointment, general_inquiry, '
+                            '"confidence_score": 0.0-1.0}'
+                        ),
+                    },
+                    {"role": "user", "content": f"[{language}] {message}"},
+                ],
+                temperature=0,
+                max_tokens=120,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content or "{}"
+            data = json.loads(raw)
+            if "intent_name" in data:
+                data["detected_entities"] = json.dumps({"language": language})
+                return data
+        except Exception as exc:
+            logger.error("OpenAI intent detection error: %s", exc)
+        return None
+
+    async def _openai_extract_booking(self, message: str, language: str) -> Dict[str, Any]:
+        try:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Extract appointment booking fields from the user message. "
+                            "Return JSON with optional keys: symptoms, doctor_name, doctor_id, "
+                            "appointment_date (YYYY-MM-DD), appointment_time (HH:MM), "
+                            "recommended_specialist. Use null for missing fields."
+                        ),
+                    },
+                    {"role": "user", "content": f"[{language}] {message}"},
+                ],
+                temperature=0,
+                max_tokens=200,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content or "{}"
+            data = json.loads(raw)
+            return {k: v for k, v in data.items() if v is not None}
+        except Exception as exc:
+            logger.error("OpenAI booking extraction error: %s", exc)
+            return {}
 
     async def _openai_generate(
         self,

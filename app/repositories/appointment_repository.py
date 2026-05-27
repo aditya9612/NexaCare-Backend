@@ -152,3 +152,13 @@ class AppointmentRepository:
             )
             or 0
         )
+
+    async def list_needing_voice_reminder(self, target_date: date) -> list[Appointment]:
+        result = await self.db.execute(
+            select(Appointment).where(
+                Appointment.appointment_date == target_date,
+                Appointment.reminder_sent.is_(False),
+                Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
+            )
+        )
+        return list(result.scalars().all())

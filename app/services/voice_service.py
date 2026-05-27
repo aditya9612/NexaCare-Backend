@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.voice_call.handler import VoiceCallHandler
-from app.core.constants import AppointmentStatus, VoiceCallStatus, VoiceResponseType
+from app.core.config import settings
+from app.core.constants import AppointmentStatus, VoiceCallStatus, VoiceCallType, VoiceResponseType
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.voice_model import CallSchedule, VoiceCall, VoiceCallLog, VoiceResponse
 from app.repositories.appointment_repository import AppointmentRepository
@@ -16,13 +17,12 @@ from app.schemas.voice_schema import (
     RetryCallRequest,
     ScheduleCallRequest,
     StartCallRequest,
-    VoiceCallLogResponse,
     VoiceCallResponse,
-    VoiceResponseSchema,
 )
 from app.utils.helpers import utc_now
 from app.utils.pagination import build_paginated_result
 from app.utils.twilio_client import twilio_client
+from app.utils.twiml_builder import gather, say, twiml_response
 
 
 class VoiceService:
@@ -32,6 +32,11 @@ class VoiceService:
         self.patient_repo = PatientRepository(db)
         self.appointment_repo = AppointmentRepository(db)
         self.voice_handler = VoiceCallHandler()
+
+    def _twiml_url(self, path: str) -> str:
+        base = settings.PUBLIC_BASE_URL.rstrip("/")
+        prefix = settings.API_V1_PREFIX.rstrip("/")
+        return f"{base}{prefix}/voice-reminder{path}"
 
     async def schedule_call(self, data: ScheduleCallRequest) -> VoiceCallResponse:
         if not await self.patient_repo.get_by_id(data.patient_id):
@@ -83,20 +88,128 @@ class VoiceService:
             VoiceCallLog(call_id=call.id, event_type="calling", event_data="Initiating call")
         )
 
-        result = await twilio_client.initiate_call(call.phone_number)
+        if call.call_type == VoiceCallType.APPOINTMENT_ASSISTANT:
+            base = settings.PUBLIC_BASE_URL.rstrip("/")
+            prefix = settings.API_V1_PREFIX.rstrip("/")
+            twiml_url = f"{base}{prefix}/voice-assistant/twiml/start"
+        else:
+            twiml_url = self._twiml_url(f"/twiml/{call.id}")
+        status_url = self._twiml_url("/status-callback")
+        result = await twilio_client.initiate_call(
+            call.phone_number,
+            twiml_url=twiml_url,
+            status_callback_url=status_url,
+        )
         call.provider_call_id = result.get("sid")
-        processed = await self.voice_handler.process_audio("")
-        call.call_status = VoiceCallStatus.COMPLETED
-        call.duration_seconds = 30
         await self.repo.update_call(call)
         await self.repo.add_log(
             VoiceCallLog(
                 call_id=call.id,
-                event_type="completed",
-                event_data=str(processed),
+                event_type="initiated",
+                event_data=f"provider_sid={call.provider_call_id}",
             )
         )
         return call
+
+    async def build_initial_twiml(self, call_id: int) -> str:
+        call = await self._get_call(call_id)
+        greeting = await self.voice_handler.generate_voice_prompt(call.language)
+        appt_text = ""
+        if call.appointment_id:
+            appt = await self.appointment_repo.get_by_id(call.appointment_id)
+            if appt:
+                appt_text = (
+                    f" Your appointment is on {appt.appointment_date} "
+                    f"at {appt.appointment_time}."
+                )
+        menu_data = await self.voice_handler.process_audio("")
+        prompt = f"{greeting}{appt_text} {menu_data.get('menu', '')}"
+        gather_url = self._twiml_url(f"/twiml/{call.id}/gather")
+        lang = "en-US" if call.language == "en" else call.language
+        return twiml_response(gather(gather_url, prompt, num_digits=1, language=lang))
+
+    async def handle_dtmf_gather(self, call_id: int, digits: str) -> str:
+        call = await self._get_call(call_id)
+        action = self.voice_handler.parse_dtmf(digits)
+        lang = "en-US" if call.language == "en" else call.language
+
+        if action == "confirm_appointment":
+            await self._handle_appointment_action(
+                CallActionRequest(call_id=call.id, response_value=digits),
+                "confirm",
+                AppointmentStatus.CONFIRMED,
+                "1",
+            )
+            text = "Thank you. Your appointment is confirmed. Goodbye."
+        elif action == "cancel_appointment":
+            await self._handle_appointment_action(
+                CallActionRequest(call_id=call.id, response_value=digits),
+                "cancel",
+                AppointmentStatus.CANCELLED,
+                "2",
+            )
+            text = "Your appointment has been cancelled. Goodbye."
+        elif action == "reschedule_appointment":
+            await self.repo.add_response(
+                VoiceResponse(
+                    call_id=call.id,
+                    response_type=VoiceResponseType.DTMF,
+                    response_value="3",
+                    captured_at=utc_now(),
+                )
+            )
+            await self.repo.add_log(
+                VoiceCallLog(
+                    call_id=call.id,
+                    event_type="reschedule_requested",
+                    event_data="Patient requested reschedule via phone",
+                )
+            )
+            text = (
+                "We have noted your reschedule request. "
+                "Our team will contact you shortly. Goodbye."
+            )
+        elif action == "repeat_menu":
+            return await self.build_initial_twiml(call_id)
+        else:
+            text = "Invalid option. Goodbye."
+
+        if call.call_status == VoiceCallStatus.CALLING:
+            call.call_status = VoiceCallStatus.COMPLETED
+        await self.repo.update_call(call)
+        return twiml_response(say(text, lang))
+
+    async def handle_status_callback(self, payload: dict) -> None:
+        call_sid = payload.get("CallSid")
+        call_status = (payload.get("CallStatus") or "").lower()
+        duration = payload.get("CallDuration")
+
+        call = await self.repo.get_call_by_provider_sid(call_sid) if call_sid else None
+        if not call:
+            return
+
+        status_map = {
+            "completed": VoiceCallStatus.COMPLETED,
+            "busy": VoiceCallStatus.BUSY,
+            "no-answer": VoiceCallStatus.FAILED,
+            "failed": VoiceCallStatus.FAILED,
+            "canceled": VoiceCallStatus.CANCELLED,
+        }
+        if call_status in status_map:
+            call.call_status = status_map[call_status]
+        if duration is not None:
+            try:
+                call.duration_seconds = int(duration)
+            except (TypeError, ValueError):
+                pass
+        await self.repo.update_call(call)
+        await self.repo.add_log(
+            VoiceCallLog(
+                call_id=call.id,
+                event_type="status_callback",
+                event_data=f"{call_status} duration={duration}",
+            )
+        )
 
     async def retry_call(self, data: RetryCallRequest) -> VoiceCallResponse:
         call = await self._get_call(data.call_id)

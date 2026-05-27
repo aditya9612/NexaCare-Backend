@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Form, Request
+
+from fastapi.responses import Response
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -116,3 +118,26 @@ async def reschedule_appointment(
 ):
     call = await VoiceService(db).reschedule_appointment(data)
     return APIResponse(message="Appointment rescheduled via voice", data=call)
+
+
+@router.post("/twiml/{call_id}")
+async def twiml_initial(call_id: int, db: DbSession):
+    xml = await VoiceService(db).build_initial_twiml(call_id)
+    return Response(content=xml, media_type="application/xml")
+
+
+@router.post("/twiml/{call_id}/gather")
+async def twiml_gather(
+    call_id: int,
+    db: DbSession,
+    Digits: str = Form(default=""),
+):
+    xml = await VoiceService(db).handle_dtmf_gather(call_id, Digits)
+    return Response(content=xml, media_type="application/xml")
+
+
+@router.post("/status-callback")
+async def status_callback(request: Request, db: DbSession):
+    form = await request.form()
+    await VoiceService(db).handle_status_callback(dict(form))
+    return Response(content="", status_code=204)

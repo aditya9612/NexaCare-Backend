@@ -1,18 +1,19 @@
 import json
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.symptom_analysis.analyzer import SymptomAnalyzer
+from app.ai.chatbot.handler import ChatbotHandler
 from app.core.config import settings
 from app.core.constants import ChatSenderType, ChatSessionStatus
 from app.core.exceptions import BadRequestException, NotFoundException
-from app.models.chat_model import AIResponse, ChatIntent, ChatMessage, ChatSession
+from app.models.chat_model import AIResponse, ChatIntent, ChatMessage, ChatSession, ConversationMemory
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.chat_schema import (
     AIResponseSchema,
+    BookingStateResponse,
     ChatAnalyticsResponse,
     ChatBookAppointmentRequest,
     ChatHistoryResponse,
@@ -27,8 +28,8 @@ from app.schemas.chat_schema import (
     SymptomAnalysisResponse,
 )
 from app.services.appointment_service import AppointmentService
-from app.utils.ai_llm import llm_service
 from app.utils.helpers import generate_chat_session_id, utc_now
+from app.utils.rate_limiter import chat_rate_limiter
 from app.utils.redis_service import cache_get, cache_set
 
 
@@ -37,7 +38,7 @@ class ChatService:
         self.db = db
         self.repo = ChatRepository(db)
         self.patient_repo = PatientRepository(db)
-        self.symptom_analyzer = SymptomAnalyzer()
+        self.chatbot = ChatbotHandler(db)
 
     async def start_session(self, data: ChatSessionCreate) -> ChatSessionResponse:
         if not await self.patient_repo.get_by_id(data.patient_id):
@@ -61,9 +62,11 @@ class ChatService:
         )
         return ChatSessionResponse.model_validate(session)
 
-    async def send_message(self, data: SendMessageRequest) -> SendMessageResponse:
+    async def send_message(self, data: SendMessageRequest, user_id: int = 0) -> SendMessageResponse:
         session = await self._get_active_session(data.session_id)
         language = data.language or session.language
+
+        chat_rate_limiter.check(f"chat:{session.session_id}")
 
         user_msg = ChatMessage(
             session_id=session.id,
@@ -74,7 +77,7 @@ class ChatService:
         )
         user_msg = await self.repo.add_message(user_msg)
 
-        intent_data = await llm_service.detect_intent(data.message, language)
+        intent_data = await self.chatbot.detect_intent(data.message, language)
         intent = ChatIntent(
             session_id=session.id,
             intent_name=intent_data["intent_name"],
@@ -84,10 +87,24 @@ class ChatService:
         intent = await self.repo.add_intent(intent)
 
         context = await self._build_context(session.id)
-        llm_result = await llm_service.generate_response(data.message, context, language)
+        llm_result = await self.chatbot.respond(
+            session,
+            data.message,
+            context,
+            language,
+            intent_name=intent.intent_name,
+            user_id=user_id or session.patient_id,
+        )
         bot_text = llm_result["response_text"]
+        booking_state = llm_result.get("booking_state")
+        suggested_slots = llm_result.get("suggested_slots")
+        appointment_data = llm_result.get("appointment")
 
-        if intent.intent_name == "escalate":
+        from app.utils.ai_llm import llm_service
+
+        session.sentiment_score = await llm_service.analyze_sentiment(data.message)
+
+        if intent.intent_name == "escalate" or session.sentiment_score < 0.3:
             bot_text = "Connecting you to a human agent. Please hold."
             session.session_status = ChatSessionStatus.ESCALATED
 
@@ -109,7 +126,6 @@ class ChatService:
         )
         bot_msg = await self.repo.add_message(bot_msg)
 
-        session.sentiment_score = await llm_service.analyze_sentiment(data.message)
         await self.repo.update_session(session)
         await self._update_redis_session(session)
 
@@ -118,7 +134,17 @@ class ChatService:
             bot_message=ChatMessageResponse.model_validate(bot_msg),
             intent=ChatIntentResponse.model_validate(intent),
             ai_response=AIResponseSchema.model_validate(ai_resp),
+            booking_state=booking_state,
+            suggested_slots=suggested_slots,
+            appointment=appointment_data,
         )
+
+    async def get_booking_state(self, session_id: str) -> BookingStateResponse:
+        session = await self.repo.get_session_by_uuid(session_id)
+        if not session:
+            raise NotFoundException("Chat session not found")
+        state = await self.chatbot.appointment_assistant.get_booking_state(session)
+        return BookingStateResponse(**state.to_dict())
 
     async def get_history(self, session_id: str) -> ChatHistoryResponse:
         session = await self.repo.get_session_with_messages(session_id)
@@ -144,7 +170,7 @@ class ChatService:
         return ChatSessionResponse.model_validate(session)
 
     async def symptom_analysis(self, data: SymptomAnalysisRequest) -> SymptomAnalysisResponse:
-        result = await self.symptom_analyzer.analyze(data.symptoms)
+        result = await self.chatbot.symptom_analyzer.analyze(data.symptoms)
         if data.session_id:
             session = await self.repo.get_session_by_uuid(data.session_id)
             if session:
@@ -196,6 +222,7 @@ class ChatService:
         total_messages = await self.repo.count_all_messages()
         top = await self.repo.top_intents()
         avg = total_messages / total_sessions if total_sessions else 0.0
+        bookings = await self.repo.count_booking_conversions()
 
         result = ChatAnalyticsResponse(
             total_sessions=total_sessions,
@@ -204,6 +231,8 @@ class ChatService:
             total_messages=total_messages,
             top_intents=[{"intent": i[0], "count": i[1]} for i in top],
             avg_messages_per_session=round(avg, 2),
+            booking_conversions=bookings,
+            booking_conversion_rate=round(bookings / total_sessions * 100, 2) if total_sessions else 0.0,
         )
         await cache_set(cache_key, result.model_dump(), ttl=settings.ANALYTICS_CACHE_TTL_SECONDS)
         return result

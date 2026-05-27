@@ -153,6 +153,7 @@ class VoiceCallType:
     REMINDER = "reminder"
     CONFIRMATION = "confirmation"
     FOLLOW_UP = "follow_up"
+    APPOINTMENT_ASSISTANT = "appointment_assistant"
 
 
 class VoiceResponseType:

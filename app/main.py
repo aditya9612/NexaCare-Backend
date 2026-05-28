@@ -20,6 +20,7 @@ from app.websocket.notification_socket import router as notification_ws_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+    Path(settings.UPLOAD_DIR + "/doctors").mkdir(parents=True, exist_ok=True)
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
     yield
@@ -55,6 +56,10 @@ app.include_router(notification_ws_router)
 static_dir = Path("app/static")
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+uploads_dir = Path(settings.UPLOAD_DIR)
+if uploads_dir.exists():
+    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 
 @app.get("/health", tags=["Health"])

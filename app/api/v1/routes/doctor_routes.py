@@ -1,6 +1,7 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import ValidationError
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -21,12 +22,44 @@ router = APIRouter()
 
 @router.post("", response_model=APIResponse[DoctorResponse], status_code=201)
 async def create_doctor(
-    data: DoctorCreate,
     db: DbSession,
     current_user: CurrentUser,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    specialization: str = Form(...),
+    license_number: str = Form(...),
+    qualification: Optional[str] = Form(None),
+    experience: Optional[int] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    department: Optional[str] = Form(None),
+    consultation_fee: Optional[float] = Form(None),
+    availability_status: str = Form("available"),
+    bio: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
+    profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
-    doctor = await DoctorService(db).create(data, current_user.id)
+    try:
+        data = DoctorCreate(
+            first_name=first_name,
+            last_name=last_name,
+            specialization=specialization,
+            license_number=license_number,
+            qualification=qualification,
+            experience=experience,
+            phone=phone,
+            email=email,
+            department=department,
+            consultation_fee=consultation_fee,
+            availability_status=availability_status,
+            bio=bio,
+            user_id=user_id if user_id else None,
+            profile_image=None,  # will be handled by service
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+    doctor = await DoctorService(db).create(data, current_user.id, image_file=profile_image)
     return APIResponse(message="Doctor created", data=doctor)
 
 
@@ -86,12 +119,42 @@ async def get_doctor(
 @router.put("/{doctor_id}", response_model=APIResponse[DoctorResponse])
 async def update_doctor(
     doctor_id: int,
-    data: DoctorUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    specialization: Optional[str] = Form(None),
+    qualification: Optional[str] = Form(None),
+    experience: Optional[int] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    department: Optional[str] = Form(None),
+    consultation_fee: Optional[float] = Form(None),
+    license_number: Optional[str] = Form(None),
+    availability_status: Optional[str] = Form(None),
+    bio: Optional[str] = Form(None),
+    profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "update")),
 ):
-    doctor = await DoctorService(db).update(doctor_id, data, current_user.id)
+    try:
+        data = DoctorUpdate(
+            first_name=first_name,
+            last_name=last_name,
+            specialization=specialization,
+            qualification=qualification,
+            experience=experience,
+            phone=phone,
+            email=email,
+            department=department,
+            consultation_fee=consultation_fee,
+            license_number=license_number,
+            availability_status=availability_status,
+            bio=bio,
+            profile_image=None,  # will be handled by service
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+    doctor = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image)
     return APIResponse(message="Doctor updated", data=doctor)
 
 

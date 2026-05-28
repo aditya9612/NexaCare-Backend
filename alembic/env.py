@@ -23,7 +23,7 @@ import app.models.audit_log_model  # noqa: F401
 import app.models.bed_allocation_model  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -20,6 +20,7 @@ import app.models.inventory_model  # noqa: F401
 import app.models.lab_model  # noqa: F401
 import app.models.nurse_model  # noqa: F401
 import app.models.audit_log_model  # noqa: F401
+import app.models.bed_allocation_model  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)

@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from sqlalchemy import Integer, String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -11,7 +10,7 @@ from app.models.patient_model import Patient
 class Floor(Base, TimestampMixin):
     __tablename__ = "floors"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     number: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(100))
     type: Mapped[str] = mapped_column(String(50))  # General, ICU, Emergency, Deluxe
@@ -23,8 +22,8 @@ class Floor(Base, TimestampMixin):
 class Room(Base, TimestampMixin):
     __tablename__ = "rooms"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    floor_id: Mapped[str] = mapped_column(String(36), ForeignKey("floors.id", ondelete="CASCADE"), index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    floor_id: Mapped[int] = mapped_column(Integer, ForeignKey("floors.id", ondelete="CASCADE"), index=True)
     number: Mapped[int] = mapped_column(Integer, index=True)
     name: Mapped[str] = mapped_column(String(100))
     type: Mapped[str] = mapped_column(String(50))
@@ -38,8 +37,8 @@ class Room(Base, TimestampMixin):
 class Bed(Base, TimestampMixin):
     __tablename__ = "beds"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    room_id: Mapped[str] = mapped_column(String(36), ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    room_id: Mapped[int] = mapped_column(Integer, ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(100))
     type: Mapped[str] = mapped_column(String(50))  # General, ICU, Ventilator, Deluxe, etc.
     status: Mapped[str] = mapped_column(String(50), default="Available")  # Available, Occupied, Reserved, Cleaning, Maintenance
@@ -56,12 +55,12 @@ class Bed(Base, TimestampMixin):
 class BedActivityLog(Base, TimestampMixin):
     __tablename__ = "bed_activity_logs"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     type: Mapped[str] = mapped_column(String(50))  # allocation, release, transfer, crud
     message: Mapped[str] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     
-    floor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    room_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    bed_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    patient_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    floor_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    room_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bed_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    patient_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

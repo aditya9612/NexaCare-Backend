@@ -50,7 +50,7 @@ async def create_floor(
 
 @router.put("/floors/{floorId}", response_model=APIResponse[FloorResponse])
 async def update_floor(
-    floorId: str,
+    floorId: int,
     data: FloorUpdate,
     db: DbSession,
     current_user: CurrentUser,
@@ -62,7 +62,7 @@ async def update_floor(
 
 @router.delete("/floors/{floorId}", response_model=APIResponse[MessageResponse])
 async def delete_floor(
-    floorId: str,
+    floorId: int,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "delete")),
@@ -74,7 +74,7 @@ async def delete_floor(
 # 2. Room Routes
 @router.post("/floors/{floorId}/rooms", response_model=APIResponse[RoomResponse], status_code=201)
 async def create_room(
-    floorId: str,
+    floorId: int,
     data: RoomCreate,
     db: DbSession,
     current_user: CurrentUser,
@@ -86,7 +86,7 @@ async def create_room(
 
 @router.put("/rooms/{roomId}", response_model=APIResponse[RoomResponse])
 async def update_room(
-    roomId: str,
+    roomId: int,
     data: RoomUpdate,
     db: DbSession,
     current_user: CurrentUser,
@@ -98,7 +98,7 @@ async def update_room(
 
 @router.delete("/rooms/{roomId}", response_model=APIResponse[MessageResponse])
 async def delete_room(
-    roomId: str,
+    roomId: int,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "delete")),
@@ -110,7 +110,7 @@ async def delete_room(
 # 3. Bed Routes
 @router.post("/rooms/{roomId}/beds", response_model=APIResponse[BedResponse], status_code=201)
 async def create_bed(
-    roomId: str,
+    roomId: int,
     data: BedCreate,
     db: DbSession,
     current_user: CurrentUser,
@@ -122,7 +122,7 @@ async def create_bed(
 
 @router.put("/beds/{bedId}", response_model=APIResponse[BedResponse])
 async def update_bed(
-    bedId: str,
+    bedId: int,
     data: BedUpdate,
     db: DbSession,
     current_user: CurrentUser,
@@ -134,7 +134,7 @@ async def update_bed(
 
 @router.delete("/beds/{bedId}", response_model=APIResponse[MessageResponse])
 async def delete_bed(
-    bedId: str,
+    bedId: int,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "delete")),
@@ -146,7 +146,7 @@ async def delete_bed(
 # 4. Bed Allocation Actions
 @router.post("/beds/{bedId}/allocate", response_model=APIResponse[BedResponse])
 async def allocate_bed(
-    bedId: str,
+    bedId: int,
     data: BedAllocationRequest,
     db: DbSession,
     current_user: CurrentUser,
@@ -158,7 +158,7 @@ async def allocate_bed(
 
 @router.post("/beds/{bedId}/release", response_model=APIResponse[BedResponse])
 async def release_bed(
-    bedId: str,
+    bedId: int,
     data: BedReleaseRequest,
     db: DbSession,
     current_user: CurrentUser,

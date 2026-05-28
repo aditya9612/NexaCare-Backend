@@ -28,7 +28,7 @@ class BedAllocationService:
         self.repo = BedAllocationRepository(db)
 
     # Floor Services
-    async def get_floor(self, floor_id: str) -> Floor:
+    async def get_floor(self, floor_id: int) -> Floor:
         floor = await self.repo.get_floor_by_id(floor_id)
         if not floor:
             raise NotFoundException("Floor not found")
@@ -73,7 +73,7 @@ class BedAllocationService:
 
         return await self.get_floor(floor.id)
 
-    async def update_floor(self, floor_id: str, data: FloorUpdate) -> Floor:
+    async def update_floor(self, floor_id: int, data: FloorUpdate) -> Floor:
         floor = await self.get_floor(floor_id)
         
         if data.number is not None and data.number != floor.number:
@@ -98,7 +98,7 @@ class BedAllocationService:
         await self.repo.create_activity_log(log)
         return await self.get_floor(floor.id)
 
-    async def delete_floor(self, floor_id: str) -> None:
+    async def delete_floor(self, floor_id: int) -> None:
         floor = await self.get_floor(floor_id)
 
         for room in floor.rooms:
@@ -116,13 +116,13 @@ class BedAllocationService:
         await self.repo.delete_floor(floor)
 
     # Room Services
-    async def get_room(self, room_id: str) -> Room:
+    async def get_room(self, room_id: int) -> Room:
         room = await self.repo.get_room_by_id(room_id)
         if not room:
             raise NotFoundException("Room not found")
         return room
 
-    async def create_room(self, floor_id: str, data: RoomCreate) -> Room:
+    async def create_room(self, floor_id: int, data: RoomCreate) -> Room:
         floor = await self.get_floor(floor_id)
 
         existing = await self.repo.get_room_by_number(floor_id, data.number)
@@ -158,7 +158,7 @@ class BedAllocationService:
 
         return await self.get_room(room.id)
 
-    async def update_room(self, room_id: str, data: RoomUpdate) -> Room:
+    async def update_room(self, room_id: int, data: RoomUpdate) -> Room:
         room = await self.get_room(room_id)
 
         if data.number is not None and data.number != room.number:
@@ -189,7 +189,7 @@ class BedAllocationService:
 
         return await self.get_room(room.id)
 
-    async def delete_room(self, room_id: str) -> None:
+    async def delete_room(self, room_id: int) -> None:
         room = await self.get_room(room_id)
 
         for bed in room.beds:
@@ -207,13 +207,13 @@ class BedAllocationService:
         await self.repo.delete_room(room)
 
     # Bed Services
-    async def get_bed(self, bed_id: str) -> Bed:
+    async def get_bed(self, bed_id: int) -> Bed:
         bed = await self.repo.get_bed_by_id(bed_id)
         if not bed:
             raise NotFoundException("Bed not found")
         return bed
 
-    async def create_bed(self, room_id: str, data: BedCreate) -> Bed:
+    async def create_bed(self, room_id: int, data: BedCreate) -> Bed:
         room = await self.get_room(room_id)
 
         if len(room.beds) >= room.capacity:
@@ -242,7 +242,7 @@ class BedAllocationService:
 
         return await self.get_bed(bed.id)
 
-    async def update_bed(self, bed_id: str, data: BedUpdate) -> Bed:
+    async def update_bed(self, bed_id: int, data: BedUpdate) -> Bed:
         bed = await self.get_bed(bed_id)
 
         if data.name is not None and data.name != bed.name:
@@ -274,13 +274,13 @@ class BedAllocationService:
             floor_id=bed.room.floor_id if bed.room else None,
             room_id=bed.room_id,
             bed_id=bed.id,
-            patient_id=str(bed.patient_id) if bed.patient_id else None,
+            patient_id=bed.patient_id,
         )
         await self.repo.create_activity_log(log)
 
         return await self.get_bed(bed.id)
 
-    async def delete_bed(self, bed_id: str) -> None:
+    async def delete_bed(self, bed_id: int) -> None:
         bed = await self.get_bed(bed_id)
 
         if bed.status == "Occupied":
@@ -297,7 +297,7 @@ class BedAllocationService:
 
         await self.repo.delete_bed(bed)
 
-    # Patient Services (fetches from main Patient table)
+    # Patient Services
     async def get_patient(self, patient_id: int) -> Patient:
         patient = await self.repo.get_patient_by_id(patient_id)
         if not patient:
@@ -305,46 +305,42 @@ class BedAllocationService:
         return patient
 
     # Bed Allocation Operations
-    async def allocate_bed(self, bed_id: str, data: BedAllocationRequest) -> Bed:
+    async def allocate_bed(self, bed_id: int, data: BedAllocationRequest) -> Bed:
         bed = await self.get_bed(bed_id)
         if bed.status != "Available":
             raise BadRequestException(f"Bed {bed.name} is not available. Current status: {bed.status}.")
 
         patient = await self.get_patient(data.patientId)
 
-        # Update bed
         bed.status = "Occupied"
         bed.patient_id = patient.id
         bed.allocation_time = utc_now()
         bed.admission_date = data.admissionDate
 
-        # Record admission details on patient's medical history
         admission_note = f"\n[Bed Admission]: Admitted to Bed {bed.name} (Room: {bed.room.name if bed.room else ''}) on {data.admissionDate.strftime('%Y-%m-%d')}. Notes: {data.notes or 'None'}"
         patient.medical_history = f"{patient.medical_history or ''}{admission_note}".strip()
 
         await self.db.flush()
 
-        # Create Activity Log
         log = BedActivityLog(
             type="allocation",
             message=f"Patient {patient.first_name} {patient.last_name} admitted and allocated to Bed {bed.name} (Room: {bed.room.name if bed.room else ''}).",
             floor_id=bed.room.floor_id if bed.room else None,
             room_id=bed.room_id,
             bed_id=bed.id,
-            patient_id=str(patient.id),
+            patient_id=patient.id,
         )
         await self.repo.create_activity_log(log)
 
         return await self.get_bed(bed.id)
 
-    async def release_bed(self, bed_id: str, data: BedReleaseRequest) -> Bed:
+    async def release_bed(self, bed_id: int, data: BedReleaseRequest) -> Bed:
         bed = await self.get_bed(bed_id)
         if bed.status != "Occupied" or not bed.patient_id:
             raise BadRequestException(f"Bed {bed.name} is not currently occupied.")
 
         patient = await self.get_patient(bed.patient_id)
 
-        # Record discharge details on patient's medical history
         discharge_note = f"\n[Bed Discharge]: Discharged from Bed {bed.name} on {utc_now().strftime('%Y-%m-%d')}. Discharge Notes: {data.dischargeNotes or 'None'}"
         patient.medical_history = f"{patient.medical_history or ''}{discharge_note}".strip()
 
@@ -352,7 +348,6 @@ class BedAllocationService:
         room_id = bed.room_id
         patient_id = patient.id
 
-        # Free bed
         bed.status = "Available"
         bed.patient_id = None
         bed.allocation_time = None
@@ -360,14 +355,13 @@ class BedAllocationService:
 
         await self.db.flush()
 
-        # Create Activity Log
         log = BedActivityLog(
             type="release",
             message=f"Patient {patient.first_name} {patient.last_name} discharged and released from Bed {bed.name}.",
             floor_id=floor_id,
             room_id=room_id,
             bed_id=bed.id,
-            patient_id=str(patient_id),
+            patient_id=patient_id,
         )
         await self.repo.create_activity_log(log)
 
@@ -389,13 +383,11 @@ class BedAllocationService:
         source_room_name = source_bed.room.name if source_bed.room else ""
         target_room_name = target_bed.room.name if target_bed.room else ""
 
-        # Move patient to target bed
         target_bed.status = "Occupied"
         target_bed.patient_id = patient.id
         target_bed.allocation_time = allocation_time
         target_bed.admission_date = admission_date
 
-        # Free source bed
         source_bed.status = "Available"
         source_bed.patient_id = None
         source_bed.allocation_time = None
@@ -403,7 +395,6 @@ class BedAllocationService:
 
         await self.db.flush()
 
-        # Create Activity Log
         log = BedActivityLog(
             type="transfer",
             message=(
@@ -413,7 +404,7 @@ class BedAllocationService:
             floor_id=target_bed.room.floor_id if target_bed.room else None,
             room_id=target_bed.room_id,
             bed_id=target_bed.id,
-            patient_id=str(patient.id),
+            patient_id=patient.id,
         )
         await self.repo.create_activity_log(log)
 

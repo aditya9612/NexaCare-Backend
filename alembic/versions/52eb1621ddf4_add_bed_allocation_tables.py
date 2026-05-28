@@ -22,7 +22,7 @@ def upgrade() -> None:
     # 1. Create floors table
     op.create_table(
         'floors',
-        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
         sa.Column('number', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(length=100), nullable=False),
         sa.Column('type', sa.String(length=50), nullable=False),
@@ -37,8 +37,8 @@ def upgrade() -> None:
     # 2. Create rooms table
     op.create_table(
         'rooms',
-        sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('floor_id', sa.String(length=36), nullable=False),
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('floor_id', sa.Integer(), nullable=False),
         sa.Column('number', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(length=100), nullable=False),
         sa.Column('type', sa.String(length=50), nullable=False),
@@ -56,8 +56,8 @@ def upgrade() -> None:
     # 3. Create beds table
     op.create_table(
         'beds',
-        sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('room_id', sa.String(length=36), nullable=False),
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('room_id', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(length=100), nullable=False),
         sa.Column('type', sa.String(length=50), nullable=False),
         sa.Column('status', sa.String(length=50), nullable=False),
@@ -77,14 +77,14 @@ def upgrade() -> None:
     # 4. Create bed_activity_logs table
     op.create_table(
         'bed_activity_logs',
-        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
         sa.Column('type', sa.String(length=50), nullable=False),
         sa.Column('message', sa.Text(), nullable=False),
         sa.Column('timestamp', sa.DateTime(), nullable=False),
-        sa.Column('floor_id', sa.String(length=36), nullable=True),
-        sa.Column('room_id', sa.String(length=36), nullable=True),
-        sa.Column('bed_id', sa.String(length=36), nullable=True),
-        sa.Column('patient_id', sa.String(length=36), nullable=True),
+        sa.Column('floor_id', sa.Integer(), nullable=True),
+        sa.Column('room_id', sa.Integer(), nullable=True),
+        sa.Column('bed_id', sa.Integer(), nullable=True),
+        sa.Column('patient_id', sa.Integer(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint('id')

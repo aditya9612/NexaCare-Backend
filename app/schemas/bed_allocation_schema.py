@@ -23,8 +23,8 @@ class BedUpdate(BaseModel):
 
 
 class BedResponse(BaseSchema):
-    id: str
-    room_id: str
+    id: int
+    room_id: int
     name: str
     type: str
     status: str
@@ -54,8 +54,8 @@ class RoomUpdate(BaseModel):
 
 
 class RoomResponse(BaseSchema):
-    id: str
-    floor_id: str
+    id: int
+    floor_id: int
     number: int
     name: str
     type: str
@@ -83,7 +83,7 @@ class FloorUpdate(BaseModel):
 
 
 class FloorResponse(BaseSchema):
-    id: str
+    id: int
     number: int
     name: str
     type: str
@@ -105,20 +105,20 @@ class BedReleaseRequest(BaseModel):
 
 
 class BedTransferRequest(BaseModel):
-    sourceBedId: str
-    targetBedId: str
+    sourceBedId: int
+    targetBedId: int
 
 
 # Bed Activity Log Schemas
 class BedActivityLogResponse(BaseSchema):
-    id: str
+    id: int
     type: str
     message: str
     timestamp: datetime
-    floor_id: Optional[str] = None
-    room_id: Optional[str] = None
-    bed_id: Optional[str] = None
-    patient_id: Optional[str] = None
+    floor_id: Optional[int] = None
+    room_id: Optional[int] = None
+    bed_id: Optional[int] = None
+    patient_id: Optional[int] = None
 
 
 # Analytics Schemas

@@ -69,14 +69,14 @@ async def list_doctors(
     current_user: CurrentUser,
     page: int = 1,
     size: int = 20,
-    department: str | None = None,
+    department_id: int | None = None,
     availability_status: str | None = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
     _: User = Depends(require_permission("doctors", "read")),
 ):
     result = await DoctorService(db).list_doctors(
-        page=page, size=size, department=department,
+        page=page, size=size, department_id=department_id,
         availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
     )
     return APIResponse(message="Doctors retrieved", data=result)

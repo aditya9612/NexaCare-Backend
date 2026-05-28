@@ -10,6 +10,7 @@ from app.api.v1.routes import (
     chat_routes,
     dashboard_routes,
     doctor_routes,
+    department_routes,
     inventory_routes,
     lab_routes,
     nurse_routes,
@@ -33,6 +34,7 @@ api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"]
 api_router.include_router(pharmacy_routes.router, prefix="/pharmacy", tags=["Pharmacy"])
 api_router.include_router(lab_routes.router, prefix="/lab", tags=["Lab"])
 api_router.include_router(billing_routes.router, prefix="/billing", tags=["Billing"])
+api_router.include_router(department_routes.router, prefix="/departments", tags=["Departments"])
 api_router.include_router(inventory_routes.router, prefix="/inventory", tags=["Inventory"])
 api_router.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 api_router.include_router(ai_routes.router, prefix="/ai", tags=["AI"])

@@ -31,6 +31,7 @@ from app.models.whatsapp_model import (
     WhatsAppMessage,
     WhatsAppTemplate,
 )
+from app.models.bed_allocation_model import Bed, BedActivityLog, Floor, Room
 
 __all__ = [
     "User",
@@ -91,4 +92,9 @@ __all__ = [
     "DashboardMetric",
     "ReportExport",
     "AIAnalytics",
+    "Floor",
+    "Room",
+    "Bed",
+    "BedActivityLog",
 ]
+

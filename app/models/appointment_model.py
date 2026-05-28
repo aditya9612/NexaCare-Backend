@@ -15,7 +15,7 @@ class Appointment(Base, TimestampMixin):
     appointment_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("doctors.id"), index=True)
-    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.department_id"), nullable=True, index=True)
     appointment_date: Mapped[date] = mapped_column(Date, index=True)
     appointment_time: Mapped[time] = mapped_column(Time, index=True)
     appointment_type: Mapped[str | None] = mapped_column(String(50), nullable=True)

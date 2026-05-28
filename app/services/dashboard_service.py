@@ -9,6 +9,7 @@ from app.models.billing_model import Billing
 from app.models.doctor_model import Doctor
 from app.models.patient_model import Patient
 from app.models.user_model import User
+from app.models.department_model import Department
 from app.repositories.appointment_repository import AppointmentRepository
 from app.schemas.appointment_schema import AppointmentResponse
 from app.schemas.dashboard_schema import (
@@ -42,10 +43,10 @@ class DashboardService:
         ) or 0.0
 
         dept_result = await self.db.execute(
-            select(Doctor.department, func.count(Appointment.id))
+            select(Department.department_name, func.count(Appointment.id))
             .join(Appointment, Appointment.doctor_id == Doctor.id)
-            .where(Doctor.department.isnot(None))
-            .group_by(Doctor.department)
+            .join(Department, Doctor.department_id == Department.department_id)
+            .group_by(Department.department_name)
         )
         department_statistics = [
             DepartmentStat(department=row[0] or "Unknown", count=row[1])

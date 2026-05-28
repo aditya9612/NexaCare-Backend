@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.api import api_router
+from app.api.v1.routes.bed_allocation_routes import router as bed_allocation_router
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, init_db
 from app.middleware.exception_middleware import ExceptionMiddleware
@@ -48,6 +49,7 @@ app.add_middleware(ExceptionMiddleware)
 app.add_middleware(RBACMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+app.include_router(bed_allocation_router, prefix="/api", tags=["Bed Allocation"])
 app.include_router(chat_ws_router)
 app.include_router(notification_ws_router)
 

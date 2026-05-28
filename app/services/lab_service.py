@@ -4,6 +4,7 @@ from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.department_repository import DepartmentRepository
 from app.repositories.lab_repository import (
     LabReportRepository,
     LabTestRepository,
@@ -39,9 +40,17 @@ class LabService:
         self.result_repo = TestResultRepository(db)
         self.report_repo = LabReportRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.dept_repo = DepartmentRepository(db)
+
+    async def _validate_department(self, department_id: int | None) -> None:
+        if department_id is not None:
+            dept = await self.dept_repo.get_by_id(department_id)
+            if not dept:
+                raise NotFoundException(f"Department with ID {department_id} not found")
 
     # --- Lab Test Catalog ---
     async def create_test(self, data: LabTestCreate, user_id: int) -> LabTestResponse:
+        await self._validate_department(data.department_id)
         test = LabTest(test_code=generate_lab_test_code(), **data.model_dump())
         test = await self.test_repo.create(test)
         await self.audit_repo.create("create", "lab", user_id=user_id, resource_id=str(test.id))
@@ -73,6 +82,7 @@ class LabService:
         test = await self.test_repo.get_by_id(test_id)
         if not test:
             raise NotFoundException("Lab test not found")
+        await self._validate_department(data.department_id)
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(test, key, value)
         test = await self.test_repo.update(test)
@@ -91,6 +101,7 @@ class LabService:
         test = await self.test_repo.get_by_id(data.lab_test_id)
         if not test or not test.is_active:
             raise NotFoundException("Lab test not found or inactive")
+        await self._validate_department(data.department_id)
         order = TestOrder(
             order_number=generate_lab_order_number(),
             ordered_at=utc_now(),

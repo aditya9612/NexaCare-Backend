@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictException, NotFoundException
 from app.models.doctor_model import Doctor, DoctorSchedule
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.department_repository import DepartmentRepository
 from app.repositories.doctor_repository import DoctorRepository
 from app.schemas.appointment_schema import AppointmentResponse
 from app.schemas.doctor_schema import (
@@ -25,22 +26,30 @@ class DoctorService:
     def __init__(self, db: AsyncSession):
         self.repo = DoctorRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.dept_repo = DepartmentRepository(db)
+
+    async def _validate_department(self, department_id: int | None) -> None:
+        """Raise 404 if department_id is given but doesn't exist."""
+        if department_id is not None:
+            dept = await self.dept_repo.get_by_id(department_id)
+            if not dept:
+                raise NotFoundException(f"Department with ID {department_id} not found")
 
     async def list_doctors(
         self,
         page: int = 1,
         size: int = 20,
-        department: str | None = None,
+        department_id: int | None = None,
         availability_status: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ):
         skip = (page - 1) * size
         items = await self.repo.list_all(
-            skip=skip, limit=size, department=department,
+            skip=skip, limit=size, department_id=department_id,
             availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
         )
-        total = await self.repo.count_all(department=department, availability_status=availability_status)
+        total = await self.repo.count_all(department_id=department_id, availability_status=availability_status)
         return build_paginated_result(
             [DoctorResponse.model_validate(d) for d in items], total, page, size
         )

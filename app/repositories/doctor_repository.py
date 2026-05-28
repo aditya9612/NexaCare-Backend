@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment_model import Appointment
 from app.models.doctor_model import Doctor, DoctorSchedule
+from app.models.department_model import Department
 
 
 class DoctorRepository:
@@ -10,20 +11,20 @@ class DoctorRepository:
         self.db = db
 
     def _base_query(self):
-        return select(Doctor).where(Doctor.is_deleted.is_(False))
+        return select(Doctor).outerjoin(Doctor.department).where(Doctor.is_deleted.is_(False))
 
     async def list_all(
         self,
         skip: int = 0,
         limit: int = 20,
-        department: str | None = None,
+        department_id: int | None = None,
         availability_status: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ) -> list[Doctor]:
         query = self._base_query()
-        if department:
-            query = query.where(Doctor.department == department)
+        if department_id:
+            query = query.where(Doctor.department_id == department_id)
         if availability_status:
             query = query.where(Doctor.availability_status == availability_status)
         column = getattr(Doctor, sort_by, Doctor.created_at)
@@ -33,12 +34,12 @@ class DoctorRepository:
 
     async def count_all(
         self,
-        department: str | None = None,
+        department_id: int | None = None,
         availability_status: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Doctor).where(Doctor.is_deleted.is_(False))
-        if department:
-            query = query.where(Doctor.department == department)
+        if department_id:
+            query = query.where(Doctor.department_id == department_id)
         if availability_status:
             query = query.where(Doctor.availability_status == availability_status)
         return await self.db.scalar(query) or 0
@@ -54,7 +55,7 @@ class DoctorRepository:
             func.lower(Doctor.last_name).like(pattern),
             func.lower(Doctor.doctor_code).like(pattern),
             func.lower(Doctor.specialization).like(pattern),
-            func.lower(cast(Doctor.department, String)).like(pattern),
+            func.lower(Department.department_name).like(pattern),
         )
 
     async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Doctor]:
@@ -67,6 +68,7 @@ class DoctorRepository:
             await self.db.scalar(
                 select(func.count())
                 .select_from(Doctor)
+                .outerjoin(Doctor.department)
                 .where(Doctor.is_deleted.is_(False), self._search_filter(q))
             )
             or 0
@@ -77,6 +79,12 @@ class DoctorRepository:
             self._base_query().where(Doctor.availability_status == "available")
         )
         return list(result.scalars().all())
+
+    async def get_by_license(self, license_number: str) -> Doctor | None:
+        result = await self.db.execute(
+            select(Doctor).where(Doctor.license_number == license_number, Doctor.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
 
     async def create(self, doctor: Doctor) -> Doctor:
         self.db.add(doctor)

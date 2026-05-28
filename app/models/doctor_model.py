@@ -18,7 +18,7 @@ class Doctor(Base, TimestampMixin):
     experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    department: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.department_id"), nullable=True, index=True)
     consultation_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
     license_number: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     availability_status: Mapped[str] = mapped_column(String(50), default="available", index=True)
@@ -26,6 +26,7 @@ class Doctor(Base, TimestampMixin):
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
+    department = relationship("Department", back_populates="doctors")
     appointments = relationship("Appointment", back_populates="doctor")
     schedules = relationship("DoctorSchedule", back_populates="doctor", cascade="all, delete-orphan")
 

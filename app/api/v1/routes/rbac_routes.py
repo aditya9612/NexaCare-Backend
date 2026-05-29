@@ -108,3 +108,24 @@ async def list_role_permissions(
 ):
     items = await RBACService(db).list_role_permissions(role_id)
     return APIResponse(message="Role permissions retrieved", data=items)
+
+
+@router.post("/roles/assign-permissions", response_model=APIResponse[RolePermissionResponse], status_code=201)
+async def assign_role_permission_path(
+    data: RolePermissionCreate,
+    db: DbSession,
+    admin: AdminUser,
+    _: User = Depends(require_permission("permissions", "assign")),
+):
+    rp = await RBACService(db).assign_permission(data, admin.id)
+    return APIResponse(message="Permission assigned to role successfully", data=rp)
+
+
+@router.get("/roles/{role_id}/permissions", response_model=APIResponse[List[RolePermissionResponse]])
+async def get_role_permissions(
+    role_id: int,
+    db: DbSession,
+    _: User = Depends(require_permission("permissions", "read")),
+):
+    items = await RBACService(db).list_role_permissions(role_id)
+    return APIResponse(message="Role permissions retrieved successfully", data=items)

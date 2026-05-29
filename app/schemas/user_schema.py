@@ -11,6 +11,7 @@ class UserCreate(BaseSchema):
     full_name: str
     phone: str | None = None
     role_id: int
+    hospital_id: int | None = None
     gender: str | None = None
     date_of_birth: date | None = None
 
@@ -22,6 +23,7 @@ class UserUpdate(BaseSchema):
     date_of_birth: date | None = None
     profile_image: str | None = None
     is_active: bool | None = None
+    hospital_id: int | None = None
 
 
 class UserResponse(BaseSchema):
@@ -32,6 +34,7 @@ class UserResponse(BaseSchema):
     phone: str | None
     role_id: int
     role_name: str | None = None
+    hospital_id: int | None = None
     profile_image: str | None
     gender: str | None
     date_of_birth: date | None

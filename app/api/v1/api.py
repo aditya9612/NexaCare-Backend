@@ -20,6 +20,10 @@ from app.api.v1.routes import (
     voice_assistant_routes,
     voice_routes,
     whatsapp_routes,
+    super_admin_routes,
+    subscription_routes,
+    platform_routes,
+    security_routes,
 )
 
 api_router = APIRouter()
@@ -47,3 +51,7 @@ api_router.include_router(
 )
 api_router.include_router(whatsapp_routes.router, prefix="/whatsapp", tags=["WhatsApp"])
 api_router.include_router(analytics_routes.router, prefix="/analytics", tags=["Analytics"])
+api_router.include_router(super_admin_routes.router, prefix="/super-admin", tags=["Super Admin"])
+api_router.include_router(subscription_routes.router, prefix="/subscriptions", tags=["Subscriptions"])
+api_router.include_router(platform_routes.router, prefix="/platform", tags=["Platform"])
+api_router.include_router(security_routes.router, prefix="/security", tags=["Security"])

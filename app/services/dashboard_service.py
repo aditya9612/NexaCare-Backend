@@ -42,12 +42,14 @@ class DashboardService:
             select(func.coalesce(func.sum(Billing.paid_amount), 0.0)).where(Billing.is_deleted.is_(False))
         ) or 0.0
 
-        dept_result = await self.db.execute(
+        dept_query = (
             select(Department.department_name, func.count(Appointment.id))
+            .select_from(Department)
+            .join(Doctor, Doctor.department_id == Department.department_id)
             .join(Appointment, Appointment.doctor_id == Doctor.id)
-            .join(Department, Doctor.department_id == Department.department_id)
             .group_by(Department.department_name)
         )
+        dept_result = await self.db.execute(dept_query)
         department_statistics = [
             DepartmentStat(department=row[0] or "Unknown", count=row[1])
             for row in dept_result.all()

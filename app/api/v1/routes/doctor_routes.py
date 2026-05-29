@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body
 from pydantic import ValidationError
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -24,43 +24,13 @@ router = APIRouter()
 async def create_doctor(
     db: DbSession,
     current_user: CurrentUser,
-    first_name: str = Form(...),
-    last_name: str = Form(...),
-    specialization: str = Form(...),
-    license_number: str = Form(...),
-    qualification: Optional[str] = Form(None),
-    experience: Optional[int] = Form(None),
-    phone: Optional[str] = Form(None),
-    email: Optional[str] = Form(None),
-    department: Optional[str] = Form(None),
-    consultation_fee: Optional[float] = Form(None),
-    availability_status: str = Form("available"),
-    bio: Optional[str] = Form(None),
-    user_id: Optional[int] = Form(None),
-    profile_image: Optional[UploadFile] = File(None),
+    doctor: DoctorCreate,
     _: User = Depends(require_permission("doctors", "create")),
 ):
-    try:
-        data = DoctorCreate(
-            first_name=first_name,
-            last_name=last_name,
-            specialization=specialization,
-            license_number=license_number,
-            qualification=qualification,
-            experience=experience,
-            phone=phone,
-            email=email,
-            department=department,
-            consultation_fee=consultation_fee,
-            availability_status=availability_status,
-            bio=bio,
-            user_id=user_id if user_id else None,
-            profile_image=None,  # will be handled by service
-        )
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
-    doctor = await DoctorService(db).create(data, current_user.id, image_file=profile_image)
-    return APIResponse(message="Doctor created", data=doctor)
+    # Directly use validated DoctorCreate model
+    doctor_obj = await DoctorService(db).create(doctor, current_user.id, image_file=None)
+    return APIResponse(message="Doctor created", data=doctor_obj)
+# Deprecated legacy code removed
 
 
 @router.get("", response_model=APIResponse[PaginatedResult[DoctorResponse]])

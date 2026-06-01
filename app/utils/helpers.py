@@ -86,6 +86,11 @@ def generate_medicine_sku() -> str:
     return generate_code("MED")
 
 
+def generate_branch_code() -> str:
+    return generate_code("BRN")
+
+
+
 def calculate_gst_amount(amount: float, gst_rate: float) -> float:
     return round(amount * gst_rate / 100, 2)
 

@@ -7,6 +7,8 @@ from app.schemas.hospital_schema import HospitalCreate, HospitalUpdate, Hospital
 from app.schemas.user_schema import UserCreate, UserUpdate, UserResponse
 from app.services.hospital_service import HospitalService
 from app.models.user_model import User
+from app.schemas.super_admin_schema import SuperAdminDashboardResponse, SuperAdminAnalyticsResponse
+from app.services.super_admin_service import SuperAdminService
 
 router = APIRouter()
 
@@ -105,3 +107,19 @@ async def deactivate_hospital_admin(
 ):
     await HospitalService(db).delete_hospital_admin(id, current_user.id)
     return APIResponse(message="Hospital Admin deactivated successfully", data=MessageResponse(message="Hospital Admin deactivated"))
+
+@router.get("/dashboard", response_model=APIResponse[SuperAdminDashboardResponse])
+async def get_super_admin_dashboard(
+    db: DbSession,
+    current_user: User = Depends(require_super_admin)
+):
+    stats = await SuperAdminService(db).get_dashboard_stats()
+    return APIResponse(message="Super Admin dashboard stats retrieved successfully", data=stats)
+
+@router.get("/dashboard/analytics", response_model=APIResponse[SuperAdminAnalyticsResponse])
+async def get_super_admin_analytics(
+    db: DbSession,
+    current_user: User = Depends(require_super_admin)
+):
+    analytics = await SuperAdminService(db).get_analytics()
+    return APIResponse(message="Super Admin analytics retrieved successfully", data=analytics)

@@ -24,7 +24,7 @@ class HospitalRepository:
         return result.scalar_one_or_none()
 
     async def get_by_email(self, email: str) -> Hospital | None:
-        result = await self.db.execute(select(Hospital).where(Hospital.email == email, Hospital.is_deleted == False))
+        result = await self.db.execute(select(Hospital).where(Hospital.email == email))
         return result.scalar_one_or_none()
 
     async def list_hospitals(self, skip: int = 0, limit: int = 100) -> list[Hospital]:

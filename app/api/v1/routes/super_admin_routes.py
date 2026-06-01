@@ -7,7 +7,13 @@ from app.schemas.hospital_schema import HospitalCreate, HospitalUpdate, Hospital
 from app.schemas.user_schema import UserCreate, UserUpdate, UserResponse
 from app.services.hospital_service import HospitalService
 from app.models.user_model import User
-from app.schemas.super_admin_schema import SuperAdminDashboardResponse, SuperAdminAnalyticsResponse
+from app.schemas.super_admin_schema import (
+    SuperAdminDashboardResponse,
+    SuperAdminAnalyticsResponse,
+    DashboardOverviewResponse,
+    PatientAnalyticsResponse,
+    UsersDashboardResponse
+)
 from app.services.super_admin_service import SuperAdminService
 
 router = APIRouter()
@@ -123,3 +129,27 @@ async def get_super_admin_analytics(
 ):
     analytics = await SuperAdminService(db).get_analytics()
     return APIResponse(message="Super Admin analytics retrieved successfully", data=analytics)
+
+@router.get("/dashboard/overview", response_model=APIResponse[DashboardOverviewResponse])
+async def get_super_admin_dashboard_overview(
+    db: DbSession,
+    current_user: User = Depends(require_super_admin)
+):
+    overview = await SuperAdminService(db).get_dashboard_overview()
+    return APIResponse(message="Dashboard overview retrieved successfully", data=overview)
+
+@router.get("/dashboard/patients", response_model=APIResponse[PatientAnalyticsResponse])
+async def get_super_admin_dashboard_patients(
+    db: DbSession,
+    current_user: User = Depends(require_super_admin)
+):
+    patients = await SuperAdminService(db).get_patient_analytics_dashboard()
+    return APIResponse(message="Patient analytics retrieved successfully", data=patients)
+
+@router.get("/dashboard/users", response_model=APIResponse[UsersDashboardResponse])
+async def get_super_admin_dashboard_users(
+    db: DbSession,
+    current_user: User = Depends(require_super_admin)
+):
+    users = await SuperAdminService(db).get_users_dashboard()
+    return APIResponse(message="Users dashboard metrics retrieved successfully", data=users)

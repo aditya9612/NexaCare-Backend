@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.models.hospital_model import Hospital
 from app.models.branch_model import Branch
@@ -137,3 +138,114 @@ class SuperAdminRepository:
             {"year": r.year, "month": r.month, "amount": float(r.amount) if r.amount is not None else 0.0}
             for r in rows
         ]
+
+    # Extended Dashboard Repository Methods
+
+    async def get_dashboard_overview_data(self, current_month_start: datetime, prev_month_start: datetime, prev_month_end: datetime) -> dict:
+        now = datetime.utcnow()
+        
+        # 1. Patients total and MoM counts
+        total_patients = await self.db.scalar(
+            select(func.count(Patient.id)).where(Patient.is_deleted == False)
+        ) or 0
+        current_patients = await self.db.scalar(
+            select(func.count(Patient.id)).where(
+                Patient.is_deleted == False, 
+                Patient.created_at >= current_month_start
+            )
+        ) or 0
+        prev_patients = await self.db.scalar(
+            select(func.count(Patient.id)).where(
+                Patient.is_deleted == False, 
+                Patient.created_at >= prev_month_start, 
+                Patient.created_at <= prev_month_end
+            )
+        ) or 0
+
+        # 2. Appointments total and MoM counts
+        total_appointments = await self.db.scalar(
+            select(func.count(Appointment.id))
+        ) or 0
+        current_appointments = await self.db.scalar(
+            select(func.count(Appointment.id)).where(Appointment.created_at >= current_month_start)
+        ) or 0
+        prev_appointments = await self.db.scalar(
+            select(func.count(Appointment.id)).where(
+                Appointment.created_at >= prev_month_start, 
+                Appointment.created_at <= prev_month_end
+            )
+        ) or 0
+
+        # 3. Sessions total and MoM counts (unrevoked, unexpired tokens)
+        active_sessions = await self.db.scalar(
+            select(func.count(RefreshToken.id)).where(
+                RefreshToken.is_revoked == False, 
+                RefreshToken.expires_at > now
+            )
+        ) or 0
+        current_sessions = await self.db.scalar(
+            select(func.count(RefreshToken.id)).where(RefreshToken.created_at >= current_month_start)
+        ) or 0
+        prev_sessions = await self.db.scalar(
+            select(func.count(RefreshToken.id)).where(
+                RefreshToken.created_at >= prev_month_start, 
+                RefreshToken.created_at <= prev_month_end
+            )
+        ) or 0
+
+        return {
+            "total_patients": total_patients,
+            "current_patients": current_patients,
+            "prev_patients": prev_patients,
+            "total_appointments": total_appointments,
+            "current_appointments": current_appointments,
+            "prev_appointments": prev_appointments,
+            "active_sessions": active_sessions,
+            "current_sessions": current_sessions,
+            "prev_sessions": prev_sessions
+        }
+
+    async def get_patients_last_6_months(self, start_date: datetime) -> list[dict]:
+        query = select(
+            func.year(Patient.created_at).label("year"),
+            func.month(Patient.created_at).label("month"),
+            func.count(Patient.id).label("count")
+        ).where(
+            Patient.is_deleted == False,
+            Patient.created_at >= start_date
+        ).group_by(
+            func.year(Patient.created_at),
+            func.month(Patient.created_at)
+        ).order_by(
+            func.year(Patient.created_at),
+            func.month(Patient.created_at)
+        )
+        res = await self.db.execute(query)
+        rows = res.all()
+        return [
+            {"year": r.year, "month": r.month, "count": r.count}
+            for r in rows
+        ]
+
+    async def get_users_distribution_data(self) -> list[dict]:
+        query = select(
+            Role.name.label("role_name"),
+            func.count(User.id).label("count")
+        ).join(Role, User.role_id == Role.id).group_by(Role.name)
+        res = await self.db.execute(query)
+        rows = res.all()
+        return [
+            {"role_name": r.role_name, "count": r.count}
+            for r in rows
+        ]
+
+    async def get_recent_admins(self, limit: int = 10) -> list[User]:
+        query = select(User).join(Role, User.role_id == Role.id).where(
+            Role.name == UserRole.HOSPITAL_ADMIN
+        ).options(
+            joinedload(User.hospital)
+        ).order_by(
+            User.created_at.desc()
+        ).limit(limit)
+        res = await self.db.execute(query)
+        return list(res.scalars().all())

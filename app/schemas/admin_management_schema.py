@@ -8,7 +8,6 @@ class AdminCreate(BaseSchema):
     full_name: str = Field(..., min_length=2, max_length=255)
     phone: str | None = Field(None, max_length=20)
     hospital_id: int | None = None
-    branch_id: int | None = None
     gender: str | None = Field(None, max_length=20)
     date_of_birth: date | None = None
 
@@ -18,7 +17,6 @@ class AdminUpdate(BaseSchema):
     gender: str | None = Field(None, max_length=20)
     date_of_birth: date | None = None
     hospital_id: int | None = None
-    branch_id: int | None = None
     is_active: bool | None = None
 
 class AdminStatusUpdate(BaseSchema):
@@ -37,8 +35,6 @@ class AdminResponse(BaseSchema):
     role_name: str | None = None
     hospital_id: int | None
     hospital_name: str | None = None
-    branch_id: int | None
-    branch_name: str | None = None
     profile_image: str | None
     gender: str | None
     date_of_birth: date | None

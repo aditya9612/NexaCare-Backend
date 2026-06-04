@@ -3,7 +3,6 @@ from app.schemas.common_schema import BaseSchema
 
 class SuperAdminDashboardResponse(BaseSchema):
     total_hospitals: int
-    total_branches: int
     total_admins: int
     active_admins: int
     inactive_admins: int

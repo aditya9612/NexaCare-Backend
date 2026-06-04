@@ -5,7 +5,6 @@ from app.core.security import get_password_hash
 from app.models.user_model import User
 from app.repositories.admin_management_repository import AdminManagementRepository
 from app.repositories.hospital_repository import HospitalRepository
-from app.repositories.branch_repository import BranchRepository
 from app.repositories.rbac_repository import RBACRepository
 from app.repositories.audit_repository import AuditRepository
 from app.schemas.admin_management_schema import AdminCreate, AdminUpdate, AdminResponse
@@ -17,7 +16,6 @@ class AdminManagementService:
         self.db = db
         self.repo = AdminManagementRepository(db)
         self.hospital_repo = HospitalRepository(db)
-        self.branch_repo = BranchRepository(db)
         self.rbac_repo = RBACRepository(db)
         self.audit_repo = AuditRepository(db)
 
@@ -32,8 +30,6 @@ class AdminManagementService:
             role_name=user.role.name if user.role else None,
             hospital_id=user.hospital_id,
             hospital_name=user.hospital.name if user.hospital else None,
-            branch_id=user.branch_id,
-            branch_name=user.branch.name if user.branch else None,
             profile_image=user.profile_image,
             gender=user.gender,
             date_of_birth=user.date_of_birth,
@@ -62,15 +58,7 @@ class AdminManagementService:
             if not hospital:
                 raise NotFoundException("Hospital not found")
 
-        # Validate branch
-        if data.branch_id:
-            if not data.hospital_id:
-                raise BadRequestException("hospital_id is required if branch_id is specified")
-            branch = await self.branch_repo.get_by_id(data.branch_id)
-            if not branch:
-                raise NotFoundException("Branch not found")
-            if branch.hospital_id != data.hospital_id:
-                raise BadRequestException("Branch does not belong to the specified hospital")
+
 
         # Resolve role
         role = await self.rbac_repo.get_role_by_name(UserRole.HOSPITAL_ADMIN)
@@ -86,7 +74,6 @@ class AdminManagementService:
             phone=data.phone,
             role_id=role.id,
             hospital_id=data.hospital_id,
-            branch_id=data.branch_id,
             gender=data.gender,
             date_of_birth=data.date_of_birth,
             is_active=True,
@@ -153,15 +140,7 @@ class AdminManagementService:
             if not hospital:
                 raise NotFoundException("Hospital not found")
 
-        # Resolve branch_id context
-        if data.branch_id is not None:
-            if not target_hospital_id:
-                raise BadRequestException("Hospital ID is required if branch is specified")
-            branch = await self.branch_repo.get_by_id(data.branch_id)
-            if not branch:
-                raise NotFoundException("Branch not found")
-            if branch.hospital_id != target_hospital_id:
-                raise BadRequestException("Branch does not belong to the specified hospital")
+
 
         # Update fields
         update_data = data.model_dump(exclude_unset=True)

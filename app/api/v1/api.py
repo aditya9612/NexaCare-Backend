@@ -24,7 +24,6 @@ from app.api.v1.routes import (
     subscription_routes,
     platform_routes,
     security_routes,
-    branch_routes,
     admin_management_routes,
 )
 
@@ -58,6 +57,5 @@ api_router.include_router(super_admin_routes.router, prefix="/super-admin", tags
 api_router.include_router(subscription_routes.router, prefix="/subscriptions", tags=["Subscriptions"])
 api_router.include_router(platform_routes.router, prefix="/platform", tags=["Platform"])
 api_router.include_router(security_routes.router, prefix="/security", tags=["Security"])
-api_router.include_router(branch_routes.router, prefix="/branches", tags=["Branches"])
 api_router.include_router(admin_management_routes.router, prefix="/super-admin/admins", tags=["Super Admin Admins"])
 

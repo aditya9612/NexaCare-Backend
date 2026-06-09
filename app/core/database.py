@@ -41,6 +41,7 @@ async def init_db():
         doctor_model,
         inventory_model,
         lab_model,
+        nurse_model,
         patient_model,
         permission_model,
         pharmacy_model,

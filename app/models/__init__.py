@@ -7,7 +7,16 @@ from app.models.department_model import Department
 from app.models.doctor_model import Doctor, DoctorSchedule
 from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Vendor, Warehouse
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
-from app.models.nurse_model import Nurse
+from app.models.nurse_model import (
+    Nurse,
+    NurseAttendance,
+    NurseHandoverNote,
+    NurseNotification,
+    NursePatientAssignment,
+    NurseShift,
+    PatientVital,
+    NurseTask,
+)
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.models.permission_model import Permission
 from app.models.pharmacy_model import (
@@ -80,6 +89,13 @@ __all__ = [
     "Warehouse",
     "ReorderAlert",
     "Nurse",
+    "NurseShift",
+    "NurseAttendance",
+    "NurseHandoverNote",
+    "NursePatientAssignment",
+    "NurseNotification",
+    "PatientVital",
+    "NurseTask",
     "AuditLog",
     "ChatSession",
     "ChatMessage",

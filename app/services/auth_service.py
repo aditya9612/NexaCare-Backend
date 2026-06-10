@@ -136,67 +136,22 @@ class AuthService:
             raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "login")
 
-    async def login(
-        self,
-        data: LoginRequest,
-        ip_address: str | None = None,
-        user_agent: str | None = None,
-    ) -> TokenResponse:
-        from app.services.security_service import SecurityService
-        security_svc = SecurityService(self.db)
-
+    async def login(self, data: LoginRequest) -> TokenResponse:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
-            await security_svc.record_login(
-                user_id=None,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                status="failed",
-                details=f"Login failed: user not found ({data.email or data.phone})"
-            )
             raise UnauthorizedException("Invalid credentials")
 
         if data.otp:
             if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
-                await security_svc.record_login(
-                    user_id=user.id,
-                    ip_address=ip_address,
-                    user_agent=user_agent,
-                    status="failed",
-                    details="Login failed: invalid OTP"
-                )
                 raise UnauthorizedException("Invalid credentials")
         elif not data.password or not verify_password(data.password, user.hashed_password):
-            await security_svc.record_login(
-                user_id=user.id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                status="failed",
-                details="Login failed: incorrect password"
-            )
             raise UnauthorizedException("Invalid credentials")
 
         if not user.is_active:
-            await security_svc.record_login(
-                user_id=user.id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                status="failed",
-                details="Login failed: account not activated"
-            )
             raise UnauthorizedException("Account not activated. Please verify OTP.")
 
         user.last_login = utc_now()
         await self.repo.update(user)
-
-        await security_svc.record_login(
-            user_id=user.id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            status="success",
-            details="Login successful"
-        )
-
         return await self._issue_tokens(user)
 
     async def _issue_tokens(self, user: User) -> TokenResponse:

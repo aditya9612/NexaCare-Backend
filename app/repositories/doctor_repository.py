@@ -86,6 +86,12 @@ class DoctorRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_email(self, email: str) -> Doctor | None:
+        result = await self.db.execute(
+            select(Doctor).where(Doctor.email == email, Doctor.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, doctor: Doctor) -> Doctor:
         self.db.add(doctor)
         await self.db.flush()

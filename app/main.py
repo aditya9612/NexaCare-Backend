@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.api import api_router
 from app.api.v1.routes.bed_allocation_routes import router as bed_allocation_router
 from app.core.config import settings
+import app.core.logger  # noqa: F401 — configure logging before DB engine
 from app.core.database import AsyncSessionLocal, init_db
 from app.middleware.exception_middleware import ExceptionMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware

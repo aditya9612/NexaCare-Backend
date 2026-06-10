@@ -66,7 +66,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "app/uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
 
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://nexacaresuperadmin.netlify.app",
+        "https://nexacare360.netlify.app",
+    ]
 
     OTP_EXPIRE_MINUTES: int = 10
     # Dev helper: if set, this OTP always works in non-production envs.

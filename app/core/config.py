@@ -11,11 +11,13 @@ class Settings(BaseSettings):
     APP_NAME: str = "NesaCare HMS"
     APP_ENV: str = "development"
     DEBUG: bool = True
-    SQLALCHEMY_ECHO: bool = False
+    SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
-    DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
-    DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
+    # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
+    # DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
+    DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa%40123@localhost/nexacare"
+    DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa%40123@localhost/nexacare"
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"

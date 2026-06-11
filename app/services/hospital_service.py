@@ -1,11 +1,12 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.hospital_model import Hospital
 from app.models.user_model import User
 from app.core.constants import UserRole
 from app.repositories.hospital_repository import HospitalRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.rbac_repository import RBACRepository
+from app.repositories.auth_repository import AuthRepository
 from app.schemas.hospital_schema import (
     HospitalCreate,
     HospitalUpdate,
@@ -26,7 +27,7 @@ class HospitalService:
     async def create_hospital(self, data: HospitalCreate, user_id: int) -> HospitalResponse:
         existing = await self.repo.get_by_email(data.email)
         if existing:
-            raise BadRequestException("Hospital with this email already exists")
+            raise ConflictException("Hospital with this email already exists")
         hospital = Hospital(**data.model_dump())
         hospital = await self.repo.create(hospital)
         await self.audit_repo.create("create", "hospitals", user_id=user_id, resource_id=str(hospital.id))
@@ -46,6 +47,12 @@ class HospitalService:
         hospital = await self.repo.get_by_id(id)
         if not hospital:
             raise NotFoundException("Hospital not found")
+        
+        if data.email:
+            existing = await self.repo.get_by_email(data.email)
+            if existing and existing.id != id:
+                raise ConflictException("Hospital with this email already exists")
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(hospital, key, value)
         hospital = await self.repo.update(hospital)
@@ -79,6 +86,18 @@ class HospitalService:
         hospital = await self.repo.get_by_id(data.hospital_id)
         if not hospital:
             raise NotFoundException("Hospital not found")
+
+        # Check duplicate email
+        auth_repo = AuthRepository(self.db)
+        existing_user = await auth_repo.get_by_email(data.email)
+        if existing_user:
+            raise ConflictException("User with this email already exists")
+
+        # Check duplicate phone
+        if data.phone:
+            existing_phone = await auth_repo.get_by_phone(data.phone)
+            if existing_phone:
+                raise ConflictException("User with this phone number already exists")
 
         # Create user
         user = User(
@@ -143,6 +162,14 @@ class HospitalService:
         admin = await self.repo.get_admin_by_id(admin_id)
         if not admin:
             raise NotFoundException("Hospital Admin user not found")
+        
+        # Check duplicate phone
+        if data.phone:
+            auth_repo = AuthRepository(self.db)
+            existing_phone = await auth_repo.get_by_phone(data.phone)
+            if existing_phone and existing_phone.id != admin_id:
+                raise ConflictException("User with this phone number already exists")
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(admin, key, value)
         await self.db.flush()
@@ -174,3 +201,4 @@ class HospitalService:
         admin.is_active = False
         await self.db.flush()
         await self.audit_repo.create("deactivate", "users", user_id=user_id, resource_id=str(admin_id))
+

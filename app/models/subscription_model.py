@@ -24,13 +24,38 @@ class Subscription(Base, TimestampMixin):
     __tablename__ = "subscriptions"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    hospital_id: Mapped[int] = mapped_column(ForeignKey("hospitals.id", ondelete="CASCADE"), index=True)
-    plan_id: Mapped[int] = mapped_column(ForeignKey("subscription_plans.id", ondelete="CASCADE"), index=True)
-    status: Mapped[str] = mapped_column(String(50), default="active", index=True)  # active, expired, cancelled
-    start_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    end_date: Mapped[datetime] = mapped_column(DateTime)
-    price_paid: Mapped[float] = mapped_column(Float, default=0.0)
-    transaction_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-    hospital = relationship("Hospital", back_populates="subscriptions")
-    plan = relationship("SubscriptionPlan", back_populates="subscriptions")
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription_plans.id", ondelete="CASCADE"),
+        index=True
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(50),
+        default="active",
+        index=True
+    )
+
+    start_date: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow
+    )
+
+    end_date: Mapped[datetime] = mapped_column(DateTime)
+
+    price_paid: Mapped[float] = mapped_column(
+        Float,
+        default=0.0
+    )
+
+    transaction_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    plan = relationship(
+        "SubscriptionPlan",
+        back_populates="subscriptions"
+    )
+
+

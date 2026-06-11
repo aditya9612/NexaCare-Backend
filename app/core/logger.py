@@ -9,4 +9,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
+_sql_log_level = logging.INFO if settings.SQLALCHEMY_ECHO else logging.WARNING
+for _sql_logger in ("sqlalchemy.engine", "sqlalchemy.pool", "sqlalchemy.dialects"):
+    logging.getLogger(_sql_logger).setLevel(_sql_log_level)
+
 logger = logging.getLogger("hms")

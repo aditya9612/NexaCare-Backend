@@ -1,0 +1,95 @@
+from datetime import date
+from typing import List, Optional
+
+from fastapi import APIRouter, File, Form, UploadFile, Depends
+from pydantic import ValidationError
+
+from app.core.dependencies import DbSession
+from app.schemas.common_schema import APIResponse
+from app.schemas.appointment_schema import AppointmentResponse
+from app.schemas.public_schema import (
+    AdvancedBookingRequest,
+    PublicDoctorResponse,
+    QuickBookingRequest,
+    ReportUploadResponse,
+    SymptomAnalysisRequest,
+    SymptomAnalysisResponse,
+)
+from app.services.public_service import PublicService
+
+router = APIRouter()
+
+
+@router.get("/doctors", response_model=APIResponse[List[PublicDoctorResponse]])
+async def list_public_doctors(
+    db: DbSession,
+    department: Optional[str] = None,
+    specialty: Optional[str] = None,
+    date: Optional[date] = None,
+):
+    """
+    Get available doctors with their availability slots.
+    Supports optional filters: department, specialty, date.
+    """
+    doctors = await PublicService(db).list_public_doctors(
+        department=department,
+        specialty=specialty,
+        appointment_date=date,
+    )
+    return APIResponse(message="Available doctors retrieved successfully", data=doctors)
+
+
+@router.post("/appointments/book", response_model=APIResponse[AppointmentResponse], status_code=201)
+async def quick_book_appointment(
+    db: DbSession,
+    request_data: QuickBookingRequest,
+):
+    """
+    Quickly book an appointment.
+    Creates a new patient if they do not exist by phone.
+    """
+    appointment = await PublicService(db).quick_book_appointment(request_data)
+    return APIResponse(message="Appointment booked successfully", data=appointment)
+
+
+@router.post("/ai/analyze-symptoms", response_model=APIResponse[SymptomAnalysisResponse])
+async def analyze_symptoms(
+    db: DbSession,
+    request_data: SymptomAnalysisRequest,
+):
+    """
+    Analyze patient symptoms and suggest specialist doctor and booking slots.
+    """
+    analysis = await PublicService(db).analyze_symptoms(request_data)
+    return APIResponse(message="Symptom analysis completed", data=analysis)
+
+
+@router.post("/appointments/upload-report", response_model=APIResponse[ReportUploadResponse], status_code=201)
+async def upload_public_report(
+    db: DbSession,
+    file: UploadFile = File(...),
+    patient_phone: str = Form(...),
+    patient_name: Optional[str] = Form(None),
+):
+    """
+    Upload a medical report PDF/Image and associate it with a patient.
+    Creates a new patient if they do not exist by phone.
+    """
+    upload_result = await PublicService(db).upload_public_report(
+        file=file,
+        patient_phone=patient_phone,
+        patient_name=patient_name,
+    )
+    return APIResponse(message="Report uploaded successfully", data=upload_result)
+
+
+@router.post("/appointments/book-ai", response_model=APIResponse[AppointmentResponse], status_code=201)
+async def advanced_book_appointment(
+    db: DbSession,
+    request_data: AdvancedBookingRequest,
+):
+    """
+    Book an appointment with AI triage insights and optional report document link.
+    """
+    appointment = await PublicService(db).advanced_book_appointment(request_data)
+    return APIResponse(message="Appointment booked successfully with AI insights", data=appointment)

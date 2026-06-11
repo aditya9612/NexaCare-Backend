@@ -14,6 +14,7 @@ class LabTestCreate(BaseSchema):
     sample_type: str = "blood"
     turnaround_hours: int = Field(24, ge=1)
     normal_range: str | None = None
+    department_id: int | None = None
 
 
 class LabTestUpdate(BaseSchema):
@@ -25,6 +26,7 @@ class LabTestUpdate(BaseSchema):
     turnaround_hours: int | None = Field(None, ge=1)
     normal_range: str | None = None
     is_active: bool | None = None
+    department_id: int | None = None
 
 
 class LabTestResponse(BaseSchema):
@@ -38,6 +40,7 @@ class LabTestResponse(BaseSchema):
     turnaround_hours: int
     normal_range: str | None
     is_active: bool
+    department_id: int | None
     created_at: datetime
     updated_at: datetime
 

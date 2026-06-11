@@ -6,7 +6,7 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=settings.SQLALCHEMY_ECHO,
     pool_pre_ping=False,  # aiomysql async ping() incompatible with SQLAlchemy pre-ping
     pool_recycle=3600,
 )

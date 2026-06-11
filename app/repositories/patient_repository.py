@@ -37,6 +37,12 @@ class PatientRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_phone(self, phone: str) -> Patient | None:
+        result = await self.db.execute(
+            self._base_query().where(Patient.phone == phone)
+        )
+        return result.scalar_one_or_none()
+
     def _search_filter(self, q: str):
         pattern = f"%{q.lower()}%"
         return or_(

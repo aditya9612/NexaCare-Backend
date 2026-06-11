@@ -25,11 +25,13 @@ from app.api.v1.routes import (
     platform_routes,
     security_routes,
     admin_management_routes,
+    public_routes,
 )
 
 
 api_router = APIRouter()
 
+api_router.include_router(public_routes.router, prefix="/public", tags=["Public Portal"])
 api_router.include_router(auth_routes.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(rbac_routes.router, tags=["RBAC"])
 api_router.include_router(patient_routes.router, prefix="/patients", tags=["Patients"])

@@ -99,6 +99,15 @@ class DoctorService:
         user_id: int,
         image_file: Optional[UploadFile] = None,
     ) -> DoctorResponse:
+        if data.email:
+            existing_email = await self.repo.get_by_email(data.email)
+            if existing_email:
+                raise ConflictException("Email already exists")
+
+        existing_license = await self.repo.get_by_license(data.license_number)
+        if existing_license:
+            raise ConflictException("A doctor with this license number already exists")
+
         # Save uploaded image file if provided, otherwise use URL from data
         profile_image_path: Optional[str] = data.profile_image
         if image_file and image_file.filename:
@@ -131,6 +140,16 @@ class DoctorService:
         if not doctor:
             raise NotFoundException("Doctor not found")
 
+        if data.email and data.email != doctor.email:
+            existing_email = await self.repo.get_by_email(data.email)
+            if existing_email:
+                raise ConflictException("Email already exists")
+
+        if data.license_number and data.license_number != doctor.license_number:
+            existing_license = await self.repo.get_by_license(data.license_number)
+            if existing_license:
+                raise ConflictException("A doctor with this license number already exists")
+
         update_data = data.model_dump(exclude_unset=True)
 
         # If a new image file is uploaded, save it and override profile_image
@@ -155,6 +174,7 @@ class DoctorService:
             raise ConflictException("Doctor could not be updated due to a database conflict")
         await self.audit_repo.create("update", "doctors", user_id=user_id, resource_id=str(doctor.id))
         return DoctorResponse.model_validate(doctor)
+
 
     async def delete(self, doctor_id: int, user_id: int) -> None:
         doctor = await self.repo.get_by_id(doctor_id)

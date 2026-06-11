@@ -10,8 +10,9 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "NesaCare HMS"
     APP_ENV: str = "development"
-    DEBUG: bool = True
-    SQLALCHEMY_ECHO: bool = False
+    DEBUG: bool = False
+    SQLALCHEMY_ECHO: bool = True
+
     API_V1_PREFIX: str = "/api/v1"
 
     DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"

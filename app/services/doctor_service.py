@@ -22,6 +22,39 @@ from app.utils.helpers import generate_doctor_code
 from app.utils.pagination import build_paginated_result
 
 
+async def save_doctor_image(file: UploadFile) -> str:
+    import os
+    import uuid
+    from pathlib import Path
+    import aiofiles
+    from fastapi import HTTPException
+    from app.core.config import settings
+
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    if ext not in {"jpg", "jpeg", "png", "webp"}:
+        raise HTTPException(
+            status_code=400,
+            detail="File type not allowed. Only jpg, jpeg, png, and webp are allowed."
+        )
+
+    upload_dir = Path("app/uploads/doctors")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = upload_dir / unique_filename
+
+    content = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=400, detail="File too large")
+
+    async with aiofiles.open(filepath, "wb") as f:
+        await f.write(content)
+
+    return str(filepath).replace(os.sep, "/")
+
+
 class DoctorService:
     def __init__(self, db: AsyncSession):
         self.repo = DoctorRepository(db)
@@ -69,7 +102,7 @@ class DoctorService:
         # Save uploaded image file if provided, otherwise use URL from data
         profile_image_path: Optional[str] = data.profile_image
         if image_file and image_file.filename:
-            profile_image_path = await save_upload(image_file, subfolder="doctors")
+            profile_image_path = await save_doctor_image(image_file)
 
         dump = data.model_dump()
         dump["profile_image"] = profile_image_path
@@ -102,7 +135,7 @@ class DoctorService:
 
         # If a new image file is uploaded, save it and override profile_image
         if image_file and image_file.filename:
-            profile_image_path = await save_upload(image_file, subfolder="doctors")
+            profile_image_path = await save_doctor_image(image_file)
             update_data["profile_image"] = profile_image_path
         else:
             # Remove profile_image from update if no file provided so existing value stays

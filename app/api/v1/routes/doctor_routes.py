@@ -24,13 +24,44 @@ router = APIRouter()
 async def create_doctor(
     db: DbSession,
     current_user: CurrentUser,
-    doctor: DoctorCreate,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    specialization: str = Form(...),
+    license_number: str = Form(...),
+    qualification: Optional[str] = Form(None),
+    experience: Optional[int] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    department_id: Optional[int] = Form(None),
+    consultation_fee: Optional[float] = Form(None),
+    availability_status: str = Form("available"),
+    bio: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
+    profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
-    # Directly use validated DoctorCreate model
-    doctor_obj = await DoctorService(db).create(doctor, current_user.id, image_file=None)
+    try:
+        doctor_data = DoctorCreate(
+            first_name=first_name,
+            last_name=last_name,
+            specialization=specialization,
+            qualification=qualification,
+            experience=experience,
+            phone=phone,
+            email=email,
+            department_id=department_id,
+            consultation_fee=consultation_fee,
+            license_number=license_number,
+            availability_status=availability_status,
+            bio=bio,
+            user_id=user_id,
+            profile_image=None
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+
+    doctor_obj = await DoctorService(db).create(doctor_data, current_user.id, image_file=profile_image)
     return APIResponse(message="Doctor created", data=doctor_obj)
-# Deprecated legacy code removed
 
 
 @router.get("", response_model=APIResponse[PaginatedResult[DoctorResponse]])

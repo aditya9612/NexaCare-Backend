@@ -12,7 +12,10 @@ from app.models.user_model import User
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.rbac_repository import RBACRepository
 
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(
+    scheme_name="JWT",
+    description="Paste the access_token from POST /auth/login (data.access_token). Do not include the Bearer prefix.",
+)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 

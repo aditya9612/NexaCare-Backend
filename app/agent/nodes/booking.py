@@ -1,0 +1,535 @@
+"""
+app/agent/nodes/booking.py
+--------------------------
+All booking-flow nodes.
+
+Name + Problem collection uses Groq LLM extraction (not rule-based).
+Each field extraction has full positive + negative scenario handling.
+"""
+
+import logging
+from datetime import date, timedelta, datetime
+from xml.sax.saxutils import escape
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
+
+from app.agent.state import BookingCallState
+from app.agent.llm import extract_patient_name, extract_problem, detect_specialty
+from app.models.doctor_model import Doctor, DoctorSchedule
+
+logger = logging.getLogger("nexacare.agent.nodes.booking")
+
+MAX_RETRIES = 2
+
+
+# ── Localised strings ─────────────────────────────────────────────────────────
+STRINGS = {
+    # Name collection
+    "ask_name": {
+        "en": "Please say your full name.",
+        "hi": "कृपया अपना पूरा नाम बोलें।",
+        "mr": "कृपया आपले पूर्ण नाव सांगा.",
+    },
+    "name_confirmed": {
+        "en": "Got it. I have noted your name as {name}. ",
+        "hi": "ठीक है। मैंने आपका नाम {name} नोट कर लिया है। ",
+        "mr": "ठीक आहे. मी तुमचे नाव {name} नोंदवले आहे. ",
+    },
+    "name_not_found": {
+        "en": "I could not catch your name clearly. Could you please say your name again?",
+        "hi": "मुझे आपका नाम स्पष्ट नहीं सुना। कृपया अपना नाम फिर से बोलें।",
+        "mr": "मला तुमचे नाव स्पष्ट ऐकू आले नाही. कृपया पुन्हा सांगा.",
+    },
+    # Problem collection
+    "ask_problem": {
+        "en": "Please describe the health problem or symptoms you are experiencing.",
+        "hi": "कृपया अपनी स्वास्थ्य समस्या या लक्षण बताएं।",
+        "mr": "कृपया तुमची आरोग्य समस्या किंवा लक्षणे सांगा.",
+    },
+    "problem_confirmed": {
+        "en": "I understand. You are experiencing {problem}. Let me find the right doctor for you. Please hold for a moment.",
+        "hi": "समझ गया। आप {problem} का अनुभव कर रहे हैं। मैं आपके लिए सही डॉक्टर ढूंढता हूँ।",
+        "mr": "समजले. तुम्हाला {problem} होत आहे. मी तुमच्यासाठी योग्य डॉक्टर शोधतो.",
+    },
+    "problem_not_found": {
+        "en": "I could not understand your problem clearly. Could you please describe your symptoms in a little more detail?",
+        "hi": "मुझे आपकी समस्या स्पष्ट नहीं समझ आई। कृपया थोड़ा और विस्तार से बताएं।",
+        "mr": "मला तुमची समस्या स्पष्ट समजली नाही. कृपया थोडे अधिक सांगा.",
+    },
+    # Doctors
+    "suggest_doctors_intro": {
+        "en": "Based on your symptoms, I recommend a {specialty} specialist. Here are the available doctors. ",
+        "hi": "आपके लक्षणों के आधार पर, {specialty} विशेषज्ञ उचित रहेंगे। उपलब्ध डॉक्टर: ",
+        "mr": "तुमच्या लक्षणांवरून {specialty} तज्ञ योग्य आहेत. उपलब्ध डॉक्टर: ",
+    },
+    "press_for_doctor": {
+        "en": "Press {n} for Doctor {name}. ",
+        "hi": "{n} दबाएं डॉक्टर {name} के लिए। ",
+        "mr": "{n} दाबा डॉक्टर {name} साठी. ",
+    },
+    "no_doctors": {
+        "en": "I am sorry, no specialists are currently available. Please call during working hours.",
+        "hi": "क्षमा करें, कोई विशेषज्ञ उपलब्ध नहीं है। कार्यालय समय में कॉल करें।",
+        "mr": "माफ करा, सध्या कोणतेही तज्ञ उपलब्ध नाहीत.",
+    },
+    # Slots
+    "ask_slot_intro": {
+        "en": "You selected Doctor {name}. Here are the available appointment slots. ",
+        "hi": "आपने डॉक्टर {name} को चुना। उपलब्ध स्लॉट: ",
+        "mr": "तुम्ही डॉक्टर {name} निवडले. उपलब्ध स्लॉट्स: ",
+    },
+    "press_for_slot": {
+        "en": "Press {n} for {date} at {time}. ",
+        "hi": "{n} दबाएं {date} को {time} बजे। ",
+        "mr": "{n} दाबा {date} रोजी {time} वाजता. ",
+    },
+    # Confirmation
+    "confirm_booking": {
+        "en": (
+            "Your appointment has been booked successfully. "
+            "Doctor {doctor}, on {date} at {time}. "
+            "Your appointment number is {appt_no}. "
+            "We will send a confirmation to your registered number. "
+            "Thank you for choosing NexaCare. Have a healthy day. Goodbye."
+        ),
+        "hi": (
+            "आपकी अपॉइंटमेंट सफलतापूर्वक बुक हो गई। "
+            "डॉक्टर {doctor}, {date} को {time} बजे। "
+            "अपॉइंटमेंट नंबर: {appt_no}। "
+            "NexaCare चुनने के लिए धन्यवाद।"
+        ),
+        "mr": (
+            "तुमची अपॉइंटमेंट यशस्वीरित्या बुक झाली. "
+            "डॉक्टर {doctor}, {date} रोजी {time} वाजता. "
+            "अपॉइंटमेंट नंबर: {appt_no}. "
+            "NexaCare निवडल्याबद्दल धन्यवाद."
+        ),
+    },
+    # Errors
+    "error": {
+        "en": "I am sorry, something went wrong. Please call again. Goodbye.",
+        "hi": "क्षमा करें, कुछ गड़बड़ी हुई। पुनः कॉल करें।",
+        "mr": "माफ करा, काहीतरी चुकीचे झाले. पुन्हा कॉल करा.",
+    },
+    "max_retries": {
+        "en": "We are unable to process your request at this time. Please call again. Goodbye.",
+        "hi": "हम अभी आपकी सहायता नहीं कर सकते। कृपया पुनः कॉल करें।",
+        "mr": "आम्ही सध्या तुमची मदत करू शकत नाही. पुन्हा कॉल करा.",
+    },
+}
+
+
+def _s(key: str, lang: str, **kwargs) -> str:
+    text = STRINGS[key].get(lang, STRINGS[key]["en"])
+    return text.format(**kwargs) if kwargs else text
+
+
+def _say(text: str, lang: str) -> str:
+    return f'<Say language="{escape(lang)}">{escape(text)}</Say>'
+
+
+def _gather_speech(action: str, prompt: str, lang: str, timeout: int = 8) -> str:
+    return (
+        f'<Gather input="speech" action="{escape(action)}" method="POST" '
+        f'language="{escape(lang)}" speechTimeout="auto" timeout="{timeout}">'
+        f'{_say(prompt, lang)}'
+        f'</Gather>'
+        f'<Redirect method="POST">{escape(action)}</Redirect>'
+    )
+
+
+def _gather_dtmf(action: str, prompt: str, lang: str, num_digits: int = 1) -> str:
+    return (
+        f'<Gather numDigits="{num_digits}" action="{escape(action)}" method="POST" timeout="10">'
+        f'{_say(prompt, lang)}'
+        f'</Gather>'
+        f'<Redirect method="POST">{escape(action)}</Redirect>'
+    )
+
+
+def _twiml(*elements: str) -> str:
+    return '<?xml version="1.0" encoding="UTF-8"?><Response>' + "".join(elements) + "</Response>"
+
+
+def _hangup_twiml(text: str, lang: str) -> str:
+    return _twiml(_say(text, lang), "<Hangup/>")
+
+
+def _format_time_for_tts(time_str: str) -> str:
+    """Convert HH:MM:SS → '2:00 PM' for natural TTS."""
+    try:
+        t = datetime.strptime(time_str, "%H:%M:%S")
+        return t.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return time_str
+
+
+# ── Node: collect_name ────────────────────────────────────────────────────────
+
+def build_collect_name_twiml(state: BookingCallState) -> str:
+    lang = state["language"]
+    twilio_lang = state["twilio_language"]
+    action = f"{state['base_url']}/agent/v1/voice/turn"
+    return _twiml(_gather_speech(action, _s("ask_name", lang), twilio_lang))
+
+
+def process_collect_name(state: BookingCallState, speech_result: str) -> dict:
+    """
+    Send transcript to Groq LLM for name extraction.
+    Positive: confirms name back to patient, moves to collect_problem.
+    Negative: asks patient to repeat (up to MAX_RETRIES).
+    """
+    lang = state["language"]
+    twilio_lang = state["twilio_language"]
+    action = f"{state['base_url']}/agent/v1/voice/turn"
+
+    logger.info(f"[{state['call_sid']}] Name transcript: {speech_result!r}")
+
+    # ── LLM extraction ──
+    extraction = extract_patient_name(speech_result or "")
+    logger.info(f"[{state['call_sid']}] Name extraction: {extraction}")
+
+    # ── POSITIVE scenario ──
+    if extraction["found"] and extraction.get("name"):
+        name = extraction["name"]
+        logger.info(f"[{state['call_sid']}] ✓ Name confirmed: {name!r}")
+
+        # Confirm back + ask problem
+        confirm_msg = _s("name_confirmed", lang, name=name)
+        ask_problem_msg = _s("ask_problem", lang)
+
+        return {
+            "step": "collect_problem",
+            "patient_name": name,
+            "retry_count": 0,
+            "_twiml": _twiml(
+                _say(confirm_msg, twilio_lang),
+                _gather_speech(action, ask_problem_msg, twilio_lang, timeout=10),
+            ),
+        }
+
+    # ── NEGATIVE scenario ──
+    retry = state["retry_count"] + 1
+    logger.warning(f"[{state['call_sid']}] ✗ Name not found (retry {retry}/{MAX_RETRIES}) | reason: {extraction.get('reason')}")
+
+    if retry > MAX_RETRIES:
+        logger.error(f"[{state['call_sid']}] Max retries reached for name collection")
+        return {
+            "step": "error",
+            "_twiml": _hangup_twiml(_s("max_retries", lang), twilio_lang),
+        }
+
+    return {
+        "step": "collect_name",
+        "retry_count": retry,
+        "_twiml": _twiml(
+            _say(_s("name_not_found", lang), twilio_lang),
+            _gather_speech(action, _s("ask_name", lang), twilio_lang),
+        ),
+    }
+
+
+# ── Node: collect_problem ─────────────────────────────────────────────────────
+
+def process_collect_problem(state: BookingCallState, speech_result: str) -> dict:
+    """
+    Send transcript to Groq LLM for problem extraction.
+    Positive: confirms problem, triggers specialty detection.
+    Negative: asks patient to describe again.
+    """
+    lang = state["language"]
+    twilio_lang = state["twilio_language"]
+    action = f"{state['base_url']}/agent/v1/voice/turn"
+
+    logger.info(f"[{state['call_sid']}] Problem transcript: {speech_result!r}")
+
+    # ── LLM extraction ──
+    extraction = extract_problem(speech_result or "")
+    logger.info(f"[{state['call_sid']}] Problem extraction: {extraction}")
+
+    # ── NEGATIVE scenario ──
+    if not extraction["found"] or not extraction.get("problem"):
+        retry = state["retry_count"] + 1
+        logger.warning(f"[{state['call_sid']}] ✗ Problem not found (retry {retry}/{MAX_RETRIES}) | reason: {extraction.get('reason')}")
+
+        if retry > MAX_RETRIES:
+            logger.error(f"[{state['call_sid']}] Max retries reached for problem collection")
+            return {
+                "step": "error",
+                "_twiml": _hangup_twiml(_s("max_retries", lang), twilio_lang),
+            }
+
+        return {
+            "step": "collect_problem",
+            "retry_count": retry,
+            "_twiml": _twiml(
+                _say(_s("problem_not_found", lang), twilio_lang),
+                _gather_speech(action, _s("ask_problem", lang), twilio_lang, timeout=10),
+            ),
+        }
+
+    # ── POSITIVE scenario ──
+    problem = extraction["problem"]
+    logger.info(f"[{state['call_sid']}] ✓ Problem confirmed: {problem!r}")
+
+    # Detect specialty via LLM
+    logger.info(f"[{state['call_sid']}] Detecting specialty for: {problem!r}")
+    analysis = detect_specialty(problem)
+    logger.info(f"[{state['call_sid']}] Specialty: {analysis['specialty']} ({analysis['confidence']})")
+
+    # Confirm problem back to patient, then find doctors (DB fetch handled in router)
+    confirm_msg = _s("problem_confirmed", lang, problem=problem)
+
+    return {
+        "step": "suggest_doctors",
+        "problem_description": problem,
+        "detected_specialty": analysis["specialty"],
+        "specialty_confidence": analysis["confidence"],
+        "specialty_reasoning": analysis["reasoning"],
+        "retry_count": 0,
+        "_pending": "suggest_doctors",
+        "_confirm_problem_tts": confirm_msg,   # router will prepend this before doctor list
+    }
+
+
+# ── Node: suggest_doctors ─────────────────────────────────────────────────────
+
+async def fetch_doctors_for_specialty(specialty: str, db: AsyncSession) -> list[dict]:
+    result = await db.execute(
+        select(Doctor).where(
+            and_(
+                Doctor.specialization.ilike(f"%{specialty}%"),
+                Doctor.availability_status == "available",
+                Doctor.is_deleted == False,
+            )
+        ).limit(3)
+    )
+    doctors = result.scalars().all()
+
+    if not doctors:
+        result = await db.execute(
+            select(Doctor).where(
+                and_(
+                    Doctor.specialization.ilike("%General%"),
+                    Doctor.availability_status == "available",
+                    Doctor.is_deleted == False,
+                )
+            ).limit(3)
+        )
+        doctors = result.scalars().all()
+
+    return [
+        {
+            "id": d.id,
+            "name": f"Dr. {d.first_name} {d.last_name}",
+            "specialization": d.specialization,
+            "consultation_fee": d.consultation_fee,
+            "department_id": d.department_id,
+        }
+        for d in doctors
+    ]
+
+
+def build_suggest_doctors_twiml(
+    state: BookingCallState,
+    doctors: list[dict],
+    confirm_problem_tts: str = "",
+) -> str:
+    lang = state["language"]
+    twilio_lang = state["twilio_language"]
+    action = f"{state['base_url']}/agent/v1/voice/turn"
+    specialty = state.get("detected_specialty", "General Medicine")
+
+    if not doctors:
+        return _hangup_twiml(_s("no_doctors", lang), twilio_lang)
+
+    intro = _s("suggest_doctors_intro", lang, specialty=specialty)
+    options = "".join(
+        _s("press_for_doctor", lang, n=i + 1, name=d["name"])
+        for i, d in enumerate(doctors)
+    )
+    prompt = intro + options
+
+    elements = []
+    # Prepend problem confirmation TTS if present
+    if confirm_problem_tts:
+        elements.append(_say(confirm_problem_tts, twilio_lang))
+    elements.append(_gather_dtmf(action, prompt, twilio_lang))
+
+    return _twiml(*elements)
+
+
+# ── Node: select_doctor ───────────────────────────────────────────────────────
+
+def process_select_doctor(state: BookingCallState, digit: str) -> dict:
+    doctors = state.get("suggested_doctors", [])
+
+    try:
+        idx = int(digit) - 1
+        if 0 <= idx < len(doctors):
+            doctor = doctors[idx]
+            logger.info(f"[{state['call_sid']}] ✓ Doctor selected: {doctor['name']}")
+            return {
+                "step": "select_slot",
+                "selected_doctor_id": doctor["id"],
+                "selected_doctor_name": doctor["name"],
+                "selected_doctor_specialization": doctor["specialization"],
+                "retry_count": 0,
+                "_pending": "select_slot",
+            }
+    except (ValueError, IndexError):
+        pass
+
+    logger.warning(f"[{state['call_sid']}] ✗ Invalid doctor digit: {digit!r}")
+    return {
+        "step": "suggest_doctors",
+        "_twiml": build_suggest_doctors_twiml(state, doctors),
+    }
+
+
+# ── Node: select_slot ─────────────────────────────────────────────────────────
+
+async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
+    today = date.today()
+    slots = []
+
+    result = await db.execute(
+        select(DoctorSchedule).where(
+            and_(
+                DoctorSchedule.doctor_id == doctor_id,
+                DoctorSchedule.is_active == True,
+            )
+        )
+    )
+    schedules = result.scalars().all()
+
+    if not schedules:
+        return [
+            {"date": str(today + timedelta(days=1)), "time": "10:00:00", "doctor_id": doctor_id},
+            {"date": str(today + timedelta(days=2)), "time": "14:00:00", "doctor_id": doctor_id},
+            {"date": str(today + timedelta(days=3)), "time": "11:00:00", "doctor_id": doctor_id},
+        ]
+
+    for offset in range(7):
+        check_date = today + timedelta(days=offset + 1)
+        day_of_week = check_date.weekday()
+        for schedule in schedules:
+            if schedule.day_of_week == day_of_week:
+                slots.append({
+                    "date": str(check_date),
+                    "time": schedule.start_time.strftime("%H:%M:%S"),
+                    "doctor_id": doctor_id,
+                })
+                if len(slots) >= 3:
+                    return slots
+
+    return slots or [
+        {"date": str(today + timedelta(days=1)), "time": "10:00:00", "doctor_id": doctor_id},
+    ]
+
+
+def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
+    lang = state["language"]
+    twilio_lang = state["twilio_language"]
+    action = f"{state['base_url']}/agent/v1/voice/turn"
+    doctor_name = state.get("selected_doctor_name", "the doctor")
+
+    intro = _s("ask_slot_intro", lang, name=doctor_name)
+    options = "".join(
+        _s("press_for_slot", lang, n=i + 1, date=s["date"], time=_format_time_for_tts(s["time"]))
+        for i, s in enumerate(slots)
+    )
+    return _twiml(_gather_dtmf(action, intro + options, twilio_lang))
+
+
+def process_select_slot(state: BookingCallState, digit: str) -> dict:
+    slots = state.get("available_slots", [])
+
+    try:
+        idx = int(digit) - 1
+        if 0 <= idx < len(slots):
+            slot = slots[idx]
+            logger.info(f"[{state['call_sid']}] ✓ Slot selected: {slot}")
+            return {
+                "step": "confirm",
+                "selected_slot": slot,
+                "retry_count": 0,
+                "_pending": "confirm",
+            }
+    except (ValueError, IndexError):
+        pass
+
+    logger.warning(f"[{state['call_sid']}] ✗ Invalid slot digit: {digit!r}")
+    return {
+        "step": "select_slot",
+        "_twiml": build_select_slot_twiml(state, slots),
+    }
+
+
+# ── Node: confirm booking ─────────────────────────────────────────────────────
+
+async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
+    from app.models.appointment_model import Appointment
+    import random
+    import string
+
+    lang = state["language"]
+    twilio_lang = state["twilio_language"]
+    slot = state["selected_slot"]
+    doctor_id = state["selected_doctor_id"]
+    doctor_name = state.get("selected_doctor_name", "the doctor")
+
+    try:
+        appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+        appt = Appointment(
+            appointment_number=appt_no,
+            patient_id=1,
+            doctor_id=doctor_id,
+            department_id=None,
+            appointment_date=slot["date"],
+            appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
+            appointment_status="scheduled",
+            symptoms=state.get("problem_description"),
+            notes=f"Booked via AI Voice Agent. Patient: {state.get('patient_name')}",
+            consultation_type="in_person",
+            reminder_sent=False,
+            token_number=random.randint(1, 99),
+        )
+        db.add(appt)
+        await db.commit()
+        await db.refresh(appt)
+
+        logger.info(
+            f"[{state['call_sid']}] ✓ Appointment booked: {appt_no} | "
+            f"Doctor: {doctor_name} | {slot['date']} {slot['time']}"
+        )
+
+        time_display = _format_time_for_tts(slot["time"])
+        confirm_text = _s(
+            "confirm_booking", lang,
+            doctor=doctor_name,
+            date=slot["date"],
+            time=time_display,
+            appt_no=appt_no,
+        )
+
+        return {
+            "step": "booked",
+            "appointment_id": appt.id,
+            "appointment_number": appt_no,
+            "_twiml": _twiml(_say(confirm_text, twilio_lang), "<Hangup/>"),
+        }
+
+    except Exception as e:
+        logger.error(f"[{state['call_sid']}] Booking failed: {e}")
+        # Rollback the broken transaction so the session is reusable
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return {
+            "step": "error",
+            "_twiml": _hangup_twiml(_s("error", lang), twilio_lang),
+        }

@@ -33,9 +33,9 @@ class StaffRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_employee_code(self, employee_code: str) -> Staff | None:
+    async def get_by_staff_code(self, staff_code: str) -> Staff | None:
         result = await self.db.execute(
-            self._base_query().where(func.lower(Staff.employee_code) == employee_code.lower())
+            self._base_query().where(func.lower(Staff.staff_code) == staff_code.lower())
         )
         return result.scalar_one_or_none()
 
@@ -45,7 +45,7 @@ class StaffRepository:
         limit: int = 20,
         q: str | None = None,
         department_id: int | None = None,
-        status: str | None = None,
+        status: int | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ) -> list[Staff]:
@@ -54,8 +54,7 @@ class StaffRepository:
             pattern = f"%{q.lower()}%"
             query = query.where(
                 or_(
-                    func.lower(Staff.first_name).like(pattern),
-                    func.lower(Staff.last_name).like(pattern),
+                    func.lower(Staff.full_name).like(pattern),
                     func.lower(Staff.email).like(pattern),
                 )
             )
@@ -73,15 +72,14 @@ class StaffRepository:
         self,
         q: str | None = None,
         department_id: int | None = None,
-        status: str | None = None,
+        status: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
         if q:
             pattern = f"%{q.lower()}%"
             query = query.where(
                 or_(
-                    func.lower(Staff.first_name).like(pattern),
-                    func.lower(Staff.last_name).like(pattern),
+                    func.lower(Staff.full_name).like(pattern),
                     func.lower(Staff.email).like(pattern),
                 )
             )
@@ -102,10 +100,10 @@ class StaffRepository:
             select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
         ) or 0
         active = await self.db.scalar(
-            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == "active")
+            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 1)
         ) or 0
         inactive = await self.db.scalar(
-            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == "inactive")
+            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 0)
         ) or 0
         return {
             "total_staff": total,
@@ -121,6 +119,6 @@ class StaffRepository:
     async def soft_delete(self, staff: Staff) -> Staff:
         staff.is_deleted = True
         staff.deleted_at = utc_now()
-        staff.status = "inactive"
+        staff.status = 0
         await self.db.flush()
         return staff

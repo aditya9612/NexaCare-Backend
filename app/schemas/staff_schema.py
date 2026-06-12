@@ -8,22 +8,21 @@ from app.schemas.rbac_schema import RoleResponse
 from app.utils.phone_utils import validate_phone_field
 
 
-class StaffStatus(str, Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
+class StaffStatus(int, Enum):
+    ACTIVE = 1
+    INACTIVE = 0
 
 
 class StaffCreate(BaseSchema):
-    first_name: str = Field(..., min_length=1, max_length=100)
-    last_name: str = Field(..., min_length=1, max_length=100)
+    full_name: str = Field(..., min_length=1, max_length=200)
     email: EmailStr
     phone: str | None = Field(None, max_length=20)
-    employee_code: str = Field(..., min_length=1, max_length=50)
+    staff_code: str = Field(..., min_length=1, max_length=50)
     department_id: int = Field(..., gt=0)
-    role_id: int = Field(..., gt=0)
+    role_name: str = Field(..., min_length=1, max_length=50)
     status: StaffStatus = StaffStatus.ACTIVE
 
-    @field_validator("first_name", "last_name", "employee_code")
+    @field_validator("full_name", "staff_code", "role_name")
     @classmethod
     def strip_strings(cls, value: str) -> str:
         stripped = value.strip()
@@ -39,16 +38,15 @@ class StaffCreate(BaseSchema):
 
 
 class StaffUpdate(BaseSchema):
-    first_name: str | None = Field(None, min_length=1, max_length=100)
-    last_name: str | None = Field(None, min_length=1, max_length=100)
+    full_name: str | None = Field(None, min_length=1, max_length=200)
     email: EmailStr | None = None
     phone: str | None = Field(None, max_length=20)
-    employee_code: str | None = Field(None, min_length=1, max_length=50)
+    staff_code: str | None = Field(None, min_length=1, max_length=50)
     department_id: int | None = Field(None, gt=0)
-    role_id: int | None = Field(None, gt=0)
+    role_name: str | None = Field(None, min_length=1, max_length=50)
     status: StaffStatus | None = None
 
-    @field_validator("first_name", "last_name", "employee_code")
+    @field_validator("full_name", "staff_code", "role_name")
     @classmethod
     def strip_strings(cls, value: str | None) -> str | None:
         if value is not None:
@@ -71,14 +69,13 @@ class StaffStatusUpdate(BaseSchema):
 
 class StaffResponse(BaseSchema):
     id: int
-    first_name: str
-    last_name: str
+    full_name: str
     email: str
     phone: str | None
-    employee_code: str
+    staff_code: str
     department_id: int
-    role_id: int
-    status: str
+    role_name: str
+    status: int
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None

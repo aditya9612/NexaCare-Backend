@@ -20,13 +20,13 @@ class StaffService:
         self.rbac_repo = RBACRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def _validate_department_and_role(self, department_id: int | None, role_id: int | None):
+    async def _validate_department_and_role(self, department_id: int | None, role_name: str | None):
         if department_id is not None:
             dept = await self.dept_repo.get_by_id(department_id)
             if not dept:
                 raise NotFoundException("Department not found")
-        if role_id is not None:
-            role = await self.rbac_repo.get_role_by_id(role_id)
+        if role_name is not None:
+            role = await self.rbac_repo.get_role_by_name(role_name)
             if not role:
                 raise NotFoundException("Role not found")
 
@@ -36,12 +36,12 @@ class StaffService:
         if existing_email:
             raise ConflictException("Email already exists")
     
-        existing_code = await self.repo.get_by_employee_code(data.employee_code)
+        existing_code = await self.repo.get_by_staff_code(data.staff_code)
         if existing_code:
-            raise ConflictException("Employee code already exists")
+            raise ConflictException("Staff code already exists")
     
         # Validate existence of department and role
-        await self._validate_department_and_role(data.department_id, data.role_id)
+        await self._validate_department_and_role(data.department_id, data.role_name)
     
         staff = Staff(**data.model_dump())
         staff = await self.repo.create(staff)
@@ -50,7 +50,7 @@ class StaffService:
         staff = await self.repo.get_by_id(staff.id)
         if not staff:
             raise NotFoundException("Staff member not found")
-
+ 
         # Create audit log
         await self.audit_repo.create("create", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
@@ -62,7 +62,7 @@ class StaffService:
         size: int = 20,
         q: str | None = None,
         department_id: int | None = None,
-        status: str | None = None,
+        status: int | None = None,
     ) -> PaginatedResult[StaffResponse]:
         skip = (page - 1) * size
         items = await self.repo.list_all(
@@ -100,14 +100,14 @@ class StaffService:
             if existing_email and existing_email.id != staff_id:
                 raise ConflictException("Email already exists")
                 
-        # Check duplicate employee code if it is being changed
-        if data.employee_code:
-            existing_code = await self.repo.get_by_employee_code(data.employee_code)
+        # Check duplicate staff code if it is being changed
+        if data.staff_code:
+            existing_code = await self.repo.get_by_staff_code(data.staff_code)
             if existing_code and existing_code.id != staff_id:
-                raise ConflictException("Employee code already exists")
+                raise ConflictException("Staff code already exists")
                 
         # Validate department/role if changed
-        await self._validate_department_and_role(data.department_id, data.role_id)
+        await self._validate_department_and_role(data.department_id, data.role_name)
         
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(staff, key, value)
@@ -123,7 +123,7 @@ class StaffService:
         
         return StaffResponse.model_validate(staff)
 
-    async def update_staff_status(self, staff_id: int, status: str, current_user_id: int) -> StaffResponse:
+    async def update_staff_status(self, staff_id: int, status: int, current_user_id: int) -> StaffResponse:
         staff = await self.repo.get_by_id(staff_id)
         if not staff:
             raise NotFoundException("Staff member not found")

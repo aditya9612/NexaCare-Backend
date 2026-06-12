@@ -36,7 +36,7 @@ async def list_staff(
     size: int = 20,
     q: str | None = None,
     department_id: int | None = None,
-    status: str | None = None,
+    status: int | None = None,
     _: User = Depends(require_permission("staff", "read")),
 ):
     result = await StaffService(db).list_staff(

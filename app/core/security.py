@@ -37,7 +37,18 @@ def create_refresh_token(subject: str | Any) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def normalize_bearer_token(token: str) -> str:
+    """Strip common client formatting mistakes before JWT decode."""
+    token = token.strip()
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
+        token = token[1:-1].strip()
+    while token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
 def decode_token(token: str) -> dict:
+    token = normalize_bearer_token(token)
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except JWTError as exc:

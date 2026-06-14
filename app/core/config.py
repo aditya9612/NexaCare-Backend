@@ -16,8 +16,8 @@ class Settings(BaseSettings):
 
     # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
     # DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
-    DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa%40123@localhost/nexacare"
-    DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa%40123@localhost/nexacare"
+    DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
+    DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"

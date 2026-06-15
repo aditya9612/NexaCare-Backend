@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
-    DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
-    DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
+    DATABASE_URL: str = "mysql+aiomysql://root:Mahakal12_12@127.0.0.1:3306/NesaCare"
+    DATABASE_URL_SYNC: str = "mysql+pymysql://root:Mahakal12_12127.0.0.1:3306/NesaCare"
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "noreply@nesacare.com"
+
 
     SMS_API_KEY: str = ""
     WHATSAPP_API_KEY: str = ""

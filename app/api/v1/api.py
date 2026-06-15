@@ -26,6 +26,7 @@ from app.api.v1.routes import (
     security_routes,
     branch_routes,
     admin_management_routes,
+    accountant_routes,
 )
 
 
@@ -60,4 +61,8 @@ api_router.include_router(platform_routes.router, prefix="/platform", tags=["Pla
 api_router.include_router(security_routes.router, prefix="/security", tags=["Security"])
 api_router.include_router(branch_routes.router, prefix="/branches", tags=["Branches"])
 api_router.include_router(admin_management_routes.router, prefix="/super-admin/admins", tags=["Super Admin Admins"])
-
+api_router.include_router(
+    accountant_routes.router,
+    prefix="/accountant",
+    tags=["Accountant Dashboard"]
+)

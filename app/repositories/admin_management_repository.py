@@ -13,8 +13,7 @@ class AdminManagementRepository:
     def _base_query(self):
         return select(User).join(User.role).options(
             joinedload(User.role),
-            joinedload(User.hospital),
-            joinedload(User.branch)
+            joinedload(User.hospital)
         ).where(Role.name == UserRole.HOSPITAL_ADMIN)
 
     async def get_by_id(self, admin_id: int) -> User | None:

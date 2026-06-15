@@ -22,13 +22,14 @@ import app.models.nurse_model  # noqa: F401
 import app.models.audit_log_model  # noqa: F401
 import app.models.bed_allocation_model  # noqa: F401
 import app.models.hospital_model  # noqa: F401
-import app.models.branch_model  # noqa: F401
 import app.models.subscription_model  # noqa: F401
 import app.models.ai_config_model  # noqa: F401
 import app.models.security_model  # noqa: F401
+import app.models.staff_model  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
+database_url = settings.DATABASE_URL_SYNC.replace("%", "%%")
+config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -11,10 +11,18 @@ class Settings(BaseSettings):
     APP_NAME: str = "NesaCare HMS"
     APP_ENV: str = "development"
     DEBUG: bool = True
+    SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
+
     DATABASE_URL: str = "mysql+aiomysql://root:Mahakal12_12@127.0.0.1:3306/NesaCare"
-    DATABASE_URL_SYNC: str = "mysql+pymysql://root:Mahakal12_12127.0.0.1:3306/NesaCare"
+    DATABASE_URL_SYNC: str = "mysql+pymysql://root:Mahakal12_12@127.0.0.1:3306/NesaCare"
+
+    # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
+    # DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
+    #DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
+    #DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
+
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"
@@ -66,7 +74,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "app/uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
 
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://nexacaresuperadmin.netlify.app",
+        "https://nexacare360.netlify.app",
+    ]
 
     OTP_EXPIRE_MINUTES: int = 10
     # Dev helper: if set, this OTP always works in non-production envs.

@@ -24,14 +24,17 @@ from app.api.v1.routes import (
     subscription_routes,
     platform_routes,
     security_routes,
-    branch_routes,
     admin_management_routes,
     accountant_routes,
+    public_routes,
+    staff_routes,
+
 )
 
 
 api_router = APIRouter()
 
+api_router.include_router(public_routes.router, prefix="/public", tags=["Public Portal"])
 api_router.include_router(auth_routes.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(rbac_routes.router, tags=["RBAC"])
 api_router.include_router(patient_routes.router, prefix="/patients", tags=["Patients"])
@@ -39,6 +42,7 @@ api_router.include_router(doctor_routes.router, prefix="/doctors", tags=["Doctor
 api_router.include_router(appointment_routes.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(dashboard_routes.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"])
+api_router.include_router(staff_routes.router, prefix="/staff", tags=["Staff"])
 api_router.include_router(pharmacy_routes.router, prefix="/pharmacy", tags=["Pharmacy"])
 api_router.include_router(lab_routes.router, prefix="/lab", tags=["Lab"])
 api_router.include_router(billing_routes.router, prefix="/billing", tags=["Billing"])
@@ -59,7 +63,6 @@ api_router.include_router(super_admin_routes.router, prefix="/super-admin", tags
 api_router.include_router(subscription_routes.router, prefix="/subscriptions", tags=["Subscriptions"])
 api_router.include_router(platform_routes.router, prefix="/platform", tags=["Platform"])
 api_router.include_router(security_routes.router, prefix="/security", tags=["Security"])
-api_router.include_router(branch_routes.router, prefix="/branches", tags=["Branches"])
 api_router.include_router(admin_management_routes.router, prefix="/super-admin/admins", tags=["Super Admin Admins"])
 api_router.include_router(
     accountant_routes.router,

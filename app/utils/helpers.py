@@ -26,6 +26,11 @@ def generate_nurse_code() -> str:
     return generate_code("NRS")
 
 
+def generate_staff_code() -> str:
+    return generate_code("STF")
+
+
+
 def generate_appointment_number() -> str:
     return generate_code("APT")
 
@@ -85,9 +90,6 @@ def generate_campaign_code() -> str:
 def generate_medicine_sku() -> str:
     return generate_code("MED")
 
-
-def generate_branch_code() -> str:
-    return generate_code("BRN")
 
 
 

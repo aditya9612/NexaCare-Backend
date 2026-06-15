@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.models.hospital_model import Hospital
-from app.models.branch_model import Branch
 from app.models.user_model import User
 from app.models.role_model import Role
 from app.models.doctor_model import Doctor
@@ -25,11 +24,6 @@ class SuperAdminRepository:
         # 1. Total Hospitals
         total_hospitals = await self.db.scalar(
             select(func.count(Hospital.id)).where(Hospital.is_deleted == False)
-        ) or 0
-
-        # 2. Total Branches
-        total_branches = await self.db.scalar(
-            select(func.count(Branch.id)).where(Branch.is_deleted == False)
         ) or 0
 
         # 3. Admins Query (Hospital Admin)
@@ -85,7 +79,6 @@ class SuperAdminRepository:
 
         return {
             "total_hospitals": total_hospitals,
-            "total_branches": total_branches,
             "total_admins": total_admins,
             "active_admins": active_admins,
             "inactive_admins": inactive_admins,

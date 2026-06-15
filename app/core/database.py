@@ -6,7 +6,7 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=settings.SQLALCHEMY_ECHO,
     pool_pre_ping=False,  # aiomysql async ping() incompatible with SQLAlchemy pre-ping
     pool_recycle=3600,
 )
@@ -80,7 +80,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     resources = [
         "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
-        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments", "branches",
+        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
     ]
     actions = [
         PermissionAction.CREATE,
@@ -113,7 +113,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     admin_resources = {
         "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
-        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments", "branches",
+        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
     }
 
     for perm in permissions:

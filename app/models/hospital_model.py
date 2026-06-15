@@ -15,6 +15,5 @@ class Hospital(Base, TimestampMixin, SoftDeleteMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     users = relationship("User", back_populates="hospital")
-    subscriptions = relationship("Subscription", back_populates="hospital", cascade="all, delete-orphan")
-    branches = relationship("Branch", back_populates="hospital", cascade="all, delete-orphan")
+    # subscriptions = relationship("Subscription", back_populates="hospital", cascade="all, delete-orphan")
 

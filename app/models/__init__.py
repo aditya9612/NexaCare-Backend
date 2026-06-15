@@ -23,6 +23,7 @@ from app.models.pharmacy_model import (
 from app.models.refresh_token_model import RefreshToken
 from app.models.role_model import Role, RolePermission
 from app.models.user_model import User
+from app.models.staff_model import Staff
 from app.models.voice_model import CallAnalytics, CallSchedule, VoiceCall, VoiceCallLog, VoiceResponse
 from app.models.whatsapp_model import (
     MessageDelivery,
@@ -33,14 +34,12 @@ from app.models.whatsapp_model import (
 )
 from app.models.bed_allocation_model import Bed, BedActivityLog, Floor, Room
 from app.models.hospital_model import Hospital
-from app.models.branch_model import Branch
 from app.models.subscription_model import SubscriptionPlan, Subscription
 from app.models.ai_config_model import AIConfiguration
 from app.models.security_model import LoginHistory
 
 __all__ = [
     "Hospital",
-    "Branch",
     "SubscriptionPlan",
     "Subscription",
     "AIConfiguration",
@@ -107,5 +106,6 @@ __all__ = [
     "Room",
     "Bed",
     "BedActivityLog",
+    "Staff",
 ]
 

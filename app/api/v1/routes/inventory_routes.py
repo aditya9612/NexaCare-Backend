@@ -12,8 +12,6 @@ from app.schemas.inventory_schema import (
     StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
-    VendorCreate,
-    VendorResponse,
     WarehouseCreate,
     WarehouseResponse,
 )
@@ -121,28 +119,7 @@ async def list_stock_transactions(
     return APIResponse(message="Stock transactions retrieved", data=result)
 
 
-# --- Vendors ---
-@router.post("/vendors", response_model=APIResponse[VendorResponse], status_code=201)
-async def create_vendor(
-    data: VendorCreate,
-    db: DbSession,
-    current_user: CurrentUser,
-    _: User = Depends(require_permission("inventory", "create")),
-):
-    vendor = await InventoryService(db).create_vendor(data, current_user.id)
-    return APIResponse(message="Vendor created", data=vendor)
-
-
-@router.get("/vendors", response_model=APIResponse[PaginatedResult[VendorResponse]])
-async def list_vendors(
-    db: DbSession,
-    current_user: CurrentUser,
-    page: int = 1,
-    size: int = 20,
-    _: User = Depends(require_permission("inventory", "read")),
-):
-    result = await InventoryService(db).list_vendors(page=page, size=size)
-    return APIResponse(message="Vendors retrieved", data=result)
+# --- Vendors Removed (moved to unified /vendors API) ---
 
 
 # --- Warehouses ---

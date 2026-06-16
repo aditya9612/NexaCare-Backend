@@ -1,17 +1,18 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ReorderAlertStatus, StockTransactionType
-from app.core.exceptions import BadRequestException, NotFoundException
-from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Vendor, Warehouse
+from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
+from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Warehouse
+from app.models.vendor_model import Vendor
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.inventory_repository import (
     InventoryRepository,
     ReorderAlertRepository,
     StockTransactionRepository,
-    VendorRepository,
     WarehouseRepository,
 )
+from app.repositories.vendor_repository import VendorRepository
 from app.schemas.inventory_schema import (
     ConsumptionReport,
     InventoryItemCreate,
@@ -21,9 +22,7 @@ from app.schemas.inventory_schema import (
     StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
-    VendorCreate,
-    VendorResponse,
-    VendorUpdate,
+    # Vendor schemas removed (centralized)
     WarehouseCreate,
     WarehouseResponse,
     WarehouseUpdate,
@@ -48,9 +47,41 @@ class InventoryService:
             if not dept:
                 raise NotFoundException(f"Department with ID {department_id} not found")
 
+    async def _validate_warehouse(self, warehouse_id: int | None) -> None:
+        if warehouse_id is not None:
+            wh = await self.warehouse_repo.get_by_id(warehouse_id)
+            if not wh:
+                raise NotFoundException(f"Warehouse with ID {warehouse_id} not found")
+
+    async def _validate_vendor(self, vendor_id: int | None) -> None:
+        if vendor_id is not None:
+            vendor = await self.vendor_repo.get_by_id(vendor_id)
+            if not vendor:
+                raise NotFoundException(f"Vendor with ID {vendor_id} not found")
+
     async def create_item(self, data: InventoryItemCreate, user_id: int) -> InventoryItemResponse:
         await self._validate_department(data.department_id)
-        sku = data.sku or generate_code("SKU")
+        await self._validate_warehouse(data.warehouse_id)
+        await self._validate_vendor(data.vendor_id)
+        
+        sku = data.sku
+        if sku:
+            existing = await self.item_repo.get_by_sku(sku)
+            if existing:
+                raise ConflictException("Inventory item with this SKU already exists")
+        else:
+            while True:
+                sku = generate_code("SKU")
+                existing = await self.item_repo.get_by_sku(sku)
+                if not existing:
+                    break
+                    
+        barcode = data.barcode
+        if barcode:
+            existing_barcode = await self.item_repo.get_by_barcode(barcode)
+            if existing_barcode:
+                raise ConflictException("Inventory item with this barcode already exists")
+
         item = InventoryItem(sku=sku, **data.model_dump(exclude={"sku"}))
         item = await self.item_repo.create(item)
         await self._check_reorder_alert(item)
@@ -86,6 +117,14 @@ class InventoryService:
         if not item:
             raise NotFoundException("Inventory item not found")
         await self._validate_department(data.department_id)
+        await self._validate_warehouse(data.warehouse_id)
+        await self._validate_vendor(data.vendor_id)
+        
+        if data.barcode:
+            existing_barcode = await self.item_repo.get_by_barcode(data.barcode)
+            if existing_barcode and existing_barcode.id != item_id:
+                raise ConflictException("Inventory item with this barcode already exists")
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(item, key, value)
         item = await self.item_repo.update(item)
@@ -116,6 +155,9 @@ class InventoryService:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
+            
+        await self._validate_warehouse(data.warehouse_id)
+        await self._validate_warehouse(data.target_warehouse_id)
 
         delta = data.quantity
         if data.transaction_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION):
@@ -159,20 +201,20 @@ class InventoryService:
             [StockTransactionResponse.model_validate(t) for t in items], total, page, size
         )
 
-    async def create_vendor(self, data: VendorCreate, user_id: int) -> VendorResponse:
-        vendor = Vendor(**data.model_dump())
-        vendor = await self.vendor_repo.create(vendor)
-        await self.audit_repo.create("create", "inventory_vendor", user_id=user_id, resource_id=str(vendor.id))
-        return VendorResponse.model_validate(vendor)
-
-    async def list_vendors(self, page: int = 1, size: int = 20):
-        skip = (page - 1) * size
-        items = await self.vendor_repo.list_all(skip=skip, limit=size)
-        total = await self.vendor_repo.count_all()
-        return build_paginated_result([VendorResponse.model_validate(v) for v in items], total, page, size)
+    # --- Vendor Services Removed (Centralized in VendorService) ---
 
     async def create_warehouse(self, data: WarehouseCreate, user_id: int) -> WarehouseResponse:
-        code = data.code or generate_code("WH")
+        code = data.code
+        if code:
+            existing = await self.warehouse_repo.get_by_code(code)
+            if existing:
+                raise ConflictException("Warehouse with this code already exists")
+        else:
+            while True:
+                code = generate_code("WH")
+                existing = await self.warehouse_repo.get_by_code(code)
+                if not existing:
+                    break
         warehouse = Warehouse(code=code, name=data.name, location=data.location, capacity=data.capacity)
         warehouse = await self.warehouse_repo.create(warehouse)
         await self.audit_repo.create("create", "inventory_warehouse", user_id=user_id, resource_id=str(warehouse.id))

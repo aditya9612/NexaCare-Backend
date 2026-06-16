@@ -18,6 +18,7 @@ class InventoryItemCreate(BaseSchema):
     expiry_date: date | None = None
     warehouse_id: int | None = None
     vendor_id: int | None = None
+    department_id: int | None = None
     description: str | None = None
 
 
@@ -32,6 +33,7 @@ class InventoryItemUpdate(BaseSchema):
     expiry_date: date | None = None
     warehouse_id: int | None = None
     vendor_id: int | None = None
+    department_id: int | None = None
     description: str | None = None
     is_active: bool | None = None
 
@@ -49,6 +51,7 @@ class InventoryItemResponse(BaseSchema):
     expiry_date: date | None
     warehouse_id: int | None
     vendor_id: int | None
+    department_id: int | None
     is_active: bool
     created_at: datetime
     updated_at: datetime

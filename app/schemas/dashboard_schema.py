@@ -28,3 +28,18 @@ class DoctorDashboardResponse(BaseModel):
 class PatientDashboardResponse(BaseModel):
     appointment_history: list[AppointmentResponse]
     upcoming_appointments: list[AppointmentResponse]
+
+
+class ReceptionDashboardResponse(BaseModel):
+    total_registered_patients: int
+    today_scheduled_appointments: int
+    checked_in_patients: int
+    waiting_patients: int
+    completed_visits: int
+    cancelled_appointments: int
+    available_doctors: int
+    walk_in_patients: int
+    pending_billing: int
+    rescheduled_appointments: int
+    total_patient_footfall: int
+

@@ -101,6 +101,19 @@ class ExpenseService:
         expense = Expense(**data.model_dump())
         expense = await self.expense_repo.create(expense)
         await self.audit_repo.create("create", "expense", user_id=user_id, resource_id=str(expense.id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="EXPENSE_RECORDED",
+            reference_no=f"EXP-{expense.id}",
+            description=f"Expense Recorded: {expense.description or ''}",
+            amount=expense.amount,
+            source_module="expenses",
+            source_id=expense.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return ExpenseResponse.model_validate(expense)
 
     async def list_expenses(self, query: ExpenseQuery):

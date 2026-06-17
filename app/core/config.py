@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # Allow Super Admin / Hospital Admin via POST /auth/register (disable in production).
     ALLOW_ADMIN_SELF_REGISTER: bool = True
 
+    # ICU telemetry ingestion limits
+    ICU_TELEMETRY_ECG_MAX_SAMPLES: int = 1000
+
 
 @lru_cache
 def get_settings() -> Settings:

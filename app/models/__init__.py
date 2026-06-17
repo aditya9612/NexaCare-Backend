@@ -42,6 +42,7 @@ from app.models.whatsapp_model import (
     WhatsAppTemplate,
 )
 from app.models.bed_allocation_model import Bed, BedActivityLog, Floor, Room
+from app.models.icu_telemetry_model import IcuDevice, IcuTelemetryAlert, IcuVitalReading
 from app.models.hospital_model import Hospital
 from app.models.subscription_model import SubscriptionPlan, Subscription
 from app.models.ai_config_model import AIConfiguration
@@ -123,5 +124,8 @@ __all__ = [
     "Bed",
     "BedActivityLog",
     "Staff",
+    "IcuDevice",
+    "IcuVitalReading",
+    "IcuTelemetryAlert",
 ]
 

@@ -28,7 +28,7 @@ from app.api.v1.routes import (
     accountant_routes,
     public_routes,
     staff_routes,
-
+    icu_telemetry_routes,
 )
 
 
@@ -64,8 +64,5 @@ api_router.include_router(subscription_routes.router, prefix="/subscriptions", t
 api_router.include_router(platform_routes.router, prefix="/platform", tags=["Platform"])
 api_router.include_router(security_routes.router, prefix="/security", tags=["Security"])
 api_router.include_router(admin_management_routes.router, prefix="/super-admin/admins", tags=["Super Admin Admins"])
-api_router.include_router(
-    accountant_routes.router,
-    prefix="/accountant",
-    tags=["Accountant Dashboard"]
-)
+api_router.include_router(icu_telemetry_routes.router, prefix="/icu", tags=["ICU Telemetry"])
+

@@ -26,6 +26,7 @@ class RBACMiddleware(BaseHTTPMiddleware):
         "/api/v1/voice-reminder/twiml",
         "/api/v1/voice-reminder/status-callback",
         "/api/v1/voice-assistant/twiml",
+        "/api/v1/icu/telemetry",
         "/ws/",
     )
 

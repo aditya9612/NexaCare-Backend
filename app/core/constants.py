@@ -121,6 +121,64 @@ class ReorderAlertStatus:
     RESOLVED = "resolved"
 
 
+class TelemetryAlertStatus:
+    ACTIVE = "active"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+
+
+class TelemetryAlertSeverity:
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class VitalType:
+    HEART_RATE = "heart_rate"
+    SYSTOLIC_BP = "systolic_bp"
+    DIASTOLIC_BP = "diastolic_bp"
+    SPO2 = "spo2"
+    RESPIRATORY_RATE = "respiratory_rate"
+    TEMPERATURE = "temperature"
+
+
+VITAL_THRESHOLDS: dict[str, dict[str, float]] = {
+    VitalType.HEART_RATE: {
+        "min": 60,
+        "max": 100,
+        "critical_min": 40,
+        "critical_max": 130,
+    },
+    VitalType.SYSTOLIC_BP: {
+        "min": 90,
+        "max": 140,
+        "critical_min": 70,
+        "critical_max": 180,
+    },
+    VitalType.DIASTOLIC_BP: {
+        "min": 60,
+        "max": 90,
+        "critical_min": 40,
+        "critical_max": 120,
+    },
+    VitalType.SPO2: {
+        "min": 94,
+        "critical_min": 88,
+    },
+    VitalType.RESPIRATORY_RATE: {
+        "min": 12,
+        "max": 20,
+        "critical_min": 8,
+        "critical_max": 30,
+    },
+    VitalType.TEMPERATURE: {
+        "min": 36.1,
+        "max": 37.5,
+        "critical_min": 35.0,
+        "critical_max": 39.5,
+    },
+}
+
+
 class ChatSessionStatus:
     ACTIVE = "Active"
     CLOSED = "Closed"

@@ -9,6 +9,8 @@ from app.schemas.appointment_schema import AppointmentResponse
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.doctor_schema import (
     DoctorCreate,
+    DoctorOnboardCreate,
+    DoctorOnboardResponse,
     DoctorResponse,
     DoctorScheduleCreate,
     DoctorScheduleResponse,
@@ -31,6 +33,21 @@ async def create_doctor(
     doctor_obj = await DoctorService(db).create(doctor, current_user.id, image_file=None)
     return APIResponse(message="Doctor created", data=doctor_obj)
 # Deprecated legacy code removed
+
+
+@router.post("/onboard", response_model=APIResponse[DoctorOnboardResponse], status_code=201)
+async def onboard_doctor(
+    db: DbSession,
+    current_user: CurrentUser,
+    data: DoctorOnboardCreate,
+    _: User = Depends(require_permission("doctors", "create")),
+):
+    """
+    Create a doctor login account (`users`) and clinical profile (`doctors`) in one step.
+    The new doctor can log in immediately with the provided email and password.
+    """
+    result = await DoctorService(db).onboard(data, current_user)
+    return APIResponse(message="Doctor onboarded successfully", data=result)
 
 
 @router.get("", response_model=APIResponse[PaginatedResult[DoctorResponse]])

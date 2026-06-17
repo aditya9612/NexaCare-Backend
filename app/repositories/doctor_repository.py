@@ -92,6 +92,12 @@ class DoctorRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_user_id(self, user_id: int) -> Doctor | None:
+        result = await self.db.execute(
+            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, doctor: Doctor) -> Doctor:
         self.db.add(doctor)
         await self.db.flush()

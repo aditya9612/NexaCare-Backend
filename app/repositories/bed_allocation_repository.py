@@ -97,6 +97,16 @@ class BedAllocationRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    async def list_icu_beds(self) -> List[Bed]:
+        query = (
+            select(Bed)
+            .where(func.lower(Bed.type) == "icu")
+            .options(selectinload(Bed.patient), selectinload(Bed.room))
+            .order_by(Bed.id.asc())
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def create_bed(self, bed: Bed) -> Bed:
         self.db.add(bed)
         await self.db.flush()

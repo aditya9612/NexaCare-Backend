@@ -33,6 +33,7 @@ from app.api.v1.routes import (
     vendor_routes,
     transaction_routes,
     transaction_history_routes,
+    clinical_record_router,
 )
 
 
@@ -74,4 +75,5 @@ api_router.include_router(admin_management_routes.router, prefix="/super-admin/a
 api_router.include_router(icu_telemetry_routes.router, prefix="/icu", tags=["ICU Telemetry"])
 api_router.include_router(transaction_routes.router, prefix="/transactions", tags=["Transactions"])
 api_router.include_router(transaction_history_routes.router, prefix="/transaction-history", tags=["Transaction History"])
+api_router.include_router(clinical_record_router.router, prefix="/clinical-records", tags=["Clinical Records"])
 

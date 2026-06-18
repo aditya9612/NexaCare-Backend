@@ -27,6 +27,8 @@ from app.schemas.doctor_medical_record_schema import (
 from app.services.doctor_service import DoctorService
 from app.services.doctor_medical_record_service import DoctorMedicalRecordService
 from app.utils.pagination import PaginatedResult
+from app.schemas.clinical_record_schema import ClinicalRecordResponse
+from fastapi import Query
 
 router = APIRouter()
 
@@ -369,3 +371,18 @@ async def add_doctor_schedule(
 ):
     schedule = await DoctorService(db).add_schedule(doctor_id, data, current_user.id)
     return APIResponse(message="Schedule added", data=schedule)
+
+@router.get("/{doctor_id}/clinical-records", response_model=APIResponse[PaginatedResult[ClinicalRecordResponse]])
+async def list_doctor_clinical_records(
+    doctor_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    from app.services.clinical_record_service import ClinicalRecordService
+    result = await ClinicalRecordService(db).list_records(
+        page=page, size=size, doctor_id=doctor_id
+    )
+    return APIResponse(message="Records fetched successfully", data=result)

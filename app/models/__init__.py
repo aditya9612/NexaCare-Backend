@@ -49,6 +49,7 @@ from app.models.hospital_model import Hospital
 from app.models.subscription_model import SubscriptionPlan, Subscription
 from app.models.ai_config_model import AIConfiguration
 from app.models.security_model import LoginHistory
+from app.models.clinical_record_model import ClinicalRecord
 
 __all__ = [
     "Hospital",
@@ -132,5 +133,6 @@ __all__ = [
     "ExpenseCategory",
     "Expense",
     "VendorPayment",
+    "ClinicalRecord",
 ]
 

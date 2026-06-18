@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -16,7 +17,15 @@ from app.schemas.doctor_schema import (
     DoctorScheduleResponse,
     DoctorUpdate,
 )
+from app.schemas.doctor_medical_record_schema import (
+    DiagnosisResponse,
+    DiagnosisUpdate,
+    MedicalRecordResponse,
+    TreatmentNoteCreate,
+    TreatmentNoteResponse,
+)
 from app.services.doctor_service import DoctorService
+from app.services.doctor_medical_record_service import DoctorMedicalRecordService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
@@ -122,6 +131,147 @@ async def list_available_doctors(
     doctors = await DoctorService(db).list_available()
     return APIResponse(message="Available doctors", data=doctors)
 
+
+
+# =========================
+# Doctor Dashboard - Medical Records APIs
+# =========================
+
+
+@router.post(
+    "/medical-records",
+    response_model=APIResponse[MedicalRecordResponse],
+    status_code=201,
+)
+async def upload_report(
+    db: DbSession,
+    current_user: CurrentUser,
+    patient_id: int = Form(...),
+    patient_name: str = Form(...),
+    report_title: str = Form(...),
+    report_type: str = Form(...),
+    diagnosis: str | None = Form(None),
+    notes: str | None = Form(None),
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("doctors", "create")),
+):
+    record = await DoctorMedicalRecordService(db).upload_report(
+        patient_id=patient_id,
+        patient_name=patient_name,
+        report_title=report_title,
+        report_type=report_type,
+        diagnosis=diagnosis,
+        notes=notes,
+        file=file,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Report uploaded", data=record)
+
+
+@router.get(
+    "/medical-records",
+    response_model=APIResponse[PaginatedResult[MedicalRecordResponse]],
+)
+async def view_reports(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    result = await DoctorMedicalRecordService(db).list_reports(
+        page=page,
+        size=size,
+    )
+    return APIResponse(message="Medical records retrieved", data=result)
+
+
+@router.get("/medical-records/{record_id}/download")
+async def download_report(
+    record_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    record = await DoctorMedicalRecordService(db).get_report_file(record_id)
+    return FileResponse(
+        path=record.file_path,
+        filename=record.file_name,
+        media_type=record.file_type or "application/octet-stream",
+    )
+
+
+@router.get(
+    "/patients/{patient_id}/diagnosis",
+    response_model=APIResponse[DiagnosisResponse],
+)
+async def get_diagnosis(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    diagnosis = await DoctorMedicalRecordService(db).get_diagnosis(patient_id)
+    return APIResponse(message="Diagnosis retrieved", data=diagnosis)
+
+
+@router.put(
+    "/patients/{patient_id}/diagnosis",
+    response_model=APIResponse[DiagnosisResponse],
+)
+async def update_diagnosis(
+    patient_id: int,
+    data: DiagnosisUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "update")),
+):
+    diagnosis = await DoctorMedicalRecordService(db).update_diagnosis(
+        patient_id=patient_id,
+        data=data,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Diagnosis updated", data=diagnosis)
+
+
+@router.get(
+    "/patients/{patient_id}/treatment-notes",
+    response_model=APIResponse[PaginatedResult[TreatmentNoteResponse]],
+)
+async def view_treatment_notes(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    result = await DoctorMedicalRecordService(db).list_treatment_notes(
+        patient_id=patient_id,
+        page=page,
+        size=size,
+    )
+    return APIResponse(message="Treatment notes retrieved", data=result)
+
+
+@router.post(
+    "/patients/{patient_id}/treatment-notes",
+    response_model=APIResponse[TreatmentNoteResponse],
+    status_code=201,
+)
+async def add_treatment_note(
+    patient_id: int,
+    data: TreatmentNoteCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "create")),
+):
+    note = await DoctorMedicalRecordService(db).add_treatment_note(
+        patient_id=patient_id,
+        data=data,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Treatment note added", data=note)
 
 @router.get("/{doctor_id}", response_model=APIResponse[DoctorResponse])
 async def get_doctor(

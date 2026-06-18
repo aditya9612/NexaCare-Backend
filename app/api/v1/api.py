@@ -26,6 +26,7 @@ from app.api.v1.routes import (
     platform_routes,
     security_routes,
     admin_management_routes,
+    accountant_routes,
     public_routes,
     staff_routes,
     icu_telemetry_routes,
@@ -48,7 +49,8 @@ api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"]
 api_router.include_router(staff_routes.router, prefix="/staff", tags=["Staff"])
 api_router.include_router(pharmacy_routes.router, prefix="/pharmacy", tags=["Pharmacy"])
 api_router.include_router(lab_routes.router, prefix="/lab", tags=["Lab"])
-api_router.include_router(billing_routes.router, prefix="/billing", tags=["Billing"])
+api_router.include_router(billing_routes.router, prefix="/billing", tags=["Billing"]) 
+api_router.include_router( accountant_routes.router,  prefix="/accountant", tags=["Accountant Dashboard"],)  
 api_router.include_router(department_routes.router, prefix="/departments", tags=["Departments"])
 api_router.include_router(expense_routes.router, prefix="/expenses", tags=["Expenses"])
 api_router.include_router(inventory_routes.router, prefix="/inventory", tags=["Inventory"])

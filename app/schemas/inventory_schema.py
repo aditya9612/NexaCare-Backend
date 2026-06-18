@@ -1,9 +1,10 @@
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
+from app.schemas.vendor_schema import VendorCreate, VendorUpdate, VendorResponse
 
 
 class InventoryItemCreate(BaseSchema):
@@ -68,6 +69,15 @@ class StockTransactionCreate(BaseSchema):
     notes: str | None = None
     target_warehouse_id: int | None = None
 
+    @field_validator("transaction_type")
+    @classmethod
+    def validate_transaction_type(cls, v: str) -> str:
+        v_lower = v.lower()
+        allowed = {"inward", "outward", "transfer", "adjustment", "consumption"}
+        if v_lower not in allowed:
+            raise ValueError(f"transaction_type must be one of {allowed}")
+        return v_lower
+
 
 class StockTransactionResponse(BaseSchema):
     id: int
@@ -84,35 +94,7 @@ class StockTransactionResponse(BaseSchema):
     created_at: datetime
 
 
-class VendorCreate(BaseSchema):
-    name: str
-    contact_person: str | None = None
-    phone: str | None = None
-    email: str | None = None
-    address: str | None = None
-    gst_number: str | None = None
-
-
-class VendorUpdate(BaseSchema):
-    name: str | None = None
-    contact_person: str | None = None
-    phone: str | None = None
-    email: str | None = None
-    address: str | None = None
-    gst_number: str | None = None
-    is_active: bool | None = None
-
-
-class VendorResponse(BaseSchema):
-    id: int
-    name: str
-    contact_person: str | None
-    phone: str | None
-    email: str | None
-    address: str | None
-    gst_number: str | None
-    is_active: bool
-    created_at: datetime
+# --- Vendor Schemas (Moved to central vendor_schema) ---
 
 
 class WarehouseCreate(BaseSchema):

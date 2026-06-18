@@ -5,7 +5,8 @@ from app.models.billing_model import Bill, Billing, BillItem, Insurance, Insuran
 from app.models.chat_model import AIResponse, ChatIntent, ChatMessage, ChatSession, ConversationMemory
 from app.models.department_model import Department
 from app.models.doctor_model import Doctor, DoctorSchedule
-from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Vendor, Warehouse
+from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Warehouse
+from app.models.vendor_model import Vendor
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
 from app.models.nurse_model import (
     Nurse,
@@ -34,6 +35,7 @@ from app.models.role_model import Role, RolePermission
 from app.models.user_model import User
 from app.models.staff_model import Staff
 from app.models.voice_model import CallAnalytics, CallSchedule, VoiceCall, VoiceCallLog, VoiceResponse
+from app.models.expense_model import ExpenseCategory, Expense, VendorPayment
 from app.models.whatsapp_model import (
     MessageDelivery,
     WhatsAppAnalytics,
@@ -127,5 +129,8 @@ __all__ = [
     "IcuDevice",
     "IcuVitalReading",
     "IcuTelemetryAlert",
+    "ExpenseCategory",
+    "Expense",
+    "VendorPayment",
 ]
 

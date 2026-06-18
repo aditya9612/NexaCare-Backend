@@ -80,7 +80,7 @@ def upgrade() -> None:
     op.create_foreign_key(None, 'purchases', 'suppliers', ['supplier_id'], ['id'])
     op.alter_column('refresh_tokens', 'token',
                existing_type=mysql.VARCHAR(charset='utf8mb4', collation='utf8mb4_unicode_ci', length=191),
-               type_=sa.String(length=500),
+               type_=sa.String(length=255),
                existing_nullable=False)
     op.create_foreign_key(None, 'refresh_tokens', 'users', ['user_id'], ['id'], ondelete='CASCADE')
     op.create_foreign_key(None, 'reorder_alerts', 'inventory_items', ['item_id'], ['id'])
@@ -152,7 +152,7 @@ def downgrade() -> None:
     op.drop_constraint(None, 'reorder_alerts', type_='foreignkey')
     op.drop_constraint(None, 'refresh_tokens', type_='foreignkey')
     op.alter_column('refresh_tokens', 'token',
-               existing_type=sa.String(length=500),
+               existing_type=sa.String(length=255),
                type_=mysql.VARCHAR(charset='utf8mb4', collation='utf8mb4_unicode_ci', length=191),
                existing_nullable=False)
     op.drop_constraint(None, 'purchases', type_='foreignkey')

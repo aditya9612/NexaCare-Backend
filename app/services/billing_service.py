@@ -120,6 +120,19 @@ class BillingService:
         billing = await self._recalculate_billing(billing)
         billing = await self.repo.get_by_id(billing.id)
         await self.audit_repo.create("create", "billing", user_id=user_id, resource_id=str(billing.id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="INVOICE_CREATED",
+            reference_no=billing.bill_number,
+            description=f"Billing Invoice Created: {billing.notes or ''}",
+            amount=billing.total_amount,
+            source_module="billing",
+            source_id=billing.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return self._to_response(billing)
 
     async def list_billings(
@@ -194,6 +207,19 @@ class BillingService:
         billing.paid_amount = round(billing.paid_amount + data.amount, 2)
         await self._recalculate_billing(billing)
         await self.audit_repo.create("payment", "billing", user_id=user_id, resource_id=str(billing_id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="PAYMENT_RECEIVED",
+            reference_no=payment.transaction_ref or f"PAY-{payment.id}",
+            description=f"Payment Received on bill {billing.bill_number} via {payment.payment_method}",
+            amount=payment.amount,
+            source_module="payments",
+            source_id=payment.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return PaymentResponse.model_validate(payment)
 
     async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int) -> PaymentResponse:
@@ -219,6 +245,19 @@ class BillingService:
         if billing.paid_amount == 0 and billing.balance_amount > 0:
             billing.status = BillingStatus.PENDING
         await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="REFUND_ISSUED",
+            reference_no=payment.transaction_ref or f"REF-{payment.id}",
+            description=f"Refund Issued for bill {billing.bill_number}: {payment.refund_reason or ''}",
+            amount=payment.amount,
+            source_module="refunds",
+            source_id=payment.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return PaymentResponse.model_validate(payment)
 
     async def generate_invoice(self, billing_id: int, user_id: int) -> tuple[str, bytes]:
@@ -280,6 +319,7 @@ class BillingService:
 
 class InsuranceService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = InsuranceRepository(db)
         self.claim_repo = InsuranceClaimRepository(db)
         self.audit_repo = AuditRepository(db)
@@ -298,4 +338,17 @@ class InsuranceService:
         )
         claim = await self.claim_repo.create(claim)
         await self.audit_repo.create("create", "billing_claim", user_id=user_id, resource_id=str(claim.id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="INSURANCE_CLAIM",
+            reference_no=claim.claim_number,
+            description=f"Insurance Claim Submitted: {claim.notes or ''}",
+            amount=claim.claimed_amount,
+            source_module="insurance",
+            source_id=claim.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return InsuranceClaimResponse.model_validate(claim)

@@ -29,6 +29,7 @@ class InventoryItem(Base, TimestampMixin, SoftDeleteMixin):
     warehouse: Mapped["Warehouse | None"] = relationship(back_populates="items")
     transactions: Mapped[list["StockTransaction"]] = relationship(back_populates="item")
     department = relationship("Department", back_populates="inventory_items")
+    vendor: Mapped["Vendor | None"] = relationship(back_populates="items")
 
 
 class StockTransaction(Base, TimestampMixin):
@@ -49,19 +50,6 @@ class StockTransaction(Base, TimestampMixin):
 
     item: Mapped["InventoryItem"] = relationship(back_populates="transactions")
     warehouse: Mapped["Warehouse | None"] = relationship(back_populates="transactions")
-
-
-class Vendor(Base, TimestampMixin, SoftDeleteMixin):
-    __tablename__ = "vendors"
-
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(255), index=True)
-    contact_person: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    address: Mapped[str | None] = mapped_column(Text, nullable=True)
-    gst_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Warehouse(Base, TimestampMixin, SoftDeleteMixin):

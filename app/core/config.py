@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
+  
 
 
     # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"

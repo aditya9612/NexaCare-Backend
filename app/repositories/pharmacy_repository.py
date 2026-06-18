@@ -160,6 +160,28 @@ class PrescriptionRepository:
         await self.db.flush()
         await self.db.refresh(prescription)
         return prescription
+    async def update(self, prescription: Prescription) -> Prescription:
+        await self.db.flush()
+        await self.db.refresh(prescription)
+        return prescription
+
+    async def delete_items(self, prescription_id: int) -> None:
+        items = await self.db.execute(
+            select(PrescriptionItem).where(
+                PrescriptionItem.prescription_id == prescription_id
+            )
+        )
+
+        for item in items.scalars().all():
+            await self.db.delete(item)
+
+        await self.db.flush()
+
+    async def soft_delete(self, prescription: Prescription) -> None:
+        prescription.is_deleted = True
+        prescription.deleted_at = utc_now()
+        prescription.status = "cancelled"
+        await self.db.flush()
 
 
 class PharmacyInvoiceRepository:

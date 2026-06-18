@@ -160,7 +160,98 @@ class PharmacyService:
         return build_paginated_result(
             [self._prescription_response(p) for p in items], total, page, size
         )
+    async def send_prescription_to_pharmacy(
+        self,
+        prescription_id: int,
+        user_id: int,
+    ) -> PrescriptionResponse:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
 
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        if prescription.status == "cancelled":
+            raise BadRequestException("Cancelled prescription cannot be sent to pharmacy")
+
+        if prescription.status == "dispensed":
+            raise BadRequestException("Dispensed prescription cannot be sent again")
+
+        prescription.status = "sent_to_pharmacy"
+        prescription = await self.prescription_repo.update(prescription)
+
+        await self.audit_repo.create(
+            "send_to_pharmacy",
+            "prescriptions",
+            user_id=user_id,
+            resource_id=str(prescription.id),
+        )
+
+        return self._prescription_response(prescription)
+
+    async def update_prescription(
+        self,
+        prescription_id: int,
+        data,
+        user_id: int,
+    ) -> PrescriptionResponse:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        if prescription.status in ["dispensed", "cancelled"]:
+            raise BadRequestException("Dispensed or cancelled prescription cannot be updated")
+
+        update_data = data.model_dump(exclude_unset=True)
+
+        if "instructions" in update_data:
+            prescription.instructions = update_data["instructions"]
+
+        if data.items is not None:
+            await self.prescription_repo.delete_items(prescription.id)
+
+            for item_data in data.items:
+                item = PrescriptionItem(
+                    prescription_id=prescription.id,
+                    **item_data.model_dump(),
+                )
+                self.db.add(item)
+
+        prescription.status = "updated"
+        prescription = await self.prescription_repo.update(prescription)
+
+        await self.audit_repo.create(
+            "update",
+            "prescriptions",
+            user_id=user_id,
+            resource_id=str(prescription.id),
+        )
+
+        prescription = await self.prescription_repo.get_by_id(prescription.id)
+        return self._prescription_response(prescription)
+
+    async def delete_prescription(
+        self,
+        prescription_id: int,
+        user_id: int,
+    ) -> None:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        if prescription.status == "dispensed":
+            raise BadRequestException("Dispensed prescription cannot be deleted")
+
+        await self.prescription_repo.soft_delete(prescription)
+
+        await self.audit_repo.create(
+            "delete",
+            "prescriptions",
+            user_id=user_id,
+            resource_id=str(prescription.id),
+        )      
+      
     def _prescription_response(self, prescription: Prescription) -> PrescriptionResponse:
         resp = PrescriptionResponse.model_validate(prescription)
         resp.items = [PrescriptionItemResponse.model_validate(i) for i in prescription.items]

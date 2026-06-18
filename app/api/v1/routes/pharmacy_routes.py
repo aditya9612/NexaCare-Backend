@@ -13,6 +13,7 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceResponse,
     PrescriptionCreate,
     PrescriptionResponse,
+    PrescriptionUpdate,
     PurchaseCreate,
     PurchaseResponse,
     SalesReport,
@@ -116,6 +117,59 @@ async def list_prescriptions(
 ):
     result = await PharmacyService(db).list_prescriptions(page=page, size=size, status=status)
     return APIResponse(message="Prescriptions retrieved", data=result)
+
+
+@router.post(
+    "/prescriptions/{prescription_id}/send-to-pharmacy",
+    response_model=APIResponse[PrescriptionResponse],
+)
+async def send_prescription_to_pharmacy(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    prescription = await PharmacyService(db).send_prescription_to_pharmacy(
+        prescription_id=prescription_id,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Prescription sent to pharmacy", data=prescription)
+
+
+@router.put(
+    "/prescriptions/{prescription_id}",
+    response_model=APIResponse[PrescriptionResponse],
+)
+async def update_prescription(
+    prescription_id: int,
+    data: PrescriptionUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    prescription = await PharmacyService(db).update_prescription(
+        prescription_id=prescription_id,
+        data=data,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Prescription updated", data=prescription)
+
+
+@router.delete(
+    "/prescriptions/{prescription_id}",
+    response_model=APIResponse[MessageResponse],
+)
+async def delete_prescription(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "delete")),
+):
+    await PharmacyService(db).delete_prescription(
+        prescription_id=prescription_id,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Prescription deleted", data=MessageResponse(message="Prescription cancelled"))
 
 
 # --- Invoices ---

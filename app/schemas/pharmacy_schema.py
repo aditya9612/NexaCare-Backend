@@ -68,6 +68,20 @@ class PrescriptionCreate(BaseSchema):
     appointment_id: int | None = None
     instructions: str | None = None
     items: List[PrescriptionItemCreate] = Field(default_factory=list)
+    
+
+class PrescriptionItemUpdate(BaseSchema):
+    medicine_id: int
+    dosage: str
+    frequency: str
+    duration_days: int = Field(1, ge=1)
+    quantity: int = Field(1, ge=1)
+    instructions: str | None = None
+
+
+class PrescriptionUpdate(BaseSchema):
+    instructions: str | None = None
+    items: List[PrescriptionItemUpdate] | None = None    
 
 
 class PrescriptionItemResponse(BaseSchema):

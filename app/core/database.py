@@ -35,12 +35,14 @@ async def init_db():
         appointment_model,
         audit_log_model,
         bed_allocation_model,
+        icu_telemetry_model,
         billing_model,
         chat_model,
         department_model,
         doctor_model,
         inventory_model,
         lab_model,
+        nurse_model,
         patient_model,
         permission_model,
         pharmacy_model,
@@ -49,6 +51,7 @@ async def init_db():
         user_model,
         voice_model,
         whatsapp_model,
+        expense_model,
     )
 
     async with engine.begin() as conn:
@@ -59,6 +62,8 @@ async def init_db():
         await _seed_phase3_permissions(session)
         await _seed_patient_permissions(session)
         await _seed_bed_allocation_permissions(session)
+        await _seed_icu_telemetry_permissions(session)
+        await _seed_expense_permissions(session)
         await _seed_default_super_admin(session)
         await session.commit()
 
@@ -282,6 +287,72 @@ async def _seed_bed_allocation_permissions(session: AsyncSession) -> None:
                         session.add(RolePermission(role_id=role.id, permission_id=perm.id))
 
 
+async def _seed_icu_telemetry_permissions(session: AsyncSession) -> None:
+    """Seed permissions for ICU telemetry module."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    resource = "icu_telemetry"
+    actions = [
+        PermissionAction.CREATE,
+        PermissionAction.READ,
+        PermissionAction.UPDATE,
+        PermissionAction.DELETE,
+        PermissionAction.EXPORT,
+        PermissionAction.APPROVE,
+        PermissionAction.ASSIGN,
+    ]
+
+    perms = []
+    for action in actions:
+        perm_name = f"{resource}:{action}"
+        existing = await session.execute(select(Permission).where(Permission.name == perm_name))
+        perm = existing.scalar_one_or_none()
+        if not perm:
+            perm = Permission(
+                name=perm_name,
+                resource=resource,
+                action=action,
+                description=f"{action} {resource}",
+            )
+            session.add(perm)
+            await session.flush()
+        perms.append(perm)
+
+    admin_role_names = [UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN]
+    for r_name in admin_role_names:
+        result = await session.execute(select(Role).where(Role.name == r_name))
+        role = result.scalar_one_or_none()
+        if role:
+            for perm in perms:
+                rp = await session.execute(
+                    select(RolePermission).where(
+                        RolePermission.role_id == role.id,
+                        RolePermission.permission_id == perm.id,
+                    )
+                )
+                if not rp.scalar_one_or_none():
+                    session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+
+    clinical_role_names = [UserRole.DOCTOR, UserRole.NURSE]
+    clinical_actions = {PermissionAction.READ, PermissionAction.UPDATE}
+    for r_name in clinical_role_names:
+        result = await session.execute(select(Role).where(Role.name == r_name))
+        role = result.scalar_one_or_none()
+        if role:
+            for perm in perms:
+                if perm.action in clinical_actions:
+                    rp = await session.execute(
+                        select(RolePermission).where(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == perm.id,
+                        )
+                    )
+                    if not rp.scalar_one_or_none():
+                        session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+
+
 async def _seed_default_super_admin(session: AsyncSession) -> None:
     """Ensure bootstrap Super Admin exists and can log in (fixes stale / manual DB rows)."""
     if not settings.SEED_SUPER_ADMIN:
@@ -364,3 +435,56 @@ async def _seed_default_super_admin(session: AsyncSession) -> None:
 
     if changed:
         await session.flush()
+
+
+async def _seed_expense_permissions(session: AsyncSession) -> None:
+    """Seed permissions for the Expense Management & Vendor modules and assign to Admin and Accountant roles."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    resources = ["expense", "vendor"]
+    actions = [
+        PermissionAction.CREATE,
+        PermissionAction.READ,
+        PermissionAction.UPDATE,
+        PermissionAction.DELETE,
+        PermissionAction.EXPORT,
+        PermissionAction.APPROVE,
+        PermissionAction.ASSIGN,
+    ]
+
+    # Create permissions if they don't exist
+    perms = []
+    for resource in resources:
+        for action in actions:
+            perm_name = f"{resource}:{action}"
+            existing = await session.execute(select(Permission).where(Permission.name == perm_name))
+            perm = existing.scalar_one_or_none()
+            if not perm:
+                perm = Permission(
+                    name=perm_name,
+                    resource=resource,
+                    action=action,
+                    description=f"{action} {resource}",
+                )
+                session.add(perm)
+                await session.flush()
+            perms.append(perm)
+
+    # Roles to receive all expense and vendor permissions: Super Admin, Hospital Admin, Accountant
+    target_roles = [UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.ACCOUNTANT]
+    for r_name in target_roles:
+        result = await session.execute(select(Role).where(Role.name == r_name))
+        role = result.scalar_one_or_none()
+        if role:
+            for perm in perms:
+                rp = await session.execute(
+                    select(RolePermission).where(
+                        RolePermission.role_id == role.id,
+                        RolePermission.permission_id == perm.id,
+                    )
+                )
+                if not rp.scalar_one_or_none():
+                    session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+

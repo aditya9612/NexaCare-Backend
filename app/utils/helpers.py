@@ -26,6 +26,11 @@ def generate_nurse_code() -> str:
     return generate_code("NRS")
 
 
+def generate_staff_code() -> str:
+    return generate_code("STF")
+
+
+
 def generate_appointment_number() -> str:
     return generate_code("APT")
 

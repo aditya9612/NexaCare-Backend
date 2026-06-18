@@ -4,29 +4,83 @@ from fastapi import UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictException, NotFoundException
+from app.core.constants import UserRole
+from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.security import get_password_hash
 from app.models.doctor_model import Doctor, DoctorSchedule
+from app.models.user_model import User
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.auth_repository import AuthRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.doctor_repository import DoctorRepository
+from app.repositories.rbac_repository import RBACRepository
 from app.schemas.appointment_schema import AppointmentResponse
 from app.schemas.doctor_schema import (
     DoctorCreate,
+    DoctorOnboardCreate,
+    DoctorOnboardResponse,
+    DoctorOnboardUserSummary,
     DoctorResponse,
     DoctorScheduleCreate,
     DoctorScheduleResponse,
     DoctorUpdate,
 )
 from app.utils.file_upload import save_upload
-from app.utils.helpers import generate_doctor_code
+from app.utils.helpers import generate_doctor_code, generate_user_code
 from app.utils.pagination import build_paginated_result
+
+
+async def save_doctor_image(file: UploadFile) -> str:
+    import os
+    import uuid
+    from pathlib import Path
+    import aiofiles
+    from fastapi import HTTPException
+    from app.core.config import settings
+
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    if ext not in {"jpg", "jpeg", "png", "webp"}:
+        raise HTTPException(
+            status_code=400,
+            detail="File type not allowed. Only jpg, jpeg, png, and webp are allowed."
+        )
+
+    upload_dir = Path("app/uploads/doctors")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = upload_dir / unique_filename
+
+    content = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=400, detail="File too large")
+
+    async with aiofiles.open(filepath, "wb") as f:
+        await f.write(content)
+
+    return str(filepath).replace(os.sep, "/")
 
 
 class DoctorService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = DoctorRepository(db)
+        self.auth_repo = AuthRepository(db)
+        self.rbac_repo = RBACRepository(db)
         self.audit_repo = AuditRepository(db)
         self.dept_repo = DepartmentRepository(db)
+
+    def _raise_doctor_integrity_error(self, exc: IntegrityError) -> None:
+        err_msg = str(exc.orig).lower()
+        if "license_number" in err_msg:
+            raise ConflictException("A doctor with this license number already exists") from exc
+        if "duplicate" in err_msg and "user_id" in err_msg:
+            raise ConflictException("This user already has a doctor profile") from exc
+        if "doctors_ibfk" in err_msg or "foreign key" in err_msg:
+            raise ConflictException("The specified user_id does not exist") from exc
+        raise ConflictException("Doctor could not be saved due to a database conflict") from exc
 
     async def _validate_department(self, department_id: int | None) -> None:
         """Raise 404 if department_id is given but doesn't exist."""
@@ -78,7 +132,7 @@ class DoctorService:
         # Save uploaded image file if provided, otherwise use URL from data
         profile_image_path: Optional[str] = data.profile_image
         if image_file and image_file.filename:
-            profile_image_path = await save_upload(image_file, subfolder="doctors")
+            profile_image_path = await save_doctor_image(image_file)
 
         dump = data.model_dump()
         dump["profile_image"] = profile_image_path
@@ -86,15 +140,92 @@ class DoctorService:
         doctor = Doctor(doctor_code=generate_doctor_code(), **dump)
         try:
             doctor = await self.repo.create(doctor)
-        except IntegrityError as e:
-            err_msg = str(e.orig)
-            if "license_number" in err_msg:
-                raise ConflictException("A doctor with this license number already exists")
-            if "user_id" in err_msg or "doctors_ibfk" in err_msg:
-                raise ConflictException("The specified user_id does not exist")
-            raise ConflictException("Doctor could not be created due to a database conflict")
+        except IntegrityError as exc:
+            self._raise_doctor_integrity_error(exc)
         await self.audit_repo.create("create", "doctors", user_id=user_id, resource_id=str(doctor.id))
         return DoctorResponse.model_validate(doctor)
+
+    async def onboard(
+        self,
+        data: DoctorOnboardCreate,
+        actor: User,
+        image_file: Optional[UploadFile] = None,
+    ) -> DoctorOnboardResponse:
+        email_norm = data.email.strip().lower()
+        if await self.auth_repo.get_by_email(email_norm):
+            raise ConflictException("Email already registered")
+        if data.phone and await self.auth_repo.get_by_phone(data.phone):
+            raise ConflictException("Phone number already registered")
+        if await self.repo.get_by_email(email_norm):
+            raise ConflictException("A doctor with this email already exists")
+        existing_license = await self.repo.get_by_license(data.license_number)
+        if existing_license:
+            raise ConflictException("A doctor with this license number already exists")
+        await self._validate_department(data.department_id)
+
+        role = await self.rbac_repo.get_role_by_name(UserRole.DOCTOR)
+        if not role:
+            raise BadRequestException("Doctor role not seeded")
+
+        profile_image_path: Optional[str] = data.profile_image
+        if image_file and image_file.filename:
+            profile_image_path = await save_upload(image_file, subfolder="doctors")
+
+        full_name = f"{data.first_name} {data.last_name}".strip()
+        hospital_id = actor.hospital_id
+
+        user = User(
+            user_code=generate_user_code(),
+            email=email_norm,
+            hashed_password=get_password_hash(data.password),
+            full_name=full_name,
+            phone=data.phone,
+            role_id=role.id,
+            hospital_id=hospital_id,
+            profile_image=profile_image_path,
+            is_active=True,
+            is_verified=True,
+        )
+        try:
+            user = await self.auth_repo.create(user)
+            doctor = Doctor(
+                doctor_code=generate_doctor_code(),
+                user_id=user.id,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                specialization=data.specialization,
+                qualification=data.qualification,
+                experience=data.experience,
+                phone=data.phone,
+                email=email_norm,
+                department_id=data.department_id,
+                consultation_fee=data.consultation_fee,
+                license_number=data.license_number,
+                availability_status=data.availability_status,
+                profile_image=profile_image_path,
+                bio=data.bio,
+            )
+            doctor = await self.repo.create(doctor)
+        except IntegrityError as exc:
+            self._raise_doctor_integrity_error(exc)
+
+        user = await self.auth_repo.get_by_id(user.id)
+        await self.audit_repo.create("create", "users", user_id=actor.id, resource_id=str(user.id))
+        await self.audit_repo.create("create", "doctors", user_id=actor.id, resource_id=str(doctor.id))
+
+        return DoctorOnboardResponse(
+            doctor=DoctorResponse.model_validate(doctor),
+            user=DoctorOnboardUserSummary(
+                id=user.id,
+                user_code=user.user_code,
+                email=user.email,
+                full_name=user.full_name,
+                phone=user.phone,
+                role_name=user.role.name if user.role else UserRole.DOCTOR,
+                hospital_id=user.hospital_id,
+                is_active=user.is_active,
+            ),
+        )
 
     async def update(
         self,
@@ -121,7 +252,7 @@ class DoctorService:
 
         # If a new image file is uploaded, save it and override profile_image
         if image_file and image_file.filename:
-            profile_image_path = await save_upload(image_file, subfolder="doctors")
+            profile_image_path = await save_doctor_image(image_file)
             update_data["profile_image"] = profile_image_path
         else:
             # Remove profile_image from update if no file provided so existing value stays
@@ -132,13 +263,8 @@ class DoctorService:
 
         try:
             doctor = await self.repo.update(doctor)
-        except IntegrityError as e:
-            err_msg = str(e.orig)
-            if "license_number" in err_msg:
-                raise ConflictException("A doctor with this license number already exists")
-            if "user_id" in err_msg or "doctors_ibfk" in err_msg:
-                raise ConflictException("The specified user_id does not exist")
-            raise ConflictException("Doctor could not be updated due to a database conflict")
+        except IntegrityError as exc:
+            self._raise_doctor_integrity_error(exc)
         await self.audit_repo.create("update", "doctors", user_id=user_id, resource_id=str(doctor.id))
         return DoctorResponse.model_validate(doctor)
 

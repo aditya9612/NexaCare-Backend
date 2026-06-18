@@ -1,3 +1,4 @@
+from datetime import date
 from fastapi import APIRouter, Depends
 
 from app.core.constants import UserRole
@@ -8,6 +9,7 @@ from app.schemas.dashboard_schema import (
     AdminDashboardResponse,
     DoctorDashboardResponse,
     PatientDashboardResponse,
+    ReceptionDashboardResponse,
 )
 from app.services.dashboard_service import DashboardService
 
@@ -44,3 +46,14 @@ async def patient_dashboard(
 ):
     data = await DashboardService(db).patient_dashboard(current_user)
     return APIResponse(message="Patient dashboard", data=data)
+
+
+@router.get("/reception", response_model=APIResponse[ReceptionDashboardResponse])
+async def reception_dashboard(
+    db: DbSession,
+    date: date | None = None,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    __: User = Depends(require_permission("dashboard", "read")),
+):
+    data = await DashboardService(db).reception_dashboard(date)
+    return APIResponse(message="Receptionist dashboard stats retrieved successfully", data=data)

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, status
-from app.core.dependencies import CurrentUser, DbSession
+from app.core.dependencies import CurrentUser, DbSession, bearer_scheme
 from app.core.exceptions import ForbiddenException
 from app.core.constants import UserRole
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -16,7 +16,7 @@ from app.schemas.super_admin_schema import (
 )
 from app.services.super_admin_service import SuperAdminService
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(bearer_scheme)])
 
 async def require_super_admin(user: CurrentUser) -> User:
     if not user.role or user.role.name != UserRole.SUPER_ADMIN:

@@ -23,4 +23,6 @@ openai>=1.12.0
 pytest>=7.4.4
 pytest-asyncio>=0.23.4
 xhtml2pdf>=0.2.17
-
+pyngrok
+groq
+langgraph

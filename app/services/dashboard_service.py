@@ -17,6 +17,7 @@ from app.schemas.dashboard_schema import (
     DepartmentStat,
     DoctorDashboardResponse,
     PatientDashboardResponse,
+    ReceptionDashboardResponse,
 )
 
 
@@ -112,3 +113,150 @@ class DashboardService:
             appointment_history=[AppointmentResponse.model_validate(a) for a in history],
             upcoming_appointments=[AppointmentResponse.model_validate(a) for a in upcoming],
         )
+
+    async def reception_dashboard(self, target_date: date | None = None) -> ReceptionDashboardResponse:
+        from datetime import datetime, time
+        from app.models.audit_log_model import AuditLog
+        from app.core.constants import DoctorAvailability
+
+        t_date = target_date or date.today()
+        start_of_day = datetime.combine(t_date, time.min)
+        end_of_day = datetime.combine(t_date, time.max)
+
+        # 1. total_registered_patients
+        try:
+            total_registered_patients = await self.db.scalar(
+                select(func.count(Patient.id)).where(
+                    Patient.is_deleted.is_(False)
+                )
+            ) or 0
+        except Exception:
+            total_registered_patients = 0
+
+        # 2. today_scheduled_appointments
+        try:
+            today_scheduled_appointments = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date
+                )
+            ) or 0
+        except Exception:
+            today_scheduled_appointments = 0
+
+        # 3. checked_in_patients
+        try:
+            checked_in_patients = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in"])
+                )
+            ) or 0
+        except Exception:
+            checked_in_patients = 0
+
+        # 4. waiting_patients
+        try:
+            waiting_patients = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_status.in_(["Waiting", "waiting", "Pending", "pending"])
+                )
+            ) or 0
+        except Exception:
+            waiting_patients = 0
+
+        # 5. completed_visits
+        try:
+            completed_visits = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_status == AppointmentStatus.COMPLETED
+                )
+            ) or 0
+        except Exception:
+            completed_visits = 0
+
+        # 6. cancelled_appointments
+        try:
+            cancelled_appointments = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_status == AppointmentStatus.CANCELLED
+                )
+            ) or 0
+        except Exception:
+            cancelled_appointments = 0
+
+        # 7. available_doctors
+        try:
+            available_doctors = await self.db.scalar(
+                select(func.count(Doctor.id)).where(
+                    Doctor.availability_status == DoctorAvailability.AVAILABLE,
+                    Doctor.is_deleted.is_(False)
+                )
+            ) or 0
+        except Exception:
+            available_doctors = 0
+
+        # 8. walk_in_patients
+        try:
+            walk_in_patients = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_type.in_(["walk-in", "walk_in", "walk in", "Walk-In", "Walk_In", "Walk In"])
+                )
+            ) or 0
+        except Exception:
+            walk_in_patients = 0
+
+        # 9. pending_billing
+        try:
+            pending_billing = await self.db.scalar(
+                select(func.count(Billing.id)).where(
+                    Billing.is_deleted.is_(False),
+                    Billing.status == "pending",
+                    Billing.created_at >= start_of_day,
+                    Billing.created_at <= end_of_day
+                )
+            ) or 0
+        except Exception:
+            pending_billing = 0
+
+        # 10. rescheduled_appointments
+        try:
+            rescheduled_appointments = await self.db.scalar(
+                select(func.count(AuditLog.id)).where(
+                    AuditLog.action == "reschedule",
+                    AuditLog.resource == "appointments",
+                    AuditLog.created_at >= start_of_day,
+                    AuditLog.created_at <= end_of_day
+                )
+            ) or 0
+        except Exception:
+            rescheduled_appointments = 0
+
+        # 11. total_patient_footfall
+        try:
+            total_patient_footfall = await self.db.scalar(
+                select(func.count(func.distinct(Appointment.patient_id))).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in", "Waiting", "waiting", "Completed", "completed"])
+                )
+            ) or 0
+        except Exception:
+            total_patient_footfall = 0
+
+        return ReceptionDashboardResponse(
+            total_registered_patients=total_registered_patients,
+            today_scheduled_appointments=today_scheduled_appointments,
+            checked_in_patients=checked_in_patients,
+            waiting_patients=waiting_patients,
+            completed_visits=completed_visits,
+            cancelled_appointments=cancelled_appointments,
+            available_doctors=available_doctors,
+            walk_in_patients=walk_in_patients,
+            pending_billing=pending_billing,
+            rescheduled_appointments=rescheduled_appointments,
+            total_patient_footfall=total_patient_footfall,
+        )
+

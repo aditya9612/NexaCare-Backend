@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -23,6 +25,14 @@ def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
+def hash_api_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def generate_device_api_key() -> str:
+    return secrets.token_urlsafe(32)
+
+
 def create_access_token(subject: str | Any, expires_delta: Optional[timedelta] = None) -> str:
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -37,7 +47,18 @@ def create_refresh_token(subject: str | Any) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def normalize_bearer_token(token: str) -> str:
+    """Strip common client formatting mistakes before JWT decode."""
+    token = token.strip()
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
+        token = token[1:-1].strip()
+    while token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
 def decode_token(token: str) -> dict:
+    token = normalize_bearer_token(token)
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except JWTError as exc:

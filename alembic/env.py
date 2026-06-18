@@ -25,9 +25,19 @@ import app.models.hospital_model  # noqa: F401
 import app.models.subscription_model  # noqa: F401
 import app.models.ai_config_model  # noqa: F401
 import app.models.security_model  # noqa: F401
+import app.models.staff_model  # noqa: F401
+import app.models.icu_telemetry_model  # noqa: F401
+import app.models.expense_model  # noqa: F401
+import app.models.vendor_model  # noqa: F401
+import app.models.transaction_history_model  # noqa: F401
+import app.models.chat_model  # noqa: F401
+import app.models.voice_model  # noqa: F401
+import app.models.whatsapp_model  # noqa: F401
+import app.models.analytics_model  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
+database_url = settings.DATABASE_URL_SYNC.replace("%", "%%")
+config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

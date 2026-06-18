@@ -4,7 +4,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Vendor, Warehouse
+from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Warehouse
+from app.models.vendor_model import Vendor
 from app.utils.helpers import utc_now
 
 
@@ -63,6 +64,18 @@ class InventoryRepository:
 
     async def get_by_id(self, item_id: int) -> InventoryItem | None:
         result = await self.db.execute(self._base_query().where(InventoryItem.id == item_id))
+        return result.scalar_one_or_none()
+
+    async def get_by_sku(self, sku: str) -> InventoryItem | None:
+        result = await self.db.execute(
+            self._base_query().where(func.lower(InventoryItem.sku) == sku.lower())
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_barcode(self, barcode: str) -> InventoryItem | None:
+        result = await self.db.execute(
+            self._base_query().where(func.lower(InventoryItem.barcode) == barcode.lower())
+        )
         return result.scalar_one_or_none()
 
     async def create(self, item: InventoryItem) -> InventoryItem:
@@ -184,37 +197,7 @@ class StockTransactionRepository:
         ]
 
 
-class VendorRepository:
-    def __init__(self, db: AsyncSession):
-        self.db = db
-
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[Vendor]:
-        result = await self.db.execute(
-            select(Vendor).where(Vendor.is_deleted.is_(False)).offset(skip).limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def count_all(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(Vendor).where(Vendor.is_deleted.is_(False))
-        )) or 0
-
-    async def get_by_id(self, vendor_id: int) -> Vendor | None:
-        result = await self.db.execute(
-            select(Vendor).where(Vendor.id == vendor_id, Vendor.is_deleted.is_(False))
-        )
-        return result.scalar_one_or_none()
-
-    async def create(self, vendor: Vendor) -> Vendor:
-        self.db.add(vendor)
-        await self.db.flush()
-        await self.db.refresh(vendor)
-        return vendor
-
-    async def update(self, vendor: Vendor) -> Vendor:
-        await self.db.flush()
-        await self.db.refresh(vendor)
-        return vendor
+# --- VendorRepository removed (use central VendorRepository instead) ---
 
 
 class WarehouseRepository:
@@ -235,6 +218,12 @@ class WarehouseRepository:
     async def get_by_id(self, warehouse_id: int) -> Warehouse | None:
         result = await self.db.execute(
             select(Warehouse).where(Warehouse.id == warehouse_id, Warehouse.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_code(self, code: str) -> Warehouse | None:
+        result = await self.db.execute(
+            select(Warehouse).where(func.lower(Warehouse.code) == code.lower(), Warehouse.is_deleted.is_(False))
         )
         return result.scalar_one_or_none()
 

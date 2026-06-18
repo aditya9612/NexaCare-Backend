@@ -101,10 +101,11 @@ class LabService:
         test = await self.test_repo.get_by_id(data.lab_test_id)
         if not test or not test.is_active:
             raise NotFoundException("Lab test not found or inactive")
-        await self._validate_department(data.department_id)
+        await self._validate_department(test.department_id)
         order = TestOrder(
             order_number=generate_lab_order_number(),
             ordered_at=utc_now(),
+            department_id=test.department_id,
             **data.model_dump(),
         )
         order = await self.order_repo.create(order)

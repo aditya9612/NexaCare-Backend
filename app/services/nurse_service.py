@@ -1,27 +1,76 @@
+from datetime import date
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictException, NotFoundException
-from app.models.nurse_model import Nurse
+from app.core.constants import LabOrderStatus
+from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.models.lab_model import TestOrder
+from app.models.nurse_model import Nurse, NurseAttendance, NurseHandoverNote, NurseShift, PatientVital
+from app.repositories.nurse_repository import (
+    NurseAttendanceRepository,
+    NurseHandoverNoteRepository,
+    NurseNotificationRepository,
+    NursePatientAssignmentRepository,
+    NursePatientLabTestRepository,
+    NursePatientVitalRepository,
+    NurseRepository,
+    NurseShiftRepository,
+    NurseTaskRepository,
+)
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.department_repository import DepartmentRepository
-from app.repositories.nurse_repository import NurseRepository
-from app.schemas.nurse_schema import NurseCreate, NurseResponse, NurseUpdate
-from app.utils.helpers import generate_nurse_code
+from app.schemas.patient_schema import PatientResponse
+from app.schemas.nurse_schema import (
+    NurseAssignedPatientProfileResponse,
+    NurseAssignedPatientStatusResponse,
+    NurseAttendanceCreate,
+    NurseAttendanceResponse,
+    NurseCreate,
+    NurseHandoverNoteCreate,
+    NurseHandoverNoteResponse,
+    NurseHandoverNoteUpdate,
+    NurseNotificationResponse,
+    NurseResponse,
+    NurseShiftCreate,
+    NurseShiftDetailsResponse,
+    NurseShiftResponse,
+    NurseShiftUpdate,
+    NurseUpdate,
+    PatientVitalCreate,
+    PatientVitalResponse,
+    NurseTaskResponse,
+    NurseTaskStatusUpdate,
+    NursePatientLabTestResponse,
+)
+from app.utils.helpers import generate_nurse_code, utc_now
 from app.utils.pagination import build_paginated_result
 
 
 class NurseService:
     def __init__(self, db: AsyncSession):
         self.repo = NurseRepository(db)
+        self.shift_repo = NurseShiftRepository(db)
+        self.attendance_repo = NurseAttendanceRepository(db)
+        self.handover_repo = NurseHandoverNoteRepository(db)
+        self.assignment_repo = NursePatientAssignmentRepository(db)
+        self.lab_test_repo = NursePatientLabTestRepository(db)
+        self.vital_repo = NursePatientVitalRepository(db)
+        self.task_repo = NurseTaskRepository(db)
+        self.notification_repo = NurseNotificationRepository(db)
         self.audit_repo = AuditRepository(db)
         self.dept_repo = DepartmentRepository(db)
 
     async def _validate_department(self, department_id: int | None) -> None:
-        """Raise 404 if department_id is given but doesn't exist."""
         if department_id is not None:
             dept = await self.dept_repo.get_by_id(department_id)
             if not dept:
                 raise NotFoundException(f"Department with ID {department_id} not found")
+
+    async def _get_nurse_or_raise(self, nurse_id: int) -> Nurse:
+        nurse = await self.repo.get_by_id(nurse_id)
+        if not nurse:
+            raise NotFoundException("Nurse not found")
+        return nurse
 
     async def list_nurses(
         self,
@@ -34,8 +83,12 @@ class NurseService:
     ):
         skip = (page - 1) * size
         items = await self.repo.list_all(
-            skip=skip, limit=size, department_id=department_id,
-            shift=shift, sort_by=sort_by, sort_order=sort_order,
+            skip=skip,
+            limit=size,
+            department_id=department_id,
+            shift=shift,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
         total = await self.repo.count_all(department_id=department_id, shift=shift)
         return build_paginated_result(
@@ -43,9 +96,7 @@ class NurseService:
         )
 
     async def get_by_id(self, nurse_id: int) -> NurseResponse:
-        nurse = await self.repo.get_by_id(nurse_id)
-        if not nurse:
-            raise NotFoundException("Nurse not found")
+        nurse = await self._get_nurse_or_raise(nurse_id)
         return NurseResponse.model_validate(nurse)
 
     async def create(self, data: NurseCreate, user_id: int) -> NurseResponse:
@@ -59,9 +110,7 @@ class NurseService:
         return NurseResponse.model_validate(nurse)
 
     async def update(self, nurse_id: int, data: NurseUpdate, user_id: int) -> NurseResponse:
-        nurse = await self.repo.get_by_id(nurse_id)
-        if not nurse:
-            raise NotFoundException("Nurse not found")
+        nurse = await self._get_nurse_or_raise(nurse_id)
         if data.license_number and data.license_number != nurse.license_number:
             existing = await self.repo.get_by_license(data.license_number)
             if existing:
@@ -74,9 +123,7 @@ class NurseService:
         return NurseResponse.model_validate(nurse)
 
     async def delete(self, nurse_id: int, user_id: int) -> None:
-        nurse = await self.repo.get_by_id(nurse_id)
-        if not nurse:
-            raise NotFoundException("Nurse not found")
+        nurse = await self._get_nurse_or_raise(nurse_id)
         await self.repo.delete(nurse)
         await self.audit_repo.create("delete", "nurses", user_id=user_id, resource_id=str(nurse_id))
 
@@ -86,4 +133,522 @@ class NurseService:
         total = await self.repo.count_search(q)
         return build_paginated_result(
             [NurseResponse.model_validate(n) for n in items], total, page, size
+        )
+
+    async def list_shifts(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        shift_name: str | None = None,
+        sort_by: str = "shift_date",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        skip = (page - 1) * size
+        items = await self.shift_repo.list_by_nurse(
+            nurse_id=nurse_id,
+            skip=skip,
+            limit=size,
+            start_date=start_date,
+            end_date=end_date,
+            shift_name=shift_name,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.shift_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            start_date=start_date,
+            end_date=end_date,
+            shift_name=shift_name,
+        )
+        return build_paginated_result(
+            [NurseShiftResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
+        )
+
+    async def get_shift_details(self, nurse_id: int) -> NurseShiftDetailsResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        shift = await self.shift_repo.get_latest_by_nurse(nurse_id)
+        if not shift:
+            raise NotFoundException("No shift found for this nurse")
+        return NurseShiftDetailsResponse(
+            shift_name=shift.shift_name,
+            shift_date=shift.shift_date,
+            start_time=shift.start_time,
+            end_time=shift.end_time,
+            status=shift.status,
+            notes=shift.notes,
+        )
+
+    async def create_shift(
+        self, nurse_id: int, data: NurseShiftCreate, user_id: int
+    ) -> NurseShiftResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        shift = NurseShift(nurse_id=nurse_id, **data.model_dump())
+        shift = await self.shift_repo.create(shift)
+        await self.audit_repo.create(
+            "create", "nurses", user_id=user_id, resource_id=str(shift.id)
+        )
+        return NurseShiftResponse.model_validate(shift)
+
+    async def update_shift(
+        self,
+        nurse_id: int,
+        shift_id: int,
+        data: NurseShiftUpdate,
+        user_id: int,
+    ) -> NurseShiftResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        shift = await self.shift_repo.get_by_id_for_nurse(shift_id, nurse_id)
+        if not shift:
+            raise NotFoundException("Shift not found")
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(shift, key, value)
+        shift = await self.shift_repo.update(shift)
+        await self.audit_repo.create(
+            "update", "nurses", user_id=user_id, resource_id=str(shift.id)
+        )
+        return NurseShiftResponse.model_validate(shift)
+
+    async def create_attendance(
+        self, nurse_id: int, data: NurseAttendanceCreate, user_id: int
+    ) -> NurseAttendanceResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        attendance = NurseAttendance(nurse_id=nurse_id, **data.model_dump())
+        attendance = await self.attendance_repo.create(attendance)
+        await self.audit_repo.create(
+            "create", "nurses", user_id=user_id, resource_id=str(attendance.id)
+        )
+        return NurseAttendanceResponse.model_validate(attendance)
+
+    async def list_attendance(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        status: str | None = None,
+        sort_by: str = "attendance_date",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        skip = (page - 1) * size
+        items = await self.attendance_repo.list_by_nurse(
+            nurse_id=nurse_id,
+            skip=skip,
+            limit=size,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.attendance_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+        )
+        return build_paginated_result(
+            [NurseAttendanceResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
+        )
+
+    async def _validate_shift(self, nurse_id: int, shift_id: int | None) -> None:
+        if shift_id is None:
+            return
+        shift = await self.shift_repo.get_by_id(shift_id)
+        if not shift or shift.nurse_id != nurse_id:
+            raise NotFoundException(f"Shift with ID {shift_id} not found for this nurse")
+
+    async def create_handover_note(
+        self, nurse_id: int, data: NurseHandoverNoteCreate, user_id: int
+    ) -> NurseHandoverNoteResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        await self._validate_shift(nurse_id, data.shift_id)
+        note = NurseHandoverNote(nurse_id=nurse_id, **data.model_dump())
+        note = await self.handover_repo.create(note)
+        await self.audit_repo.create(
+            "create", "nurses", user_id=user_id, resource_id=str(note.id)
+        )
+        return NurseHandoverNoteResponse.model_validate(note)
+
+    async def list_handover_notes(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        status: str | None = None,
+        shift_id: int | None = None,
+        sort_by: str = "handover_date",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        skip = (page - 1) * size
+        items = await self.handover_repo.list_by_nurse(
+            nurse_id=nurse_id,
+            skip=skip,
+            limit=size,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            shift_id=shift_id,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.handover_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            shift_id=shift_id,
+        )
+        return build_paginated_result(
+            [NurseHandoverNoteResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
+        )
+
+    async def update_handover_note(
+        self,
+        nurse_id: int,
+        note_id: int,
+        data: NurseHandoverNoteUpdate,
+        user_id: int,
+    ) -> NurseHandoverNoteResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        note = await self.handover_repo.get_by_id(note_id, nurse_id)
+        if not note:
+            raise NotFoundException("Handover note not found")
+        update_data = data.model_dump(exclude_unset=True)
+        if "shift_id" in update_data:
+            await self._validate_shift(nurse_id, update_data["shift_id"])
+        for key, value in update_data.items():
+            setattr(note, key, value)
+        note = await self.handover_repo.update(note)
+        await self.audit_repo.create(
+            "update", "nurses", user_id=user_id, resource_id=str(note.id)
+        )
+        return NurseHandoverNoteResponse.model_validate(note)
+
+    async def list_assigned_patients(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        skip = (page - 1) * size
+        items = await self.assignment_repo.list_patients_by_nurse(
+            nurse_id=nurse_id,
+            skip=skip,
+            limit=size,
+            status=status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.assignment_repo.count_patients_by_nurse(
+            nurse_id=nurse_id,
+            status=status,
+        )
+        return build_paginated_result(
+            [PatientResponse.model_validate(p) for p in items],
+            total,
+            page,
+            size,
+        )
+
+    async def get_assigned_patient_profile(
+        self, nurse_id: int, patient_id: int
+    ) -> NurseAssignedPatientProfileResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        patient = await self.assignment_repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+        row = await self.assignment_repo.get_assigned_patient(nurse_id, patient_id)
+        if not row:
+            raise NotFoundException("Patient is not assigned to this nurse")
+        patient, assignment = row
+        return NurseAssignedPatientProfileResponse(
+            id=patient.id,
+            patient_code=patient.patient_code,
+            first_name=patient.first_name,
+            last_name=patient.last_name,
+            gender=patient.gender,
+            dob=patient.dob,
+            blood_group=patient.blood_group,
+            marital_status=patient.marital_status,
+            phone=patient.phone,
+            email=patient.email,
+            address=patient.address,
+            city=patient.city,
+            state=patient.state,
+            pincode=patient.pincode,
+            emergency_contact_name=patient.emergency_contact_name,
+            emergency_contact_number=patient.emergency_contact_number,
+            medical_history=patient.medical_history,
+            allergies=patient.allergies,
+            diagnosis=patient.chronic_disease,
+            patient_status=assignment.patient_status,
+            assignment_status=assignment.status,
+            status=patient.status,
+            assignment_notes=assignment.notes,
+            insurance_provider=patient.insurance_provider,
+            insurance_number=patient.insurance_number,
+            created_at=patient.created_at,
+            updated_at=patient.updated_at,
+        )
+
+    async def record_patient_vitals(
+        self,
+        nurse_id: int,
+        patient_id: int,
+        data: PatientVitalCreate,
+        user_id: int,
+    ) -> PatientVitalResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        patient = await self.assignment_repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+        assignment = await self.assignment_repo.get_assigned_patient(nurse_id, patient_id)
+        if not assignment:
+            raise NotFoundException("Patient is not assigned to this nurse")
+        vital = PatientVital(
+            nurse_id=nurse_id,
+            patient_id=patient_id,
+            **data.model_dump(),
+        )
+        vital = await self.vital_repo.create(vital)
+        await self.audit_repo.create(
+            "create", "nurses", user_id=user_id, resource_id=str(vital.id)
+        )
+        return PatientVitalResponse.model_validate(vital)
+
+    def _nurse_lab_test_status(self, order_status: str) -> str:
+        if order_status == LabOrderStatus.COMPLETED:
+            return "Completed"
+        return "Pending"
+
+    def _lab_test_result_summary(self, order: TestOrder) -> str | None:
+        if order.reports:
+            summaries = [report.summary for report in order.reports if report.summary]
+            if summaries:
+                return summaries[-1]
+        if order.results:
+            parts = [
+                f"{result.parameter_name}: {result.result_value}"
+                for result in order.results
+                if result.result_value
+            ]
+            if parts:
+                return "; ".join(parts)
+        return None
+
+    def _lab_test_response(self, order: TestOrder) -> NursePatientLabTestResponse:
+        lab_test = order.lab_test
+        return NursePatientLabTestResponse(
+            id=order.id,
+            order_number=order.order_number,
+            test_name=lab_test.test_name if lab_test else "Unknown",
+            test_code=lab_test.test_code if lab_test else None,
+            category=lab_test.category if lab_test else None,
+            sample_type=lab_test.sample_type if lab_test else None,
+            request_date=order.ordered_at,
+            status=self._nurse_lab_test_status(order.status),
+            priority=order.priority,
+            notes=order.notes,
+            completed_at=order.completed_at,
+            result_summary=self._lab_test_result_summary(order),
+            created_at=order.created_at,
+        )
+
+    async def list_patient_lab_tests(
+        self,
+        nurse_id: int,
+        patient_id: int,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None,
+        sort_by: str = "ordered_at",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        patient = await self.assignment_repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+        assignment = await self.assignment_repo.get_assigned_patient(nurse_id, patient_id)
+        if not assignment:
+            raise NotFoundException("Patient is not assigned to this nurse")
+        if status is not None and status not in ("Pending", "Completed"):
+            raise BadRequestException("Status filter must be Pending or Completed")
+        skip = (page - 1) * size
+        items = await self.lab_test_repo.list_by_patient(
+            patient_id=patient_id,
+            skip=skip,
+            limit=size,
+            status=status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.lab_test_repo.count_by_patient(
+            patient_id=patient_id,
+            status=status,
+        )
+        return build_paginated_result(
+            [self._lab_test_response(item) for item in items],
+            total,
+            page,
+            size,
+        )
+
+    async def list_daily_tasks(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        patient_id: int | None = None,
+        status: str | None = None,
+        priority: str | None = None,
+        sort_by: str = "priority",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        due_date = utc_now().date()
+        skip = (page - 1) * size
+        items = await self.task_repo.list_by_nurse(
+            nurse_id=nurse_id,
+            due_date=due_date,
+            skip=skip,
+            limit=size,
+            patient_id=patient_id,
+            status=status,
+            priority=priority,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.task_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            due_date=due_date,
+            patient_id=patient_id,
+            status=status,
+            priority=priority,
+        )
+        return build_paginated_result(
+            [NurseTaskResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
+        )
+
+    async def update_task_status(
+        self,
+        nurse_id: int,
+        task_id: int,
+        data: NurseTaskStatusUpdate,
+        user_id: int,
+    ) -> NurseTaskResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        task = await self.task_repo.get_by_id(task_id, nurse_id)
+        if not task:
+            raise NotFoundException("Task not found")
+        task.status = data.status
+        task = await self.task_repo.update(task)
+        await self.audit_repo.create(
+            "update", "nurses", user_id=user_id, resource_id=str(task.id)
+        )
+        return NurseTaskResponse.model_validate(task)
+
+    async def list_assigned_patient_statuses(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        assignment_status: str | None = None,
+        patient_status: str | None = None,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        skip = (page - 1) * size
+        rows = await self.assignment_repo.list_patient_statuses_by_nurse(
+            nurse_id=nurse_id,
+            skip=skip,
+            limit=size,
+            assignment_status=assignment_status,
+            patient_status=patient_status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.assignment_repo.count_patient_statuses_by_nurse(
+            nurse_id=nurse_id,
+            assignment_status=assignment_status,
+            patient_status=patient_status,
+        )
+        return build_paginated_result(
+            [
+                NurseAssignedPatientStatusResponse(
+                    patient_id=patient.id,
+                    patient_code=patient.patient_code,
+                    first_name=patient.first_name,
+                    last_name=patient.last_name,
+                    patient_status=assignment.patient_status,
+                    assignment_status=assignment.status,
+                    notes=assignment.notes,
+                    updated_at=assignment.updated_at,
+                )
+                for patient, assignment in rows
+            ],
+            total,
+            page,
+            size,
+        )
+
+    async def list_notifications(
+        self,
+        nurse_id: int,
+        page: int = 1,
+        size: int = 20,
+        status: str = "Active",
+        notification_type: str | None = None,
+        priority: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ):
+        await self._get_nurse_or_raise(nurse_id)
+        skip = (page - 1) * size
+        items = await self.notification_repo.list_by_nurse(
+            nurse_id=nurse_id,
+            skip=skip,
+            limit=size,
+            status=status,
+            notification_type=notification_type,
+            priority=priority,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total = await self.notification_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            status=status,
+            notification_type=notification_type,
+            priority=priority,
+        )
+        return build_paginated_result(
+            [NurseNotificationResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
         )

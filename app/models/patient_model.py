@@ -37,6 +37,7 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
     appointments = relationship("Appointment", back_populates="patient")
     documents = relationship("PatientDocument", back_populates="patient", cascade="all, delete-orphan")
     family_members = relationship("FamilyMember", back_populates="patient", cascade="all, delete-orphan")
+    clinical_records = relationship("ClinicalRecord", back_populates="patient")
 
 
 class PatientDocument(Base, TimestampMixin):

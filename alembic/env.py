@@ -34,6 +34,7 @@ import app.models.chat_model  # noqa: F401
 import app.models.voice_model  # noqa: F401
 import app.models.whatsapp_model  # noqa: F401
 import app.models.analytics_model  # noqa: F401
+import app.models.clinical_record_model  # noqa: F401
 
 config = context.config
 database_url = settings.DATABASE_URL_SYNC.replace("%", "%%")

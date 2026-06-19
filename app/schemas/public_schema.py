@@ -10,6 +10,14 @@ class SuggestedSlotPublic(BaseSchema):
     appointment_time: time
 
 
+class PublicDoctorWorkingDay(BaseSchema):
+    day_of_week: int = Field(..., ge=0, le=6, description="0=Monday … 6=Sunday")
+    day_name: str = Field(..., description="MONDAY, TUESDAY, …")
+    start_time: time
+    end_time: time
+    slot_duration_minutes: int = 30
+
+
 class PublicDoctorResponse(BaseSchema):
     id: int
     name: str
@@ -17,7 +25,19 @@ class PublicDoctorResponse(BaseSchema):
     department: Optional[str] = None
     rating: float = 4.8
     experience: Optional[int] = None
+    working_days: List[str] = Field(
+        default_factory=list,
+        description="Active working days, e.g. MONDAY, TUESDAY",
+    )
+    weekly_schedule: List[PublicDoctorWorkingDay] = Field(
+        default_factory=list,
+        description="Per-day schedule with day_name for UI display",
+    )
     availability_slots: List[str] = []
+    is_available_on_date: bool = Field(
+        default=False,
+        description="True when the doctor has an active schedule on the queried date",
+    )
 
 
 class QuickBookingRequest(BaseSchema):

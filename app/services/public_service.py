@@ -6,7 +6,7 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AppointmentStatus
+from app.core.constants import AppointmentStatus, DayOfWeek
 from app.core.exceptions import ConflictException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.models.patient_model import Patient, PatientDocument
@@ -19,6 +19,7 @@ from app.schemas.appointment_schema import AppointmentResponse
 from app.schemas.public_schema import (
     AdvancedBookingRequest,
     PublicDoctorResponse,
+    PublicDoctorWorkingDay,
     QuickBookingRequest,
     ReportUploadResponse,
     SymptomAnalysisRequest,
@@ -80,6 +81,24 @@ class PublicService:
                 
         return available
 
+    def _build_weekly_schedule(self, schedules: list[DoctorSchedule]) -> tuple[list[str], list[PublicDoctorWorkingDay]]:
+        active = sorted(
+            (s for s in schedules if s.is_active),
+            key=lambda s: s.day_of_week,
+        )
+        working_days = [DayOfWeek.name_for(s.day_of_week) for s in active]
+        weekly_schedule = [
+            PublicDoctorWorkingDay(
+                day_of_week=s.day_of_week,
+                day_name=DayOfWeek.name_for(s.day_of_week),
+                start_time=s.start_time,
+                end_time=s.end_time,
+                slot_duration_minutes=s.slot_duration_minutes or 30,
+            )
+            for s in active
+        ]
+        return working_days, weekly_schedule
+
     async def list_public_doctors(
         self,
         department: Optional[str] = None,
@@ -88,7 +107,10 @@ class PublicService:
     ) -> List[PublicDoctorResponse]:
         from sqlalchemy.orm import selectinload
         # Base query to get all non-deleted, available doctors with department eagerly loaded
-        query = select(Doctor).options(selectinload(Doctor.department)).where(
+        query = select(Doctor).options(
+            selectinload(Doctor.department),
+            selectinload(Doctor.schedules),
+        ).where(
             Doctor.is_deleted.is_(False),
             Doctor.availability_status == "available"
         )
@@ -114,6 +136,9 @@ class PublicService:
                 if not matched_dept:
                     continue
             
+            working_days, weekly_schedule = self._build_weekly_schedule(doc.schedules)
+            is_available_on_date = target_date.weekday() in {s.day_of_week for s in doc.schedules if s.is_active}
+
             # Fetch slots
             slots = await self.get_doctor_available_slots(doc.id, target_date)
             
@@ -128,7 +153,10 @@ class PublicService:
                     specialty=doc.specialization,
                     department=dept_name,
                     experience=doc.experience,
+                    working_days=working_days,
+                    weekly_schedule=weekly_schedule,
                     availability_slots=slots,
+                    is_available_on_date=is_available_on_date,
                 )
             )
             

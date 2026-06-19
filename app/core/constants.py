@@ -259,3 +259,31 @@ class ReportExportStatus:
 class ReportExportFormat:
     PDF = "pdf"
     EXCEL = "excel"
+
+
+class DayOfWeek:
+    """Python weekday() convention: 0 = Monday, 6 = Sunday."""
+
+    MONDAY = 0
+    TUESDAY = 1
+    WEDNESDAY = 2
+    THURSDAY = 3
+    FRIDAY = 4
+    SATURDAY = 5
+    SUNDAY = 6
+
+    NAMES = (
+        "MONDAY",
+        "TUESDAY",
+        "WEDNESDAY",
+        "THURSDAY",
+        "FRIDAY",
+        "SATURDAY",
+        "SUNDAY",
+    )
+
+    @classmethod
+    def name_for(cls, day_of_week: int) -> str:
+        if 0 <= day_of_week <= 6:
+            return cls.NAMES[day_of_week]
+        raise ValueError(f"day_of_week must be 0-6, got {day_of_week}")

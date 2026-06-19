@@ -1,7 +1,8 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 
-from pydantic import EmailStr, Field
+from pydantic import EmailStr, Field, field_validator
 
+from app.schemas.auth_schema import GenderOption
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 
 
@@ -22,6 +23,15 @@ class DoctorOnboardCreate(BaseSchema):
     availability_status: str = "available"
     profile_image: str | None = None
     bio: str | None = None
+    gender: GenderOption | None = None
+    date_of_birth: date | None = None
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def dob_in_past(cls, value: date | None) -> date | None:
+        if value and value >= date.today():
+            raise ValueError("date_of_birth must be in the past")
+        return value
 
 
 class DoctorOnboardUserSummary(BaseSchema):
@@ -32,6 +42,8 @@ class DoctorOnboardUserSummary(BaseSchema):
     phone: str | None
     role_name: str | None
     hospital_id: int | None
+    gender: str | None
+    date_of_birth: date | None
     is_active: bool
 
 

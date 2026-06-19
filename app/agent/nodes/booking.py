@@ -1,3 +1,14 @@
+"""
+app/agent/nodes/booking.py
+--------------------------
+All booking-flow nodes.
+
+Name + Problem collection uses Groq LLM extraction (not rule-based).
+Each field extraction has full positive + negative scenario handling.
+After a successful booking, an SMS confirmation is sent to the caller.
+"""
+
+import os
 import logging
 from datetime import date, timedelta, datetime
 from xml.sax.saxutils import escape
@@ -12,6 +23,84 @@ from app.models.doctor_model import Doctor, DoctorSchedule
 logger = logging.getLogger("nexacare.agent.nodes.booking")
 
 MAX_RETRIES = 2
+
+
+# ── SMS confirmation ───────────────────────────────────────────────────────────
+
+SMS_TEMPLATES = {
+    "en": (
+        "NexaCare Appointment Confirmed!\n"
+        "Patient: {name}\n"
+        "Doctor: Dr. {doctor}\n"
+        "Date: {date}\n"
+        "Time: {time}\n"
+        "Appt No: {appt_no}\n"
+        "Please arrive 10 mins early. Reply CANCEL to cancel."
+    ),
+    "hi": (
+        "NexaCare अपॉइंटमेंट कन्फर्म!\n"
+        "मरीज: {name}\n"
+        "डॉक्टर: Dr. {doctor}\n"
+        "तारीख: {date}\n"
+        "समय: {time}\n"
+        "अपॉइंटमेंट नं: {appt_no}\n"
+        "10 मिनट पहले आएं।"
+    ),
+    "mr": (
+        "NexaCare अपॉइंटमेंट कन्फर्म!\n"
+        "रुग्ण: {name}\n"
+        "डॉक्टर: Dr. {doctor}\n"
+        "तारीख: {date}\n"
+        "वेळ: {time}\n"
+        "अपॉइंटमेंट नं: {appt_no}\n"
+        "10 मिनिटे आधी या."
+    ),
+}
+
+
+def _send_sms_confirmation(
+    to_number: str,
+    lang: str,
+    name: str,
+    doctor: str,
+    appt_date: str,
+    appt_time: str,
+    appt_no: str,
+) -> bool:
+    """
+    Send an SMS booking confirmation to the caller's number.
+    Uses Twilio's Messages API — same credentials already in .env.
+    Returns True on success, False on failure (never raises — booking
+    should not be rolled back because of an SMS failure).
+    """
+    try:
+        from twilio.rest import Client  # lazy import — only needed here
+
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+        auth_token  = os.getenv("TWILIO_AUTH_TOKEN")
+        from_number = os.getenv("TWILIO_PHONE_NUMBER")
+
+        if not all([account_sid, auth_token, from_number, to_number]):
+            logger.warning("SMS skipped: missing Twilio credentials or caller number")
+            return False
+
+        template = SMS_TEMPLATES.get(lang, SMS_TEMPLATES["en"])
+        body = template.format(
+            name=name,
+            doctor=doctor,
+            date=appt_date,
+            time=appt_time,
+            appt_no=appt_no,
+        )
+
+        client = Client(account_sid, auth_token)
+        message = client.messages.create(body=body, from_=from_number, to=to_number)
+        logger.info(f"SMS sent to {to_number} | SID={message.sid}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"SMS failed (non-critical): {e}")
+        return False
 
 
 # ── Localised strings ─────────────────────────────────────────────────────────
@@ -210,28 +299,28 @@ def build_collect_name_twiml(state: BookingCallState) -> str:
     return _twiml(_gather_speech(action, _s("ask_name", lang), twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang)))
 
 
-def process_collect_name(state: BookingCallState, speech_result: str) -> dict:
+def process_collect_name(state: BookingCallState, speech_result: str, confidence: float = -1.0) -> dict:
     """
     Send transcript to Groq LLM for name extraction.
     Positive: confirms name back to patient, moves to collect_problem.
     Negative: asks patient to repeat (up to MAX_RETRIES).
+    Never rejects based on Twilio confidence score — LLM decides.
     """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
     action = f"{state['base_url']}/agent/v1/voice/turn"
 
-    logger.info(f"[{state['call_sid']}] Name transcript: {speech_result!r}")
+    logger.info(f"[{state['call_sid']}] Name transcript: {speech_result!r} | confidence={confidence}")
 
     # ── LLM extraction ──
-    extraction = extract_patient_name(speech_result or "")
+    extraction = extract_patient_name(speech_result or "", twilio_confidence=confidence)
     logger.info(f"[{state['call_sid']}] Name extraction: {extraction}")
 
     # ── POSITIVE scenario ──
-    if extraction["found"] and extraction.get("name"):
-        name = extraction["name"]
+    if extraction["found"] and extraction.get("name", "").strip():
+        name = extraction["name"].strip()
         logger.info(f"[{state['call_sid']}] ✓ Name confirmed: {name!r}")
 
-        # Confirm back + ask problem
         confirm_msg = _s("name_confirmed", lang, name=name)
         ask_problem_msg = _s("ask_problem", lang)
 
@@ -247,13 +336,23 @@ def process_collect_name(state: BookingCallState, speech_result: str) -> dict:
 
     # ── NEGATIVE scenario ──
     retry = state["retry_count"] + 1
-    logger.warning(f"[{state['call_sid']}] ✗ Name not found (retry {retry}/{MAX_RETRIES}) | reason: {extraction.get('reason')}")
+    logger.warning(
+        f"[{state['call_sid']}] ✗ Name not found "
+        f"(retry {retry}/{MAX_RETRIES}) | reason: {extraction.get('reason')} | "
+        f"transcript={speech_result!r}"
+    )
 
     if retry > MAX_RETRIES:
-        logger.error(f"[{state['call_sid']}] Max retries reached for name collection")
+        logger.error(f"[{state['call_sid']}] Max retries reached for name — using 'Patient' as fallback")
+        # Graceful fallback: use "Patient" so the call continues rather than hanging up
         return {
-            "step": "error",
-            "_twiml": _hangup_twiml(_s("max_retries", lang), twilio_lang),
+            "step": "collect_problem",
+            "patient_name": "Patient",
+            "retry_count": 0,
+            "_twiml": _twiml(
+                _say(_s("ask_problem", lang), twilio_lang),
+                _gather_speech(action, _s("ask_problem", lang), twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang, base=10)),
+            ),
         }
 
     return {
@@ -268,32 +367,44 @@ def process_collect_name(state: BookingCallState, speech_result: str) -> dict:
 
 # ── Node: collect_problem ─────────────────────────────────────────────────────
 
-def process_collect_problem(state: BookingCallState, speech_result: str) -> dict:
+def process_collect_problem(state: BookingCallState, speech_result: str, confidence: float = -1.0) -> dict:
     """
     Send transcript to Groq LLM for problem extraction.
     Positive: confirms problem, triggers specialty detection.
     Negative: asks patient to describe again.
+    Never rejects based on Twilio confidence score — LLM decides.
     """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
     action = f"{state['base_url']}/agent/v1/voice/turn"
 
-    logger.info(f"[{state['call_sid']}] Problem transcript: {speech_result!r}")
+    logger.info(f"[{state['call_sid']}] Problem transcript: {speech_result!r} | confidence={confidence}")
 
     # ── LLM extraction ──
-    extraction = extract_problem(speech_result or "")
+    extraction = extract_problem(speech_result or "", twilio_confidence=confidence)
     logger.info(f"[{state['call_sid']}] Problem extraction: {extraction}")
 
     # ── NEGATIVE scenario ──
-    if not extraction["found"] or not extraction.get("problem"):
+    if not extraction["found"] or not extraction.get("problem", "").strip():
         retry = state["retry_count"] + 1
-        logger.warning(f"[{state['call_sid']}] ✗ Problem not found (retry {retry}/{MAX_RETRIES}) | reason: {extraction.get('reason')}")
+        logger.warning(
+            f"[{state['call_sid']}] ✗ Problem not found "
+            f"(retry {retry}/{MAX_RETRIES}) | reason: {extraction.get('reason')} | "
+            f"transcript={speech_result!r}"
+        )
 
         if retry > MAX_RETRIES:
-            logger.error(f"[{state['call_sid']}] Max retries reached for problem collection")
+            logger.error(f"[{state['call_sid']}] Max retries for problem — falling back to General Medicine")
+            # Graceful fallback: route to General Medicine so call doesn't dead-end
             return {
-                "step": "error",
-                "_twiml": _hangup_twiml(_s("max_retries", lang), twilio_lang),
+                "step": "suggest_doctors",
+                "problem_description": speech_result or "not specified",
+                "detected_specialty": "General Medicine",
+                "specialty_confidence": "low",
+                "specialty_reasoning": "Fallback after max retries",
+                "retry_count": 0,
+                "_pending": "suggest_doctors",
+                "_confirm_problem_tts": "",
             }
 
         return {
@@ -306,15 +417,13 @@ def process_collect_problem(state: BookingCallState, speech_result: str) -> dict
         }
 
     # ── POSITIVE scenario ──
-    problem = extraction["problem"]
+    problem = extraction["problem"].strip()
     logger.info(f"[{state['call_sid']}] ✓ Problem confirmed: {problem!r}")
 
-    # Detect specialty via LLM
     logger.info(f"[{state['call_sid']}] Detecting specialty for: {problem!r}")
     analysis = detect_specialty(problem)
     logger.info(f"[{state['call_sid']}] Specialty: {analysis['specialty']} ({analysis['confidence']})")
 
-    # Confirm problem back to patient, then find doctors (DB fetch handled in router)
     confirm_msg = _s("problem_confirmed", lang, problem=problem)
 
     return {
@@ -325,7 +434,7 @@ def process_collect_problem(state: BookingCallState, speech_result: str) -> dict
         "specialty_reasoning": analysis["reasoning"],
         "retry_count": 0,
         "_pending": "suggest_doctors",
-        "_confirm_problem_tts": confirm_msg,   # router will prepend this before doctor list
+        "_confirm_problem_tts": confirm_msg,
     }
 
 
@@ -510,11 +619,13 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     import random
     import string
 
-    lang = state["language"]
+    lang        = state["language"]
     twilio_lang = state["twilio_language"]
-    slot = state["selected_slot"]
-    doctor_id = state["selected_doctor_id"]
+    slot        = state["selected_slot"]
+    doctor_id   = state["selected_doctor_id"]
     doctor_name = state.get("selected_doctor_name", "the doctor")
+    patient_name = state.get("patient_name", "Patient")
+    caller_number = state.get("from_number", "")
 
     try:
         appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
@@ -528,7 +639,7 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
             appointment_status="scheduled",
             symptoms=state.get("problem_description"),
-            notes=f"Booked via AI Voice Agent. Patient: {state.get('patient_name')}",
+            notes=f"Booked via AI Voice Agent. Patient: {patient_name}",
             consultation_type="in_person",
             reminder_sent=False,
             token_number=random.randint(1, 99),
@@ -537,12 +648,26 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
         await db.commit()
         await db.refresh(appt)
 
+        time_display = _format_time_for_tts(slot["time"])
+
         logger.info(
             f"[{state['call_sid']}] ✓ Appointment booked: {appt_no} | "
-            f"Doctor: {doctor_name} | {slot['date']} {slot['time']}"
+            f"Doctor: {doctor_name} | {slot['date']} {time_display}"
         )
 
-        time_display = _format_time_for_tts(slot["time"])
+        # ── Send SMS confirmation (non-blocking — failure won't affect call) ──
+        sms_sent = _send_sms_confirmation(
+            to_number=caller_number,
+            lang=lang,
+            name=patient_name,
+            doctor=doctor_name,
+            appt_date=slot["date"],
+            appt_time=time_display,
+            appt_no=appt_no,
+        )
+        if sms_sent:
+            logger.info(f"[{state['call_sid']}] ✓ SMS confirmation sent to {caller_number}")
+
         confirm_text = _s(
             "confirm_booking", lang,
             doctor=doctor_name,
@@ -560,6 +685,7 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
 
     except Exception as e:
         logger.error(f"[{state['call_sid']}] Booking failed: {e}")
+        await db.rollback()
         return {
             "step": "error",
             "_twiml": _hangup_twiml(_s("error", lang), twilio_lang),

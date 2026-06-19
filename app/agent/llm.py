@@ -108,9 +108,13 @@ JSON format:
 }"""
 
 
-def extract_patient_name(transcript: str) -> dict:
+def extract_patient_name(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
     Use Groq LLM to extract the patient's name from a speech transcript.
+
+    twilio_confidence: the raw Twilio STT confidence value (0.0–1.0).
+    Twilio frequently reports 0.0 even on correct transcripts, so we NEVER
+    reject a transcript based on confidence alone — we always try the LLM.
 
     Returns:
         {
@@ -123,6 +127,12 @@ def extract_patient_name(transcript: str) -> dict:
     if not transcript or not transcript.strip():
         return {"found": False, "name": "", "confidence": "low", "reason": "Empty transcript."}
 
+    # Log for debugging — useful to track which transcripts fail extraction
+    logger.info(
+        f"Name extraction attempt | transcript={transcript!r} | "
+        f"twilio_confidence={twilio_confidence}"
+    )
+
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -131,17 +141,19 @@ def extract_patient_name(transcript: str) -> dict:
                 {"role": "system", "content": NAME_SYSTEM_PROMPT},
                 {"role": "user",   "content": f'Transcript: "{transcript.strip()}"'},
             ],
-            temperature=0.1,
+            temperature=0.0,   # deterministic — name extraction is not creative
             max_tokens=100,
             response_format={"type": "json_object"},
         )
-        result = json.loads(response.choices[0].message.content.strip())
+        raw = response.choices[0].message.content.strip()
+        result = json.loads(raw)
 
-        # Validate
+        # Sanitise response
         if not isinstance(result.get("found"), bool):
             result["found"] = bool(result.get("name", "").strip())
-        if not result.get("name"):
+        if not result.get("name", "").strip():
             result["found"] = False
+            result["name"] = ""
 
         logger.info(
             f"Name extraction: found={result['found']} name={result.get('name')!r} "
@@ -150,15 +162,20 @@ def extract_patient_name(transcript: str) -> dict:
         return result
 
     except Exception as e:
-        logger.warning(f"Name extraction LLM failed: {e}")
-        # Graceful fallback — basic prefix stripping
-        raw = transcript.strip().lower()
-        for prefix in ["my name is ", "i am ", "this is ", "myself ", "name is ", "i'm ", "call me "]:
-            if raw.startswith(prefix):
+        logger.warning(f"Name extraction LLM failed: {e} — using fallback")
+        # Graceful fallback — basic prefix stripping across EN/HI/MR
+        raw = transcript.strip()
+        prefixes = [
+            "my name is ", "i am ", "this is ", "myself ", "name is ", "i'm ", "call me ",
+            "मेरा नाम है ", "मेरा नाम ", "मैं हूँ ", "माझे नाव आहे ", "माझे नाव ", "मी आहे ",
+        ]
+        clean = raw.lower()
+        for prefix in prefixes:
+            if clean.startswith(prefix.lower()):
                 raw = raw[len(prefix):]
                 break
         name = raw.strip().title()
-        if len(name) >= 2:
+        if len(name.replace(" ", "")) >= 2:
             return {"found": True, "name": name, "confidence": "low", "reason": "Fallback prefix strip."}
         return {"found": False, "name": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
 
@@ -195,9 +212,11 @@ JSON format:
 }"""
 
 
-def extract_problem(transcript: str) -> dict:
+def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
     Use Groq LLM to extract and normalise the patient's problem from transcript.
+
+    twilio_confidence: raw Twilio STT score. Never used to reject a transcript.
 
     Returns:
         {
@@ -210,6 +229,11 @@ def extract_problem(transcript: str) -> dict:
     if not transcript or not transcript.strip():
         return {"found": False, "problem": "", "confidence": "low", "reason": "Empty transcript."}
 
+    logger.info(
+        f"Problem extraction attempt | transcript={transcript!r} | "
+        f"twilio_confidence={twilio_confidence}"
+    )
+
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -218,7 +242,7 @@ def extract_problem(transcript: str) -> dict:
                 {"role": "system", "content": PROBLEM_SYSTEM_PROMPT},
                 {"role": "user",   "content": f'Transcript: "{transcript.strip()}"'},
             ],
-            temperature=0.1,
+            temperature=0.0,   # deterministic extraction
             max_tokens=150,
             response_format={"type": "json_object"},
         )
@@ -226,6 +250,9 @@ def extract_problem(transcript: str) -> dict:
 
         if not isinstance(result.get("found"), bool):
             result["found"] = bool(result.get("problem", "").strip())
+        if not result.get("problem", "").strip():
+            result["found"] = False
+            result["problem"] = ""
 
         logger.info(
             f"Problem extraction: found={result['found']} "
@@ -234,10 +261,11 @@ def extract_problem(transcript: str) -> dict:
         return result
 
     except Exception as e:
-        logger.warning(f"Problem extraction LLM failed: {e}")
+        logger.warning(f"Problem extraction LLM failed: {e} — using raw transcript as fallback")
+        # If LLM fails entirely, use raw transcript if it's long enough to be meaningful
         problem = transcript.strip()
-        if len(problem) >= 5:
-            return {"found": True, "problem": problem, "confidence": "low", "reason": f"LLM error — raw transcript used."}
+        if len(problem.replace(" ", "")) >= 4:
+            return {"found": True, "problem": problem, "confidence": "low", "reason": "LLM error — raw transcript used."}
         return {"found": False, "problem": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
 
 

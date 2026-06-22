@@ -16,6 +16,7 @@ from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.rbac_middleware import RBACMiddleware
 from app.websocket.chat_socket import router as chat_ws_router
 from app.websocket.notification_socket import router as notification_ws_router
+from app.agent.router import router as agent_router
 
 
 @asynccontextmanager
@@ -24,6 +25,25 @@ async def lifespan(app: FastAPI):
     Path(settings.UPLOAD_DIR + "/doctors").mkdir(parents=True, exist_ok=True)
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
+
+    # Start ngrok tunnel for Twilio webhooks
+    try:
+        from pyngrok import ngrok, conf
+        ngrok_token = os.getenv("NGROK_AUTH_TOKEN")
+        if ngrok_token:
+            ngrok.kill()  # kill any existing tunnel first
+            conf.get_default().auth_token = ngrok_token
+            tunnel = ngrok.connect(8000, "http")
+            public_url = tunnel.public_url
+            os.environ["PUBLIC_BASE_URL"] = public_url
+            import logging
+            logging.getLogger("nexacare").info(f"ngrok tunnel: {public_url}")
+            print(f"\n🌐 ngrok URL: {public_url}/agent/v1/voice/incoming\n")
+        else:
+            print("⚠️  NGROK_AUTH_TOKEN not set — skipping ngrok tunnel")
+    except Exception as e:
+        print(f"⚠️  ngrok failed to start: {e}")
+
     yield
 
 
@@ -53,6 +73,7 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 app.include_router(bed_allocation_router, prefix="/api", tags=["Bed Allocation"])
 app.include_router(chat_ws_router)
 app.include_router(notification_ws_router)
+app.include_router(agent_router, prefix="/agent/v1/voice")
 
 static_dir = Path("app/static")
 if static_dir.exists():

@@ -28,7 +28,8 @@ async def list_public_doctors(
     date: Optional[date] = None,
 ):
     """
-    Get available doctors with their availability slots.
+    Get available doctors with their availability slots and weekly schedule.
+    `working_days` / `weekly_schedule.day_name` use MONDAY–SUNDAY (day_of_week 0–6).
     Supports optional filters: department, specialty, date.
     """
     doctors = await PublicService(db).list_public_doctors(

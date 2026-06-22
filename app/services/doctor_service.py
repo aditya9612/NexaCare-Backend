@@ -183,6 +183,8 @@ class DoctorService:
             role_id=role.id,
             hospital_id=hospital_id,
             profile_image=profile_image_path,
+            gender=data.gender.value if data.gender else None,
+            date_of_birth=data.date_of_birth,
             is_active=True,
             is_verified=True,
         )
@@ -223,6 +225,8 @@ class DoctorService:
                 phone=user.phone,
                 role_name=user.role.name if user.role else UserRole.DOCTOR,
                 hospital_id=user.hospital_id,
+                gender=user.gender,
+                date_of_birth=user.date_of_birth,
                 is_active=user.is_active,
             ),
         )

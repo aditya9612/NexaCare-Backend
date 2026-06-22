@@ -22,6 +22,13 @@ class VendorCreate(BaseModel):
             raise ValueError("name cannot be empty or only spaces")
         return stripped
 
+    @field_validator("contact_person", "phone", "email", "address", "gst_number", "service_type")
+    @classmethod
+    def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            return value.strip()
+        return value
+
 
 class VendorUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -44,6 +51,13 @@ class VendorUpdate(BaseModel):
             return stripped
         return value
 
+    @field_validator("contact_person", "phone", "email", "address", "gst_number", "service_type")
+    @classmethod
+    def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            return value.strip()
+        return value
+
 
 class VendorResponse(BaseSchema):
     id: int
@@ -58,3 +72,4 @@ class VendorResponse(BaseSchema):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+

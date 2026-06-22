@@ -20,6 +20,13 @@ class ExpenseCategoryCreate(BaseModel):
             raise ValueError("name cannot be empty or only spaces")
         return stripped
 
+    @field_validator("description")
+    @classmethod
+    def strip_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            return value.strip()
+        return value
+
 
 class ExpenseCategoryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
@@ -33,6 +40,13 @@ class ExpenseCategoryUpdate(BaseModel):
             if len(stripped) < 1:
                 raise ValueError("name cannot be empty or only spaces")
             return stripped
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def strip_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            return value.strip()
         return value
 
 
@@ -64,6 +78,13 @@ class ExpenseCreate(BaseModel):
             raise ValueError("expense_date cannot be in the future")
         return value
 
+    @field_validator("description")
+    @classmethod
+    def strip_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            return value.strip()
+        return value
+
 
 class ExpenseUpdate(BaseModel):
     category_id: Optional[int] = Field(None, gt=0)
@@ -80,6 +101,13 @@ class ExpenseUpdate(BaseModel):
             if value > date.today():
                 raise ValueError("expense_date cannot be in the future")
             return value
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def strip_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            return value.strip()
         return value
 
 

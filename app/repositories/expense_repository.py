@@ -88,7 +88,10 @@ class ExpenseRepository:
         if description is not None:
             query = query.where(func.lower(Expense.description).like(f"%{description.lower().strip()}%"))
 
-        column = getattr(Expense, sort_by, Expense.created_at)
+        if sort_by not in Expense.__table__.columns:
+            column = Expense.created_at
+        else:
+            column = getattr(Expense, sort_by)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         query = query.options(selectinload(Expense.category), selectinload(Expense.vendor))
 

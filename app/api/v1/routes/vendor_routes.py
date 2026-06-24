@@ -27,7 +27,7 @@ async def list_vendors(
     current_user: CurrentUser,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    vendor_type: str | None = Query(None, pattern="^(expenses|inventory)$"),
+    vendor_type: str | None = Query(None, pattern="^(expense|expenses|inventory)$"),
     _: User = Depends(require_permission("vendor", "read")),
 ):
     result = await VendorService(db).list_vendors(page=page, size=size, vendor_type=vendor_type)

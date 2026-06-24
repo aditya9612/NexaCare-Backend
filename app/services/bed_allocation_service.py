@@ -368,6 +368,9 @@ class BedAllocationService:
         return await self.get_bed(bed.id)
 
     async def transfer_bed(self, data: BedTransferRequest) -> Bed:
+        if data.sourceBedId == data.targetBedId:
+            raise BadRequestException("Source and target beds cannot be the same.")
+
         source_bed = await self.get_bed(data.sourceBedId)
         if source_bed.status != "Occupied" or not source_bed.patient_id:
             raise BadRequestException(f"Source bed {source_bed.name} is not occupied.")

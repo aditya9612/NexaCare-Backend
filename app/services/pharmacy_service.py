@@ -137,6 +137,7 @@ class PharmacyService:
         ]
 
     # --- Prescriptions ---
+    
     async def create_prescription(self, data: PrescriptionCreate, user_id: int) -> PrescriptionResponse:
         items = [
             PrescriptionItem(**item.model_dump()) for item in data.items
@@ -150,113 +151,76 @@ class PharmacyService:
         )
         prescription = await self.prescription_repo.create(prescription, items)
         prescription = await self.prescription_repo.get_by_id(prescription.id)
-        await self.audit_repo.create("create", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
+        await self.audit_repo.create(
+            "create",
+            "pharmacy_prescription",
+            user_id=user_id,
+            resource_id=str(prescription.id)
+        )
         return self._prescription_response(prescription)
 
-    async def list_prescriptions(self, page: int = 1, size: int = 20, status: str | None = None):
+    async def list_prescriptions(
+        self,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None
+    ):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status)
+        items = await self.prescription_repo.list_all(
+            skip=skip,
+            limit=size,
+            status=status
+        )
         total = await self.prescription_repo.count_all(status=status)
+
         return build_paginated_result(
-            [self._prescription_response(p) for p in items], total, page, size
+            [self._prescription_response(p) for p in items],
+            total,
+            page,
+            size
         )
-    async def send_prescription_to_pharmacy(
+
+    def _prescription_response(
         self,
-        prescription_id: int,
-        user_id: int,
+        prescription: Prescription
     ) -> PrescriptionResponse:
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
-
-        if not prescription:
-            raise NotFoundException("Prescription not found")
-
-        if prescription.status == "cancelled":
-            raise BadRequestException("Cancelled prescription cannot be sent to pharmacy")
-
-        if prescription.status == "dispensed":
-            raise BadRequestException("Dispensed prescription cannot be sent again")
-
-        prescription.status = "sent_to_pharmacy"
-        prescription = await self.prescription_repo.update(prescription)
-
-        await self.audit_repo.create(
-            "send_to_pharmacy",
-            "prescriptions",
-            user_id=user_id,
-            resource_id=str(prescription.id),
-        )
-
-        return self._prescription_response(prescription)
-
-    async def update_prescription(
-        self,
-        prescription_id: int,
-        data,
-        user_id: int,
-    ) -> PrescriptionResponse:
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
-
-        if not prescription:
-            raise NotFoundException("Prescription not found")
-
-        if prescription.status in ["dispensed", "cancelled"]:
-            raise BadRequestException("Dispensed or cancelled prescription cannot be updated")
-
-        update_data = data.model_dump(exclude_unset=True)
-
-        if "instructions" in update_data:
-            prescription.instructions = update_data["instructions"]
-
-        if data.items is not None:
-            await self.prescription_repo.delete_items(prescription.id)
-
-            for item_data in data.items:
-                item = PrescriptionItem(
-                    prescription_id=prescription.id,
-                    **item_data.model_dump(),
-                )
-                self.db.add(item)
-
-        prescription.status = "updated"
-        prescription = await self.prescription_repo.update(prescription)
-
-        await self.audit_repo.create(
-            "update",
-            "prescriptions",
-            user_id=user_id,
-            resource_id=str(prescription.id),
-        )
-
-        prescription = await self.prescription_repo.get_by_id(prescription.id)
-        return self._prescription_response(prescription)
-
-    async def delete_prescription(
-        self,
-        prescription_id: int,
-        user_id: int,
-    ) -> None:
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
-
-        if not prescription:
-            raise NotFoundException("Prescription not found")
-
-        if prescription.status == "dispensed":
-            raise BadRequestException("Dispensed prescription cannot be deleted")
-
-        await self.prescription_repo.soft_delete(prescription)
-
-        await self.audit_repo.create(
-            "delete",
-            "prescriptions",
-            user_id=user_id,
-            resource_id=str(prescription.id),
-        )      
-      
-    def _prescription_response(self, prescription: Prescription) -> PrescriptionResponse:
         resp = PrescriptionResponse.model_validate(prescription)
-        resp.items = [PrescriptionItemResponse.model_validate(i) for i in prescription.items]
+        resp.items = [
+            PrescriptionItemResponse.model_validate(i)
+            for i in prescription.items
+        ]
         return resp
 
+    async def get_prescription_by_id(self, prescription_id: int):
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        return self._prescription_response(prescription)
+
+    async def update_prescription(self, prescription_id: int, data):
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(prescription, key, value)
+
+        prescription = await self.prescription_repo.update(prescription)
+
+        return self._prescription_response(prescription)
+
+    async def delete_prescription(self, prescription_id: int):
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        await self.prescription_repo.delete(prescription) 
+        
+           
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
         subtotal = 0.0

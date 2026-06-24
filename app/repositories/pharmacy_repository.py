@@ -183,6 +183,16 @@ class PrescriptionRepository:
         prescription.status = "cancelled"
         await self.db.flush()
 
+    async def update(self, prescription: Prescription) -> Prescription:
+        await self.db.flush()
+        await self.db.refresh(prescription)
+        return prescription
+
+    async def delete(self, prescription: Prescription) -> None:
+        prescription.is_deleted = True
+        prescription.deleted_at = utc_now()
+        await self.db.flush()    
+
 
 class PharmacyInvoiceRepository:
     def __init__(self, db: AsyncSession):

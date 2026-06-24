@@ -119,27 +119,20 @@ async def list_prescriptions(
     return APIResponse(message="Prescriptions retrieved", data=result)
 
 
-@router.post(
-    "/prescriptions/{prescription_id}/send-to-pharmacy",
-    response_model=APIResponse[PrescriptionResponse],
-)
-async def send_prescription_to_pharmacy(
+
+
+@router.get("/prescriptions/{prescription_id}")
+async def get_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("pharmacy", "update")),
+    _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    prescription = await PharmacyService(db).send_prescription_to_pharmacy(
-        prescription_id=prescription_id,
-        user_id=current_user.id,
-    )
-    return APIResponse(message="Prescription sent to pharmacy", data=prescription)
+    prescription = await PharmacyService(db).get_prescription_by_id(prescription_id)
+    return APIResponse(message="Prescription retrieved", data=prescription)
 
 
-@router.put(
-    "/prescriptions/{prescription_id}",
-    response_model=APIResponse[PrescriptionResponse],
-)
+@router.put("/prescriptions/{prescription_id}")
 async def update_prescription(
     prescription_id: int,
     data: PrescriptionUpdate,
@@ -148,28 +141,23 @@ async def update_prescription(
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     prescription = await PharmacyService(db).update_prescription(
-        prescription_id=prescription_id,
-        data=data,
-        user_id=current_user.id,
+        prescription_id, data
     )
     return APIResponse(message="Prescription updated", data=prescription)
 
 
-@router.delete(
-    "/prescriptions/{prescription_id}",
-    response_model=APIResponse[MessageResponse],
-)
+@router.delete("/prescriptions/{prescription_id}")
 async def delete_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_prescription(
-        prescription_id=prescription_id,
-        user_id=current_user.id,
-    )
-    return APIResponse(message="Prescription deleted", data=MessageResponse(message="Prescription cancelled"))
+    await PharmacyService(db).delete_prescription(prescription_id)
+    return APIResponse(message="Prescription deleted")
+
+
+# --- Invoices ---    
 
 
 # --- Invoices ---

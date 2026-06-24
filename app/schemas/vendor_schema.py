@@ -1,18 +1,25 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.common_schema import BaseSchema
 
 
 class VendorCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    vendor_type: str = Field(..., pattern="^(expenses|inventory)$")
+    vendor_type: str = Field(..., pattern="^(expense|expenses|inventory)$")
     contact_person: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=20)
-    email: Optional[str] = Field(None, max_length=255)
+    email: Optional[EmailStr] = Field(None, max_length=255)
     address: Optional[str] = Field(None)
     gst_number: Optional[str] = Field(None, max_length=50)
     service_type: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("vendor_type")
+    @classmethod
+    def validate_vendor_type(cls, value: str) -> str:
+        if value == "expense":
+            return "expenses"
+        return value
 
     @field_validator("name")
     @classmethod
@@ -22,7 +29,18 @@ class VendorCreate(BaseModel):
             raise ValueError("name cannot be empty or only spaces")
         return stripped
 
-    @field_validator("contact_person", "phone", "email", "address", "gst_number", "service_type")
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            stripped = value.strip()
+            if stripped != "":
+                from app.utils.phone_utils import validate_phone_field
+                return validate_phone_field(stripped)
+            return None
+        return value
+
+    @field_validator("contact_person", "email", "address", "gst_number", "service_type")
     @classmethod
     def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
@@ -32,14 +50,21 @@ class VendorCreate(BaseModel):
 
 class VendorUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    vendor_type: Optional[str] = Field(None, pattern="^(expenses|inventory)$")
+    vendor_type: Optional[str] = Field(None, pattern="^(expense|expenses|inventory)$")
     contact_person: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=20)
-    email: Optional[str] = Field(None, max_length=255)
+    email: Optional[EmailStr] = Field(None, max_length=255)
     address: Optional[str] = Field(None)
     gst_number: Optional[str] = Field(None, max_length=50)
     service_type: Optional[str] = Field(None, max_length=100)
     is_active: Optional[bool] = Field(None)
+
+    @field_validator("vendor_type")
+    @classmethod
+    def validate_vendor_type(cls, value: Optional[str]) -> Optional[str]:
+        if value == "expense":
+            return "expenses"
+        return value
 
     @field_validator("name")
     @classmethod
@@ -51,7 +76,18 @@ class VendorUpdate(BaseModel):
             return stripped
         return value
 
-    @field_validator("contact_person", "phone", "email", "address", "gst_number", "service_type")
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            stripped = value.strip()
+            if stripped != "":
+                from app.utils.phone_utils import validate_phone_field
+                return validate_phone_field(stripped)
+            return None
+        return value
+
+    @field_validator("contact_person", "email", "address", "gst_number", "service_type")
     @classmethod
     def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:

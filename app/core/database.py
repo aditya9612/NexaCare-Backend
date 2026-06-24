@@ -52,6 +52,7 @@ async def init_db():
         voice_model,
         whatsapp_model,
         expense_model,
+        vendor_model,
     )
 
     async with engine.begin() as conn:

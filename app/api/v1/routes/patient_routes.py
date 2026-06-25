@@ -1,6 +1,8 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, File, UploadFile, Query
+from fastapi import APIRouter, Depends, File, UploadFile, Query, Form, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -12,6 +14,8 @@ from app.schemas.patient_schema import (
     PatientDocumentResponse,
     PatientResponse,
     PatientUpdate,
+    PatientFilterQuery,
+    PatientDocumentCreate,
 )
 from app.schemas.clinical_record_schema import ClinicalRecordResponse
 from app.services.patient_service import PatientService
@@ -58,10 +62,7 @@ async def search_patients(
     return APIResponse(message="Search results", data=result)
 
 
-@router.get("/filter", response_model=APIResponse[PaginatedResult[PatientResponse]])
-async def filter_patients(
-    db: DbSession,
-    current_user: CurrentUser,
+def get_patient_filter_query(
     gender: str | None = None,
     blood_group: str | None = None,
     city: str | None = None,
@@ -69,10 +70,36 @@ async def filter_patients(
     status: str | None = None,
     page: int = 1,
     size: int = 20,
+) -> PatientFilterQuery:
+    try:
+        return PatientFilterQuery(
+            gender=gender,
+            blood_group=blood_group,
+            city=city,
+            state=state,
+            status=status,
+            page=page,
+            size=size,
+        )
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
+
+@router.get("/filter", response_model=APIResponse[PaginatedResult[PatientResponse]])
+async def filter_patients(
+    db: DbSession,
+    current_user: CurrentUser,
+    params: PatientFilterQuery = Depends(get_patient_filter_query),
     _: User = Depends(require_permission("patients", "read")),
 ):
     result = await PatientService(db).filter_patients(
-        gender=gender, blood_group=blood_group, city=city, state=state, status=status, page=page, size=size
+        gender=params.gender,
+        blood_group=params.blood_group,
+        city=params.city,
+        state=params.state,
+        status=params.status,
+        page=params.page,
+        size=params.size,
     )
     return APIResponse(message="Filtered patients", data=result)
 
@@ -140,10 +167,23 @@ async def upload_document(
     patient_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    request: Request,
     file: UploadFile = File(...),
-    document_type: str = "general",
+    document_type: str = Form("general"),
     _: User = Depends(require_permission("patients", "update")),
 ):
+    # Extract raw value from form to distinguish between omitted and explicitly empty/whitespace values
+    form_data = await request.form()
+    raw_document_type = form_data.get("document_type")
+    
+    val_to_check = raw_document_type if raw_document_type is not None else "General"
+    
+    try:
+        validated = PatientDocumentCreate(document_type=val_to_check)
+        document_type = validated.document_type
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
     doc = await PatientService(db).upload_document(patient_id, file, document_type, current_user.id)
     return APIResponse(message="Document uploaded", data=doc)
 

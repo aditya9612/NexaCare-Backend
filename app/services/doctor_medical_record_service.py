@@ -46,6 +46,13 @@ class DoctorMedicalRecordService:
         if not patient:
             raise NotFoundException("Patient not found")
 
+        # Check if patient name matches the database record
+        db_full_name = f"{patient.first_name} {patient.last_name}".strip()
+        if patient_name.strip().lower() != db_full_name.lower():
+            raise BadRequestException(
+                f"Provided patient name '{patient_name}' does not match the actual patient record '{db_full_name}'"
+            )
+
         allowed_types = {"application/pdf", "image/jpeg", "image/png"}
         if file.content_type not in allowed_types:
             raise BadRequestException("Only PDF, JPG and PNG files are allowed")

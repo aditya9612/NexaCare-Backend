@@ -15,6 +15,7 @@ from app.models.pharmacy_model import (
     Supplier,
 )
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.patient_repository import PatientRepository
 from app.repositories.pharmacy_repository import (
     MedicineRepository,
     PharmacyInvoiceRepository,
@@ -62,6 +63,7 @@ class PharmacyService:
         self.supplier_repo = SupplierRepository(db)
         self.purchase_repo = PurchaseRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.patient_repo = PatientRepository(db)
 
     # --- Medicines ---
     async def create_medicine(self, data: MedicineCreate, user_id: int) -> MedicineResponse:
@@ -168,6 +170,14 @@ class PharmacyService:
 
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
+        patient = await self.patient_repo.get_by_id(data.patient_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+
+        prescription = await self.prescription_repo.get_by_id(data.prescription_id)
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
         for item_data in data.items:
@@ -178,7 +188,7 @@ class PharmacyService:
                 raise BadRequestException(f"Insufficient stock for {medicine.name}")
             if medicine.expiry_date and medicine.expiry_date < date.today():
                 raise BadRequestException(f"Medicine {medicine.name} has expired")
-            unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
+            unit_price = medicine.unit_price
             line_total = round(item_data.quantity * unit_price, 2)
             subtotal += line_total
             invoice_items.append(PharmacyInvoiceItem(

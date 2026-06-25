@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
@@ -23,6 +24,7 @@ from app.schemas.doctor_medical_record_schema import (
     MedicalRecordResponse,
     TreatmentNoteCreate,
     TreatmentNoteResponse,
+    MedicalRecordUploadValidator,
 )
 from app.services.doctor_service import DoctorService
 from app.services.doctor_medical_record_service import DoctorMedicalRecordService
@@ -184,6 +186,23 @@ async def upload_report(
     file: UploadFile = File(...),
     _: User = Depends(require_permission("doctors", "create")),
 ):
+    try:
+        validated = MedicalRecordUploadValidator(
+            patient_id=patient_id,
+            patient_name=patient_name,
+            report_title=report_title,
+            report_type=report_type,
+            diagnosis=diagnosis,
+            notes=notes,
+        )
+        patient_name = validated.patient_name
+        report_title = validated.report_title
+        report_type = validated.report_type
+        diagnosis = validated.diagnosis
+        notes = validated.notes
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
     record = await DoctorMedicalRecordService(db).upload_report(
         patient_id=patient_id,
         patient_name=patient_name,

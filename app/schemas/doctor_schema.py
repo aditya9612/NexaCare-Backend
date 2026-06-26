@@ -138,6 +138,52 @@ def validate_dob_field(v: date | None) -> date | None:
     return v
 
 
+def validate_name_field(v: str | None, field_name: str) -> str | None:
+    if v is None:
+        return v
+    # Reject empty string, whitespace-only, and "null"
+    if not v or not v.strip() or v.lower() == "null":
+        raise ValueError(f"{field_name} cannot be blank or 'null'")
+    # Reject leading/trailing spaces
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError(f"{field_name} must not contain leading or trailing spaces")
+    # Reject multiple consecutive spaces
+    if "  " in v:
+        raise ValueError(f"{field_name} must not contain multiple consecutive spaces")
+    # Reject Unicode characters (must contain only ASCII)
+    if not v.isascii():
+        raise ValueError(f"{field_name} must contain only standard ASCII characters")
+    # Allow only ASCII alphabets, spaces, apostrophe, hyphen and dot
+    if not re.match(r"^[a-zA-Z\s\-\'\.]+$", v):
+        raise ValueError(f"{field_name} must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
+    return v
+
+
+def validate_license_number(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if not v or not v.strip() or v.lower() == "null":
+        raise ValueError("License number cannot be blank or 'null'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("License number must not contain leading or trailing spaces")
+    if not v.isascii():
+        raise ValueError("License number must contain only standard ASCII characters")
+    # Allow only alphanumeric, hyphens, slashes
+    if not re.match(r"^[a-zA-Z0-9\-\/]+$", v):
+        raise ValueError("License number must contain only alphanumeric characters, hyphens, or slashes")
+    return v
+
+
+def validate_optional_string(v: str | None, field_name: str) -> str | None:
+    if v is None:
+        return v
+    if not v.strip() or v.lower() == "null":
+        raise ValueError(f"{field_name} cannot be empty or 'null'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError(f"{field_name} must not contain leading or trailing spaces")
+    return v
+
+
 class DoctorOnboardCreate(BaseSchema):
     """Create a login account and doctor profile in one request."""
 
@@ -150,7 +196,7 @@ class DoctorOnboardCreate(BaseSchema):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=20)
     department_id: int | None = Field(None, gt=0)
-    consultation_fee: float | None = None
+    consultation_fee: float | None = Field(None, ge=0)
     license_number: str
     availability_status: str = "available"
     profile_image: str | None = None
@@ -197,6 +243,40 @@ class DoctorOnboardCreate(BaseSchema):
     def validate_bio(cls, v: str | None) -> str | None:
         return validate_bio_field(v)
 
+    @field_validator("first_name")
+    @classmethod
+    def validate_first_name(cls, v: str) -> str:
+        res = validate_name_field(v, "First name")
+        if res is None:
+            raise ValueError("First name cannot be blank")
+        return res
+
+    @field_validator("last_name")
+    @classmethod
+    def validate_last_name(cls, v: str) -> str:
+        res = validate_name_field(v, "Last name")
+        if res is None:
+            raise ValueError("Last name cannot be blank")
+        return res
+
+    @field_validator("qualification")
+    @classmethod
+    def validate_qualification(cls, v: str | None) -> str | None:
+        return validate_optional_string(v, "Qualification")
+
+    @field_validator("license_number")
+    @classmethod
+    def validate_license(cls, v: str) -> str:
+        res = validate_license_number(v)
+        if res is None:
+            raise ValueError("License number cannot be blank")
+        return res
+
+    @field_validator("profile_image")
+    @classmethod
+    def validate_profile_img(cls, v: str | None) -> str | None:
+        return validate_optional_string(v, "Profile image")
+
 
 class DoctorOnboardUserSummary(BaseSchema):
     id: int
@@ -220,12 +300,12 @@ class DoctorCreate(BaseSchema):
     phone: str | None = None
     email: EmailStr | None = None
     department_id: int | None = Field(None, gt=0)
-    consultation_fee: float | None = None
+    consultation_fee: float | None = Field(None, ge=0)
     license_number: str
     availability_status: str = "available"
     profile_image: str | None = None
     bio: str | None = None
-    user_id: int | None = None
+    user_id: int | None = Field(None, gt=0)
 
     @field_validator("specialization")
     @classmethod
@@ -250,6 +330,40 @@ class DoctorCreate(BaseSchema):
     def validate_bio(cls, v: str | None) -> str | None:
         return validate_bio_field(v)
 
+    @field_validator("first_name")
+    @classmethod
+    def validate_first_name(cls, v: str) -> str:
+        res = validate_name_field(v, "First name")
+        if res is None:
+            raise ValueError("First name cannot be blank")
+        return res
+
+    @field_validator("last_name")
+    @classmethod
+    def validate_last_name(cls, v: str) -> str:
+        res = validate_name_field(v, "Last name")
+        if res is None:
+            raise ValueError("Last name cannot be blank")
+        return res
+
+    @field_validator("qualification")
+    @classmethod
+    def validate_qualification(cls, v: str | None) -> str | None:
+        return validate_optional_string(v, "Qualification")
+
+    @field_validator("license_number")
+    @classmethod
+    def validate_license(cls, v: str) -> str:
+        res = validate_license_number(v)
+        if res is None:
+            raise ValueError("License number cannot be blank")
+        return res
+
+    @field_validator("profile_image")
+    @classmethod
+    def validate_profile_img(cls, v: str | None) -> str | None:
+        return validate_optional_string(v, "Profile image")
+
 
 class DoctorUpdate(BaseSchema):
     first_name: str | None = None
@@ -260,7 +374,7 @@ class DoctorUpdate(BaseSchema):
     phone: str | None = None
     email: EmailStr | None = None
     department_id: int | None = Field(None, gt=0)
-    consultation_fee: float | None = None
+    consultation_fee: float | None = Field(None, ge=0)
     license_number: str | None = None
     availability_status: str | None = None
     profile_image: str | None = None
@@ -285,6 +399,31 @@ class DoctorUpdate(BaseSchema):
     @classmethod
     def validate_bio(cls, v: str | None) -> str | None:
         return validate_bio_field(v)
+
+    @field_validator("first_name")
+    @classmethod
+    def validate_first_name(cls, v: str | None) -> str | None:
+        return validate_name_field(v, "First name")
+
+    @field_validator("last_name")
+    @classmethod
+    def validate_last_name(cls, v: str | None) -> str | None:
+        return validate_name_field(v, "Last name")
+
+    @field_validator("qualification")
+    @classmethod
+    def validate_qualification(cls, v: str | None) -> str | None:
+        return validate_optional_string(v, "Qualification")
+
+    @field_validator("license_number")
+    @classmethod
+    def validate_license(cls, v: str | None) -> str | None:
+        return validate_license_number(v)
+
+    @field_validator("profile_image")
+    @classmethod
+    def validate_profile_img(cls, v: str | None) -> str | None:
+        return validate_optional_string(v, "Profile image")
 
 
 class DoctorResponse(BaseSchema):
@@ -334,7 +473,7 @@ class DoctorScheduleCreate(BaseSchema):
     day_of_week: int = Field(..., ge=0, le=6)
     start_time: time
     end_time: time
-    slot_duration_minutes: int = 30
+    slot_duration_minutes: int = Field(30, gt=0, le=180)
 
 
 class DoctorScheduleResponse(BaseSchema):

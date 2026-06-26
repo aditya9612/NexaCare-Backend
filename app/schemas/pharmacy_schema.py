@@ -1,7 +1,31 @@
 from datetime import date, datetime
+import re
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
+
+
+def validate_gst_number(v: str | None) -> str | None:
+    if v is None:
+        return v
+    cleaned = v.strip().upper()
+    if not cleaned or cleaned.lower() == "null":
+        raise ValueError("GST number cannot be blank or 'null'")
+    if len(cleaned) != 15:
+        raise ValueError("GST number must be exactly 15 characters long")
+    
+    # State code: 01-38
+    # Next 5: letters
+    # Next 4: digits
+    # Next 1: letter
+    # Next 1: alphanumeric
+    # Next 1: letter
+    # Next 1: alphanumeric
+    pattern = r"^(0[1-9]|[1-2][0-9]|3[0-8])[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9][A-Z][A-Z0-9]$"
+    if not re.match(pattern, cleaned):
+        raise ValueError("Invalid GST number format")
+    return cleaned
+
 
 from app.schemas.common_schema import BaseSchema
 
@@ -19,6 +43,36 @@ class MedicineCreate(BaseSchema):
     manufacturer: str | None = None
     description: str | None = None
 
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: str | None) -> str | None:
+        if v is not None:
+            if " " in v:
+                raise ValueError("Barcode cannot contain spaces")
+            if not v.isdigit():
+                raise ValueError("Barcode must contain only numeric characters")
+            if len(v) != 13:
+                raise ValueError("Barcode must be exactly 13 digits")
+            if all(c == "0" for c in v):
+                raise ValueError("Barcode cannot be all zeros")
+        return v
+
+    @field_validator("expiry_date")
+    @classmethod
+    def validate_expiry_date(cls, v: date | None) -> date | None:
+        if v is not None and v < date.today():
+            raise ValueError("Expiry date cannot be in the past")
+        return v
+
+    @field_validator("name", "generic_name", "category")
+    @classmethod
+    def validate_non_blank_strings(cls, v: str | None) -> str | None:
+        if v is not None:
+            if v.strip() == "":
+                raise ValueError("cannot be empty or only spaces")
+            return v.strip()
+        return v
+
 
 class MedicineUpdate(BaseSchema):
     name: str | None = None
@@ -34,6 +88,36 @@ class MedicineUpdate(BaseSchema):
     description: str | None = None
     is_active: bool | None = None
 
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: str | None) -> str | None:
+        if v is not None:
+            if " " in v:
+                raise ValueError("Barcode cannot contain spaces")
+            if not v.isdigit():
+                raise ValueError("Barcode must contain only numeric characters")
+            if len(v) != 13:
+                raise ValueError("Barcode must be exactly 13 digits")
+            if all(c == "0" for c in v):
+                raise ValueError("Barcode cannot be all zeros")
+        return v
+
+    @field_validator("expiry_date")
+    @classmethod
+    def validate_expiry_date(cls, v: date | None) -> date | None:
+        if v is not None and v < date.today():
+            raise ValueError("Expiry date cannot be in the past")
+        return v
+
+    @field_validator("name", "generic_name", "category")
+    @classmethod
+    def validate_non_blank_strings(cls, v: str | None) -> str | None:
+        if v is not None:
+            if v.strip() == "":
+                raise ValueError("cannot be empty or only spaces")
+            return v.strip()
+        return v
+
 
 class MedicineResponse(BaseSchema):
     id: int
@@ -48,6 +132,7 @@ class MedicineResponse(BaseSchema):
     reorder_level: int
     expiry_date: date | None
     manufacturer: str | None
+    description: str | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -115,12 +200,11 @@ class PrescriptionResponse(BaseSchema):
 class PharmacyInvoiceItemCreate(BaseSchema):
     medicine_id: int
     quantity: int = Field(1, ge=1)
-    unit_price: float | None = Field(None, ge=0)
 
 
 class PharmacyInvoiceCreate(BaseSchema):
-    patient_id: int | None = None
-    prescription_id: int | None = None
+    patient_id: int
+    prescription_id: int
     discount_amount: float = Field(0.0, ge=0)
     items: List[PharmacyInvoiceItemCreate] = Field(..., min_length=1)
 
@@ -157,6 +241,12 @@ class SupplierCreate(BaseSchema):
     address: str | None = None
     gst_number: str | None = None
 
+    @field_validator("gst_number")
+    @classmethod
+    def validate_supplier_gst(cls, v: str | None) -> str | None:
+        return validate_gst_number(v)
+
+
 
 class SupplierUpdate(BaseSchema):
     name: str | None = None
@@ -166,6 +256,12 @@ class SupplierUpdate(BaseSchema):
     address: str | None = None
     gst_number: str | None = None
     is_active: bool | None = None
+
+    @field_validator("gst_number")
+    @classmethod
+    def validate_supplier_gst(cls, v: str | None) -> str | None:
+        return validate_gst_number(v)
+
 
 
 class SupplierResponse(BaseSchema):

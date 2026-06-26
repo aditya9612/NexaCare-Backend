@@ -43,7 +43,12 @@ class StaffService:
         # Validate existence of department and role
         await self._validate_department_and_role(data.department_id, data.role_name)
     
-        staff = Staff(**data.model_dump())
+        from enum import Enum
+        data_dict = {
+            k: (v.value if isinstance(v, Enum) else v)
+            for k, v in data.model_dump().items()
+        }
+        staff = Staff(**data_dict)
         staff = await self.repo.create(staff)
         
         # Eager load relationships by re-fetching
@@ -109,7 +114,10 @@ class StaffService:
         # Validate department/role if changed
         await self._validate_department_and_role(data.department_id, data.role_name)
         
+        from enum import Enum
         for key, value in data.model_dump(exclude_unset=True).items():
+            if isinstance(value, Enum):
+                value = value.value
             setattr(staff, key, value)
             
         await self.repo.update(staff)

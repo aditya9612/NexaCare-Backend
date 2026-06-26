@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile, Query
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -13,6 +13,7 @@ from app.schemas.patient_schema import (
     PatientResponse,
     PatientUpdate,
 )
+from app.schemas.clinical_record_schema import ClinicalRecordResponse
 from app.services.patient_service import PatientService
 from app.utils.pagination import PaginatedResult
 
@@ -179,3 +180,19 @@ async def list_family_members(
 ):
     members = await PatientService(db).list_family_members(patient_id)
     return APIResponse(message="Family members retrieved", data=members)
+
+
+@router.get("/{patient_id}/clinical-records", response_model=APIResponse[PaginatedResult[ClinicalRecordResponse]])
+async def list_patient_clinical_records(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    _: User = Depends(require_permission("patients", "read")),
+):
+    from app.services.clinical_record_service import ClinicalRecordService
+    result = await ClinicalRecordService(db).list_records(
+        page=page, size=size, patient_id=patient_id
+    )
+    return APIResponse(message="Records fetched successfully", data=result)

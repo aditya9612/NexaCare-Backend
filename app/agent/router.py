@@ -28,7 +28,7 @@ router = APIRouter(tags=["AI Voice Agent"])
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def xml(twiml: str) -> Response:
-    return Response(content=twiml, media_type="application/xml")
+    return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
 
 def _base_url() -> str:

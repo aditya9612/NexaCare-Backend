@@ -31,3 +31,4 @@ class Appointment(Base, TimestampMixin):
     patient = relationship("Patient", back_populates="appointments")
     doctor = relationship("Doctor", back_populates="appointments")
     department = relationship("Department", back_populates="appointments")
+    clinical_record = relationship("ClinicalRecord", back_populates="appointment", uselist=False)

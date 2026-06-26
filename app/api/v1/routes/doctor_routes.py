@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body, Request
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
@@ -27,51 +27,80 @@ from app.schemas.doctor_medical_record_schema import (
 from app.services.doctor_service import DoctorService
 from app.services.doctor_medical_record_service import DoctorMedicalRecordService
 from app.utils.pagination import PaginatedResult
+from app.schemas.clinical_record_schema import ClinicalRecordResponse
+from fastapi import Query
 
 router = APIRouter()
 
 
 @router.post("", response_model=APIResponse[DoctorResponse], status_code=201)
 async def create_doctor(
+    request: Request,
     db: DbSession,
     current_user: CurrentUser,
-    first_name: str = Form(...),
-    last_name: str = Form(...),
-    specialization: str = Form(...),
-    license_number: str = Form(...),
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    specialization: Optional[str] = Form(None),
+    license_number: Optional[str] = Form(None),
     qualification: Optional[str] = Form(None),
     experience: Optional[int] = Form(None),
     phone: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
     department_id: Optional[int] = Form(None),
     consultation_fee: Optional[float] = Form(None),
-    availability_status: str = Form("available"),
+    availability_status: Optional[str] = Form(None),
     bio: Optional[str] = Form(None),
     user_id: Optional[int] = Form(None),
     profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
-    try:
-        doctor_data = DoctorCreate(
-            first_name=first_name,
-            last_name=last_name,
-            specialization=specialization,
-            qualification=qualification,
-            experience=experience,
-            phone=phone,
-            email=email,
-            department_id=department_id,
-            consultation_fee=consultation_fee,
-            license_number=license_number,
-            availability_status=availability_status,
-            bio=bio,
-            user_id=user_id,
-            profile_image=None
-        )
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            doctor_data = DoctorCreate(**body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": f"Invalid JSON payload: {str(e)}", "type": "json_invalid"}])
+        image_file = None
+    else:
+        # Check required fields for Form/Multipart manually since we made them optional in function signature
+        missing_fields = []
+        if not first_name:
+            missing_fields.append({"type": "missing", "loc": ["body", "first_name"], "msg": "Field required", "input": None})
+        if not last_name:
+            missing_fields.append({"type": "missing", "loc": ["body", "last_name"], "msg": "Field required", "input": None})
+        if not specialization:
+            missing_fields.append({"type": "missing", "loc": ["body", "specialization"], "msg": "Field required", "input": None})
+        if not license_number:
+            missing_fields.append({"type": "missing", "loc": ["body", "license_number"], "msg": "Field required", "input": None})
+        
+        if missing_fields:
+            raise HTTPException(status_code=422, detail=missing_fields)
+            
+        try:
+            doctor_data = DoctorCreate(
+                first_name=first_name,
+                last_name=last_name,
+                specialization=specialization,
+                qualification=qualification,
+                experience=experience,
+                phone=phone,
+                email=email,
+                department_id=department_id,
+                consultation_fee=consultation_fee,
+                license_number=license_number,
+                availability_status=availability_status or "available",
+                bio=bio,
+                user_id=user_id,
+                profile_image=None
+            )
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
+        image_file = profile_image
 
-    doctor_obj = await DoctorService(db).create(doctor_data, current_user.id, image_file=profile_image)
+    doctor_obj = await DoctorService(db).create(doctor_data, current_user.id, image_file=image_file)
     return APIResponse(message="Doctor created", data=doctor_obj)
 
 
@@ -369,3 +398,18 @@ async def add_doctor_schedule(
 ):
     schedule = await DoctorService(db).add_schedule(doctor_id, data, current_user.id)
     return APIResponse(message="Schedule added", data=schedule)
+
+@router.get("/{doctor_id}/clinical-records", response_model=APIResponse[PaginatedResult[ClinicalRecordResponse]])
+async def list_doctor_clinical_records(
+    doctor_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    from app.services.clinical_record_service import ClinicalRecordService
+    result = await ClinicalRecordService(db).list_records(
+        page=page, size=size, doctor_id=doctor_id
+    )
+    return APIResponse(message="Records fetched successfully", data=result)

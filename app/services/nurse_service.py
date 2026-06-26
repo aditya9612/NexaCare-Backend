@@ -19,6 +19,7 @@ from app.repositories.nurse_repository import (
 )
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.department_repository import DepartmentRepository
+from app.repositories.auth_repository import AuthRepository
 from app.schemas.patient_schema import PatientResponse
 from app.schemas.nurse_schema import (
     NurseAssignedPatientProfileResponse,
@@ -59,6 +60,7 @@ class NurseService:
         self.notification_repo = NurseNotificationRepository(db)
         self.audit_repo = AuditRepository(db)
         self.dept_repo = DepartmentRepository(db)
+        self.auth_repo = AuthRepository(db)
 
     async def _validate_department(self, department_id: int | None) -> None:
         if department_id is not None:
@@ -100,6 +102,16 @@ class NurseService:
         return NurseResponse.model_validate(nurse)
 
     async def create(self, data: NurseCreate, user_id: int) -> NurseResponse:
+        # Validate that the user exists
+        user = await self.auth_repo.get_by_id(data.user_id)
+        if not user:
+            raise NotFoundException("User not found")
+
+        # Validate that the user is not already registered as a nurse
+        existing_nurse = await self.repo.get_by_user_id(data.user_id)
+        if existing_nurse:
+            raise ConflictException("User is already registered as a nurse")
+
         existing = await self.repo.get_by_license(data.license_number)
         if existing:
             raise ConflictException("License number already registered")

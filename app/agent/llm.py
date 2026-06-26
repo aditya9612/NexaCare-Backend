@@ -31,20 +31,34 @@ VALID_SPECIALTIES = [
 ]
 
 SPECIALTY_KEYWORDS: dict[str, list[str]] = {
-    "Cardiology":       ["heart", "chest pain", "palpitation", "cardiac", "blood pressure", "hypertension", "bp"],
-    "Orthopedics":      ["bone", "joint", "knee", "back pain", "fracture", "spine", "shoulder", "hip", "arthritis"],
-    "Neurology":        ["headache", "migraine", "seizure", "stroke", "numbness", "tremor", "dizziness", "memory"],
-    "Gastroenterology": ["stomach", "digestion", "acidity", "ibs", "liver", "nausea", "vomiting", "abdomen", "constipation"],
-    "Dermatology":      ["skin", "rash", "acne", "itching", "allergy", "eczema", "psoriasis", "hair loss"],
-    "Pulmonology":      ["breathing", "lungs", "cough", "asthma", "breathless", "wheezing", "copd"],
-    "ENT":              ["ear", "nose", "throat", "hearing", "tonsil", "sinus", "cold", "sneezing"],
-    "Gynecology":       ["periods", "menstrual", "pregnancy", "pcod", "pcos", "uterus", "ovary"],
-    "Psychiatry":       ["anxiety", "depression", "stress", "mental", "sleep", "insomnia", "panic", "mood"],
-    "Ophthalmology":    ["eye", "vision", "blur", "glasses", "cataract", "retina"],
-    "Endocrinology":    ["thyroid", "diabetes", "sugar", "hormones", "weight gain", "fatigue", "insulin"],
-    "Pediatrics":       ["child", "baby", "infant", "kids", "fever in child", "vaccination"],
-    "Urology":          ["urinary", "kidney stone", "prostate", "urine", "bladder", "uti"],
-    "Nephrology":       ["kidney", "renal", "dialysis", "creatinine", "kidney failure"],
+    "Cardiology":       ["heart", "chest pain", "palpitation", "cardiac", "blood pressure", "hypertension", "bp",
+                          "छाती में दर्द", "हृदय", "रक्तदाब", "छातीत दुखणे", "हृदयविकार"],
+    "Orthopedics":      ["bone", "joint", "knee", "back pain", "fracture", "spine", "shoulder", "hip", "arthritis",
+                          "हड्डी", "घुटने में दर्द", "कमर दर्द", "जोड़ों का दर्द", "हाड", "गुडघेदुखी", "पाठदुखी", "सांधेदुखी"],
+    "Neurology":        ["headache", "migraine", "seizure", "stroke", "numbness", "tremor", "dizziness", "memory",
+                          "सिरदर्द", "चक्कर", "डोकेदुखी", "बेहोशी"],
+    "Gastroenterology": ["stomach", "digestion", "acidity", "ibs", "liver", "nausea", "vomiting", "abdomen", "constipation",
+                          "पेट दर्द", "उलटी", "अपचन", "पोटदुखी", "पोटात दुखणे", "जुलाब"],
+    "Dermatology":      ["skin", "rash", "acne", "itching", "allergy", "eczema", "psoriasis", "hair loss",
+                          "त्वचा", "खुजली", "चकत्ते", "त्वचेवर पुरळ", "खाज"],
+    "Pulmonology":      ["breathing", "lungs", "cough", "asthma", "breathless", "wheezing", "copd",
+                          "खांसी", "सांस लेने में तकलीफ", "खोकला", "दम लागणे", "श्वास घेण्यास त्रास"],
+    "ENT":              ["ear", "nose", "throat", "hearing", "tonsil", "sinus", "cold", "sneezing",
+                          "कान में दर्द", "गला खराब", "कानदुखी", "घसा खवखवणे", "सर्दी"],
+    "Gynecology":       ["periods", "menstrual", "pregnancy", "pcod", "pcos", "uterus", "ovary",
+                          "मासिक धर्म", "गर्भावस्था", "मासिक पाळी", "गर्भधारणा"],
+    "Psychiatry":       ["anxiety", "depression", "stress", "mental", "sleep", "insomnia", "panic", "mood",
+                          "तनाव", "नींद नहीं आना", "ताण", "झोप न लागणे", "चिंता"],
+    "Ophthalmology":    ["eye", "vision", "blur", "glasses", "cataract", "retina",
+                          "आंख में दर्द", "धुंधला दिखना", "डोळ्यात दुखणे", "डोळ्यांचा त्रास"],
+    "Endocrinology":    ["thyroid", "diabetes", "sugar", "hormones", "weight gain", "fatigue", "insulin",
+                          "मधुमेह", "थकान", "थायराइड", "साखर", "थकवा"],
+    "Pediatrics":       ["child", "baby", "infant", "kids", "fever in child", "vaccination",
+                          "बच्चा", "मूल", "बच्चे को बुखार"],
+    "Urology":          ["urinary", "kidney stone", "prostate", "urine", "bladder", "uti",
+                          "पेशाब में जलन", "लघवीला त्रास", "पथरी"],
+    "Nephrology":       ["kidney", "renal", "dialysis", "creatinine", "kidney failure",
+                          "किडनी", "डायलिसिस"],
 }
 
 
@@ -65,17 +79,25 @@ def _keyword_hint(problem: str) -> Optional[str]:
 
 # ── 1. Name extraction ────────────────────────────────────────────────────────
 
-NAME_SYSTEM_PROMPT = """You are a medical receptionist assistant.
+NAME_SYSTEM_PROMPT = """You are a medical receptionist assistant for an Indian hospital.
 The patient was asked "Please say your full name." and you received their speech transcript.
+
+The patient may have spoken in English, Hindi, or Marathi. The transcript may
+contain Devanagari script (Hindi/Marathi), Latin script (English or
+transliterated Hindi/Marathi), or a mix. Filler phrases meaning "my name is"
+appear in all three languages — for example "my name is", "mera naam hai",
+"माझे नाव आहे", "मेरा नाम है" — strip these in whichever language they appear.
 
 Your job: extract ONLY the patient's actual name from the transcript.
 
 Rules:
 - Respond ONLY with valid JSON. No markdown, no explanation outside JSON.
-- Remove filler phrases like "my name is", "I am", "this is", "myself", "call me", etc.
-- If a clear name is present, extract it properly capitalised.
+- Remove filler phrases (in English, Hindi, or Marathi) like "my name is",
+  "I am", "this is", "myself", "call me", "मेरा नाम है", "माझे नाव आहे", etc.
+- If a clear name is present, extract it properly capitalised (if in Latin
+  script) or as correctly written (if in Devanagari script).
 - If the transcript is too unclear, empty, or does not contain a name, set found to false.
-- Names can be Indian names — be flexible.
+- Names can be Indian names — be flexible. A single short word can be a valid name.
 
 JSON format:
 {
@@ -86,9 +108,13 @@ JSON format:
 }"""
 
 
-def extract_patient_name(transcript: str) -> dict:
+def extract_patient_name(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
     Use Groq LLM to extract the patient's name from a speech transcript.
+
+    twilio_confidence: the raw Twilio STT confidence value (0.0–1.0).
+    Twilio frequently reports 0.0 even on correct transcripts, so we NEVER
+    reject a transcript based on confidence alone — we always try the LLM.
 
     Returns:
         {
@@ -101,6 +127,12 @@ def extract_patient_name(transcript: str) -> dict:
     if not transcript or not transcript.strip():
         return {"found": False, "name": "", "confidence": "low", "reason": "Empty transcript."}
 
+    # Log for debugging — useful to track which transcripts fail extraction
+    logger.info(
+        f"Name extraction attempt | transcript={transcript!r} | "
+        f"twilio_confidence={twilio_confidence}"
+    )
+
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -109,17 +141,19 @@ def extract_patient_name(transcript: str) -> dict:
                 {"role": "system", "content": NAME_SYSTEM_PROMPT},
                 {"role": "user",   "content": f'Transcript: "{transcript.strip()}"'},
             ],
-            temperature=0.1,
+            temperature=0.0,   # deterministic — name extraction is not creative
             max_tokens=100,
             response_format={"type": "json_object"},
         )
-        result = json.loads(response.choices[0].message.content.strip())
+        raw = response.choices[0].message.content.strip()
+        result = json.loads(raw)
 
-        # Validate
+        # Sanitise response
         if not isinstance(result.get("found"), bool):
             result["found"] = bool(result.get("name", "").strip())
-        if not result.get("name"):
+        if not result.get("name", "").strip():
             result["found"] = False
+            result["name"] = ""
 
         logger.info(
             f"Name extraction: found={result['found']} name={result.get('name')!r} "
@@ -128,46 +162,61 @@ def extract_patient_name(transcript: str) -> dict:
         return result
 
     except Exception as e:
-        logger.warning(f"Name extraction LLM failed: {e}")
-        # Graceful fallback — basic prefix stripping
-        raw = transcript.strip().lower()
-        for prefix in ["my name is ", "i am ", "this is ", "myself ", "name is ", "i'm ", "call me "]:
-            if raw.startswith(prefix):
+        logger.warning(f"Name extraction LLM failed: {e} — using fallback")
+        # Graceful fallback — basic prefix stripping across EN/HI/MR
+        raw = transcript.strip()
+        prefixes = [
+            "my name is ", "i am ", "this is ", "myself ", "name is ", "i'm ", "call me ",
+            "मेरा नाम है ", "मेरा नाम ", "मैं हूँ ", "माझे नाव आहे ", "माझे नाव ", "मी आहे ",
+        ]
+        clean = raw.lower()
+        for prefix in prefixes:
+            if clean.startswith(prefix.lower()):
                 raw = raw[len(prefix):]
                 break
         name = raw.strip().title()
-        if len(name) >= 2:
+        if len(name.replace(" ", "")) >= 2:
             return {"found": True, "name": name, "confidence": "low", "reason": "Fallback prefix strip."}
         return {"found": False, "name": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
 
 
 # ── 2. Problem extraction ─────────────────────────────────────────────────────
 
-PROBLEM_SYSTEM_PROMPT = """You are a medical receptionist assistant.
+PROBLEM_SYSTEM_PROMPT = """You are a medical receptionist assistant for an Indian hospital.
 The patient was asked "Please describe your health problem or symptoms."
+
+The patient may have spoken in English, Hindi, or Marathi. The transcript may
+contain Devanagari script (Hindi/Marathi), Latin script (English or
+transliterated Hindi/Marathi), or a mix.
 
 Your job: extract and normalise the medical problem from the transcript.
 
 Rules:
 - Respond ONLY with valid JSON. No markdown, no explanation outside JSON.
 - Rephrase vague or broken speech into a clear medical problem description.
+- IMPORTANT: write the cleaned "problem" in the SAME language the patient
+  spoke (Hindi stays in Hindi/Devanagari, Marathi stays in Marathi/Devanagari,
+  English stays in English). This text gets read back to the patient by
+  text-to-speech in their own language, so do not translate it.
 - If the patient described a clear problem, set found to true.
-- If the transcript is too unclear, too short (just "pain" with no context), 
+- If the transcript is too unclear, too short (just "pain" with no context),
   or does not describe any health problem, set found to false.
-- Be generous — if there's any health information, extract it.
+- Be generous — if there's any health information, extract it, regardless of language.
 
 JSON format:
 {
   "found": true or false,
-  "problem": "<cleaned medical problem description or empty string>",
+  "problem": "<cleaned medical problem description, in the patient's spoken language, or empty string>",
   "confidence": "<high|medium|low>",
   "reason": "<one short sentence>"
 }"""
 
 
-def extract_problem(transcript: str) -> dict:
+def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
     Use Groq LLM to extract and normalise the patient's problem from transcript.
+
+    twilio_confidence: raw Twilio STT score. Never used to reject a transcript.
 
     Returns:
         {
@@ -180,6 +229,11 @@ def extract_problem(transcript: str) -> dict:
     if not transcript or not transcript.strip():
         return {"found": False, "problem": "", "confidence": "low", "reason": "Empty transcript."}
 
+    logger.info(
+        f"Problem extraction attempt | transcript={transcript!r} | "
+        f"twilio_confidence={twilio_confidence}"
+    )
+
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -188,7 +242,7 @@ def extract_problem(transcript: str) -> dict:
                 {"role": "system", "content": PROBLEM_SYSTEM_PROMPT},
                 {"role": "user",   "content": f'Transcript: "{transcript.strip()}"'},
             ],
-            temperature=0.1,
+            temperature=0.0,   # deterministic extraction
             max_tokens=150,
             response_format={"type": "json_object"},
         )
@@ -196,6 +250,9 @@ def extract_problem(transcript: str) -> dict:
 
         if not isinstance(result.get("found"), bool):
             result["found"] = bool(result.get("problem", "").strip())
+        if not result.get("problem", "").strip():
+            result["found"] = False
+            result["problem"] = ""
 
         logger.info(
             f"Problem extraction: found={result['found']} "
@@ -204,10 +261,11 @@ def extract_problem(transcript: str) -> dict:
         return result
 
     except Exception as e:
-        logger.warning(f"Problem extraction LLM failed: {e}")
+        logger.warning(f"Problem extraction LLM failed: {e} — using raw transcript as fallback")
+        # If LLM fails entirely, use raw transcript if it's long enough to be meaningful
         problem = transcript.strip()
-        if len(problem) >= 5:
-            return {"found": True, "problem": problem, "confidence": "low", "reason": f"LLM error — raw transcript used."}
+        if len(problem.replace(" ", "")) >= 4:
+            return {"found": True, "problem": problem, "confidence": "low", "reason": "LLM error — raw transcript used."}
         return {"found": False, "problem": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
 
 
@@ -215,6 +273,9 @@ def extract_problem(transcript: str) -> dict:
 
 SPECIALTY_SYSTEM_PROMPT = f"""You are a medical triage assistant for NexaCare hospital.
 Analyse the patient's problem and return the most appropriate medical specialty.
+
+The problem description may be written in English, Hindi, or Marathi
+(Devanagari or Latin script). Understand it regardless of language.
 
 Available specialties:
 {chr(10).join(f"- {s}" for s in VALID_SPECIALTIES)}

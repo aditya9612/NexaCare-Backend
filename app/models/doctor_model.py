@@ -29,6 +29,7 @@ class Doctor(Base, TimestampMixin):
     department = relationship("Department", back_populates="doctors")
     appointments = relationship("Appointment", back_populates="doctor")
     schedules = relationship("DoctorSchedule", back_populates="doctor", cascade="all, delete-orphan")
+    clinical_records = relationship("ClinicalRecord", back_populates="doctor")
 
 
 class DoctorSchedule(Base, TimestampMixin):

@@ -25,7 +25,10 @@ class InventoryRepository:
             query = query.where(InventoryItem.category == category)
         if warehouse_id:
             query = query.where(InventoryItem.warehouse_id == warehouse_id)
-        column = getattr(InventoryItem, sort_by, InventoryItem.created_at)
+        if sort_by not in InventoryItem.__table__.columns:
+            column = InventoryItem.created_at
+        else:
+            column = getattr(InventoryItem, sort_by)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())

@@ -43,6 +43,20 @@ NO_INPUT = {
     "mr": "आम्हाला तुमचे उत्तर मिळाले नाही. कृपया पुन्हा कॉल करा.",
 }
 
+# Marathi's only available Twilio TTS voices are Generative-tier (Google
+# Chirp3 voices) — there's no Standard/Neural fallback for mr-IN. Twilio
+# does not appear to auto-select a Generative voice the way it does for
+# older voice tiers, so language="mr-IN" alone silently fails to render.
+# Pin the voice explicitly to remove that ambiguity.
+VOICE_BY_LANG = {
+    "mr-IN": "Google.mr-IN-Chirp3-HD-Aoede",
+}
+
+
+def _voice_attr(twilio_lang: str) -> str:
+    voice = VOICE_BY_LANG.get(twilio_lang)
+    return f' voice="{escape(voice)}"' if voice else ""
+
 
 def build_greeting_twiml(base_url: str, language: str, twilio_language: str) -> str:
     """
@@ -54,15 +68,16 @@ def build_greeting_twiml(base_url: str, language: str, twilio_language: str) -> 
     menu = escape(SERVICE_MENUS.get(language, SERVICE_MENUS["en"]))
     no_input = escape(NO_INPUT.get(language, NO_INPUT["en"]))
     lang = escape(twilio_language)
+    voice = _voice_attr(twilio_language)
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
-        f'<Say language="{lang}">{greeting}</Say>'
+        f'<Say language="{lang}"{voice}>{greeting}</Say>'
         f'<Gather numDigits="1" action="{action}" method="POST" timeout="10">'
-        f'<Say language="{lang}">{menu}</Say>'
+        f'<Say language="{lang}"{voice}>{menu}</Say>'
         "</Gather>"
-        f'<Say language="{lang}">{no_input}</Say>'
+        f'<Say language="{lang}"{voice}>{no_input}</Say>'
         "<Hangup/>"
         "</Response>"
     )

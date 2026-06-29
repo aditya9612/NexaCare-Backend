@@ -70,7 +70,8 @@ def validate_staff_phone(v: str | None) -> str | None:
 class StaffCreate(BaseSchema):
     full_name: str = Field(..., min_length=1, max_length=200)
     email: EmailStr
-    phone: str
+    phone: str | None = Field(None, max_length=20)
+    password: str = Field(..., min_length=6, max_length=100)
     staff_code: str = Field(..., min_length=1, max_length=50)
     department_id: int = Field(..., gt=0)
     role_name: str = Field(..., min_length=1, max_length=50)

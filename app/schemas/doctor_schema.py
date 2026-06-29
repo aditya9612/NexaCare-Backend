@@ -17,8 +17,8 @@ class DoctorGenderOption(str, Enum):
 def validate_specialization_value(v: str | None) -> str | None:
     if v is None:
         return v
-    if not v or v.lower() == "null":
-        raise ValueError("Specialization cannot be blank or 'null'")
+    if not v or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("Specialization cannot be blank, 'null', or 'string'")
     
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError("Specialization should not contain leading or trailing spaces")
@@ -141,9 +141,9 @@ def validate_dob_field(v: date | None) -> date | None:
 def validate_name_field(v: str | None, field_name: str) -> str | None:
     if v is None:
         return v
-    # Reject empty string, whitespace-only, and "null"
-    if not v or not v.strip() or v.lower() == "null":
-        raise ValueError(f"{field_name} cannot be blank or 'null'")
+    # Reject empty string, whitespace-only, "null", and "string"
+    if not v or not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError(f"{field_name} cannot be blank, 'null', or 'string'")
     # Reject leading/trailing spaces
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError(f"{field_name} must not contain leading or trailing spaces")
@@ -162,8 +162,8 @@ def validate_name_field(v: str | None, field_name: str) -> str | None:
 def validate_license_number(v: str | None) -> str | None:
     if v is None:
         return v
-    if not v or not v.strip() or v.lower() == "null":
-        raise ValueError("License number cannot be blank or 'null'")
+    if not v or not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("License number cannot be blank, 'null', or 'string'")
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError("License number must not contain leading or trailing spaces")
     if not v.isascii():
@@ -177,8 +177,8 @@ def validate_license_number(v: str | None) -> str | None:
 def validate_optional_string(v: str | None, field_name: str) -> str | None:
     if v is None:
         return v
-    if not v.strip() or v.lower() == "null":
-        raise ValueError(f"{field_name} cannot be empty or 'null'")
+    if not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError(f"{field_name} cannot be empty, 'null', or 'string'")
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError(f"{field_name} must not contain leading or trailing spaces")
     return v

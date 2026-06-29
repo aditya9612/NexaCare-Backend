@@ -1,6 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 from app.core.exceptions import ConflictException, NotFoundException, BadRequestException
 from app.models.staff_model import Staff
+from app.models.user_model import User
+from app.core.security import get_password_hash
+from app.utils.helpers import generate_user_code
 from app.repositories.staff_repository import StaffRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.rbac_repository import RBACRepository
@@ -31,7 +35,7 @@ class StaffService:
                 raise NotFoundException("Role not found")
 
     async def create_staff(self, data: StaffCreate, current_user_id: int) -> StaffResponse:
-        # Validate duplicates
+        # Validate duplicates in staff table
         existing_email = await self.repo.get_by_email(data.email)
         if existing_email:
             raise ConflictException("Email already exists")
@@ -43,11 +47,53 @@ class StaffService:
         # Validate existence of department and role
         await self._validate_department_and_role(data.department_id, data.role_name)
     
+        # Validate duplicates in users table
+        email_norm = data.email.strip().lower()
+        existing_user_email = await self.db.scalar(
+            select(User).where(func.lower(User.email) == email_norm)
+        )
+        if existing_user_email:
+            raise ConflictException("User account with this email already exists")
+
+        if data.phone:
+            existing_user_phone = await self.db.scalar(
+                select(User).where(User.phone == data.phone)
+            )
+            if existing_user_phone:
+                raise ConflictException("User account with this phone already exists")
+
+        # Resolve role
+        role = await self.rbac_repo.get_role_by_name(data.role_name)
+        if not role:
+            raise NotFoundException("Role not found")
+
+        # Retrieve actor's hospital context
+        current_user = await self.db.get(User, current_user_id)
+        hospital_id = current_user.hospital_id if current_user else None
+
+        # Create user account for login
+        user = User(
+            user_code=generate_user_code(),
+            email=email_norm,
+            hashed_password=get_password_hash(data.password),
+            full_name=data.full_name,
+            phone=data.phone,
+            role_id=role.id,
+            hospital_id=hospital_id,
+            is_active=True,
+            is_verified=True,
+        )
+        self.db.add(user)
+        await self.db.flush()
+
         from enum import Enum
         data_dict = {
             k: (v.value if isinstance(v, Enum) else v)
             for k, v in data.model_dump().items()
         }
+        # Remove password from data_dict so it is not passed to Staff model constructor
+        data_dict.pop("password", None)
+
         staff = Staff(**data_dict)
         staff = await self.repo.create(staff)
         

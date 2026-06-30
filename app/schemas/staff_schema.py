@@ -67,11 +67,77 @@ def validate_staff_phone(v: str | None) -> str | None:
     return "+91" + raw_num
 
 
+def validate_staff_password(v: str) -> str:
+    if not v:
+        raise ValueError("Password is required")
+    if len(v) < 8 or len(v) > 20:
+        raise ValueError("Password must be between 8 and 20 characters in length")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("Password must not contain leading or trailing spaces")
+    if not v.strip():
+        raise ValueError("Password must not be only whitespace")
+    if not v.isascii():
+        raise ValueError("Password must contain only standard ASCII characters")
+        
+    if not any(c.isupper() for c in v):
+        raise ValueError("Password must contain at least one uppercase letter")
+    if not any(c.islower() for c in v):
+        raise ValueError("Password must contain at least one lowercase letter")
+    if not any(c.isdigit() for c in v):
+        raise ValueError("Password must contain at least one numeric digit")
+    if not any(not (c.isalnum() or c.isspace()) for c in v):
+        raise ValueError("Password must contain at least one special character")
+        
+    common_passwords = {
+        "password@123",
+        "admin@123",
+        "welcome@123",
+        "qwerty@123",
+        "12345678",
+    }
+    if v.lower() in common_passwords:
+        raise ValueError("Password is too common or easily guessable")
+        
+    return v
+
+
+def validate_staff_code(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if not v.strip() or v.lower() == "null":
+        raise ValueError("Staff code cannot be empty or 'null'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("Staff code must not contain leading or trailing spaces")
+    if not v.isascii():
+        raise ValueError("Staff code must contain only standard ASCII characters")
+    if not re.match(r"^[a-zA-Z0-9\-\/]+$", v):
+        raise ValueError("Staff code must contain only alphanumeric characters, hyphens, or slashes")
+    return v
+
+
+def validate_staff_role_name(v: str | None) -> str | None:
+    if v is None:
+        return v
+    stripped = v.strip()
+    if not stripped or stripped.lower() == "null":
+        raise ValueError("Role name cannot be empty or 'null'")
+    
+    allowed_roles = {"Nurse", "Receptionist", "Accountant", "Pharmacist", "Lab Technician"}
+    restricted_roles = {"Doctor", "Patient", "Super Admin", "Hospital Admin"}
+    
+    if stripped in restricted_roles:
+        raise ValueError(f"Role '{stripped}' is not allowed to be created as staff. Please use specialized onboarding flows.")
+    if stripped not in allowed_roles:
+        raise ValueError(f"Invalid staff role '{stripped}'. Must be one of: {', '.join(sorted(allowed_roles))}")
+        
+    return stripped
+
+
 class StaffCreate(BaseSchema):
     full_name: str = Field(..., min_length=1, max_length=200)
     email: EmailStr
     phone: str | None = Field(None, max_length=20)
-    password: str = Field(..., min_length=6, max_length=100)
+    password: str = Field(..., min_length=8, max_length=20)
     staff_code: str = Field(..., min_length=1, max_length=50)
     department_id: int = Field(..., gt=0)
     role_name: str = Field(..., min_length=1, max_length=50)
@@ -87,13 +153,26 @@ class StaffCreate(BaseSchema):
     def check_phone(cls, value: str) -> str:
         return validate_staff_phone(value)
 
-    @field_validator("staff_code", "role_name")
+    @field_validator("password")
     @classmethod
-    def strip_strings(cls, value: str) -> str:
-        stripped = value.strip()
-        if len(stripped) < 1:
-            raise ValueError("Field cannot be empty or only spaces")
-        return stripped
+    def check_password(cls, value: str) -> str:
+        return validate_staff_password(value)
+
+    @field_validator("staff_code")
+    @classmethod
+    def check_staff_code(cls, value: str) -> str:
+        res = validate_staff_code(value)
+        if res is None:
+            raise ValueError("Staff code cannot be empty")
+        return res
+
+    @field_validator("role_name")
+    @classmethod
+    def check_role_name(cls, value: str) -> str:
+        res = validate_staff_role_name(value)
+        if res is None:
+            raise ValueError("Role name cannot be empty")
+        return res
 
 
 class StaffUpdate(BaseSchema):
@@ -119,15 +198,15 @@ class StaffUpdate(BaseSchema):
             raise ValueError("Phone number cannot be null")
         return validate_staff_phone(value)
 
-    @field_validator("staff_code", "role_name")
+    @field_validator("staff_code")
     @classmethod
-    def strip_strings(cls, value: str | None) -> str | None:
-        if value is not None:
-            stripped = value.strip()
-            if len(stripped) < 1:
-                raise ValueError("Field cannot be empty or only spaces")
-            return stripped
-        return value
+    def check_staff_code(cls, value: str | None) -> str | None:
+        return validate_staff_code(value)
+
+    @field_validator("role_name")
+    @classmethod
+    def check_role_name(cls, value: str | None) -> str | None:
+        return validate_staff_role_name(value)
 
 
 class StaffStatusUpdate(BaseSchema):

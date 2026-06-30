@@ -281,9 +281,10 @@ class DoctorService:
         await self.audit_repo.create("delete", "doctors", user_id=user_id, resource_id=str(doctor.id))
 
     async def search(self, q: str, page: int = 1, size: int = 20):
+        q_stripped = q.strip() if q else ""
         skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size)
-        total = await self.repo.count_search(q)
+        items = await self.repo.search(q_stripped, skip=skip, limit=size)
+        total = await self.repo.count_search(q_stripped)
         return build_paginated_result(
             [DoctorResponse.model_validate(d) for d in items], total, page, size
         )

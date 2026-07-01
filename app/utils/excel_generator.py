@@ -23,4 +23,8 @@ def generate_excel_report(report_type: str, rows: List[Dict[str, Any]]) -> str:
         writer.writerows(rows)
 
     logger.info("Excel/CSV report generated: %s", file_path)
-    return str(file_path)
+    # Return web-relative path with forward slashes (strip leading 'app' prefix)
+    relative = str(file_path).replace("\\", "/")
+    if relative.startswith("app/"):
+        relative = relative[len("app"):]
+    return relative

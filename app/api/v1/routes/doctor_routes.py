@@ -352,22 +352,37 @@ async def update_doctor(
     profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "update")),
 ):
+    update_args = {}
+    if first_name is not None and first_name.strip() != "":
+        update_args["first_name"] = first_name.strip()
+    if last_name is not None and last_name.strip() != "":
+        update_args["last_name"] = last_name.strip()
+    if specialization is not None and specialization.strip() != "":
+        update_args["specialization"] = specialization.strip()
+    if qualification is not None and qualification.strip() != "":
+        update_args["qualification"] = qualification.strip()
+    if experience is not None:
+        update_args["experience"] = experience
+    if phone is not None and phone.strip() != "":
+        update_args["phone"] = phone.strip()
+    if email is not None and email.strip() != "":
+        update_args["email"] = email.strip()
+    if department is not None and department.strip() != "":
+        try:
+            update_args["department_id"] = int(department)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Department ID must be a valid integer")
+    if consultation_fee is not None:
+        update_args["consultation_fee"] = consultation_fee
+    if license_number is not None and license_number.strip() != "":
+        update_args["license_number"] = license_number.strip()
+    if availability_status is not None and availability_status.strip() != "":
+        update_args["availability_status"] = availability_status.strip()
+    if bio is not None and bio.strip() != "":
+        update_args["bio"] = bio.strip()
+
     try:
-        data = DoctorUpdate(
-            first_name=first_name,
-            last_name=last_name,
-            specialization=specialization,
-            qualification=qualification,
-            experience=experience,
-            phone=phone,
-            email=email,
-            department=department,
-            consultation_fee=consultation_fee,
-            license_number=license_number,
-            availability_status=availability_status,
-            bio=bio,
-            profile_image=None,  # will be handled by service
-        )
+        data = DoctorUpdate(**update_args)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
     doctor = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image)

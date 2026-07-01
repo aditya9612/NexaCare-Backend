@@ -30,11 +30,24 @@ class InventoryItemCreate(BaseSchema):
             raise ValueError("cannot be empty or only spaces")
         return stripped
 
-    @field_validator("sku", "barcode", "description")
+    @field_validator("sku", "description")
     @classmethod
     def validate_optional_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             return v.strip()
+        return v
+
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            stripped = v.strip()
+            if stripped != "":
+                if not stripped.isdigit():
+                    raise ValueError("Barcode must contain only numeric characters")
+                if len(stripped) != 13:
+                    raise ValueError("Barcode must be exactly 13 digits")
+                return stripped
         return v
 
 
@@ -53,7 +66,7 @@ class InventoryItemUpdate(BaseSchema):
     description: Optional[str] = None
     is_active: Optional[bool] = None
 
-    @field_validator("name", "barcode", "category", "unit")
+    @field_validator("name", "category", "unit")
     @classmethod
     def validate_required_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
@@ -61,6 +74,19 @@ class InventoryItemUpdate(BaseSchema):
             if len(stripped) < 1:
                 raise ValueError("cannot be empty or only spaces")
             return stripped
+        return v
+
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            stripped = v.strip()
+            if stripped != "":
+                if not stripped.isdigit():
+                    raise ValueError("Barcode must contain only numeric characters")
+                if len(stripped) != 13:
+                    raise ValueError("Barcode must be exactly 13 digits")
+                return stripped
         return v
 
     @field_validator("description")
@@ -138,7 +164,7 @@ class StockTransactionResponse(BaseSchema):
 
 class WarehouseCreate(BaseSchema):
     name: str = Field(..., min_length=1, max_length=255)
-    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    code: str = Field(..., min_length=1, max_length=50)
     location: Optional[str] = Field(None, min_length=1, max_length=255)
     capacity: Optional[int] = Field(None, ge=0)
 
@@ -150,7 +176,18 @@ class WarehouseCreate(BaseSchema):
             raise ValueError("name cannot be empty or only spaces")
         return stripped
 
-    @field_validator("code", "location")
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+            raise ValueError("Warehouse code cannot be blank, 'null', or 'string'")
+        import re
+        if not re.match(r"^[a-zA-Z0-9\-_]+$", stripped):
+            raise ValueError("Warehouse code must contain only letters, numbers, hyphens, and underscores")
+        return stripped
+
+    @field_validator("location")
     @classmethod
     def validate_optional_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:

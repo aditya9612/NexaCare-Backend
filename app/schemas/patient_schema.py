@@ -30,6 +30,8 @@ def validate_phone_number_field(v: str | None, field_name: str) -> str | None:
         raise ValueError(f"{field_name} cannot be blank or 'null'")
     if not cleaned.isdigit() or len(cleaned) != 10:
         raise ValueError(f"{field_name} must contain exactly 10 numeric digits")
+    if cleaned[0] not in {"6", "7", "8", "9"}:
+        raise ValueError(f"{field_name} must start with 6, 7, 8, or 9")
     return cleaned
 
 

@@ -8,6 +8,7 @@ from app.schemas.analytics_schema import (
     AppointmentAnalyticsResponse,
     DashboardSummaryResponse,
     DoctorAnalyticsResponse,
+    ExportListItem,
     ExportReportRequest,
     ExportReportResponse,
     KPIResponse,
@@ -151,3 +152,16 @@ async def export_excel(
 ):
     result = await AnalyticsService(db).request_export_excel(data, current_user.id)
     return APIResponse(message="Excel export queued", data=result)
+
+
+@router.get("/exports", response_model=APIResponse[PaginatedResult[ExportListItem]])
+async def list_exports(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    report_type: str | None = None,
+    _: User = Depends(require_permission("analytics", "read")),
+):
+    result = await AnalyticsService(db).list_exports(page, size, report_type)
+    return APIResponse(message="Exports retrieved", data=result)

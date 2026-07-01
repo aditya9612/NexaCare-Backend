@@ -21,8 +21,10 @@ from app.schemas.lab_schema import (
     LabTestResponse,
     LabTestUpdate,
     SampleCreate,
+    SampleUpdate,
     SampleResponse,
     TestOrderCreate,
+    TestOrderUpdate,
     TestOrderResponse,
     TestResultCreate,
     TestResultResponse,
@@ -126,6 +128,55 @@ class LabService:
             raise NotFoundException("Test order not found")
         return self._order_response(order)
 
+    async def update_order(
+        self,
+        order_id: int,
+        data: TestOrderUpdate,
+        user_id: int,
+)     -> TestOrderResponse:
+        order = await self.order_repo.get_by_id(order_id)
+
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        update_data = data.model_dump(exclude_unset=True)
+
+        if "lab_test_id" in update_data:
+            test = await self.test_repo.get_by_id(update_data["lab_test_id"])
+            if not test or not test.is_active:
+                raise NotFoundException("Lab test not found or inactive")
+            update_data["department_id"] = test.department_id
+
+        for key, value in update_data.items():
+            setattr(order, key, value)
+
+        order = await self.order_repo.update(order)
+
+        await self.audit_repo.create(
+            "update",
+            "lab_order",
+             user_id=user_id,
+             resource_id=str(order.id),
+        )
+
+        return self._order_response(order)
+
+
+    async def delete_order(self, order_id: int, user_id: int) -> None:
+        order = await self.order_repo.get_by_id(order_id)
+
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        await self.order_repo.soft_delete(order)
+
+        await self.audit_repo.create(
+            "delete",
+            "lab_order",
+             user_id=user_id,
+             resource_id=str(order.id),
+        )
+
     def _order_response(self, order: TestOrder) -> TestOrderResponse:
         resp = TestOrderResponse.model_validate(order)
         if order.lab_test:
@@ -148,8 +199,10 @@ class LabService:
             sample_code=generate_sample_code(),
             sample_type=data.sample_type,
             collected_at=utc_now(),
+            collection_date=data.collection_date,
             collected_by=user_id,
-            status=SampleStatus.COLLECTED,
+            status=data.status,
+            volume=data.volume,
             notes=data.notes,
         )
         sample = await self.sample_repo.create(sample)
@@ -163,6 +216,58 @@ class LabService:
         items = await self.sample_repo.list_all(skip=skip, limit=size, status=status)
         total = await self.sample_repo.count_all(status=status)
         return build_paginated_result([SampleResponse.model_validate(s) for s in items], total, page, size)
+
+    async def get_sample(self, sample_id: int) -> SampleResponse:
+        sample = await self.sample_repo.get_by_id(sample_id)
+
+        if not sample:
+            raise NotFoundException("Sample not found")
+
+        return SampleResponse.model_validate(sample)
+
+    async def update_sample(
+        self,
+        sample_id: int,
+        data: SampleUpdate,
+        user_id: int,
+    ) -> SampleResponse:
+        sample = await self.sample_repo.get_by_id(sample_id)
+
+        if not sample:
+            raise NotFoundException("Sample not found")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(sample, key, value)
+
+        sample = await self.sample_repo.update(sample)
+
+        await self.audit_repo.create(
+            "update",
+            "lab_sample",
+            user_id=user_id,
+            resource_id=str(sample.id),
+        )
+
+        return SampleResponse.model_validate(sample)
+
+    async def delete_sample(
+        self,
+        sample_id: int,
+        user_id: int,
+    ) -> None:
+        sample = await self.sample_repo.get_by_id(sample_id)
+
+        if not sample:
+            raise NotFoundException("Sample not found")
+
+        await self.sample_repo.delete(sample)
+
+        await self.audit_repo.create(
+            "delete",
+            "lab_sample",
+            user_id=user_id,
+            resource_id=str(sample.id),
+        )     
 
     # --- Results ---
     async def enter_result(self, data: TestResultCreate, user_id: int) -> TestResultResponse:

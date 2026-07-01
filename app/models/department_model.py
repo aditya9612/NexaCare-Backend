@@ -1,4 +1,4 @@
-from sqlalchemy import String
+from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -10,6 +10,7 @@ class Department(Base, TimestampMixin):
 
     department_id: Mapped[int] = mapped_column(primary_key=True, index=True)
     department_name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Existing relations
     appointments = relationship("Appointment", back_populates="department")

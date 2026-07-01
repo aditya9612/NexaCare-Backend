@@ -9,7 +9,7 @@ class DepartmentRepository:
     async def create(self, department: Department) -> Department:
         self.db.add(department)
         await self.db.flush()
-        await self.db.refresh(department)
+        
         return department
 
     async def get_by_id(self, department_id: int) -> Department | None:
@@ -36,7 +36,7 @@ class DepartmentRepository:
 
     async def update(self, department: Department) -> Department:
         await self.db.flush()
-        await self.db.refresh(department)
+       
         return department
 
     async def delete(self, department: Department) -> None:

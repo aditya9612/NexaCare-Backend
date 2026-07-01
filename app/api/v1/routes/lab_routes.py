@@ -13,9 +13,11 @@ from app.schemas.lab_schema import (
     LabTestResponse,
     LabTestUpdate,
     SampleCreate,
+    SampleUpdate,
     SampleResponse,
     TestOrderCreate,
     TestOrderResponse,
+    TestOrderUpdate,
     TestResultCreate,
     TestResultResponse,
 )
@@ -130,6 +132,29 @@ async def get_test_order(
     return APIResponse(message="Test order retrieved", data=order)
 
 
+@router.put("/orders/{order_id}", response_model=APIResponse[TestOrderResponse])
+async def update_test_order(
+    order_id: int,
+    data: TestOrderUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    order = await LabService(db).update_order(order_id, data, current_user.id)
+    return APIResponse(message="Test order updated", data=order)
+
+
+@router.delete("/orders/{order_id}", response_model=APIResponse[MessageResponse])
+async def delete_test_order(
+    order_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "delete")),
+):
+    await LabService(db).delete_order(order_id, current_user.id)
+    return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
+
+
 # --- Samples ---
 @router.post("/samples", response_model=APIResponse[SampleResponse], status_code=201)
 async def collect_sample(
@@ -153,6 +178,40 @@ async def list_samples(
 ):
     result = await LabService(db).list_samples(page=page, size=size, status=status)
     return APIResponse(message="Samples retrieved", data=result)
+
+@router.get("/samples/{sample_id}", response_model=APIResponse[SampleResponse])
+async def get_sample(
+    sample_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    sample = await LabService(db).get_sample(sample_id)
+    return APIResponse(message="Sample retrieved", data=sample)
+
+@router.put("/samples/{sample_id}", response_model=APIResponse[SampleResponse])
+async def update_sample(
+    sample_id: int,
+    data: SampleUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    sample = await LabService(db).update_sample(sample_id, data, current_user.id)
+    return APIResponse(message="Sample updated", data=sample)
+
+@router.delete("/samples/{sample_id}", response_model=APIResponse[MessageResponse])
+async def delete_sample(
+    sample_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "delete")),
+):
+    await LabService(db).delete_sample(sample_id, current_user.id)
+    return APIResponse(
+        message="Sample deleted",
+        data=MessageResponse(message="Deleted successfully"),
+    )        
 
 
 # --- Results ---

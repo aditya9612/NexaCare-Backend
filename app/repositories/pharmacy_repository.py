@@ -229,6 +229,17 @@ class PharmacyInvoiceRepository:
         await self.db.flush()
         result = await self.db.execute(self._base_query().where(PharmacyInvoice.id == invoice.id))
         return result.scalar_one()
+    
+    async def update(self, invoice: PharmacyInvoice) -> PharmacyInvoice:
+        await self.db.flush()
+        await self.db.refresh(invoice)
+        return invoice
+
+
+    async def soft_delete(self, invoice: PharmacyInvoice) -> None:
+        invoice.is_deleted = True
+        invoice.deleted_at = utc_now()
+        await self.db.flush()
 
     async def get_sales_report(self, start, end) -> dict:
         total = await self.db.scalar(
@@ -269,6 +280,24 @@ class SupplierRepository:
         await self.db.refresh(supplier)
         return supplier
 
+    async def get_by_id(self, supplier_id: int) -> Supplier | None:
+        result = await self.db.execute(
+            select(Supplier).where(
+                Supplier.id == supplier_id,
+                Supplier.is_deleted.is_(False)
+            )
+        )
+        return result.scalar_one_or_none() 
+
+    async def update(self, supplier: Supplier) -> Supplier:
+        await self.db.flush()
+        await self.db.refresh(supplier)
+        return supplier
+
+    async def soft_delete(self, supplier: Supplier) -> None:
+        supplier.is_deleted = True
+        supplier.deleted_at = utc_now()
+        await self.db.flush()    
 
 class PurchaseRepository:
     def __init__(self, db: AsyncSession):
@@ -289,7 +318,7 @@ class PurchaseRepository:
     async def get_by_id(self, purchase_id: int) -> Purchase | None:
         result = await self.db.execute(self._base_query().where(Purchase.id == purchase_id))
         return result.scalar_one_or_none()
-
+    
     async def create(self, purchase: Purchase, items: list[PurchaseItem]) -> Purchase:
         self.db.add(purchase)
         await self.db.flush()
@@ -299,3 +328,13 @@ class PurchaseRepository:
         await self.db.flush()
         await self.db.refresh(purchase)
         return purchase
+
+    async def update(self, purchase: Purchase) -> Purchase:
+        await self.db.flush()
+        await self.db.refresh(purchase)
+        return purchase
+
+    async def soft_delete(self, purchase: Purchase) -> None:
+        purchase.is_deleted = True
+        purchase.deleted_at = utc_now()
+        await self.db.flush()    

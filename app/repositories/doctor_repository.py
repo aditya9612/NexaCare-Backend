@@ -49,14 +49,37 @@ class DoctorRepository:
         return result.scalar_one_or_none()
 
     def _search_filter(self, q: str):
-        pattern = f"%{q.lower()}%"
-        return or_(
+        q_clean = q.strip().lower() if q else ""
+        pattern = f"%{q_clean}%"
+        concat_name = func.concat(func.lower(Doctor.first_name), " ", func.lower(Doctor.last_name))
+        
+        base_filter = or_(
             func.lower(Doctor.first_name).like(pattern),
             func.lower(Doctor.last_name).like(pattern),
             func.lower(Doctor.doctor_code).like(pattern),
             func.lower(Doctor.specialization).like(pattern),
             func.lower(Department.department_name).like(pattern),
+            concat_name.like(pattern),
         )
+        
+        words = q_clean.split()
+        if len(words) > 1:
+            from sqlalchemy import and_
+            word_filters = []
+            for word in words:
+                word_pattern = f"%{word}%"
+                word_filters.append(
+                    or_(
+                        func.lower(Doctor.first_name).like(word_pattern),
+                        func.lower(Doctor.last_name).like(word_pattern),
+                        func.lower(Doctor.doctor_code).like(word_pattern),
+                        func.lower(Doctor.specialization).like(word_pattern),
+                        func.lower(Department.department_name).like(word_pattern),
+                    )
+                )
+            return or_(base_filter, and_(*word_filters))
+            
+        return base_filter
 
     async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Doctor]:
         query = self._base_query().where(self._search_filter(q))

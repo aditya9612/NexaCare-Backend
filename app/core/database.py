@@ -29,7 +29,22 @@ async def get_db():
             await session.close()
 
 
+def run_migrations():
+    import logging
+    from alembic.config import Config
+    from alembic import command
+    logger = logging.getLogger("nexacare.db")
+    try:
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Alembic database migrations successfully upgraded to head.")
+    except Exception as e:
+        logger.warning(f"Alembic auto-migration failed: {e}")
+
+
 async def init_db():
+    run_migrations()
+
     from app.models import (  # noqa: F401
         analytics_model,
         appointment_model,

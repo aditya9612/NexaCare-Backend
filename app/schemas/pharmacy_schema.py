@@ -5,26 +5,7 @@ from typing import List, Optional
 from pydantic import EmailStr, Field, field_validator
 
 
-def validate_gst_number(v: str | None) -> str | None:
-    if v is None:
-        return v
-    cleaned = v.strip().upper()
-    if not cleaned or cleaned.lower() == "null":
-        raise ValueError("GST number cannot be blank or 'null'")
-    if len(cleaned) != 15:
-        raise ValueError("GST number must be exactly 15 characters long")
-    
-    # State code: 01-38
-    # Next 5: letters
-    # Next 4: digits
-    # Next 1: letter
-    # Next 1: alphanumeric
-    # Next 1: letter
-    # Next 1: alphanumeric
-    pattern = r"^(0[1-9]|[1-2][0-9]|3[0-8])[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9][A-Z][A-Z0-9]$"
-    if not re.match(pattern, cleaned):
-        raise ValueError("Invalid GST number format")
-    return cleaned
+from app.utils.validators import validate_gst_number
 
 
 def validate_supplier_name(v: str | None) -> str | None:

@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.common_schema import BaseSchema
+from app.utils.validators import validate_gst_number
 
 
 class VendorCreate(BaseModel):
@@ -40,12 +41,17 @@ class VendorCreate(BaseModel):
             return None
         return value
 
-    @field_validator("contact_person", "email", "address", "gst_number", "service_type")
+    @field_validator("contact_person", "email", "address", "service_type")
     @classmethod
     def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             return value.strip()
         return value
+
+    @field_validator("gst_number")
+    @classmethod
+    def validate_gst(cls, value: Optional[str]) -> Optional[str]:
+        return validate_gst_number(value)
 
 
 class VendorUpdate(BaseModel):
@@ -87,12 +93,17 @@ class VendorUpdate(BaseModel):
             return None
         return value
 
-    @field_validator("contact_person", "email", "address", "gst_number", "service_type")
+    @field_validator("contact_person", "email", "address", "service_type")
     @classmethod
     def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             return value.strip()
         return value
+
+    @field_validator("gst_number")
+    @classmethod
+    def validate_gst(cls, value: Optional[str]) -> Optional[str]:
+        return validate_gst_number(value)
 
 
 class VendorResponse(BaseSchema):

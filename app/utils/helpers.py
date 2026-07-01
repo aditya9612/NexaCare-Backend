@@ -7,7 +7,7 @@ def utc_now() -> datetime:
 
 
 def generate_code(prefix: str) -> str:
-    return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"
+    return f"{prefix}-{utc_now().strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"
 
 
 def generate_mrn() -> str:

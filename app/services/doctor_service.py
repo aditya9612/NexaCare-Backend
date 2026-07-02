@@ -129,6 +129,13 @@ class DoctorService:
         if existing_license:
             raise ConflictException("A doctor with this license number already exists")
 
+        if data.user_id:
+            user = await self.auth_repo.get_by_id(data.user_id)
+            if not user:
+                raise NotFoundException(f"User with ID {data.user_id} not found")
+
+        await self._validate_department(data.department_id)
+
         # Save uploaded image file if provided, otherwise use URL from data
         profile_image_path: Optional[str] = data.profile_image
         if image_file and image_file.filename:

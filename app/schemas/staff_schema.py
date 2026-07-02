@@ -64,7 +64,7 @@ def validate_staff_phone(v: str | None) -> str | None:
     if len(set(raw_num)) == 1:
         raise ValueError("Phone number cannot consist of repeated identical digits")
         
-    return "+91" + raw_num
+    return raw_num
 
 
 def validate_staff_password(v: str) -> str:

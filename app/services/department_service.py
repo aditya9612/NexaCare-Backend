@@ -56,13 +56,13 @@ class DepartmentService:
         return self._to_response(department)
 
     async def delete(self, department_id: int) -> None:
-        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.exc import SQLAlchemyError
         department = await self.repo.get_by_id(department_id)
         if not department:
             raise NotFoundException(f"Department with ID {department_id} not found")
         try:
             await self.repo.delete(department)
-        except IntegrityError as exc:
+        except SQLAlchemyError as exc:
             raise ConflictException(
                 "Cannot delete department because it is referenced by other records (e.g., doctors, staff, or appointments)."
             ) from exc

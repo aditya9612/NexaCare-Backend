@@ -24,6 +24,7 @@ from app.schemas.lab_schema import (
     SampleResponse,
     TestOrderCreate,
     TestOrderResponse,
+    TestOrderUpdate,
     TestResultCreate,
     TestResultResponse,
 )
@@ -34,6 +35,7 @@ from app.utils.pdf_generator import generate_lab_report_html
 
 class LabService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.test_repo = LabTestRepository(db)
         self.order_repo = TestOrderRepository(db)
         self.sample_repo = SampleRepository(db)
@@ -50,6 +52,8 @@ class LabService:
 
     # --- Lab Test Catalog ---
     async def create_test(self, data: LabTestCreate, user_id: int) -> LabTestResponse:
+        if not data.department_id:
+            raise BadRequestException("Department ID is required to create lab test.")
         await self._validate_department(data.department_id)
         test = LabTest(test_code=generate_lab_test_code(), **data.model_dump())
         test = await self.test_repo.create(test)
@@ -82,6 +86,8 @@ class LabService:
         test = await self.test_repo.get_by_id(test_id)
         if not test:
             raise NotFoundException("Lab test not found")
+        if not data.department_id:
+            raise BadRequestException("Department ID is required to update lab test.")
         await self._validate_department(data.department_id)
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(test, key, value)
@@ -98,6 +104,10 @@ class LabService:
 
     # --- Test Orders ---
     async def create_order(self, data: TestOrderCreate, user_id: int) -> TestOrderResponse:
+        if not data.appointment_id:
+            raise BadRequestException("Appointment ID is required to create test order.")
+        if not data.doctor_id:
+            raise BadRequestException("Doctor ID is required to create test order.")
         test = await self.test_repo.get_by_id(data.lab_test_id)
         if not test or not test.is_active:
             raise NotFoundException("Lab test not found or inactive")
@@ -125,6 +135,57 @@ class LabService:
         if not order:
             raise NotFoundException("Test order not found")
         return self._order_response(order)
+
+    async def update_order(self, order_id: int, data: TestOrderUpdate, user_id: int) -> TestOrderResponse:
+        order = await self.order_repo.get_by_id(order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        # Get final values for validation
+        p_id = data.patient_id if data.patient_id is not None else order.patient_id
+        d_id = data.doctor_id if data.doctor_id is not None else order.doctor_id
+        a_id = data.appointment_id if data.appointment_id is not None else order.appointment_id
+
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.appointment_model import Appointment
+
+        if data.patient_id is not None:
+            patient = await self.db.get(Patient, data.patient_id)
+            if not patient:
+                raise NotFoundException(f"Patient with ID {data.patient_id} not found")
+
+        if data.doctor_id is not None:
+            doctor = await self.db.get(Doctor, data.doctor_id)
+            if not doctor:
+                raise NotFoundException(f"Doctor with ID {data.doctor_id} not found")
+
+        if data.lab_test_id is not None:
+            test = await self.test_repo.get_by_id(data.lab_test_id)
+            if not test or not test.is_active:
+                raise NotFoundException("Lab test not found or inactive")
+            order.department_id = test.department_id
+
+        if a_id is not None:
+            appointment = await self.db.get(Appointment, a_id)
+            if not appointment:
+                raise NotFoundException(f"Appointment with ID {a_id} not found")
+            if appointment.patient_id != p_id or appointment.doctor_id != d_id:
+                raise BadRequestException("Appointment does not match patient and doctor")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(order, key, value)
+
+        order = await self.order_repo.update(order)
+        await self.audit_repo.create("update", "lab_order", user_id=user_id, resource_id=str(order.id))
+        return self._order_response(order)
+
+    async def delete_order(self, order_id: int, user_id: int) -> None:
+        order = await self.order_repo.get_by_id(order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+        await self.order_repo.soft_delete(order)
+        await self.audit_repo.create("delete", "lab_order", user_id=user_id, resource_id=str(order.id))
 
     def _order_response(self, order: TestOrder) -> TestOrderResponse:
         resp = TestOrderResponse.model_validate(order)
@@ -245,9 +306,49 @@ class LabService:
             order.status = LabOrderStatus.COMPLETED
             order.completed_at = utc_now()
             await self.order_repo.update(order)
+
+            from app.models.patient_model import Patient
+            from app.models.doctor_model import Doctor
+            from sqlalchemy import select
+
+            patient = await self.db.get(Patient, order.patient_id)
+            doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
+            
+            result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
+            results = list(result_objs.scalars().all())
+
+            columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
+            rows = [
+                [
+                    r.parameter_name,
+                    r.result_value,
+                    r.unit or "-",
+                    r.normal_range or "-",
+                    "Yes" if r.is_critical else "No"
+                ]
+                for r in results
+            ]
+
+            report_data = {
+                "order_number": order.order_number,
+                "status": report.status,
+                "generated_at": report.approved_at.strftime("%Y-%m-%d %H:%M:%S") if report.approved_at else utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
+                "patient_code": patient.patient_code if patient else "Unknown",
+                "patient_gender": patient.gender if patient else "Unknown",
+                "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
+                "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
+                "doctor_code": doctor.doctor_code if doctor else "",
+                "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
+                "test_category": order.lab_test.category if order.lab_test else "Unknown",
+                "summary": report.summary or "",
+                "columns": columns,
+                "rows": rows,
+            }
+
             path = await generate_lab_report_html(
                 report.report_number,
-                {"summary": report.summary or "", "order_number": order.order_number},
+                report_data,
             )
             report.report_path = path
 

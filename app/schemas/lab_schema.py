@@ -14,7 +14,7 @@ class LabTestCreate(BaseSchema):
     sample_type: str = "blood"
     turnaround_hours: int = Field(24, ge=1)
     normal_range: str | None = None
-    department_id: int | None = None
+    department_id: int
 
 
 class LabTestUpdate(BaseSchema):
@@ -26,7 +26,7 @@ class LabTestUpdate(BaseSchema):
     turnaround_hours: int | None = Field(None, ge=1)
     normal_range: str | None = None
     is_active: bool | None = None
-    department_id: int | None = None
+    department_id: int
 
 
 class LabTestResponse(BaseSchema):
@@ -47,11 +47,21 @@ class LabTestResponse(BaseSchema):
 
 class TestOrderCreate(BaseSchema):
     patient_id: int
-    doctor_id: int | None = None
+    doctor_id: int
     lab_test_id: int
-    appointment_id: int | None = None
+    appointment_id: int
     priority: str = "normal"
     notes: str | None = None
+
+
+class TestOrderUpdate(BaseSchema):
+    patient_id: int | None = None
+    doctor_id: int | None = None
+    lab_test_id: int | None = None
+    appointment_id: int | None = None
+    priority: str | None = None
+    notes: str | None = None
+    status: str | None = None
 
 
 class TestOrderResponse(BaseSchema):

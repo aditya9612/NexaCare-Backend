@@ -136,23 +136,69 @@ class AuthService:
             raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "login")
 
-    async def login(self, data: LoginRequest) -> TokenResponse:
-        user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
-            raise UnauthorizedException("Invalid credentials")
+    async def login(
+        self,
+        data: LoginRequest,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> TokenResponse:
+        from app.services.security_service import SecurityService
 
-        if data.otp:
-            if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+        user = None
+        try:
+            user = await self._get_user_by_identifier(data.email, data.phone)
+            if not user:
                 raise UnauthorizedException("Invalid credentials")
-        elif not data.password or not verify_password(data.password, user.hashed_password):
-            raise UnauthorizedException("Invalid credentials")
 
-        if not user.is_active:
-            raise UnauthorizedException("Account not activated. Please verify OTP.")
+            if data.otp:
+                if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+                    raise UnauthorizedException("Invalid credentials")
+            elif not data.password or not verify_password(
+                data.password, user.hashed_password
+            ):
+                raise UnauthorizedException("Invalid credentials")
 
-        user.last_login = utc_now()
-        await self.repo.update(user)
-        return await self._issue_tokens(user)
+            if not user.is_active:
+                raise UnauthorizedException("Account not activated. Please verify OTP.")
+
+            user.last_login = utc_now()
+            await self.repo.update(user)
+            tokens = await self._issue_tokens(user)
+
+            # Record successful login safely
+            try:
+                await SecurityService(self.db).record_login(
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                    details="Login successful",
+                )
+            except Exception:
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    pass
+
+            return tokens
+
+        except UnauthorizedException as exc:
+            # Record failed login safely
+            try:
+                user_id = user.id if user else None
+                await SecurityService(self.db).record_login(
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILED",
+                    details=str(exc.detail),
+                )
+            except Exception:
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    pass
+            raise exc
 
     async def _issue_tokens(self, user: User) -> TokenResponse:
         access = create_access_token(user.id)

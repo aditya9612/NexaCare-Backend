@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import PharmacyStatus, PurchaseStatus
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.pharmacy_model import (
     Medicine,
     PharmacyInvoice,
@@ -35,6 +35,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionCreate,
     PrescriptionItemResponse,
     PrescriptionResponse,
+    PrescriptionUpdate,
     PurchaseCreate,
     PurchaseItemResponse,
     PurchaseResponse,
@@ -140,6 +141,10 @@ class PharmacyService:
 
     # --- Prescriptions ---
     async def create_prescription(self, data: PrescriptionCreate, user_id: int) -> PrescriptionResponse:
+        if not data.appointment_id:
+            raise BadRequestException("Appointment ID is required to create prescription")
+        if not data.items:
+            raise BadRequestException("Prescription must contain at least one medicine item")
         items = [
             PrescriptionItem(**item.model_dump()) for item in data.items
         ]
@@ -155,13 +160,53 @@ class PharmacyService:
         await self.audit_repo.create("create", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
         return self._prescription_response(prescription)
 
-    async def list_prescriptions(self, page: int = 1, size: int = 20, status: str | None = None):
+    async def list_prescriptions(self, page: int = 1, size: int = 20, status: str | None = None, doctor_id: int | None = None):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status)
-        total = await self.prescription_repo.count_all(status=status)
+        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status, doctor_id=doctor_id)
+        total = await self.prescription_repo.count_all(status=status, doctor_id=doctor_id)
         return build_paginated_result(
             [self._prescription_response(p) for p in items], total, page, size
         )
+
+    async def get_prescription(self, prescription_id: int, doctor_id: int | None = None) -> PrescriptionResponse:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+        if doctor_id is not None and prescription.doctor_id != doctor_id:
+            raise ForbiddenException("You do not have permission to access this prescription")
+        return self._prescription_response(prescription)
+
+    async def update_prescription(self, prescription_id: int, data: PrescriptionUpdate, doctor_id: int, user_id: int) -> PrescriptionResponse:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+        if prescription.doctor_id != doctor_id:
+            raise ForbiddenException("You do not have permission to modify this prescription")
+        
+        if data.patient_id is not None:
+            prescription.patient_id = data.patient_id
+        if data.instructions is not None:
+            prescription.instructions = data.instructions
+        if data.status is not None:
+            prescription.status = data.status
+
+        items = None
+        if data.items is not None:
+            items = [PrescriptionItem(**item.model_dump()) for item in data.items]
+
+        prescription = await self.prescription_repo.update(prescription, items)
+        prescription = await self.prescription_repo.get_by_id(prescription.id)
+        await self.audit_repo.create("update", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
+        return self._prescription_response(prescription)
+
+    async def delete_prescription(self, prescription_id: int, doctor_id: int, user_id: int) -> None:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+        if prescription.doctor_id != doctor_id:
+            raise ForbiddenException("You do not have permission to delete this prescription")
+        await self.prescription_repo.soft_delete(prescription)
+        await self.audit_repo.create("delete", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
 
     def _prescription_response(self, prescription: Prescription) -> PrescriptionResponse:
         resp = PrescriptionResponse.model_validate(prescription)
@@ -170,13 +215,15 @@ class PharmacyService:
 
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
-        patient = await self.patient_repo.get_by_id(data.patient_id)
-        if not patient:
-            raise NotFoundException("Patient not found")
+        if data.patient_id is not None:
+            patient = await self.patient_repo.get_by_id(data.patient_id)
+            if not patient:
+                raise NotFoundException("Patient not found")
 
-        prescription = await self.prescription_repo.get_by_id(data.prescription_id)
-        if not prescription:
-            raise NotFoundException("Prescription not found")
+        if data.prescription_id is not None:
+            prescription = await self.prescription_repo.get_by_id(data.prescription_id)
+            if not prescription:
+                raise NotFoundException("Prescription not found")
 
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
@@ -188,7 +235,7 @@ class PharmacyService:
                 raise BadRequestException(f"Insufficient stock for {medicine.name}")
             if medicine.expiry_date and medicine.expiry_date < date.today():
                 raise BadRequestException(f"Medicine {medicine.name} has expired")
-            unit_price = medicine.unit_price
+            unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
             line_total = round(item_data.quantity * unit_price, 2)
             subtotal += line_total
             invoice_items.append(PharmacyInvoiceItem(

@@ -134,17 +134,23 @@ class PrescriptionRepository:
             .options(selectinload(Prescription.items))
         )
 
-    async def list_all(self, skip: int = 0, limit: int = 20, status: str | None = None) -> list[Prescription]:
+    async def list_all(
+        self, skip: int = 0, limit: int = 20, status: str | None = None, doctor_id: int | None = None
+    ) -> list[Prescription]:
         query = self._base_query()
         if status:
             query = query.where(Prescription.status == status)
+        if doctor_id is not None:
+            query = query.where(Prescription.doctor_id == doctor_id)
         result = await self.db.execute(query.order_by(Prescription.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None) -> int:
+    async def count_all(self, status: str | None = None, doctor_id: int | None = None) -> int:
         query = select(func.count()).select_from(Prescription).where(Prescription.is_deleted.is_(False))
         if status:
             query = query.where(Prescription.status == status)
+        if doctor_id is not None:
+            query = query.where(Prescription.doctor_id == doctor_id)
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, prescription_id: int) -> Prescription | None:
@@ -160,6 +166,22 @@ class PrescriptionRepository:
         await self.db.flush()
         await self.db.refresh(prescription)
         return prescription
+
+    async def update(self, prescription: Prescription, items: list[PrescriptionItem] | None = None) -> Prescription:
+        await self.db.flush()
+        if items is not None:
+            prescription.items.clear()
+            for item in items:
+                item.prescription_id = prescription.id
+                self.db.add(item)
+            await self.db.flush()
+        await self.db.refresh(prescription)
+        return prescription
+
+    async def soft_delete(self, prescription: Prescription) -> None:
+        prescription.is_deleted = True
+        prescription.deleted_at = utc_now()
+        await self.db.flush()
 
 
 class PharmacyInvoiceRepository:

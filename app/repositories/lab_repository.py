@@ -121,6 +121,11 @@ class TestOrderRepository:
         await self.db.refresh(order)
         return order
 
+    async def soft_delete(self, order: TestOrder) -> None:
+        order.is_deleted = True
+        order.deleted_at = utc_now()
+        await self.db.flush()
+
 
 class SampleRepository:
     def __init__(self, db: AsyncSession):

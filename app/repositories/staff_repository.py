@@ -51,7 +51,8 @@ class StaffRepository:
     ) -> list[Staff]:
         query = self._base_query()
         if q:
-            pattern = f"%{q.lower()}%"
+            clean_q = " ".join(q.split()).lower()
+            pattern = f"%{clean_q}%"
             query = query.where(
                 or_(
                     func.lower(Staff.full_name).like(pattern),
@@ -76,7 +77,8 @@ class StaffRepository:
     ) -> int:
         query = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
         if q:
-            pattern = f"%{q.lower()}%"
+            clean_q = " ".join(q.split()).lower()
+            pattern = f"%{clean_q}%"
             query = query.where(
                 or_(
                     func.lower(Staff.full_name).like(pattern),

@@ -639,7 +639,7 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
             appointment_status="scheduled",
             symptoms=state.get("problem_description"),
-            notes=f"Booked via AI Voice Agent. Patient: {patient_name}",
+            notes=f"Booked via AI Voice Agent. Patient: {patient_name} | Phone: {caller_number} | Lang: {lang}",
             consultation_type="in_person",
             reminder_sent=False,
             token_number=random.randint(1, 99),

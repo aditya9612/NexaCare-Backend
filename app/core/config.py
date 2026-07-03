@@ -14,19 +14,15 @@ class Settings(BaseSettings):
     SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
-
     DATABASE_URL: str = "mysql+aiomysql://root:Mahakal12_12@localhost/NesaCare"
     DATABASE_URL_SYNC: str = "mysql+pymysql://root:Mahakal12_12@localhost/NesaCare"
-
-
 
     # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
     # DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
     #DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
-   # DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
+    #DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
 
-    DATABASE_URL: str = "mysql+aiomysql://root:Kumud2901@localhost/nexacare"
-    DATABASE_URL_SYNC: str = "mysql+pymysql://root:Kumud2901@localhost/nexacare"
+   
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"

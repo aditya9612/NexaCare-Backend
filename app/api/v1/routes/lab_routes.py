@@ -18,8 +18,8 @@ from app.schemas.lab_schema import (
     TestOrderCreate,
     TestOrderResponse,
     TestOrderUpdate,
-    TestOrderUpdate,
     TestResultCreate,
+    TestResultUpdate,
     TestResultResponse,
 )
 from app.services.lab_service import LabService
@@ -266,6 +266,29 @@ async def list_test_results(
     return APIResponse(message="Test results retrieved", data=result)
 
 
+@router.get("/results/{result_id}", response_model=APIResponse[TestResultResponse])
+async def get_test_result(
+    result_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    result = await LabService(db).get_result(result_id)
+    return APIResponse(message="Test result retrieved", data=result)
+
+
+@router.put("/results/{result_id}", response_model=APIResponse[TestResultResponse])
+async def update_test_result(
+    result_id: int,
+    data: TestResultUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    result = await LabService(db).update_result(result_id, data, current_user.id)
+    return APIResponse(message="Test result updated", data=result)
+
+
 # --- Reports ---
 @router.post("/reports", response_model=APIResponse[LabReportResponse], status_code=201)
 async def create_lab_report(
@@ -289,6 +312,17 @@ async def list_lab_reports(
 ):
     result = await LabService(db).list_reports(page=page, size=size, status=status)
     return APIResponse(message="Lab reports retrieved", data=result)
+
+
+@router.get("/reports/{report_id}", response_model=APIResponse[LabReportResponse])
+async def get_lab_report(
+    report_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    report = await LabService(db).get_report(report_id)
+    return APIResponse(message="Lab report retrieved", data=report)    
 
 
 @router.put("/reports/{report_id}/approve", response_model=APIResponse[LabReportResponse])

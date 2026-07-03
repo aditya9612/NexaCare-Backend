@@ -392,7 +392,15 @@ class LabService:
         items = await self.report_repo.list_all(skip=skip, limit=size, status=status)
         total = await self.report_repo.count_all(status=status)
         return build_paginated_result([LabReportResponse.model_validate(r) for r in items], total, page, size)
+    
+    async def get_report(self, report_id: int) -> LabReportResponse:
+        report = await self.report_repo.get_by_id(report_id)
 
+        if not report:
+           raise NotFoundException("Lab report not found")
+
+        return LabReportResponse.model_validate(report)
+    
     async def approve_report(self, report_id: int, data: LabReportApprove, user_id: int) -> LabReportResponse:
         report = await self.report_repo.get_by_id(report_id)
         if not report:

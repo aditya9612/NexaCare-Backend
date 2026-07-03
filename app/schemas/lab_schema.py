@@ -126,6 +126,15 @@ class TestResultCreate(BaseSchema):
     is_critical: bool = False
 
 
+class TestResultUpdate(BaseSchema):
+    parameter_name: str | None = None
+    result_value: str | None = None
+    unit: str | None = None
+    normal_range: str | None = None
+    is_critical: bool | None = None
+    status: str | None = None    
+
+
 class TestResultResponse(BaseSchema):
     id: int
     test_order_id: int

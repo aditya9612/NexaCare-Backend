@@ -165,8 +165,6 @@ class PharmacyService:
             resource_id=str(prescription.id)
         )
         return self._prescription_response(prescription)
-
-    async def list_prescriptions(self, page: int = 1, size: int = 20, status: str | None = None, doctor_id: int | None = None):
     async def list_prescriptions(
         self,
         page: int = 1,
@@ -174,13 +172,7 @@ class PharmacyService:
         status: str | None = None
     ):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status, doctor_id=doctor_id)
-        total = await self.prescription_repo.count_all(status=status, doctor_id=doctor_id)
-        items = await self.prescription_repo.list_all(
-            skip=skip,
-            limit=size,
-            status=status
-        )
+        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status)
         total = await self.prescription_repo.count_all(status=status)
 
         return build_paginated_result(
@@ -230,7 +222,7 @@ class PharmacyService:
         await self.prescription_repo.soft_delete(prescription)
         await self.audit_repo.create("delete", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
 
-    def _prescription_response(self, prescription: Prescription) -> PrescriptionResponse:
+
     def _prescription_response(
         self,
         prescription: Prescription
@@ -325,6 +317,9 @@ class PharmacyService:
             created_by=user_id,
         )
         invoice = await self.invoice_repo.create(invoice, invoice_items)
+        prescription.status = "completed"
+        prescription.dispensed_at = utc_now()
+        await self.prescription_repo.update(prescription)
         await self.audit_repo.create("create", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
         return self._invoice_response(invoice)
 

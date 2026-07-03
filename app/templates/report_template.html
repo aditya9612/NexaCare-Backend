@@ -4,37 +4,75 @@
   <meta charset="utf-8">
   <title>{{ report_type }} Report</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; }
-    h1 { color: #1e40af; }
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 8px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-weight: bold; color: #1e40af; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; }
     table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-    th, td { border: 1px solid #e5e7eb; padding: 8px; }
+    th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
     th { background: #f3f4f6; }
   </style>
 </head>
 <body>
   <h1>{{ report_type }} Report</h1>
-  <p>Generated: {{ generated_at }}</p>
-  {% if rows %}
-  <table>
-    <thead>
-      <tr>
-        {% for col in columns %}
-        <th>{{ col }}</th>
+  
+  <div class="section">
+    <div class="section-title">Report Details</div>
+    <p><strong>Report Number:</strong> {{ report_number }}</p>
+    <p><strong>Order Number:</strong> {{ order_number }}</p>
+    <p><strong>Status:</strong> {{ status }}</p>
+    <p><strong>Generated At:</strong> {{ generated_at }}</p>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Patient Details</div>
+    <p><strong>Name:</strong> {{ patient_name }} (Code: {{ patient_code }})</p>
+    <p><strong>Gender:</strong> {{ patient_gender }} | <strong>DOB:</strong> {{ patient_dob }}</p>
+  </div>
+
+  {% if doctor_name %}
+  <div class="section">
+    <div class="section-title">Prescribed By</div>
+    <p><strong>Doctor:</strong> {{ doctor_name }} (Code: {{ doctor_code }})</p>
+  </div>
+  {% endif %}
+
+  <div class="section">
+    <div class="section-title">Test Details</div>
+    <p><strong>Test Name:</strong> {{ test_name }} (Category: {{ test_category }})</p>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Test Results</div>
+    {% if rows %}
+    <table>
+      <thead>
+        <tr>
+          {% for col in columns %}
+          <th>{{ col }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for cell in row %}
+          <td>{{ cell }}</td>
+          {% endfor %}
+        </tr>
         {% endfor %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in rows %}
-      <tr>
-        {% for cell in row %}
-        <td>{{ cell }}</td>
-        {% endfor %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p>No data available.</p>
+      </tbody>
+    </table>
+    {% else %}
+    <p>No results available.</p>
+    {% endif %}
+  </div>
+
+  {% if summary %}
+  <div class="section">
+    <div class="section-title">Summary / Remarks</div>
+    <p>{{ summary }}</p>
+  </div>
   {% endif %}
 </body>
 </html>

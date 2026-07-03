@@ -118,4 +118,3 @@ async def generate_lab_report_html(report_number: str, data: dict) -> str:
     if relative.startswith("app/"):
         relative = relative[len("app"):]
     return relative
-

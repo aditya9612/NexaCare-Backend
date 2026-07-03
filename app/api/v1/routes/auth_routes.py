@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.core.dependencies import CurrentUser, DbSession
 from app.schemas.auth_schema import (
@@ -50,8 +50,12 @@ async def send_otp(data: SendOTPRequest, db: DbSession):
 
 
 @router.post("/login", response_model=APIResponse[TokenResponse])
-async def login(data: LoginRequest, db: DbSession):
-    tokens = await AuthService(db).login(data)
+async def login(data: LoginRequest, db: DbSession, request: Request):
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    tokens = await AuthService(db).login(
+        data, ip_address=ip_address, user_agent=user_agent
+    )
     return APIResponse(message="Login successful", data=tokens)
 
 

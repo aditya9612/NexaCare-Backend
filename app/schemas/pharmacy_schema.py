@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from pydantic import EmailStr, Field, field_validator
 
-
+from app.schemas.common_schema import BaseSchema
 from app.utils.validators import validate_gst_number
 
 
@@ -79,9 +79,6 @@ def validate_supplier_address(v: str | None) -> str | None:
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError("Address must not contain leading or trailing spaces")
     return v.strip()
-
-
-from app.schemas.common_schema import BaseSchema
 
 
 class MedicineCreate(BaseSchema):
@@ -207,10 +204,10 @@ class PrescriptionItemCreate(BaseSchema):
 class PrescriptionCreate(BaseSchema):
     patient_id: int
     doctor_id: int
-    appointment_id: int | None = None
+    appointment_id: int
     instructions: str | None = None
-    items: List[PrescriptionItemCreate] = Field(default_factory=list)
-    
+    items: List[PrescriptionItemCreate] = Field(..., min_length=1)
+
 
 class PrescriptionItemUpdate(BaseSchema):
     medicine_id: int
@@ -254,14 +251,22 @@ class PrescriptionResponse(BaseSchema):
     created_at: datetime
 
 
+class PrescriptionUpdate(BaseSchema):
+    patient_id: Optional[int] = None
+    instructions: Optional[str] = None
+    status: Optional[str] = None
+    items: Optional[List[PrescriptionItemCreate]] = None
+
+
 class PharmacyInvoiceItemCreate(BaseSchema):
     medicine_id: int = Field(..., gt=0)
     quantity: int = Field(1, ge=1)
+    unit_price: float | None = Field(None, ge=0)
 
 
 class PharmacyInvoiceCreate(BaseSchema):
-    patient_id: int = Field(..., gt=0)
-    prescription_id: int = Field(..., gt=0)
+    patient_id: int | None = Field(None, gt=0)
+    prescription_id: int | None = Field(None, gt=0)
     discount_amount: float = Field(0.0, ge=0)
     discount_percentage: float = Field(0.0, ge=0, le=100)
     tax_percentage: float = Field(0.0, ge=0, le=100)
@@ -333,7 +338,6 @@ class SupplierCreate(BaseSchema):
         return validate_gst_number(v)
 
 
-
 class SupplierUpdate(BaseSchema):
     name: str | None = None
     contact_person: str | None = None
@@ -367,7 +371,6 @@ class SupplierUpdate(BaseSchema):
     @classmethod
     def validate_supplier_gst(cls, v: str | None) -> str | None:
         return validate_gst_number(v)
-
 
 
 class SupplierResponse(BaseSchema):

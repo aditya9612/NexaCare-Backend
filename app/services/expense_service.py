@@ -167,10 +167,47 @@ class ExpenseService:
             setattr(expense, key, value)
 
         expense = await self.expense_repo.update(expense)
-        await self._update_expense_status(expense.id)
+        if "status" not in data.model_fields_set:
+            await self._update_expense_status(expense.id)
         # Re-fetch with loaded relationships
         expense = await self.expense_repo.get_by_id(expense.id)
         await self.audit_repo.create("update", "expense", user_id=user_id, resource_id=str(expense.id))
+
+        # Sync transaction history
+        from sqlalchemy import select
+        from app.models.transaction_history_model import TransactionHistory
+        stmt = select(TransactionHistory).where(
+            TransactionHistory.source_module == "expenses",
+            TransactionHistory.source_id == expense.id,
+            TransactionHistory.is_deleted.is_(False)
+        )
+        tx_result = await self.db.execute(stmt)
+        tx_history = tx_result.scalar_one_or_none()
+
+        from datetime import datetime, time
+        event_datetime = datetime.combine(expense.expense_date, time.min)
+
+        if tx_history:
+            tx_history.amount = expense.amount
+            tx_history.description = f"Expense Recorded: {expense.description or ''}"
+            tx_history.event_date = event_datetime
+            tx_history.status = expense.status
+            from app.repositories.transaction_history_repository import TransactionHistoryRepository
+            await TransactionHistoryRepository(self.db).update(tx_history)
+        else:
+            from app.services.transaction_history_service import TransactionHistoryService
+            await TransactionHistoryService(self.db).create_event(
+                event_type="EXPENSE_RECORDED",
+                reference_no=f"EXP-{expense.id}",
+                description=f"Expense Recorded: {expense.description or ''}",
+                amount=expense.amount,
+                source_module="expenses",
+                source_id=expense.id,
+                status=expense.status,
+                event_date=event_datetime,
+                user_id=user_id
+            )
+
         return ExpenseResponse.model_validate(expense)
 
     async def delete_expense(self, expense_id: int, user_id: int) -> None:

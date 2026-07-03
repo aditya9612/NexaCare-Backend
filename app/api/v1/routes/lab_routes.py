@@ -18,6 +18,7 @@ from app.schemas.lab_schema import (
     TestOrderCreate,
     TestOrderResponse,
     TestOrderUpdate,
+    TestOrderUpdate,
     TestResultCreate,
     TestResultResponse,
 )
@@ -130,6 +131,29 @@ async def get_test_order(
 ):
     order = await LabService(db).get_order(order_id)
     return APIResponse(message="Test order retrieved", data=order)
+
+
+@router.put("/test-orders/{order_id}", response_model=APIResponse[TestOrderResponse])
+async def update_test_order(
+    order_id: int,
+    data: TestOrderUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    order = await LabService(db).update_order(order_id, data, current_user.id)
+    return APIResponse(message="Test order updated", data=order)
+
+
+@router.delete("/test-orders/{order_id}", response_model=APIResponse[MessageResponse])
+async def delete_test_order(
+    order_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "delete")),
+):
+    await LabService(db).delete_order(order_id, current_user.id)
+    return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 
 @router.put("/orders/{order_id}", response_model=APIResponse[TestOrderResponse])
@@ -287,11 +311,73 @@ async def download_lab_report(
     _: User = Depends(require_permission("lab", "export")),
 ):
     from app.repositories.lab_repository import LabReportRepository
+    from app.core.exceptions import NotFoundException
+    import os
+    
     report = await LabReportRepository(db).get_by_id(report_id)
-    if not report or not report.report_path:
-        from app.core.exceptions import NotFoundException
+    if not report:
         raise NotFoundException("Report file not found")
-    return FileResponse(report.report_path, media_type="text/html", filename=f"report_{report_id}.html")
+        
+    need_generation = False
+    if not report.report_path or not report.report_path.endswith(".pdf") or not os.path.exists(report.report_path):
+        need_generation = True
+        
+    if need_generation:
+        from app.repositories.lab_repository import TestOrderRepository
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.lab_model import TestResult
+        from app.utils.pdf_generator import generate_lab_report_html
+        from app.utils.helpers import utc_now
+        from sqlalchemy import select
+        
+        order = await TestOrderRepository(db).get_by_id(report.test_order_id)
+        if not order:
+            raise NotFoundException("Associated test order not found")
+            
+        patient = await db.get(Patient, order.patient_id)
+        doctor = await db.get(Doctor, order.doctor_id) if order.doctor_id else None
+        
+        result_objs = await db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
+        results = list(result_objs.scalars().all())
+
+        columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
+        rows = [
+            [
+                r.parameter_name,
+                r.result_value,
+                r.unit or "-",
+                r.normal_range or "-",
+                "Yes" if r.is_critical else "No"
+            ]
+            for r in results
+        ]
+
+        report_data = {
+            "order_number": order.order_number,
+            "status": report.status,
+            "generated_at": report.approved_at.strftime("%Y-%m-%d %H:%M:%S") if report.approved_at else utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
+            "patient_code": patient.patient_code if patient else "Unknown",
+            "patient_gender": patient.gender if patient else "Unknown",
+            "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
+            "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
+            "doctor_code": doctor.doctor_code if doctor else "",
+            "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
+            "test_category": order.lab_test.category if order.lab_test else "Unknown",
+            "summary": report.summary or "",
+            "columns": columns,
+            "rows": rows,
+        }
+
+        path = await generate_lab_report_html(
+            report.report_number,
+            report_data,
+        )
+        report.report_path = path
+        await LabReportRepository(db).update(report)
+        
+    return FileResponse(report.report_path, media_type="application/pdf", filename=f"lab_report_{report_id}.pdf")
 
 
 # --- Analytics ---

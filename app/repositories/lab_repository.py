@@ -126,6 +126,7 @@ class TestOrderRepository:
         order.deleted_at = utc_now()
         await self.db.flush()
 
+
 class SampleRepository:
     def __init__(self, db: AsyncSession):
         self.db = db

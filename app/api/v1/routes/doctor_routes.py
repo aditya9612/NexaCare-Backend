@@ -25,6 +25,7 @@ from app.schemas.doctor_medical_record_schema import (
     TreatmentNoteCreate,
     TreatmentNoteResponse,
     MedicalRecordUploadValidator,
+    MedicalRecordUpdate,
 )
 from app.services.doctor_service import DoctorService
 from app.services.doctor_medical_record_service import DoctorMedicalRecordService
@@ -178,24 +179,25 @@ async def upload_report(
     db: DbSession,
     current_user: CurrentUser,
     patient_id: int = Form(...),
-    patient_name: str = Form(...),
-    report_title: str = Form(...),
-    report_type: str = Form(...),
-    diagnosis: str | None = Form(None),
-    notes: str | None = Form(None),
-    file: UploadFile = File(...),
+    appointment_id: int = Form(...),
+    doctor_id: int = Form(...),
+    diagnosis: str = Form(...),
+    report_title: Optional[str] = Form(None),
+    report_type: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
     try:
         validated = MedicalRecordUploadValidator(
             patient_id=patient_id,
-            patient_name=patient_name,
+            appointment_id=appointment_id,
+            doctor_id=doctor_id,
+            diagnosis=diagnosis,
             report_title=report_title,
             report_type=report_type,
-            diagnosis=diagnosis,
             notes=notes,
         )
-        patient_name = validated.patient_name
         report_title = validated.report_title
         report_type = validated.report_type
         diagnosis = validated.diagnosis
@@ -205,10 +207,11 @@ async def upload_report(
 
     record = await DoctorMedicalRecordService(db).upload_report(
         patient_id=patient_id,
-        patient_name=patient_name,
+        appointment_id=appointment_id,
+        doctor_id=doctor_id,
+        diagnosis=diagnosis,
         report_title=report_title,
         report_type=report_type,
-        diagnosis=diagnosis,
         notes=notes,
         file=file,
         user_id=current_user.id,
@@ -246,6 +249,78 @@ async def download_report(
         path=record.file_path,
         filename=record.file_name,
         media_type=record.file_type or "application/octet-stream",
+    )
+
+
+@router.get(
+    "/medical-records/{record_id}",
+    response_model=APIResponse[MedicalRecordResponse],
+)
+async def get_medical_record(
+    record_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id)
+    return APIResponse(message="Medical record retrieved", data=record)
+
+
+@router.put(
+    "/medical-records/{record_id}",
+    response_model=APIResponse[MedicalRecordResponse],
+)
+async def update_medical_record(
+    record_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    report_title: Optional[str] = Form(None),
+    report_type: Optional[str] = Form(None),
+    diagnosis: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    _: User = Depends(require_permission("doctors", "update")),
+):
+    try:
+        validated = MedicalRecordUpdate(
+            report_title=report_title,
+            report_type=report_type,
+            diagnosis=diagnosis,
+            notes=notes,
+        )
+        report_title = validated.report_title
+        report_type = validated.report_type
+        diagnosis = validated.diagnosis
+        notes = validated.notes
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
+    record = await DoctorMedicalRecordService(db).update_report(
+        record_id=record_id,
+        report_title=report_title,
+        report_type=report_type,
+        diagnosis=diagnosis,
+        notes=notes,
+        file=file,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Medical record updated", data=record)
+
+
+@router.delete(
+    "/medical-records/{record_id}",
+    response_model=APIResponse[MessageResponse],
+)
+async def delete_medical_record(
+    record_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "delete")),
+):
+    await DoctorMedicalRecordService(db).delete_report(record_id, current_user.id)
+    return APIResponse(
+        message="Medical record deleted",
+        data=MessageResponse(message="Record deleted"),
     )
 
 
@@ -432,6 +507,35 @@ async def add_doctor_schedule(
 ):
     schedule = await DoctorService(db).add_schedule(doctor_id, data, current_user.id)
     return APIResponse(message="Schedule added", data=schedule)
+
+
+@router.delete("/{doctor_id}/schedule", response_model=APIResponse[MessageResponse])
+async def delete_all_doctor_schedules(
+    doctor_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "delete")),
+):
+    await DoctorService(db).delete_all_schedules(doctor_id, current_user.id)
+    return APIResponse(
+        message="All schedule slots removed successfully",
+        data=MessageResponse(message="All schedule slots removed"),
+    )
+
+
+@router.delete("/{doctor_id}/schedule/{slot_id}", response_model=APIResponse[MessageResponse])
+async def delete_doctor_schedule_slot(
+    doctor_id: int,
+    slot_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "delete")),
+):
+    await DoctorService(db).delete_schedule_slot(doctor_id, slot_id, current_user.id)
+    return APIResponse(
+        message="Schedule slot removed successfully",
+        data=MessageResponse(message="Schedule slot removed"),
+    )
 
 @router.get("/{doctor_id}/clinical-records", response_model=APIResponse[PaginatedResult[ClinicalRecordResponse]])
 async def list_doctor_clinical_records(

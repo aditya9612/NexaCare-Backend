@@ -44,6 +44,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  ngrok failed to start: {e}")
 
+    # try:
+    #     from app.agent.reminder import start_reminder_scheduler
+    #     scheduler = start_reminder_scheduler(AsyncSessionLocal)
+    #     print("✅ Reminder scheduler started — runs every hour")
+    # except Exception as e:
+    #     print(f"⚠️  Reminder scheduler failed to start: {e}")
+
     yield
 
 

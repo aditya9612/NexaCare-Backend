@@ -329,6 +329,78 @@ async def agent_health():
     }
 
 
+# ── Route 7: Reminder call TwiML ───────────────────────────────────────────────
+@router.get("/reminder-twiml")
+async def reminder_twiml(
+    doctor:  str = "",
+    time:    str = "",
+    lang:    str = "en",
+    appt_no: str = "",
+    phone:   str = "",
+):
+    """
+    Served when Twilio connects a reminder call to the patient.
+    Plays the appointment reminder in the patient's language then hangs up.
+    """
+    from app.agent.reminder import build_reminder_twiml
+    logger.info(f"▶ REMINDER-TWIML | phone={phone} | appt={appt_no} | lang={lang}")
+    twiml = build_reminder_twiml(
+        lang=lang,
+        doctor=doctor,
+        time_str=time,
+        appt_no=appt_no,
+    )
+    return xml(twiml)
+ 
+ 
+# ── Route 8: Reminder call status callback ─────────────────────────────────────
+@router.post("/reminder-status")
+async def reminder_status(
+    CallStatus: str = Form(default=""),
+    doctor:     str = "",
+    time:       str = "",
+    lang:       str = "en",
+    appt_no:    str = "",
+    phone:      str = "",
+):
+    """
+    Twilio posts here when a reminder call ends.
+    If patient did not answer, send SMS instead.
+    """
+    from app.agent.reminder import send_reminder_sms
+    logger.info(
+        f"▶ REMINDER-STATUS | status={CallStatus} | "
+        f"phone={phone} | appt={appt_no}"
+    )
+ 
+    no_answer_statuses = {"no-answer", "busy", "failed"}
+    if CallStatus.lower() in no_answer_statuses:
+        logger.warning(
+            f"  ↳ Call {CallStatus} for {appt_no} — sending SMS to {phone}"
+        )
+        await send_reminder_sms(
+            phone=phone,
+            lang=lang,
+            doctor=doctor,
+            time_str=time,
+            appt_no=appt_no,
+        )
+    else:
+        logger.info(f"  ↳ Reminder call {CallStatus} for {appt_no}")
+ 
+    return PlainTextResponse("ok")
+
+# ── TEST ONLY — remove before production ──────────────────────────────────────
+@router.get("/reminder-run-now")
+async def trigger_reminders_now(db: DbSession):
+    """Manually trigger reminder job for testing."""
+    from app.agent.reminder import process_reminders
+    from app.core.database import AsyncSessionLocal
+    logger.info("▶ MANUAL REMINDER TRIGGER")
+    await process_reminders(AsyncSessionLocal)
+    return {"status": "done", "message": "Reminder job executed — check logs"}
+
+
 # ── Internal helper ────────────────────────────────────────────────────────────
 def _apply(call_sid: str, result: dict) -> None:
     """Merge non-private keys from node result into session."""

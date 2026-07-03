@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 from enum import Enum
 import re
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
 from app.schemas.auth_schema import GenderOption
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
@@ -470,10 +470,31 @@ class DoctorAvailabilityUpdate(BaseSchema):
 
 
 class DoctorScheduleCreate(BaseSchema):
-    day_of_week: int = Field(..., ge=0, le=6)
+    day_of_week: int = Field(..., ge=1, le=7)
     start_time: time
     end_time: time
     slot_duration_minutes: int = Field(30, gt=0, le=180)
+
+    @field_validator("day_of_week")
+    @classmethod
+    def map_day_of_week_to_db(cls, v: int) -> int:
+        return v - 1
+
+    @model_validator(mode="after")
+    def validate_duration(self) -> "DoctorScheduleCreate":
+        # Calculate duration in minutes
+        dt_start = datetime.combine(date.today(), self.start_time)
+        dt_end = datetime.combine(date.today(), self.end_time)
+
+        if self.start_time >= self.end_time:
+            raise ValueError("Start time must be before end time")
+
+        duration = (dt_end - dt_start).total_seconds() / 60
+        if duration < self.slot_duration_minutes:
+            raise ValueError(
+                f"Schedule duration must be at least the slot duration of {self.slot_duration_minutes} minutes"
+            )
+        return self
 
 
 class DoctorScheduleResponse(BaseSchema):
@@ -484,6 +505,11 @@ class DoctorScheduleResponse(BaseSchema):
     end_time: time
     slot_duration_minutes: int
     is_active: bool
+
+    @field_validator("day_of_week", mode="before")
+    @classmethod
+    def map_day_of_week_to_ui(cls, v: int) -> int:
+        return v + 1
 
 
 DoctorListResponse = PaginatedResponse[DoctorResponse]

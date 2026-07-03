@@ -28,6 +28,7 @@ from app.schemas.analytics_schema import (
     DoctorAnalyticsResponse,
     ExportReportRequest,
     ExportReportResponse,
+    ExportListItem,
     KPIResponse,
     ModuleAnalyticsResponse,
     PatientAnalyticsResponse,
@@ -294,6 +295,14 @@ class AnalyticsService:
             [ReportListItem.model_validate(r) for r in items], total, page, size
         )
 
+    async def list_exports(self, page: int = 1, size: int = 20, report_type: str | None = None):
+        skip = (page - 1) * size
+        items = await self.repo.list_exports(skip=skip, limit=size, report_type=report_type)
+        total = await self.repo.count_exports(report_type=report_type)
+        return build_paginated_result(
+            [ExportListItem.model_validate(r) for r in items], total, page, size
+        )
+
     async def request_export(self, data: ExportReportRequest, user_id: int) -> ExportReportResponse:
         export = ReportExport(
             report_type=data.report_type,
@@ -312,8 +321,10 @@ class AnalyticsService:
         return ExportReportResponse(
             export_id=export.id,
             status=export.status,
+            file_path=export.file_path,
             message="Export queued for processing",
         )
+
 
     async def request_export_excel(self, data: ExportReportRequest, user_id: int) -> ExportReportResponse:
         export = ReportExport(
@@ -333,8 +344,10 @@ class AnalyticsService:
         return ExportReportResponse(
             export_id=export.id,
             status=export.status,
+            file_path=export.file_path,
             message="Excel export queued for processing",
         )
+
 
     async def process_export(self, export_id: int) -> None:
         export = await self.repo.get_export(export_id)

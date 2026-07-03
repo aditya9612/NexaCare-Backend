@@ -61,6 +61,23 @@ class AnalyticsRepository:
         await self.db.refresh(export)
         return export
 
+    async def list_exports(
+        self, skip: int = 0, limit: int = 20, report_type: str | None = None
+    ) -> list[ReportExport]:
+        query = select(ReportExport)
+        if report_type:
+            query = query.where(ReportExport.report_type == report_type)
+        result = await self.db.execute(
+            query.order_by(ReportExport.created_at.desc()).offset(skip).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def count_exports(self, report_type: str | None = None) -> int:
+        query = select(func.count()).select_from(ReportExport)
+        if report_type:
+            query = query.where(ReportExport.report_type == report_type)
+        return await self.db.scalar(query) or 0
+
     async def save_dashboard_metric(self, metric: DashboardMetric) -> DashboardMetric:
         self.db.add(metric)
         await self.db.flush()

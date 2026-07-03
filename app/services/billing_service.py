@@ -65,9 +65,23 @@ class BillingService:
         )
         billing.subtotal = totals["subtotal"]
         billing.discount_amount = totals["discount_amount"]
-        billing.gst_amount = totals["gst_amount"]
         billing.tax_amount = totals["tax_amount"]
-        billing.total_amount = totals["total_amount"]
+
+        if billing.items:
+            total_gst = 0.0
+            for item in billing.items:
+                # Recalculate each item's GST and line total dynamically
+                _, gst_amt, line_total = calculate_line_total(
+                    item.quantity, item.unit_price, item.gst_rate
+                )
+                item.gst_amount = gst_amt
+                item.line_total = line_total
+                total_gst += gst_amt
+            billing.gst_amount = round(total_gst, 2)
+        else:
+            billing.gst_amount = totals["gst_amount"]
+
+        billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
         if billing.balance_amount <= 0:
             billing.status = BillingStatus.PAID
@@ -84,6 +98,15 @@ class BillingService:
         if not patient:
             raise NotFoundException("Patient not found")
 
+        if data.appointment_id is not None:
+            from sqlalchemy import select
+            from app.models.appointment_model import Appointment
+            stmt = select(Appointment).where(Appointment.id == data.appointment_id)
+            apt_result = await self.db.execute(stmt)
+            appointment = apt_result.scalar_one_or_none()
+            if not appointment:
+                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+
         billing = Billing(
             patient_id=data.patient_id,
             bill_number=generate_bill_number(),
@@ -94,6 +117,7 @@ class BillingService:
             due_date=data.due_date,
             notes=data.notes,
             insurance_id=data.insurance_id,
+            appointment_id=data.appointment_id,
             created_by=user_id,
         )
         billing = await self.repo.create(billing)

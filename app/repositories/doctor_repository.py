@@ -49,14 +49,37 @@ class DoctorRepository:
         return result.scalar_one_or_none()
 
     def _search_filter(self, q: str):
-        pattern = f"%{q.lower()}%"
-        return or_(
+        q_clean = q.strip().lower() if q else ""
+        pattern = f"%{q_clean}%"
+        concat_name = func.concat(func.lower(Doctor.first_name), " ", func.lower(Doctor.last_name))
+        
+        base_filter = or_(
             func.lower(Doctor.first_name).like(pattern),
             func.lower(Doctor.last_name).like(pattern),
             func.lower(Doctor.doctor_code).like(pattern),
             func.lower(Doctor.specialization).like(pattern),
             func.lower(Department.department_name).like(pattern),
+            concat_name.like(pattern),
         )
+        
+        words = q_clean.split()
+        if len(words) > 1:
+            from sqlalchemy import and_
+            word_filters = []
+            for word in words:
+                word_pattern = f"%{word}%"
+                word_filters.append(
+                    or_(
+                        func.lower(Doctor.first_name).like(word_pattern),
+                        func.lower(Doctor.last_name).like(word_pattern),
+                        func.lower(Doctor.doctor_code).like(word_pattern),
+                        func.lower(Doctor.specialization).like(word_pattern),
+                        func.lower(Department.department_name).like(word_pattern),
+                    )
+                )
+            return or_(base_filter, and_(*word_filters))
+            
+        return base_filter
 
     async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Doctor]:
         query = self._base_query().where(self._search_filter(q))
@@ -136,3 +159,42 @@ class DoctorRepository:
         await self.db.flush()
         await self.db.refresh(schedule)
         return schedule
+
+    async def get_medical_record_by_id(self, record_id: int):
+        from app.models.doctor_medical_record_model import DoctorMedicalRecord
+        result = await self.db.execute(
+            select(DoctorMedicalRecord).where(DoctorMedicalRecord.id == record_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update_medical_record(self, record) -> None:
+        await self.db.flush()
+        await self.db.refresh(record)
+
+    async def delete_medical_record(self, record) -> None:
+        await self.db.delete(record)
+        await self.db.flush()
+
+    async def get_schedule_slot(self, doctor_id: int, slot_id: int) -> DoctorSchedule | None:
+        result = await self.db.execute(
+            select(DoctorSchedule)
+            .where(DoctorSchedule.id == slot_id, DoctorSchedule.doctor_id == doctor_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def count_schedules(self, doctor_id: int) -> int:
+        from sqlalchemy import func
+        return await self.db.scalar(
+            select(func.count()).select_from(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor_id)
+        ) or 0
+
+    async def delete_schedule_slot(self, schedule: DoctorSchedule) -> None:
+        await self.db.delete(schedule)
+        await self.db.flush()
+
+    async def delete_all_schedules(self, doctor_id: int) -> None:
+        from sqlalchemy import delete
+        await self.db.execute(
+            delete(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor_id)
+        )
+        await self.db.flush()

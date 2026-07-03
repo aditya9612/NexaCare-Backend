@@ -1,9 +1,84 @@
 from datetime import date, datetime
+import re
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import EmailStr, Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
+from app.utils.validators import validate_gst_number
+
+
+def validate_supplier_name(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if not v or not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("Supplier name cannot be blank, 'null', or 'string'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("Supplier name must not contain leading or trailing spaces")
+    if "  " in v:
+        raise ValueError("Supplier name must not contain multiple consecutive spaces")
+    if not v.isascii():
+        raise ValueError("Supplier name must contain only standard ASCII characters")
+    if not re.match(r"^[a-zA-Z\s\-\'\.\&\,\(\)]+$", v):
+        raise ValueError("Supplier name must contain only alphabetic characters, spaces, hyphens, dots, ampersands, or parentheses")
+    return v
+
+
+def validate_contact_person(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("Contact person cannot be blank, 'null', or 'string'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("Contact person must not contain leading or trailing spaces")
+    if "  " in v:
+        raise ValueError("Contact person must not contain multiple consecutive spaces")
+    if not v.isascii():
+        raise ValueError("Contact person must contain only standard ASCII characters")
+    if not re.match(r"^[a-zA-Z\s\-\'\.]+$", v):
+        raise ValueError("Contact person must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
+    return v
+
+
+def validate_supplier_phone(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("Phone number cannot be blank, 'null', or 'string'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("Phone number should not contain leading or trailing spaces")
+    if " " in v:
+        raise ValueError("Phone number should not contain spaces")
+        
+    raw_num = v
+    if v.startswith("+91"):
+        raw_num = v[3:]
+    elif v.startswith("91") and len(v) == 12:
+        raw_num = v[2:]
+        
+    if len(raw_num) != 10:
+        raise ValueError("Phone number must contain exactly 10 digits")
+        
+    if not raw_num.isdigit():
+        raise ValueError("Phone number must contain only numeric digits")
+        
+    if raw_num[0] not in {"6", "7", "8", "9"}:
+        raise ValueError("Phone number must start with 6, 7, 8, or 9")
+        
+    if len(set(raw_num)) == 1:
+        raise ValueError("Phone number cannot consist of repeated identical digits")
+        
+    return "+91" + raw_num
+
+
+def validate_supplier_address(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("Address cannot be blank, 'null', or 'string'")
+    if v.startswith(" ") or v.endswith(" "):
+        raise ValueError("Address must not contain leading or trailing spaces")
+    return v.strip()
 
 
 class MedicineCreate(BaseSchema):
@@ -18,6 +93,36 @@ class MedicineCreate(BaseSchema):
     expiry_date: date | None = None
     manufacturer: str | None = None
     description: str | None = None
+
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: str | None) -> str | None:
+        if v is not None:
+            if " " in v:
+                raise ValueError("Barcode cannot contain spaces")
+            if not v.isdigit():
+                raise ValueError("Barcode must contain only numeric characters")
+            if len(v) != 13:
+                raise ValueError("Barcode must be exactly 13 digits")
+            if all(c == "0" for c in v):
+                raise ValueError("Barcode cannot be all zeros")
+        return v
+
+    @field_validator("expiry_date")
+    @classmethod
+    def validate_expiry_date(cls, v: date | None) -> date | None:
+        if v is not None and v < date.today():
+            raise ValueError("Expiry date cannot be in the past")
+        return v
+
+    @field_validator("name", "generic_name", "category")
+    @classmethod
+    def validate_non_blank_strings(cls, v: str | None) -> str | None:
+        if v is not None:
+            if v.strip() == "":
+                raise ValueError("cannot be empty or only spaces")
+            return v.strip()
+        return v
 
 
 class MedicineUpdate(BaseSchema):
@@ -34,6 +139,36 @@ class MedicineUpdate(BaseSchema):
     description: str | None = None
     is_active: bool | None = None
 
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: str | None) -> str | None:
+        if v is not None:
+            if " " in v:
+                raise ValueError("Barcode cannot contain spaces")
+            if not v.isdigit():
+                raise ValueError("Barcode must contain only numeric characters")
+            if len(v) != 13:
+                raise ValueError("Barcode must be exactly 13 digits")
+            if all(c == "0" for c in v):
+                raise ValueError("Barcode cannot be all zeros")
+        return v
+
+    @field_validator("expiry_date")
+    @classmethod
+    def validate_expiry_date(cls, v: date | None) -> date | None:
+        if v is not None and v < date.today():
+            raise ValueError("Expiry date cannot be in the past")
+        return v
+
+    @field_validator("name", "generic_name", "category")
+    @classmethod
+    def validate_non_blank_strings(cls, v: str | None) -> str | None:
+        if v is not None:
+            if v.strip() == "":
+                raise ValueError("cannot be empty or only spaces")
+            return v.strip()
+        return v
+
 
 class MedicineResponse(BaseSchema):
     id: int
@@ -48,6 +183,7 @@ class MedicineResponse(BaseSchema):
     reorder_level: int
     expiry_date: date | None
     manufacturer: str | None
+    description: str | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -65,9 +201,9 @@ class PrescriptionItemCreate(BaseSchema):
 class PrescriptionCreate(BaseSchema):
     patient_id: int
     doctor_id: int
-    appointment_id: int | None = None
+    appointment_id: int
     instructions: str | None = None
-    items: List[PrescriptionItemCreate] = Field(default_factory=list)
+    items: List[PrescriptionItemCreate] = Field(..., min_length=1)
 
 
 class PrescriptionItemResponse(BaseSchema):
@@ -94,15 +230,22 @@ class PrescriptionResponse(BaseSchema):
     created_at: datetime
 
 
+class PrescriptionUpdate(BaseSchema):
+    patient_id: Optional[int] = None
+    instructions: Optional[str] = None
+    status: Optional[str] = None
+    items: Optional[List[PrescriptionItemCreate]] = None
+
+
 class PharmacyInvoiceItemCreate(BaseSchema):
-    medicine_id: int
+    medicine_id: int = Field(..., gt=0)
     quantity: int = Field(1, ge=1)
     unit_price: float | None = Field(None, ge=0)
 
 
 class PharmacyInvoiceCreate(BaseSchema):
-    patient_id: int | None = None
-    prescription_id: int | None = None
+    patient_id: int | None = Field(None, gt=0)
+    prescription_id: int | None = Field(None, gt=0)
     discount_amount: float = Field(0.0, ge=0)
     items: List[PharmacyInvoiceItemCreate] = Field(..., min_length=1)
 
@@ -135,19 +278,72 @@ class SupplierCreate(BaseSchema):
     name: str
     contact_person: str | None = None
     phone: str | None = None
-    email: str | None = None
+    email: EmailStr | None = None
     address: str | None = None
     gst_number: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        res = validate_supplier_name(v)
+        if res is None:
+            raise ValueError("Supplier name cannot be blank")
+        return res
+
+    @field_validator("contact_person")
+    @classmethod
+    def validate_contact(cls, v: str | None) -> str | None:
+        return validate_contact_person(v)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: str | None) -> str | None:
+        return validate_supplier_phone(v)
+
+    @field_validator("address")
+    @classmethod
+    def validate_address(cls, v: str | None) -> str | None:
+        return validate_supplier_address(v)
+
+    @field_validator("gst_number")
+    @classmethod
+    def validate_supplier_gst(cls, v: str | None) -> str | None:
+        return validate_gst_number(v)
 
 
 class SupplierUpdate(BaseSchema):
     name: str | None = None
     contact_person: str | None = None
     phone: str | None = None
-    email: str | None = None
+    email: EmailStr | None = None
     address: str | None = None
     gst_number: str | None = None
     is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        return validate_supplier_name(v)
+
+    @field_validator("contact_person")
+    @classmethod
+    def validate_contact(cls, v: str | None) -> str | None:
+        return validate_contact_person(v)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: str | None) -> str | None:
+        return validate_supplier_phone(v)
+
+    @field_validator("address")
+    @classmethod
+    def validate_address(cls, v: str | None) -> str | None:
+        return validate_supplier_address(v)
+
+    @field_validator("gst_number")
+    @classmethod
+    def validate_supplier_gst(cls, v: str | None) -> str | None:
+        return validate_gst_number(v)
 
 
 class SupplierResponse(BaseSchema):

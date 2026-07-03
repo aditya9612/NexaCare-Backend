@@ -28,6 +28,7 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
     insurance_id: Mapped[int | None] = mapped_column(ForeignKey("insurances.id"), nullable=True)
     invoice_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id"), nullable=True)
 
     items: Mapped[list["BillItem"]] = relationship(back_populates="billing", cascade="all, delete-orphan")
     payments: Mapped[list["Payment"]] = relationship(back_populates="billing", cascade="all, delete-orphan")

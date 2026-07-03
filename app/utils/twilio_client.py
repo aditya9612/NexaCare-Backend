@@ -9,7 +9,7 @@ from app.core.logger import logger
 class TwilioClient:
     """Twilio Voice / SMS / WhatsApp Client"""
 
-    def _init_(self):
+    def __init__(self):
         self.account_sid = settings.TWILIO_ACCOUNT_SID
         self.auth_token = settings.TWILIO_AUTH_TOKEN
         self.phone_number = settings.TWILIO_PHONE_NUMBER

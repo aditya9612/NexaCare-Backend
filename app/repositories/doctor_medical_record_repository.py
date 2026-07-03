@@ -118,3 +118,12 @@ class DoctorMedicalRecordRepository:
             .select_from(TreatmentNote)
             .where(TreatmentNote.patient_id == patient_id)
         ) or 0
+
+    async def update_record(self, record: DoctorMedicalRecord) -> DoctorMedicalRecord:
+        await self.db.flush()
+        await self.db.refresh(record)
+        return record
+
+    async def delete_record(self, record: DoctorMedicalRecord) -> None:
+        await self.db.delete(record)
+        await self.db.flush()

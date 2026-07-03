@@ -66,13 +66,26 @@ class DashboardService:
         )
 
     async def doctor_dashboard(self, user: User) -> DoctorDashboardResponse:
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import Prescription
+        from app.schemas.dashboard_schema import PrescriptionSummary
+        from app.schemas.pharmacy_schema import PrescriptionResponse, PrescriptionItemResponse
+
         doctor_result = await self.db.execute(
             select(Doctor).where(Doctor.user_id == user.id, Doctor.is_deleted.is_(False))
         )
         doctor = doctor_result.scalar_one_or_none()
         if not doctor:
             return DoctorDashboardResponse(
-                today_patients=0, upcoming_appointments=[], completed_consultations=0
+                today_patients=0,
+                upcoming_appointments=[],
+                completed_consultations=0,
+                prescription_summary=PrescriptionSummary(
+                    total_prescriptions=0,
+                    pending_prescriptions=0,
+                    dispensed_prescriptions=0,
+                    recent_prescriptions=[]
+                )
             )
 
         today = date.today()
@@ -88,10 +101,57 @@ class DashboardService:
             doctor_id=doctor.id, status=AppointmentStatus.COMPLETED
         )
 
+        total_prescriptions = await self.db.scalar(
+            select(func.count()).select_from(Prescription).where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.is_deleted.is_(False)
+            )
+        ) or 0
+
+        pending_prescriptions = await self.db.scalar(
+            select(func.count()).select_from(Prescription).where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.status == "pending",
+                Prescription.is_deleted.is_(False)
+            )
+        ) or 0
+
+        dispensed_prescriptions = await self.db.scalar(
+            select(func.count()).select_from(Prescription).where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.status == "dispensed",
+                Prescription.is_deleted.is_(False)
+            )
+        ) or 0
+
+        recent_result = await self.db.execute(
+            select(Prescription)
+            .where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.is_deleted.is_(False)
+            )
+            .options(selectinload(Prescription.items))
+            .order_by(Prescription.created_at.desc())
+            .limit(5)
+        )
+        recent_prescriptions_list = list(recent_result.scalars().unique().all())
+
+        recent_prescriptions = []
+        for p in recent_prescriptions_list:
+            resp = PrescriptionResponse.model_validate(p)
+            resp.items = [PrescriptionItemResponse.model_validate(i) for i in p.items]
+            recent_prescriptions.append(resp)
+
         return DoctorDashboardResponse(
             today_patients=len(patient_ids),
             upcoming_appointments=[AppointmentResponse.model_validate(a) for a in upcoming],
             completed_consultations=completed,
+            prescription_summary=PrescriptionSummary(
+                total_prescriptions=total_prescriptions,
+                pending_prescriptions=pending_prescriptions,
+                dispensed_prescriptions=dispensed_prescriptions,
+                recent_prescriptions=recent_prescriptions
+            )
         )
 
     async def patient_dashboard(self, user: User) -> PatientDashboardResponse:

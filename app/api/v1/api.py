@@ -33,6 +33,8 @@ from app.api.v1.routes import (
     vendor_routes,
     transaction_routes,
     transaction_history_routes,
+    clinical_record_router,
+    lab_dashboard_routes,
 )
 
 
@@ -49,6 +51,7 @@ api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"]
 api_router.include_router(staff_routes.router, prefix="/staff", tags=["Staff"])
 api_router.include_router(pharmacy_routes.router, prefix="/pharmacy", tags=["Pharmacy"])
 api_router.include_router(lab_routes.router, prefix="/lab", tags=["Lab"])
+api_router.include_router(lab_dashboard_routes.router, prefix="/lab/dashboard", tags=["Lab Dashboard"])
 api_router.include_router(billing_routes.router, prefix="/billing", tags=["Billing"]) 
 api_router.include_router( accountant_routes.router,  prefix="/accountant", tags=["Accountant Dashboard"],)  
 api_router.include_router(department_routes.router, prefix="/departments", tags=["Departments"])
@@ -74,4 +77,5 @@ api_router.include_router(admin_management_routes.router, prefix="/super-admin/a
 api_router.include_router(icu_telemetry_routes.router, prefix="/icu", tags=["ICU Telemetry"])
 api_router.include_router(transaction_routes.router, prefix="/transactions", tags=["Transactions"])
 api_router.include_router(transaction_history_routes.router, prefix="/transaction-history", tags=["Transaction History"])
+api_router.include_router(clinical_record_router.router, prefix="/clinical-records", tags=["Clinical Records"])
 

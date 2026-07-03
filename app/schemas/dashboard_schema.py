@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from app.schemas.appointment_schema import AppointmentResponse
 
 
+from app.schemas.pharmacy_schema import PrescriptionResponse
+
 class DepartmentStat(BaseModel):
     department: str
     count: int
@@ -19,10 +21,18 @@ class AdminDashboardResponse(BaseModel):
     department_statistics: list[DepartmentStat]
 
 
+class PrescriptionSummary(BaseModel):
+    total_prescriptions: int
+    pending_prescriptions: int
+    dispensed_prescriptions: int
+    recent_prescriptions: list[PrescriptionResponse]
+
+
 class DoctorDashboardResponse(BaseModel):
     today_patients: int
     upcoming_appointments: list[AppointmentResponse]
     completed_consultations: int
+    prescription_summary: PrescriptionSummary
 
 
 class PatientDashboardResponse(BaseModel):

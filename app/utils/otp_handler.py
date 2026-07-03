@@ -2,6 +2,8 @@ import random
 import string
 from datetime import datetime, timedelta
 
+from app.utils.helpers import utc_now
+
 from app.core.config import settings
 from app.utils.phone_utils import normalize_phone
 
@@ -34,7 +36,7 @@ def generate_otp(length: int = 6) -> str:
 
 def store_otp(email: str | None, otp: str, expiry_minutes: int = 10, phone: str | None = None) -> None:
     """Store OTP under email and/or phone keys (same code for both)."""
-    expires = datetime.utcnow() + timedelta(minutes=expiry_minutes)
+    expires = utc_now() + timedelta(minutes=expiry_minutes)
     for key in _otp_keys(email=email, phone=phone):
         _otp_store[key] = (otp, expires)
 
@@ -52,7 +54,7 @@ def _check_key(key: str, otp: str) -> bool:
     if not stored:
         return False
     code, expires = stored
-    if datetime.utcnow() > expires:
+    if utc_now() > expires:
         del _otp_store[key]
         return False
     return code == otp

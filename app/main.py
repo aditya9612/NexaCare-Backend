@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
 
-    # Start ngrok tunnel for Twilio webhooks
+    # Start ngrok tunnel for Twilio webhooks (dev only)
     try:
         from pyngrok import ngrok, conf
         ngrok_token = os.getenv("NGROK_AUTH_TOKEN")
@@ -44,12 +44,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  ngrok failed to start: {e}")
 
-    # try:
-    #     from app.agent.reminder import start_reminder_scheduler
-    #     scheduler = start_reminder_scheduler(AsyncSessionLocal)
-    #     print("✅ Reminder scheduler started — runs every hour")
-    # except Exception as e:
-    #     print(f"⚠️  Reminder scheduler failed to start: {e}")
+    # NOTE: Appointment reminders now run via Celery Beat, not in-process.
+    # Start separately with:
+    #   celery -A app.core.celery_app worker --loglevel=info
+    #   celery -A app.core.celery_app beat --loglevel=info
 
     yield
 

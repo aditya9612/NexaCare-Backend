@@ -218,6 +218,12 @@ async def conversation_turn(
     digits = Digits.strip()
     _log_request("TURN", call_sid, Speech=speech, Digits=digits, Confidence=Confidence)
 
+    # Parse confidence — Twilio sends it as a string, sometimes empty
+    try:
+        confidence_float = float(Confidence) if Confidence.strip() else -1.0
+    except ValueError:
+        confidence_float = -1.0
+
     try:
         state = session_store.get_session(call_sid)
         if state is None:
@@ -230,7 +236,7 @@ async def conversation_turn(
         # ── collect_name ──────────────────────────────────────────────────
         if step == "collect_name":
             logger.info(f"  ↳ [{call_sid}] Processing name: {speech!r}")
-            result = book_node.process_collect_name(state, speech)
+            result = book_node.process_collect_name(state, speech, confidence=confidence_float)
             _apply(call_sid, result)
             logger.info(f"  ↳ [{call_sid}] Name result step: {result.get('step')}")
             return xml(result["_twiml"])
@@ -238,7 +244,7 @@ async def conversation_turn(
         # ── collect_problem ───────────────────────────────────────────────
         if step == "collect_problem":
             logger.info(f"  ↳ [{call_sid}] Processing problem: {speech!r}")
-            result = book_node.process_collect_problem(state, speech)
+            result = book_node.process_collect_problem(state, speech, confidence=confidence_float)
             _apply(call_sid, result)
 
             if result.get("_pending") == "suggest_doctors":
@@ -351,8 +357,8 @@ async def reminder_twiml(
         appt_no=appt_no,
     )
     return xml(twiml)
- 
- 
+
+
 # ── Route 8: Reminder call status callback ─────────────────────────────────────
 @router.post("/reminder-status")
 async def reminder_status(
@@ -372,7 +378,7 @@ async def reminder_status(
         f"▶ REMINDER-STATUS | status={CallStatus} | "
         f"phone={phone} | appt={appt_no}"
     )
- 
+
     no_answer_statuses = {"no-answer", "busy", "failed"}
     if CallStatus.lower() in no_answer_statuses:
         logger.warning(
@@ -387,18 +393,8 @@ async def reminder_status(
         )
     else:
         logger.info(f"  ↳ Reminder call {CallStatus} for {appt_no}")
- 
-    return PlainTextResponse("ok")
 
-# ── TEST ONLY — remove before production ──────────────────────────────────────
-@router.get("/reminder-run-now")
-async def trigger_reminders_now(db: DbSession):
-    """Manually trigger reminder job for testing."""
-    from app.agent.reminder import process_reminders
-    from app.core.database import AsyncSessionLocal
-    logger.info("▶ MANUAL REMINDER TRIGGER")
-    await process_reminders(AsyncSessionLocal)
-    return {"status": "done", "message": "Reminder job executed — check logs"}
+    return PlainTextResponse("ok")
 
 
 # ── Internal helper ────────────────────────────────────────────────────────────

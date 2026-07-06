@@ -1,27 +1,60 @@
 """
 app/agent/llm.py
 ----------------
-Groq LLM client using llama-3.3-70b-versatile.
+Gemini LLM client for NexaCare AI Voice Agent.
 
-Two extraction tasks:
+Uses google-genai SDK with gemini-2.5-flash for:
   1. extract_patient_name()   — extracts name from free-form speech transcript
-  2. extract_problem()        — extracts/normalises problem from free-form speech
-  3. detect_specialty()       — maps problem to medical specialty
+  2. extract_problem()        — extracts/normalises problem + severity from speech
+  3. detect_specialty()       — maps problem to medical specialty with confidence
 """
 
 import json
 import logging
 import os
+from enum import Enum
 from typing import Optional
 
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from groq import Groq
-
 load_dotenv()
 
 logger = logging.getLogger("nexacare.agent.llm")
 
-MODEL = "llama-3.3-70b-versatile"
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+def _get_model() -> str:
+    """Get Gemini model name from settings or env."""
+    try:
+        from app.core.config import settings
+        return settings.GEMINI_MODEL or "gemini-2.5-flash"
+    except Exception:
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+def _get_client() -> genai.Client:
+    """Create a Gemini client using GEMINI_API_KEY."""
+    try:
+        from app.core.config import settings
+        api_key = settings.GEMINI_API_KEY
+    except Exception:
+        api_key = None
+
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY not set. Add it to .env or settings."
+        )
+
+    return genai.Client(api_key=api_key)
+
+
+# ── Valid specialties ─────────────────────────────────────────────────────────
 
 VALID_SPECIALTIES = [
     "Cardiology", "Orthopedics", "Neurology", "Gastroenterology",
@@ -62,14 +95,8 @@ SPECIALTY_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def _get_client() -> Groq:
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY not set in environment")
-    return Groq(api_key=api_key)
-
-
 def _keyword_hint(problem: str) -> Optional[str]:
+    """Fast keyword-based specialty hint as a fallback/boost signal."""
     problem_lower = problem.lower()
     for specialty, keywords in SPECIALTY_KEYWORDS.items():
         if any(kw in problem_lower for kw in keywords):
@@ -77,57 +104,82 @@ def _keyword_hint(problem: str) -> Optional[str]:
     return None
 
 
+# ── Pydantic response schemas ─────────────────────────────────────────────────
+# Gemini's structured output guarantees conformance to these schemas.
+
+class ConfidenceLevel(str, Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class NameExtractionResult(BaseModel):
+    """Result of extracting a patient name from speech transcript."""
+    found: bool = Field(description="True if a valid patient name was found in the transcript")
+    name: str = Field(default="", description="The extracted patient name, properly capitalised")
+    confidence: ConfidenceLevel = Field(default=ConfidenceLevel.low, description="Confidence level")
+    reason: str = Field(default="", description="One short sentence explaining the extraction result")
+
+
+class SeverityLevel(str, Enum):
+    urgent = "urgent"
+    routine = "routine"
+    unclear = "unclear"
+
+
+class ProblemExtractionResult(BaseModel):
+    """Result of extracting a medical problem from speech transcript."""
+    found: bool = Field(description="True if a medical problem/symptom was described")
+    problem: str = Field(default="", description="Cleaned medical problem description in the patient's spoken language")
+    severity: SeverityLevel = Field(default=SeverityLevel.unclear, description="Urgency assessment: urgent (emergency symptoms), routine (standard), or unclear")
+    keywords: list[str] = Field(default_factory=list, description="Up to 3 medical keywords in English for specialty matching")
+    confidence: ConfidenceLevel = Field(default=ConfidenceLevel.low, description="Confidence level")
+    reason: str = Field(default="", description="One short sentence explaining the extraction result")
+
+
+class SpecialtyDetectionResult(BaseModel):
+    """Result of mapping a medical problem to a specialty."""
+    specialty: str = Field(description="One of the valid medical specialties")
+    confidence: ConfidenceLevel = Field(default=ConfidenceLevel.low, description="Confidence level")
+    reasoning: str = Field(default="", description="One short sentence explaining the specialty choice")
+
+
 # ── 1. Name extraction ────────────────────────────────────────────────────────
 
-NAME_SYSTEM_PROMPT = """You are a medical receptionist assistant for an Indian hospital.
+NAME_SYSTEM_PROMPT = """You are a medical receptionist assistant for NexaCare, an Indian hospital.
 The patient was asked "Please say your full name." and you received their speech transcript.
 
 The patient may have spoken in English, Hindi, or Marathi. The transcript may
 contain Devanagari script (Hindi/Marathi), Latin script (English or
-transliterated Hindi/Marathi), or a mix. Filler phrases meaning "my name is"
-appear in all three languages — for example "my name is", "mera naam hai",
-"माझे नाव आहे", "मेरा नाम है" — strip these in whichever language they appear.
+transliterated Hindi/Marathi), or a mix.
 
-Your job: extract ONLY the patient's actual name from the transcript.
+Your job: extract ONLY the patient's actual name from the transcript. ABSOLUTELY NO EXTRA WORDS.
 
 Rules:
-- Respond ONLY with valid JSON. No markdown, no explanation outside JSON.
-- Remove filler phrases (in English, Hindi, or Marathi) like "my name is",
-  "I am", "this is", "myself", "call me", "मेरा नाम है", "माझे नाव आहे", etc.
-- If a clear name is present, extract it properly capitalised (if in Latin
-  script) or as correctly written (if in Devanagari script).
-- If the transcript is too unclear, empty, or does not contain a name, set found to false.
-- Names can be Indian names — be flexible. A single short word can be a valid name.
-
-JSON format:
-{
-  "found": true or false,
-  "name": "<extracted name or empty string if not found>",
-  "confidence": "<high|medium|low>",
-  "reason": "<one short sentence>"
-}"""
+- STRICTLY EXTRACT ONLY THE NAME. Do not include any contextual words, greetings, or filler phrases.
+- Remove ALL filler phrases in any language. Common examples:
+  English: "my name is", "I am", "this is", "myself", "call me", "hi my name is"
+  Hindi: "मेरा नाम है", "मेरा नाम", "मैं हूँ", "मैं", "जी मेरा नाम"
+  Marathi: "माझे नाव आहे", "माझे नाव", "मी आहे", "मी"
+  Transliterated: "mera naam hai", "mera naam", "majhe naav", "majhe naav aahe"
+- Handle salutations: if the name includes Mr./Mrs./Dr./Shri/Smt., keep them
+- Indian names can be single words (e.g., "Ravi"), two words (e.g., "Ravi Kumar"), or three
+- Names in Devanagari script should be kept in Devanagari
+- Names in Latin script should be properly Title Cased
+- If the transcript is too unclear, empty, or contains only filler words, set found to false
+- A single short word (2+ characters) CAN be a valid name
+- NEVER output full sentences as the name."""
 
 
 def extract_patient_name(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
-    Use Groq LLM to extract the patient's name from a speech transcript.
+    Use Gemini to extract the patient's name from a speech transcript.
 
-    twilio_confidence: the raw Twilio STT confidence value (0.0–1.0).
-    Twilio frequently reports 0.0 even on correct transcripts, so we NEVER
-    reject a transcript based on confidence alone — we always try the LLM.
-
-    Returns:
-        {
-            "found": bool,
-            "name": str,
-            "confidence": "high"|"medium"|"low",
-            "reason": str
-        }
+    Returns dict with keys: found, name, confidence, reason
     """
     if not transcript or not transcript.strip():
         return {"found": False, "name": "", "confidence": "low", "reason": "Empty transcript."}
 
-    # Log for debugging — useful to track which transcripts fail extraction
     logger.info(
         f"Name extraction attempt | transcript={transcript!r} | "
         f"twilio_confidence={twilio_confidence}"
@@ -135,18 +187,21 @@ def extract_patient_name(transcript: str, twilio_confidence: float = -1.0) -> di
 
     try:
         client = _get_client()
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": NAME_SYSTEM_PROMPT},
-                {"role": "user",   "content": f'Transcript: "{transcript.strip()}"'},
-            ],
-            temperature=0.0,   # deterministic — name extraction is not creative
-            max_tokens=100,
-            response_format={"type": "json_object"},
+        model = _get_model()
+
+        response = client.models.generate_content(
+            model=model,
+            contents=f'Speech transcript: "{transcript.strip()}"',
+            config=types.GenerateContentConfig(
+                system_instruction=NAME_SYSTEM_PROMPT,
+                temperature=0.0,
+                max_output_tokens=150,
+                response_mime_type="application/json",
+                response_schema=NameExtractionResult,
+            ),
         )
-        raw = response.choices[0].message.content.strip()
-        result = json.loads(raw)
+
+        result = json.loads(response.text)
 
         # Sanitise response
         if not isinstance(result.get("found"), bool):
@@ -182,49 +237,36 @@ def extract_patient_name(transcript: str, twilio_confidence: float = -1.0) -> di
 
 # ── 2. Problem extraction ─────────────────────────────────────────────────────
 
-PROBLEM_SYSTEM_PROMPT = """You are a medical receptionist assistant for an Indian hospital.
+PROBLEM_SYSTEM_PROMPT = """You are a medical receptionist assistant for NexaCare, an Indian hospital.
 The patient was asked "Please describe your health problem or symptoms."
 
 The patient may have spoken in English, Hindi, or Marathi. The transcript may
 contain Devanagari script (Hindi/Marathi), Latin script (English or
 transliterated Hindi/Marathi), or a mix.
 
-Your job: extract and normalise the medical problem from the transcript.
+Your job: extract, normalise, and assess the STRICT medical problem from the transcript.
 
 Rules:
-- Respond ONLY with valid JSON. No markdown, no explanation outside JSON.
-- Rephrase vague or broken speech into a clear medical problem description.
-- IMPORTANT: write the cleaned "problem" in the SAME language the patient
-  spoke (Hindi stays in Hindi/Devanagari, Marathi stays in Marathi/Devanagari,
-  English stays in English). This text gets read back to the patient by
-  text-to-speech in their own language, so do not translate it.
+- STRICTLY EXTRACT ONLY THE SPECIFIC SYMPTOMS OR PROBLEM. DO NOT include filler words like "I am having", "I feel", "Mujhe", "Mala", etc.
+- Output just the core medical issue (e.g., "chest pain", "headache", "सिरदर्द", "पोटात दुखणे").
+- CRITICAL: Write the cleaned "problem" in the SAME language the patient spoke.
+  Hindi stays in Hindi/Devanagari, Marathi stays in Marathi/Devanagari,
+  English stays in English. This text will be read back to the patient
+  by text-to-speech, so do NOT translate it.
+- Assess severity: "urgent" for chest pain, difficulty breathing, severe bleeding,
+  loss of consciousness, etc. "routine" for standard symptoms. "unclear" if unsure.
+- Extract up to 3 medical keywords in ENGLISH (regardless of input language)
+  for specialty matching. Examples: ["chest pain", "shortness of breath", "sweating"]
 - If the patient described a clear problem, set found to true.
-- If the transcript is too unclear, too short (just "pain" with no context),
-  or does not describe any health problem, set found to false.
-- Be generous — if there's any health information, extract it, regardless of language.
-
-JSON format:
-{
-  "found": true or false,
-  "problem": "<cleaned medical problem description, in the patient's spoken language, or empty string>",
-  "confidence": "<high|medium|low>",
-  "reason": "<one short sentence>"
-}"""
+- If the transcript is too unclear, too short, or not health-related, set found to false.
+- Be generous — if there's ANY health information, extract it regardless of language."""
 
 
 def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
-    Use Groq LLM to extract and normalise the patient's problem from transcript.
+    Use Gemini to extract and normalise the patient's problem from transcript.
 
-    twilio_confidence: raw Twilio STT score. Never used to reject a transcript.
-
-    Returns:
-        {
-            "found": bool,
-            "problem": str,
-            "confidence": "high"|"medium"|"low",
-            "reason": str
-        }
+    Returns dict with keys: found, problem, severity, keywords, confidence, reason
     """
     if not transcript or not transcript.strip():
         return {"found": False, "problem": "", "confidence": "low", "reason": "Empty transcript."}
@@ -236,17 +278,21 @@ def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
 
     try:
         client = _get_client()
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": PROBLEM_SYSTEM_PROMPT},
-                {"role": "user",   "content": f'Transcript: "{transcript.strip()}"'},
-            ],
-            temperature=0.0,   # deterministic extraction
-            max_tokens=150,
-            response_format={"type": "json_object"},
+        model = _get_model()
+
+        response = client.models.generate_content(
+            model=model,
+            contents=f'Speech transcript: "{transcript.strip()}"',
+            config=types.GenerateContentConfig(
+                system_instruction=PROBLEM_SYSTEM_PROMPT,
+                temperature=0.0,
+                max_output_tokens=250,
+                response_mime_type="application/json",
+                response_schema=ProblemExtractionResult,
+            ),
         )
-        result = json.loads(response.choices[0].message.content.strip())
+
+        result = json.loads(response.text)
 
         if not isinstance(result.get("found"), bool):
             result["found"] = bool(result.get("problem", "").strip())
@@ -256,70 +302,88 @@ def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
 
         logger.info(
             f"Problem extraction: found={result['found']} "
+            f"severity={result.get('severity')} keywords={result.get('keywords')} "
             f"conf={result.get('confidence')} | {result.get('reason')}"
         )
         return result
 
     except Exception as e:
         logger.warning(f"Problem extraction LLM failed: {e} — using raw transcript as fallback")
-        # If LLM fails entirely, use raw transcript if it's long enough to be meaningful
         problem = transcript.strip()
         if len(problem.replace(" ", "")) >= 4:
-            return {"found": True, "problem": problem, "confidence": "low", "reason": "LLM error — raw transcript used."}
+            return {
+                "found": True, "problem": problem, "confidence": "low",
+                "severity": "unclear", "keywords": [],
+                "reason": "LLM error — raw transcript used.",
+            }
         return {"found": False, "problem": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
 
 
 # ── 3. Specialty detection ────────────────────────────────────────────────────
 
+_SPECIALTY_LIST = "\n".join(f"- {s}" for s in VALID_SPECIALTIES)
+
 SPECIALTY_SYSTEM_PROMPT = f"""You are a medical triage assistant for NexaCare hospital.
 Analyse the patient's problem and return the most appropriate medical specialty.
 
-The problem description may be written in English, Hindi, or Marathi
+The problem description may be in English, Hindi, or Marathi
 (Devanagari or Latin script). Understand it regardless of language.
 
 Available specialties:
-{chr(10).join(f"- {s}" for s in VALID_SPECIALTIES)}
+{_SPECIALTY_LIST}
 
 Rules:
-- Respond ONLY with a valid JSON object. No markdown, no preamble.
-- If unsure, use General Medicine.
+- Select the SINGLE most appropriate specialty from the list above.
+- If unsure or the problem is vague, use "General Medicine".
 - Be conservative: prefer common conditions over rare ones.
-
-JSON format:
-{{
-  "specialty": "<one of the specialties above>",
-  "confidence": "<high|medium|low>",
-  "reasoning": "<one short sentence>"
-}}"""
+- If multiple specialties could apply, choose the primary/most urgent one.
+- Consider the English keywords (if provided) as additional signal."""
 
 
-def detect_specialty(problem_description: str) -> dict:
+def detect_specialty(problem_description: str, keywords: list[str] | None = None) -> dict:
     """
     Detect medical specialty from patient's cleaned problem description.
+
+    Args:
+        problem_description: The cleaned problem text (in patient's language)
+        keywords: Optional list of English medical keywords from problem extraction
+
+    Returns dict with keys: specialty, confidence, reasoning
     """
     hint = _keyword_hint(problem_description)
 
-    user_prompt = (
-        f'Patient problem: "{problem_description}"\n\n'
-        + (f'Keyword hint: "{hint}". Confirm or override based on full context.\n\n' if hint else "")
-        + "Respond ONLY with the JSON object."
-    )
+    # Also check keywords for hints
+    if not hint and keywords:
+        for kw in keywords:
+            hint = _keyword_hint(kw)
+            if hint:
+                break
+
+    user_prompt = f'Patient problem: "{problem_description}"'
+    if keywords:
+        user_prompt += f'\nMedical keywords: {", ".join(keywords)}'
+    if hint:
+        user_prompt += f'\nKeyword analysis suggests: "{hint}". Confirm or override based on full context.'
 
     try:
         client = _get_client()
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": SPECIALTY_SYSTEM_PROMPT},
-                {"role": "user",   "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=150,
-            response_format={"type": "json_object"},
+        model = _get_model()
+
+        response = client.models.generate_content(
+            model=model,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SPECIALTY_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_output_tokens=150,
+                response_mime_type="application/json",
+                response_schema=SpecialtyDetectionResult,
+            ),
         )
 
-        result = json.loads(response.choices[0].message.content.strip())
+        result = json.loads(response.text)
 
+        # Validate specialty is in our list
         if result.get("specialty") not in VALID_SPECIALTIES:
             result["specialty"] = hint or "General Medicine"
             result["confidence"] = "low"

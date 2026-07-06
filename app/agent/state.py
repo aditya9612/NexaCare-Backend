@@ -51,3 +51,7 @@ class BookingCallState(TypedDict):
 
     # ── Base URL (set at startup via ngrok or real domain) ─────────────────
     base_url: str                        # e.g. "https://xxxx.ngrok-free.app"
+
+    # ── Gemini Live API fields ─────────────────────────────────────────────
+    audio_stream_sid: Optional[str]      # Twilio Media Stream SID
+    conversation_history: Optional[list] # Multi-turn context from live session

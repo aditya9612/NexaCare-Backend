@@ -3,7 +3,7 @@ app/agent/nodes/booking.py
 --------------------------
 All booking-flow nodes.
 
-Name + Problem collection uses Groq LLM extraction (not rule-based).
+Name + Problem collection uses Gemini LLM extraction (not rule-based).
 Each field extraction has full positive + negative scenario handling.
 After a successful booking, an SMS confirmation is sent to the caller.
 """
@@ -369,8 +369,8 @@ def process_collect_name(state: BookingCallState, speech_result: str, confidence
 
 def process_collect_problem(state: BookingCallState, speech_result: str, confidence: float = -1.0) -> dict:
     """
-    Send transcript to Groq LLM for problem extraction.
-    Positive: confirms problem, triggers specialty detection.
+    Send transcript to Gemini LLM for problem extraction.
+    Positive: confirms problem, triggers specialty detection with keyword boost.
     Negative: asks patient to describe again.
     Never rejects based on Twilio confidence score — LLM decides.
     """
@@ -420,8 +420,10 @@ def process_collect_problem(state: BookingCallState, speech_result: str, confide
     problem = extraction["problem"].strip()
     logger.info(f"[{state['call_sid']}] ✓ Problem confirmed: {problem!r}")
 
-    logger.info(f"[{state['call_sid']}] Detecting specialty for: {problem!r}")
-    analysis = detect_specialty(problem)
+    # Pass English keywords from extraction for multi-signal specialty matching
+    keywords = extraction.get("keywords", [])
+    logger.info(f"[{state['call_sid']}] Detecting specialty for: {problem!r} | keywords={keywords}")
+    analysis = detect_specialty(problem, keywords=keywords)
     logger.info(f"[{state['call_sid']}] Specialty: {analysis['specialty']} ({analysis['confidence']})")
 
     confirm_msg = _s("problem_confirmed", lang, problem=problem)
@@ -616,6 +618,8 @@ def process_select_slot(state: BookingCallState, digit: str) -> dict:
 
 async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     from app.models.appointment_model import Appointment
+    from app.models.patient_model import Patient
+    from app.repositories.patient_repository import PatientRepository
     import random
     import string
 
@@ -628,11 +632,40 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     caller_number = state.get("from_number", "")
 
     try:
+        # ── Resolve or create patient record from caller's phone number ──
+        patient_repo = PatientRepository(db)
+        patient = await patient_repo.get_by_phone(caller_number) if caller_number else None
+
+        if not patient:
+            name_parts = patient_name.strip().split(maxsplit=1)
+            first_name = name_parts[0] if name_parts else "Patient"
+            last_name  = name_parts[1] if len(name_parts) > 1 else ""
+
+            patient_code = "PT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+            patient = Patient(
+                patient_code=patient_code,
+                first_name=first_name,
+                last_name=last_name,
+                phone=caller_number,
+                status="active",
+            )
+            patient = await patient_repo.create(patient)
+            logger.info(
+                f"[{state['call_sid']}] ✓ New patient created: "
+                f"id={patient.id} | {first_name} {last_name} | {caller_number}"
+            )
+        else:
+            logger.info(
+                f"[{state['call_sid']}] ✓ Existing patient matched: "
+                f"id={patient.id} | phone={caller_number}"
+            )
+
         appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
         appt = Appointment(
             appointment_number=appt_no,
-            patient_id=1,
+            patient_id=patient.id,
             doctor_id=doctor_id,
             department_id=None,
             appointment_date=slot["date"],

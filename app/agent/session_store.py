@@ -43,6 +43,8 @@ def create_session(call_sid: str, from_number: str, base_url: str) -> BookingCal
         retry_count=0,
         error_message=None,
         base_url=base_url,
+        audio_stream_sid=None,
+        conversation_history=None,
     )
     _sessions[call_sid] = state
     logger.info(f"[{call_sid}] Session created | from={from_number}")

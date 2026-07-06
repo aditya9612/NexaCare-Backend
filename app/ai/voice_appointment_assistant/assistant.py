@@ -1,9 +1,13 @@
+import logging
 import re
 from datetime import date, time, timedelta
 from typing import List, Optional, Tuple
 
+from app.agent.llm import extract_patient_name, extract_problem
 from app.ai.voice_appointment_assistant import prompts
 from app.ai.voice_appointment_assistant.emergency import emergency_message, is_emergency
+
+logger = logging.getLogger("nexacare.agent.assistant")
 from app.ai.voice_appointment_assistant.language import detect_language
 from app.ai.voice_appointment_assistant.schemas import (
     VoiceBookingPayload,
@@ -59,6 +63,7 @@ class VoiceAppointmentAssistant:
         confidence: float | None = None,
     ) -> VoiceTurnResult:
         text = (transcript or "").strip()
+        logger.info(f"Processing turn - State: {state.step.name}, Transcript: {text}")
         if text:
             state.language = detect_language(text, state.language)
 
@@ -177,19 +182,40 @@ class VoiceAppointmentAssistant:
         return VoiceTurnResult(prompt=prompts.intent_menu(state.language), state=state)
 
     def _book_name(self, state: VoiceState, text: str) -> VoiceTurnResult:
-        state.patient_name = text.strip()
-        state.step = VoiceStep.BOOK_DOCTOR
-        return VoiceTurnResult(prompt=prompts.ask_doctor(state.language), state=state)
+        logger.info(f"Extracting name from raw transcript: {text}")
+        result = extract_patient_name(text)
+        if result.get("found") and result.get("name"):
+            state.patient_name = result["name"]
+            logger.info(f"Extracted name: {state.patient_name}")
+            state.step = VoiceStep.BOOK_DOCTOR
+            return VoiceTurnResult(prompt=prompts.ask_doctor(state.language), state=state)
+        else:
+            logger.info(f"Failed to extract name strictly from: {text}")
+            return VoiceTurnResult(
+                prompt=prompts.could_not_hear(state.language) + " " + prompts.ask_patient_name(state.language),
+                state=state
+            )
 
     def _book_doctor(self, state: VoiceState, text: str) -> VoiceTurnResult:
         state.doctor_or_department = text.strip()
+        logger.info(f"Set doctor/department to: {state.doctor_or_department}")
         state.step = VoiceStep.BOOK_SYMPTOMS
         return VoiceTurnResult(prompt=prompts.ask_symptoms(state.language), state=state)
 
     def _book_symptoms(self, state: VoiceState, text: str) -> VoiceTurnResult:
-        state.symptoms = text.strip()
-        state.step = VoiceStep.BOOK_DATE
-        return VoiceTurnResult(prompt=prompts.ask_date(state.language), state=state)
+        logger.info(f"Extracting problem from raw transcript: {text}")
+        result = extract_problem(text)
+        if result.get("found") and result.get("problem"):
+            state.symptoms = result["problem"]
+            logger.info(f"Extracted problem: {state.symptoms}")
+            state.step = VoiceStep.BOOK_DATE
+            return VoiceTurnResult(prompt=prompts.ask_date(state.language), state=state)
+        else:
+            logger.info(f"Failed to extract problem strictly from: {text}")
+            return VoiceTurnResult(
+                prompt=prompts.could_not_hear(state.language) + " " + prompts.ask_symptoms(state.language),
+                state=state
+            )
 
     def _book_date(self, state: VoiceState, text: str) -> VoiceTurnResult:
         parsed_date, _ = self._parse_datetime(text)

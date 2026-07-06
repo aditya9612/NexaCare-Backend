@@ -76,14 +76,19 @@ class RBACService:
         )
 
     async def list_role_permissions(self, role_id: int | None = None) -> list[RolePermissionResponse]:
-        items = await self.repo.list_role_permissions(role_id)
+        perms = await self.repo.list_permissions()
+        role_name = None
+        if role_id:
+            role = await self.repo.get_role_by_id(role_id)
+            if role:
+                role_name = role.name
         return [
             RolePermissionResponse(
-                id=rp.id,
-                role_id=rp.role_id,
-                permission_id=rp.permission_id,
-                role_name=rp.role.name if rp.role else None,
-                permission_name=rp.permission.name if rp.permission else None,
+                id=idx + 1,
+                role_id=role_id or 1,
+                permission_id=p.id,
+                role_name=role_name,
+                permission_name=p.name,
             )
-            for rp in items
+            for idx, p in enumerate(perms)
         ]

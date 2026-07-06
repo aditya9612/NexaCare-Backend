@@ -23,6 +23,7 @@ class PublicDoctorResponse(BaseSchema):
     name: str
     specialty: str
     department: Optional[str] = None
+    department_id: Optional[int] = None
     rating: float = 4.8
     experience: Optional[int] = None
     working_days: List[str] = Field(
@@ -62,6 +63,7 @@ class SymptomAnalysisResponse(BaseSchema):
     confidence_score: float
     specialty: str
     department: Optional[str] = None
+    department_id: Optional[int] = None
     suggested_doctor_id: Optional[int] = None
     suggested_doctor_name: Optional[str] = None
     available_slots: List[SuggestedSlotPublic] = []

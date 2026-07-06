@@ -49,6 +49,7 @@ from app.utils.pagination import build_paginated_result
 
 class NurseService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = NurseRepository(db)
         self.shift_repo = NurseShiftRepository(db)
         self.attendance_repo = NurseAttendanceRepository(db)
@@ -664,3 +665,261 @@ class NurseService:
             page,
             size,
         )
+
+    async def list_prescriptions(self, patient_id: int | None = None):
+        from sqlalchemy import select
+        from app.models.nurse_model import NursePrescription
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        import json
+
+        query = select(NursePrescription, Patient, Doctor).join(
+            Patient, NursePrescription.patient_id == Patient.id
+        ).join(
+            Doctor, NursePrescription.doctor_id == Doctor.id
+        )
+        if patient_id is not None:
+            query = query.where(NursePrescription.patient_id == patient_id)
+        
+        result = await self.db.execute(query)
+        rows = result.all()
+        
+        prescriptions = []
+        for presc, patient, doctor in rows:
+            time_of_day = json.loads(presc.time_of_day) if presc.time_of_day else []
+            times = json.loads(presc.times) if presc.times else {}
+            prescriptions.append({
+                "medication_id": f"MED-10{presc.id}",
+                "id": presc.id,
+                "patient_id": f"P-100{patient.id}",
+                "patient_db_id": patient.id,
+                "patient_name": f"{patient.first_name} {patient.last_name}",
+                "doctor_id": f"DOC-20{doctor.id}",
+                "doctor_db_id": doctor.id,
+                "doctor_name": f"{doctor.first_name} {doctor.last_name}",
+                "medicine_name": presc.medicine_name,
+                "dosage": presc.dosage,
+                "frequency": presc.frequency,
+                "start_date": presc.start_date.isoformat(),
+                "end_date": presc.end_date.isoformat(),
+                "meal_timing": presc.meal_timing,
+                "time_of_day": time_of_day,
+                "exact_times": times,
+                "duration": f"{presc.duration_value} {presc.duration_unit}" if presc.duration_value else "",
+                "special_instructions": presc.special_instructions or "",
+                "status": presc.status
+            })
+        return prescriptions
+
+    async def create_prescription(self, data, user_id: int):
+        from app.models.nurse_model import NursePrescription
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from sqlalchemy import select, or_
+        import json
+
+        patient = await self.db.get(Patient, data.patient_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+
+        # Resolve doctor by name if possible
+        doctor = None
+        if hasattr(data, "doctor_name") and data.doctor_name:
+            doc_name = data.doctor_name.replace("Dr. ", "").replace("Dr.", "").strip()
+            parts = doc_name.split()
+            if len(parts) >= 2:
+                first, last = parts[0], parts[-1]
+                q = select(Doctor).where(
+                    or_(
+                        Doctor.first_name.ilike(f"%{first}%"),
+                        Doctor.last_name.ilike(f"%{last}%")
+                    )
+                )
+                res = await self.db.execute(q)
+                doctor = res.scalar_one_or_none()
+            elif len(parts) == 1:
+                q = select(Doctor).where(
+                    or_(
+                        Doctor.first_name.ilike(f"%{parts[0]}%"),
+                        Doctor.last_name.ilike(f"%{parts[0]}%")
+                    )
+                )
+                res = await self.db.execute(q)
+                doctor = res.scalar_one_or_none()
+
+        if not doctor:
+            doctor = await self.db.get(Doctor, data.doctor_id)
+            
+        if not doctor:
+            res = await self.db.execute(select(Doctor).limit(1))
+            doctor = res.scalar_one_or_none()
+
+        if not doctor:
+            raise NotFoundException("No doctors found in the database. Please seed doctors first.")
+
+        presc = NursePrescription(
+            patient_id=data.patient_id,
+            doctor_id=doctor.id,
+            medicine_name=data.medicine_name,
+            dosage=data.dosage,
+            frequency=data.frequency,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            meal_timing=data.meal_timing,
+            time_of_day=json.dumps(data.time_of_day) if data.time_of_day else "[]",
+            times=json.dumps(data.times) if data.times else "{}",
+            duration_value=data.duration_value,
+            duration_unit=data.duration_unit,
+            special_instructions=data.special_instructions,
+            status="active"
+        )
+        self.db.add(presc)
+        await self.db.flush()
+        await self.db.commit()
+
+        return await self.list_prescriptions(patient_id=data.patient_id)
+
+    async def delete_prescription(self, prescription_id: int, user_id: int):
+        from app.models.nurse_model import NursePrescription
+        presc = await self.db.get(NursePrescription, prescription_id)
+        if not presc:
+            raise NotFoundException("Prescription not found")
+        await self.db.delete(presc)
+        await self.db.commit()
+
+    async def log_medication(self, prescription_id: int, data, user_id: int):
+        from app.models.nurse_model import NursePrescription, NurseMedicationLog, Nurse
+        from sqlalchemy import select
+        import datetime
+
+        presc = await self.db.get(NursePrescription, prescription_id)
+        if not presc:
+            raise NotFoundException("Prescription not found")
+
+        res = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
+        nurse = res.scalar_one_or_none()
+        nurse_id = nurse.id if nurse else None
+
+        log = NurseMedicationLog(
+            prescription_id=prescription_id,
+            nurse_id=nurse_id,
+            status=data.status,
+            time_of_day_slot=data.time_of_day_slot,
+            notes=data.notes,
+            timestamp=data.timestamp or datetime.datetime.now()
+        )
+        self.db.add(log)
+        await self.db.flush()
+        await self.db.commit()
+        return log
+
+    async def delete_medication_log(self, prescription_id: int, log_id: int, user_id: int):
+        from app.models.nurse_model import NurseMedicationLog
+        log = await self.db.get(NurseMedicationLog, log_id)
+        if not log:
+            raise NotFoundException("Log not found")
+        await self.db.delete(log)
+        await self.db.commit()
+
+    async def list_medication_schedules(self):
+        from sqlalchemy import select
+        from app.models.nurse_model import NursePrescription, NurseMedicationLog
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.user_model import User
+        from app.models.nurse_model import Nurse
+        import json
+        import datetime
+
+        query = select(NursePrescription, Patient, Doctor).join(
+            Patient, NursePrescription.patient_id == Patient.id
+        ).join(
+            Doctor, NursePrescription.doctor_id == Doctor.id
+        ).where(NursePrescription.status == "active")
+        
+        result = await self.db.execute(query)
+        rows = result.all()
+
+        today_start = datetime.datetime.combine(datetime.date.today(), datetime.time.min)
+        today_end = datetime.datetime.combine(datetime.date.today(), datetime.time.max)
+        
+        logs_query = select(NurseMedicationLog, User).outerjoin(
+            Nurse, NurseMedicationLog.nurse_id == Nurse.id
+        ).outerjoin(
+            User, Nurse.user_id == User.id
+        ).where(
+            NurseMedicationLog.timestamp.between(today_start, today_end)
+        )
+        
+        logs_result = await self.db.execute(logs_query)
+        logs_rows = logs_result.all()
+        
+        logs_map = {}
+        for log, user in logs_rows:
+            key = (log.prescription_id, log.time_of_day_slot)
+            logs_map[key] = {
+                "id": log.id,
+                "status": log.status,
+                "nurse_id": f"NUR-00{log.nurse_id}" if log.nurse_id else "—",
+                "nurse_name": user.full_name if user else "—",
+                "notes": log.notes or "",
+                "time": log.timestamp.strftime("%I:%M %p Today")
+            }
+
+        schedules = []
+        for presc, patient, doctor in rows:
+            time_of_day = json.loads(presc.time_of_day) if presc.time_of_day else ["Morning"]
+            times = json.loads(presc.times) if presc.times else {}
+            
+            for slot in time_of_day:
+                slot_time = times.get(slot, "08:00 AM")
+                slot_log = logs_map.get((presc.id, slot))
+                
+                status = "Due"
+                administered = False
+                missed = False
+                log_id = ""
+                nurse_id = "—"
+                nurse_name = "—"
+                admin_time = "—"
+                
+                if slot_log:
+                    status = slot_log["status"]
+                    if status == "Administered":
+                        administered = True
+                    elif status == "Missed":
+                        missed = True
+                    log_id = str(slot_log["id"])
+                    nurse_id = slot_log["nurse_id"]
+                    nurse_name = slot_log["nurse_name"]
+                    admin_time = slot_log["time"]
+                
+                schedules.append({
+                    "id": f"sched_{presc.id}_{slot}",
+                    "prescription_db_id": presc.id,
+                    "log_id": log_id,
+                    "admin_id": f"ADM-400{log_id}" if log_id else "—",
+                    "patientId": f"P-100{patient.id}",
+                    "patient_id": f"P-100{patient.id}",
+                    "patientName": f"{patient.first_name} {patient.last_name}",
+                    "room": "Ward-101",
+                    "medicine": presc.medicine_name,
+                    "medicine_name": presc.medicine_name,
+                    "dosage": presc.dosage,
+                    "scheduledTime": slot_time,
+                    "administered": administered,
+                    "missed": missed,
+                    "status": status,
+                    "nurse_id": nurse_id,
+                    "nurse_name": nurse_name,
+                    "administered_time": admin_time,
+                    "time_of_day_slot": slot,
+                    "medication_id": f"MED-10{presc.id}",
+                    "frequency": presc.frequency,
+                    "start_date": presc.start_date.isoformat(),
+                    "end_date": presc.end_date.isoformat(),
+                    "doctor_id": f"DOC-20{doctor.id}",
+                    "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}",
+                    "notes": slot_log["notes"] if slot_log else "",
+                })
+        return schedules

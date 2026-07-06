@@ -176,6 +176,45 @@ class NurseTask(Base, TimestampMixin):
     patient = relationship("Patient")
 
 
+class NursePrescription(Base, TimestampMixin):
+    __tablename__ = "nurse_prescriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("doctors.id", ondelete="CASCADE"), index=True)
+    medicine_name: Mapped[str] = mapped_column(String(255))
+    dosage: Mapped[str] = mapped_column(String(255))
+    frequency: Mapped[str] = mapped_column(String(255))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    meal_timing: Mapped[str] = mapped_column(String(50))
+    time_of_day: Mapped[str | None] = mapped_column(Text, nullable=True) # serialized JSON list of string times of day
+    times: Mapped[str | None] = mapped_column(Text, nullable=True) # serialized JSON dictionary of time values
+    duration_value: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    duration_unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    special_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="active", index=True)
+
+    patient = relationship("Patient")
+    doctor = relationship("Doctor")
+    logs = relationship("NurseMedicationLog", back_populates="prescription", cascade="all, delete-orphan")
+
+
+class NurseMedicationLog(Base, TimestampMixin):
+    __tablename__ = "nurse_medication_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("nurse_prescriptions.id", ondelete="CASCADE"), index=True)
+    nurse_id: Mapped[int | None] = mapped_column(ForeignKey("nurses.id", ondelete="SET NULL"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), default="Administered", index=True) # "Administered", "Missed", "Deleted"
+    time_of_day_slot: Mapped[str | None] = mapped_column(String(50), nullable=True) # e.g. "Morning", "Night"
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    prescription = relationship("NursePrescription", back_populates="logs")
+    nurse = relationship("Nurse")
+
+
 __all__ = [
     "Nurse",
     "NurseShift",
@@ -185,4 +224,6 @@ __all__ = [
     "NurseNotification",
     "PatientVital",
     "NurseTask",
+    "NursePrescription",
+    "NurseMedicationLog",
 ]

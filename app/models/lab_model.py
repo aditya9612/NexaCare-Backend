@@ -81,6 +81,7 @@ class TestResult(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
     entered_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     entered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    document_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="results")
 

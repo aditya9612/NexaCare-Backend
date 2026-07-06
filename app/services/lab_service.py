@@ -1,3 +1,7 @@
+import os
+from uuid import uuid4
+from fastapi import UploadFile
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
@@ -331,22 +335,54 @@ class LabService:
         )     
 
     # --- Results ---
-    async def enter_result(self, data: TestResultCreate, user_id: int) -> TestResultResponse:
+    async def enter_result(
+        self,
+        data: TestResultCreate,
+        user_id: int,
+        document: UploadFile | None = None,
+    ) -> TestResultResponse:
         order = await self.order_repo.get_by_id(data.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
+
+        document_url = None
+
+        if document:
+            upload_dir = "uploads/lab_results"
+            os.makedirs(upload_dir, exist_ok=True)
+
+            file_ext = os.path.splitext(document.filename)[1]
+            file_name = f"{uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, file_name)
+
+            content = await document.read()
+            with open(file_path, "wb") as f:
+                f.write(content)
+
+            document_url = file_path
+
         result = TestResult(
             entered_by=user_id,
             entered_at=utc_now(),
             status="completed",
+            document_url=document_url,
             **data.model_dump(),
         )
+
         result = await self.result_repo.create(result)
+
         order.status = LabOrderStatus.IN_PROGRESS
         await self.order_repo.update(order)
-        await self.audit_repo.create("create", "lab_result", user_id=user_id, resource_id=str(result.id))
-        return TestResultResponse.model_validate(result)
 
+        await self.audit_repo.create(
+            "create",
+            "lab_result",
+            user_id=user_id,
+            resource_id=str(result.id),
+        )
+
+        return TestResultResponse.model_validate(result)
+        
     async def list_results(
         self, page: int = 1, size: int = 20, test_order_id: int | None = None, is_critical: bool | None = None
     ):

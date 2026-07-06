@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -241,12 +241,27 @@ async def delete_sample(
 # --- Results ---
 @router.post("/results", response_model=APIResponse[TestResultResponse], status_code=201)
 async def enter_test_result(
-    data: TestResultCreate,
     db: DbSession,
     current_user: CurrentUser,
+    test_order_id: int = Form(...),
+    parameter_name: str = Form(...),
+    result_value: str = Form(...),
+    unit: str | None = Form(None),
+    normal_range: str | None = Form(None),
+    is_critical: bool = Form(False),
+    document: UploadFile | None = File(None),
     _: User = Depends(require_permission("lab", "create")),
 ):
-    result = await LabService(db).enter_result(data, current_user.id)
+    data = TestResultCreate(
+        test_order_id=test_order_id,
+        parameter_name=parameter_name,
+        result_value=result_value,
+        unit=unit,
+        normal_range=normal_range,
+        is_critical=is_critical,
+    )
+
+    result = await LabService(db).enter_result(data, current_user.id, document)
     return APIResponse(message="Test result entered", data=result)
 
 

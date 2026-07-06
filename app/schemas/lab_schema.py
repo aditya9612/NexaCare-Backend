@@ -145,7 +145,9 @@ class TestResultResponse(BaseSchema):
     is_critical: bool
     status: str
     entered_at: datetime | None
+    document_url: str | None
     created_at: datetime
+    
 
 
 class LabReportCreate(BaseSchema):

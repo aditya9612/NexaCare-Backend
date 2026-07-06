@@ -130,9 +130,35 @@ class AuthService:
 
         return user
 
+    async def _is_user_deleted(self, user: User) -> bool:
+        from app.models.doctor_model import Doctor
+        from app.models.nurse_model import Nurse
+        from app.models.patient_model import Patient
+        from app.models.staff_model import Staff
+        from sqlalchemy import select
+        
+        if user.role.name == UserRole.DOCTOR:
+            doctor = await self.db.scalar(select(Doctor).where(Doctor.user_id == user.id))
+            return doctor is None or doctor.is_deleted
+        elif user.role.name == UserRole.NURSE:
+            nurse = await self.db.scalar(select(Nurse).where(Nurse.user_id == user.id))
+            return nurse is None
+        elif user.role.name == UserRole.PATIENT:
+            patient = await self.db.scalar(select(Patient).where(Patient.user_id == user.id))
+            return patient is None or patient.is_deleted
+        elif user.role.name in {
+            UserRole.RECEPTIONIST,
+            UserRole.ACCOUNTANT,
+            UserRole.PHARMACIST,
+            UserRole.LAB_TECHNICIAN,
+        }:
+            staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
+            return staff is None or staff.is_deleted
+        return False
+
     async def send_otp(self, data: SendOTPRequest) -> None:
         user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
+        if not user or await self._is_user_deleted(user):
             raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "login")
 
@@ -149,6 +175,9 @@ class AuthService:
             user = await self._get_user_by_identifier(data.email, data.phone)
             if not user:
                 raise UnauthorizedException("Invalid credentials")
+
+            if await self._is_user_deleted(user):
+                raise UnauthorizedException("Account deactivated or deleted")
 
             if data.otp:
                 if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
@@ -229,7 +258,7 @@ class AuthService:
             raise UnauthorizedException("Refresh token expired or revoked")
 
         user = await self.repo.get_by_id(int(payload["sub"]))
-        if not user or not user.is_active:
+        if not user or not user.is_active or await self._is_user_deleted(user):
             raise UnauthorizedException("User not found or inactive")
 
         await self.repo.revoke_refresh_token(stored)
@@ -237,7 +266,7 @@ class AuthService:
 
     async def forgot_password(self, data: ForgotPasswordRequest) -> None:
         user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
+        if not user or await self._is_user_deleted(user):
             raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "password reset")
 
@@ -245,8 +274,10 @@ class AuthService:
         if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
+        if not user or await self._is_user_deleted(user):
             raise NotFoundException("User not found")
+        if not user.is_active:
+            raise BadRequestException("Account not activated")
         user.hashed_password = get_password_hash(data.new_password)
         await self.repo.update(user)
         await self.repo.revoke_all_user_tokens(user.id)

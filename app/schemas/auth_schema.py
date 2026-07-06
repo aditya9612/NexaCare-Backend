@@ -114,7 +114,28 @@ class RegisterRequest(BaseModel):
         name = value.strip()
         if len(name) < 2:
             raise ValueError("full_name must be at least 2 characters")
+        
+        parts = name.split()
+        if not parts:
+            raise ValueError("full_name cannot be empty")
+        first_name = parts[0]
+        import re
+        if not re.match(r"^[a-zA-Z\s\-'.]+$", first_name):
+            raise ValueError("First name must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
         return name
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        has_upper = any(c.isupper() for c in value)
+        has_lower = any(c.islower() for c in value)
+        has_digit = any(c.isdigit() for c in value)
+        import string
+        has_special = any(c in string.punctuation or not c.isalnum() for c in value)
+        
+        if not (has_upper and has_lower and has_digit and has_special):
+            raise ValueError("Password must include at least one uppercase letter, one lowercase letter, one number, and one special character")
+        return value
 
     @field_validator("role_name", mode="before")
     @classmethod
@@ -142,7 +163,14 @@ class RegisterRequest(BaseModel):
     @model_validator(mode="after")
     def validate_phone(self):
         if self.phone:
-            self.phone = validate_phone_field(self.phone)
+            normalized = validate_phone_field(self.phone)
+            digits = "".join(c for c in normalized if c.isdigit())
+            if len(digits) < 10:
+                raise ValueError("Phone number must contain at least 10 digits")
+            local_num = digits[-10:]
+            if local_num[0] not in {"6", "7", "8", "9"}:
+                raise ValueError("Phone number must start with 6, 7, 8, or 9")
+            self.phone = normalized
         return self
 
 
@@ -175,10 +203,36 @@ class ResetPasswordRequest(EmailOrPhoneRequest):
     otp: str
     new_password: str = Field(..., min_length=8)
 
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        has_upper = any(c.isupper() for c in value)
+        has_lower = any(c.islower() for c in value)
+        has_digit = any(c.isdigit() for c in value)
+        import string
+        has_special = any(c in string.punctuation or not c.isalnum() for c in value)
+        
+        if not (has_upper and has_lower and has_digit and has_special):
+            raise ValueError("Password must include at least one uppercase letter, one lowercase letter, one number, and one special character")
+        return value
+
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        has_upper = any(c.isupper() for c in value)
+        has_lower = any(c.islower() for c in value)
+        has_digit = any(c.isdigit() for c in value)
+        import string
+        has_special = any(c in string.punctuation or not c.isalnum() for c in value)
+        
+        if not (has_upper and has_lower and has_digit and has_special):
+            raise ValueError("Password must include at least one uppercase letter, one lowercase letter, one number, and one special character")
+        return value
 
 
 class OTPVerifyRequest(EmailOrPhoneRequest):

@@ -62,7 +62,9 @@ class DepartmentService:
             raise NotFoundException(f"Department with ID {department_id} not found")
         try:
             await self.repo.delete(department)
+            await self.db.commit()
         except SQLAlchemyError as exc:
+            await self.db.rollback()
             raise ConflictException(
                 "Cannot delete department because it is referenced by other records (e.g., doctors, staff, or appointments)."
             ) from exc

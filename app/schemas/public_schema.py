@@ -130,3 +130,23 @@ class AdvancedBookingRequest(BaseSchema):
     booking_date: date
     booking_time: time
     document_id: Optional[int] = None
+
+    @field_validator("booking_date")
+    @classmethod
+    def validate_booking_date_not_in_past(cls, value: date) -> date:
+        if value < date.today():
+            raise ValueError("Appointment date cannot be in the past")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: str) -> str:
+        from app.utils.phone_utils import validate_phone_field
+        normalized = validate_phone_field(value)
+        digits = "".join(c for c in normalized if c.isdigit())
+        if len(digits) < 10:
+            raise ValueError("Phone number must contain at least 10 digits")
+        local_num = digits[-10:]
+        if local_num[0] not in {"6", "7", "8", "9"}:
+            raise ValueError("Phone number must start with 6, 7, 8, or 9")
+        return normalized

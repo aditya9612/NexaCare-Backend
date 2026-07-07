@@ -3,10 +3,12 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
+from app.models.staff_model import Staff
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.lab_repository import (
@@ -129,11 +131,20 @@ class LabService:
         return await self.get_order(order.id)
 
     async def list_orders(
-        self, page: int = 1, size: int = 20, status: str | None = None, patient_id: int | None = None
+        self, page: int = 1, size: int = 20, status: str | None = None, patient_id: int | None = None, current_user=None
     ):
         skip = (page - 1) * size
-        items = await self.order_repo.list_all(skip=skip, limit=size, status=status, patient_id=patient_id)
-        total = await self.order_repo.count_all(status=status, patient_id=patient_id)
+        department_id = None
+        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
+
+        if role_name in ["lab technician", "lab_technician"]:
+           result = await self.db.execute(
+               select(Staff).where(Staff.email == current_user.email)
+           )
+           staff = result.scalar_one_or_none()
+           department_id = staff.department_id if staff else None
+        items = await self.order_repo.list_all(skip=skip, limit=size, status=status, patient_id=patient_id, department_id=department_id)
+        total = await self.order_repo.count_all(status=status, patient_id=patient_id, department_id=department_id)
         return build_paginated_result([self._order_response(o) for o in items], total, page, size)
 
     async def get_order(self, order_id: int) -> TestOrderResponse:

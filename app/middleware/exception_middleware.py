@@ -22,9 +22,5 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             logger.exception("Unhandled error: %s", exc)
             
             content = {"detail": "Internal server error"}
-            content["error_class"] = exc.__class__.__name__
-            content["error_message"] = str(exc)
-            content["traceback"] = traceback.format_exc().splitlines()
-                
             return JSONResponse(status_code=500, content=content)
 

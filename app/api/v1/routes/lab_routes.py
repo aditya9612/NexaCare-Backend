@@ -118,9 +118,9 @@ async def list_test_orders(
     patient_id: int | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).list_orders(page=page, size=size, status=status, patient_id=patient_id)
-    return APIResponse(message="Test orders retrieved", data=result)
-
+    result = await LabService(db).list_orders(
+    page=page, size=size, status=status, patient_id=patient_id, current_user=current_user
+)
 
 @router.get("/orders/{order_id}", response_model=APIResponse[TestOrderResponse])
 async def get_test_order(
@@ -367,8 +367,19 @@ async def download_lab_report(
     if not report:
         raise NotFoundException("Report file not found")
         
+    def resolve_disk_path(path_str: str | None) -> str | None:
+        if not path_str:
+            return None
+        p = path_str.replace("\\", "/")
+        if p.startswith("/"):
+            p = p.lstrip("/")
+        if p.startswith("uploads/"):
+            return os.path.join("app", p)
+        return p
+
+    disk_path = resolve_disk_path(report.report_path)
     need_generation = False
-    if not report.report_path or not report.report_path.endswith(".pdf") or not os.path.exists(report.report_path):
+    if not disk_path or not report.report_path.endswith(".pdf") or not os.path.exists(disk_path):
         need_generation = True
         
     if need_generation:
@@ -425,9 +436,16 @@ async def download_lab_report(
         )
         report.report_path = path
         await LabReportRepository(db).update(report)
+        disk_path = resolve_disk_path(report.report_path)
         
-    return FileResponse(report.report_path, media_type="application/pdf", filename=f"lab_report_{report_id}.pdf")
+    if not disk_path or not os.path.exists(disk_path):
+        raise NotFoundException("Report PDF file not found")
 
+    return FileResponse(
+        disk_path,
+        media_type="application/pdf",
+        filename=f"lab_report_{report_id}.pdf",
+    )
 
 # --- Analytics ---
 @router.get("/pending-tests", response_model=APIResponse[PaginatedResult[TestOrderResponse]])

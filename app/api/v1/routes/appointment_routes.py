@@ -12,6 +12,7 @@ from app.schemas.appointment_schema import (
     CancelRequest,
     ConfirmRequest,
     RescheduleRequest,
+    TokenResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -116,6 +117,16 @@ async def confirm_appointment(
 ):
     appointment = await AppointmentService(db).confirm(data, current_user.id)
     return APIResponse(message="Appointment confirmed", data=appointment)
+
+@router.get("/{appointment_id}/token", response_model=APIResponse[TokenResponse])
+async def get_appointment_token(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    token = await AppointmentService(db).get_token(appointment_id)
+    return APIResponse(message="Token retrieved", data=token)
 
 
 @router.get("/{appointment_id}", response_model=APIResponse[AppointmentResponse])

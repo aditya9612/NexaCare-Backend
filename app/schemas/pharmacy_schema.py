@@ -85,6 +85,7 @@ class MedicineCreate(BaseSchema):
     name: str
     generic_name: str | None = None
     barcode: str | None = None
+    batch_number: str | None = None
     category: str
     unit: str
     unit_price: float = Field(0.0, ge=0)
@@ -129,6 +130,7 @@ class MedicineUpdate(BaseSchema):
     name: str | None = None
     generic_name: str | None = None
     barcode: str | None = None
+    batch_number: str | None = None
     category: str | None = None
     unit: str | None = None
     unit_price: float | None = Field(None, ge=0)
@@ -175,6 +177,7 @@ class MedicineResponse(BaseSchema):
     name: str
     generic_name: str | None
     barcode: str | None
+    batch_number: str | None
     sku: str
     category: str
     unit: str
@@ -205,6 +208,24 @@ class PrescriptionCreate(BaseSchema):
     instructions: str | None = None
     items: List[PrescriptionItemCreate] = Field(..., min_length=1)
 
+
+class PrescriptionItemUpdate(BaseSchema):
+    medicine_id: int
+    dosage: str
+    frequency: str
+    duration_days: int = Field(1, ge=1)
+    quantity: int = Field(1, ge=1)
+    instructions: str | None = None
+
+
+class PrescriptionUpdate(BaseSchema):
+    instructions: str | None = None
+    items: List[PrescriptionItemUpdate] | None = None    
+
+
+class PrescriptionUpdate(BaseSchema):
+    instructions: str | None = None
+    status: str | None = None
 
 class PrescriptionItemResponse(BaseSchema):
     id: int
@@ -247,6 +268,9 @@ class PharmacyInvoiceCreate(BaseSchema):
     patient_id: int | None = Field(None, gt=0)
     prescription_id: int | None = Field(None, gt=0)
     discount_amount: float = Field(0.0, ge=0)
+    discount_percentage: float = Field(0.0, ge=0, le=100)
+    tax_percentage: float = Field(0.0, ge=0, le=100)
+    tax_amount: float = Field(0.0, ge=0)
     items: List[PharmacyInvoiceItemCreate] = Field(..., min_length=1)
 
 
@@ -265,7 +289,10 @@ class PharmacyInvoiceResponse(BaseSchema):
     patient_id: int | None
     prescription_id: int | None
     subtotal: float
+    discount_percentage: float | None = 0.0
     discount_amount: float
+    tax_percentage: float | None = 0.0
+    tax_amount: float | None = 0.0
     gst_amount: float
     total_amount: float
     paid_amount: float

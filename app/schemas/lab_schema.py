@@ -53,6 +53,14 @@ class TestOrderCreate(BaseSchema):
     priority: str = "normal"
     notes: str | None = None
 
+class TestOrderUpdate(BaseSchema):
+    patient_id: int | None = None
+    doctor_id: int | None = None
+    lab_test_id: int | None = None
+    appointment_id: int | None = None
+    status: str | None = None
+    priority: str | None = None
+    notes: str | None = None
 
 class TestOrderUpdate(BaseSchema):
     patient_id: int | None = None
@@ -83,8 +91,17 @@ class TestOrderResponse(BaseSchema):
 class SampleCreate(BaseSchema):
     test_order_id: int
     sample_type: str
+    collection_date: datetime | None = None
+    status: str = "pending"
+    volume: float | None = None
     notes: str | None = None
 
+class SampleUpdate(BaseSchema):
+    sample_type: str | None = None
+    collection_date: datetime | None = None
+    status: str | None = None
+    volume: float | None = None
+    notes: str | None = None
 
 class SampleResponse(BaseSchema):
     id: int
@@ -92,8 +109,10 @@ class SampleResponse(BaseSchema):
     sample_code: str
     sample_type: str
     collected_at: datetime | None
+    collection_date: datetime | None
     collected_by: int | None
     status: str
+    volume: float | None
     notes: str | None
     created_at: datetime
 
@@ -107,6 +126,15 @@ class TestResultCreate(BaseSchema):
     is_critical: bool = False
 
 
+class TestResultUpdate(BaseSchema):
+    parameter_name: str | None = None
+    result_value: str | None = None
+    unit: str | None = None
+    normal_range: str | None = None
+    is_critical: bool | None = None
+    status: str | None = None    
+
+
 class TestResultResponse(BaseSchema):
     id: int
     test_order_id: int
@@ -117,7 +145,9 @@ class TestResultResponse(BaseSchema):
     is_critical: bool
     status: str
     entered_at: datetime | None
+    document_url: str | None
     created_at: datetime
+    
 
 
 class LabReportCreate(BaseSchema):

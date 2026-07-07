@@ -140,6 +140,7 @@ class PharmacyService:
         ]
 
     # --- Prescriptions ---
+    
     async def create_prescription(self, data: PrescriptionCreate, user_id: int) -> PrescriptionResponse:
         if not data.appointment_id:
             raise BadRequestException("Appointment ID is required to create prescription")
@@ -157,15 +158,28 @@ class PharmacyService:
         )
         prescription = await self.prescription_repo.create(prescription, items)
         prescription = await self.prescription_repo.get_by_id(prescription.id)
-        await self.audit_repo.create("create", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
+        await self.audit_repo.create(
+            "create",
+            "pharmacy_prescription",
+            user_id=user_id,
+            resource_id=str(prescription.id)
+        )
         return self._prescription_response(prescription)
-
-    async def list_prescriptions(self, page: int = 1, size: int = 20, status: str | None = None, doctor_id: int | None = None):
+    async def list_prescriptions(
+        self,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None
+    ):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status, doctor_id=doctor_id)
-        total = await self.prescription_repo.count_all(status=status, doctor_id=doctor_id)
+        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status)
+        total = await self.prescription_repo.count_all(status=status)
+
         return build_paginated_result(
-            [self._prescription_response(p) for p in items], total, page, size
+            [self._prescription_response(p) for p in items],
+            total,
+            page,
+            size
         )
 
     async def get_prescription(self, prescription_id: int, doctor_id: int | None = None) -> PrescriptionResponse:
@@ -208,11 +222,48 @@ class PharmacyService:
         await self.prescription_repo.soft_delete(prescription)
         await self.audit_repo.create("delete", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
 
-    def _prescription_response(self, prescription: Prescription) -> PrescriptionResponse:
+
+    def _prescription_response(
+        self,
+        prescription: Prescription
+    ) -> PrescriptionResponse:
         resp = PrescriptionResponse.model_validate(prescription)
-        resp.items = [PrescriptionItemResponse.model_validate(i) for i in prescription.items]
+        resp.items = [
+            PrescriptionItemResponse.model_validate(i)
+            for i in prescription.items
+        ]
         return resp
 
+    async def get_prescription_by_id(self, prescription_id: int):
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        return self._prescription_response(prescription)
+
+    async def update_prescription(self, prescription_id: int, data):
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(prescription, key, value)
+
+        prescription = await self.prescription_repo.update(prescription)
+
+        return self._prescription_response(prescription)
+
+    async def delete_prescription(self, prescription_id: int):
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        await self.prescription_repo.delete(prescription) 
+        
+           
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
         if data.patient_id is not None:
@@ -246,14 +297,19 @@ class PharmacyService:
             ))
             await self.medicine_repo.update_stock(item_data.medicine_id, -item_data.quantity)
 
-        gst_amount = calculate_gst_amount(subtotal, 18.0)
-        total = round(subtotal - data.discount_amount + gst_amount, 2)
+        discount_amount = round((subtotal * data.discount_percentage) / 100, 2)
+        tax_amount = round((subtotal - discount_amount) * data.tax_percentage / 100, 2)
+        gst_amount = tax_amount
+        total = round(subtotal - discount_amount + tax_amount, 2)
         invoice = PharmacyInvoice(
             invoice_number=generate_pharmacy_invoice_number(),
             patient_id=data.patient_id,
             prescription_id=data.prescription_id,
             subtotal=subtotal,
-            discount_amount=data.discount_amount,
+            discount_percentage=data.discount_percentage,
+            discount_amount=discount_amount,
+            tax_percentage=data.tax_percentage,
+            tax_amount=tax_amount,
             gst_amount=gst_amount,
             total_amount=total,
             paid_amount=total,
@@ -261,6 +317,9 @@ class PharmacyService:
             created_by=user_id,
         )
         invoice = await self.invoice_repo.create(invoice, invoice_items)
+        prescription.status = "completed"
+        prescription.dispensed_at = utc_now()
+        await self.prescription_repo.update(prescription)
         await self.audit_repo.create("create", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
         return self._invoice_response(invoice)
 
@@ -274,6 +333,44 @@ class PharmacyService:
         resp = PharmacyInvoiceResponse.model_validate(invoice)
         resp.items = [PharmacyInvoiceItemResponse.model_validate(i) for i in invoice.items]
         return resp
+    
+    async def get_invoice_by_id(self, invoice_id: int) -> PharmacyInvoiceResponse:
+        invoice = await self.invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundException("Pharmacy invoice not found")
+        return self._invoice_response(invoice)
+
+    async def update_invoice(self, invoice_id: int, data: PharmacyInvoiceCreate) -> PharmacyInvoiceResponse:
+        invoice = await self.invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundException("Pharmacy invoice not found")
+
+        invoice.discount_percentage = data.discount_percentage
+        invoice.tax_percentage = data.tax_percentage
+
+        discount_amount = round((invoice.subtotal * data.discount_percentage) / 100, 2)
+        tax_amount = round((invoice.subtotal - discount_amount) * data.tax_percentage / 100, 2)
+
+        invoice.discount_amount = discount_amount
+        invoice.tax_amount = tax_amount
+        invoice.gst_amount = tax_amount
+        invoice.total_amount = round(invoice.subtotal - discount_amount + tax_amount, 2)
+        invoice.paid_amount = invoice.total_amount
+
+        invoice = await self.invoice_repo.update(invoice)
+        return self._invoice_response(invoice)
+
+    async def delete_invoice(self, invoice_id: int) -> None:
+        invoice = await self.invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundException("Pharmacy invoice not found")
+        await self.invoice_repo.soft_delete(invoice)
+
+    async def download_invoice(self, invoice_id: int):
+        invoice = await self.invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundException("Pharmacy invoice not found")
+        return self._invoice_response(invoice)
 
     # --- Suppliers ---
     async def create_supplier(self, data: SupplierCreate, user_id: int) -> SupplierResponse:
@@ -287,7 +384,48 @@ class PharmacyService:
         items = await self.supplier_repo.list_all(skip=skip, limit=size)
         total = await self.supplier_repo.count_all()
         return build_paginated_result([SupplierResponse.model_validate(s) for s in items], total, page, size)
+    
+     
+    async def get_supplier(self, supplier_id: int) -> SupplierResponse:
+        supplier = await self.supplier_repo.get_by_id(supplier_id)
 
+        if not supplier:
+            raise NotFoundException("Supplier not found")
+
+        return SupplierResponse.model_validate(supplier)
+
+    async def update_supplier(self, supplier_id: int, data: SupplierUpdate, user_id: int) -> SupplierResponse:
+        supplier = await self.supplier_repo.get_by_id(supplier_id)
+
+        if not supplier:
+            raise NotFoundException("Supplier not found")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(supplier, key, value)
+
+        supplier = await self.supplier_repo.update(supplier)
+        await self.audit_repo.create(
+            "update",
+            "pharmacy_supplier",
+             user_id=user_id,
+             resource_id=str(supplier.id),
+    )
+
+        return SupplierResponse.model_validate(supplier)
+
+    async def delete_supplier(self, supplier_id: int, user_id: int) -> None:
+        supplier = await self.supplier_repo.get_by_id(supplier_id)
+
+        if not supplier:
+            raise NotFoundException("Supplier not found")
+
+        await self.supplier_repo.soft_delete(supplier)
+        await self.audit_repo.create(
+            "delete",
+            "pharmacy_supplier",
+            user_id=user_id,
+            resource_id=str(supplier.id),
+        )
     # --- Purchases ---
     async def create_purchase(self, data: PurchaseCreate, user_id: int) -> PurchaseResponse:
         total = 0.0
@@ -313,8 +451,7 @@ class PharmacyService:
         purchase = await self.purchase_repo.create(purchase, purchase_items)
         for item in purchase_items:
             await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
-        purchase.status = PurchaseStatus.RECEIVED
-        purchase.received_at = utc_now()
+        
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
         return self._purchase_response(purchase)
@@ -329,6 +466,57 @@ class PharmacyService:
         resp = PurchaseResponse.model_validate(purchase)
         resp.items = [PurchaseItemResponse.model_validate(i) for i in purchase.items]
         return resp
+
+    async def get_purchase(self, purchase_id: int) -> PurchaseResponse:
+        purchase = await self.purchase_repo.get_by_id(purchase_id)
+
+        if not purchase:
+            raise NotFoundException("Purchase not found")
+
+        return self._purchase_response(purchase)
+
+
+    async def update_purchase(
+        self,
+        purchase_id: int,
+        data: PurchaseCreate,
+        user_id: int,
+    ) -> PurchaseResponse:
+        purchase = await self.purchase_repo.get_by_id(purchase_id)
+
+        if not purchase:
+            raise NotFoundException("Purchase not found")
+
+        purchase.supplier_id = data.supplier_id
+        purchase.notes = data.notes
+
+        purchase = await self.purchase_repo.update(purchase)
+
+        await self.audit_repo.create(
+            "update",
+            "pharmacy_purchase",
+            user_id=user_id,
+            resource_id=str(purchase.id),
+        )
+
+        purchase = await self.purchase_repo.get_by_id(purchase.id)
+        return self._purchase_response(purchase)
+
+
+    async def delete_purchase(self, purchase_id: int, user_id: int) -> None:
+        purchase = await self.purchase_repo.get_by_id(purchase_id)
+
+        if not purchase:
+            raise NotFoundException("Purchase not found")
+
+        await self.purchase_repo.soft_delete(purchase)
+
+        await self.audit_repo.create(
+            "delete",
+            "pharmacy_purchase",
+            user_id=user_id,
+            resource_id=str(purchase.id),
+        )    
 
     async def get_sales_report(self, period: str = "monthly") -> SalesReport:
         now = utc_now()

@@ -1,3 +1,7 @@
+import os
+from uuid import uuid4
+from fastapi import UploadFile
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
@@ -21,8 +25,10 @@ from app.schemas.lab_schema import (
     LabTestResponse,
     LabTestUpdate,
     SampleCreate,
+    SampleUpdate,
     SampleResponse,
     TestOrderCreate,
+    TestOrderUpdate,
     TestOrderResponse,
     TestOrderUpdate,
     TestResultCreate,
@@ -187,6 +193,55 @@ class LabService:
         await self.order_repo.soft_delete(order)
         await self.audit_repo.create("delete", "lab_order", user_id=user_id, resource_id=str(order.id))
 
+    async def update_order(
+        self,
+        order_id: int,
+        data: TestOrderUpdate,
+        user_id: int,
+)     -> TestOrderResponse:
+        order = await self.order_repo.get_by_id(order_id)
+
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        update_data = data.model_dump(exclude_unset=True)
+
+        if "lab_test_id" in update_data:
+            test = await self.test_repo.get_by_id(update_data["lab_test_id"])
+            if not test or not test.is_active:
+                raise NotFoundException("Lab test not found or inactive")
+            update_data["department_id"] = test.department_id
+
+        for key, value in update_data.items():
+            setattr(order, key, value)
+
+        order = await self.order_repo.update(order)
+
+        await self.audit_repo.create(
+            "update",
+            "lab_order",
+             user_id=user_id,
+             resource_id=str(order.id),
+        )
+
+        return self._order_response(order)
+
+
+    async def delete_order(self, order_id: int, user_id: int) -> None:
+        order = await self.order_repo.get_by_id(order_id)
+
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        await self.order_repo.soft_delete(order)
+
+        await self.audit_repo.create(
+            "delete",
+            "lab_order",
+             user_id=user_id,
+             resource_id=str(order.id),
+        )
+
     def _order_response(self, order: TestOrder) -> TestOrderResponse:
         resp = TestOrderResponse.model_validate(order)
         if order.lab_test:
@@ -209,8 +264,10 @@ class LabService:
             sample_code=generate_sample_code(),
             sample_type=data.sample_type,
             collected_at=utc_now(),
+            collection_date=data.collection_date,
             collected_by=user_id,
-            status=SampleStatus.COLLECTED,
+            status=data.status,
+            volume=data.volume,
             notes=data.notes,
         )
         sample = await self.sample_repo.create(sample)
@@ -225,23 +282,107 @@ class LabService:
         total = await self.sample_repo.count_all(status=status)
         return build_paginated_result([SampleResponse.model_validate(s) for s in items], total, page, size)
 
+    async def get_sample(self, sample_id: int) -> SampleResponse:
+        sample = await self.sample_repo.get_by_id(sample_id)
+
+        if not sample:
+            raise NotFoundException("Sample not found")
+
+        return SampleResponse.model_validate(sample)
+
+    async def update_sample(
+        self,
+        sample_id: int,
+        data: SampleUpdate,
+        user_id: int,
+    ) -> SampleResponse:
+        sample = await self.sample_repo.get_by_id(sample_id)
+
+        if not sample:
+            raise NotFoundException("Sample not found")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(sample, key, value)
+
+        sample = await self.sample_repo.update(sample)
+
+        await self.audit_repo.create(
+            "update",
+            "lab_sample",
+            user_id=user_id,
+            resource_id=str(sample.id),
+        )
+
+        return SampleResponse.model_validate(sample)
+
+    async def delete_sample(
+        self,
+        sample_id: int,
+        user_id: int,
+    ) -> None:
+        sample = await self.sample_repo.get_by_id(sample_id)
+
+        if not sample:
+            raise NotFoundException("Sample not found")
+
+        await self.sample_repo.delete(sample)
+
+        await self.audit_repo.create(
+            "delete",
+            "lab_sample",
+            user_id=user_id,
+            resource_id=str(sample.id),
+        )     
+
     # --- Results ---
-    async def enter_result(self, data: TestResultCreate, user_id: int) -> TestResultResponse:
+    async def enter_result(
+        self,
+        data: TestResultCreate,
+        user_id: int,
+        document: UploadFile | None = None,
+    ) -> TestResultResponse:
         order = await self.order_repo.get_by_id(data.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
+
+        document_url = None
+
+        if document:
+            upload_dir = "uploads/lab_results"
+            os.makedirs(upload_dir, exist_ok=True)
+
+            file_ext = os.path.splitext(document.filename)[1]
+            file_name = f"{uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, file_name)
+
+            content = await document.read()
+            with open(file_path, "wb") as f:
+                f.write(content)
+
+            document_url = file_path
+
         result = TestResult(
             entered_by=user_id,
             entered_at=utc_now(),
             status="completed",
+            document_url=document_url,
             **data.model_dump(),
         )
+
         result = await self.result_repo.create(result)
+
         order.status = LabOrderStatus.IN_PROGRESS
         await self.order_repo.update(order)
-        await self.audit_repo.create("create", "lab_result", user_id=user_id, resource_id=str(result.id))
-        return TestResultResponse.model_validate(result)
 
+        await self.audit_repo.create(
+            "create",
+            "lab_result",
+            user_id=user_id,
+            resource_id=str(result.id),
+        )
+
+        return TestResultResponse.model_validate(result)
+        
     async def list_results(
         self, page: int = 1, size: int = 20, test_order_id: int | None = None, is_critical: bool | None = None
     ):
@@ -287,7 +428,15 @@ class LabService:
         items = await self.report_repo.list_all(skip=skip, limit=size, status=status)
         total = await self.report_repo.count_all(status=status)
         return build_paginated_result([LabReportResponse.model_validate(r) for r in items], total, page, size)
+    
+    async def get_report(self, report_id: int) -> LabReportResponse:
+        report = await self.report_repo.get_by_id(report_id)
 
+        if not report:
+           raise NotFoundException("Lab report not found")
+
+        return LabReportResponse.model_validate(report)
+    
     async def approve_report(self, report_id: int, data: LabReportApprove, user_id: int) -> LabReportResponse:
         report = await self.report_repo.get_by_id(report_id)
         if not report:

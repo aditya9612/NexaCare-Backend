@@ -129,11 +129,16 @@ async def get_prescription(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    prescription = await PharmacyService(db).get_prescription_by_id(prescription_id)
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    prescription = await PharmacyService(db).get_prescription(
+        prescription_id,
+        doctor_id=doctor.id if doctor else None
+    )
     return APIResponse(message="Prescription retrieved", data=prescription)
 
 
-@router.put("/prescriptions/{prescription_id}")
+@router.put("/prescriptions/{prescription_id}", response_model=APIResponse[PrescriptionResponse])
 async def update_prescription(
     prescription_id: int,
     data: PrescriptionUpdate,
@@ -141,21 +146,40 @@ async def update_prescription(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
+    from app.repositories.doctor_repository import DoctorRepository
+    from app.core.exceptions import ForbiddenException
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    if not doctor:
+        raise ForbiddenException("Only registered doctors can modify prescriptions")
+    
     prescription = await PharmacyService(db).update_prescription(
-        prescription_id, data
+        prescription_id=prescription_id,
+        data=data,
+        doctor_id=doctor.id,
+        user_id=current_user.id
     )
     return APIResponse(message="Prescription updated", data=prescription)
 
 
-@router.delete("/prescriptions/{prescription_id}")
+@router.delete("/prescriptions/{prescription_id}", response_model=APIResponse[MessageResponse])
 async def delete_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_prescription(prescription_id)
-    return APIResponse(message="Prescription deleted")
+    from app.repositories.doctor_repository import DoctorRepository
+    from app.core.exceptions import ForbiddenException
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    if not doctor:
+        raise ForbiddenException("Only registered doctors can delete prescriptions")
+        
+    await PharmacyService(db).delete_prescription(
+        prescription_id=prescription_id,
+        doctor_id=doctor.id,
+        user_id=current_user.id
+    )
+    return APIResponse(message="Prescription deleted", data=MessageResponse(message="Deleted successfully"))
 
 
 # --- Invoices ---    

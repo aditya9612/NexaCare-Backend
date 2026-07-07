@@ -218,14 +218,6 @@ class PrescriptionItemUpdate(BaseSchema):
     instructions: str | None = None
 
 
-class PrescriptionUpdate(BaseSchema):
-    instructions: str | None = None
-    items: List[PrescriptionItemUpdate] | None = None    
-
-
-class PrescriptionUpdate(BaseSchema):
-    instructions: str | None = None
-    status: str | None = None
 
 class PrescriptionItemResponse(BaseSchema):
     id: int

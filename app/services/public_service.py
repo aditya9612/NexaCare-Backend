@@ -131,8 +131,11 @@ class PublicService:
                 matched_dept = False
                 if department.isdigit() and doc.department_id == int(department):
                     matched_dept = True
-                elif dept_name and department.lower() in dept_name.lower():
-                    matched_dept = True
+                elif dept_name:
+                    import re
+                    pattern = rf"\b{re.escape(department.lower())}\b"
+                    if re.search(pattern, dept_name.lower()):
+                        matched_dept = True
                 if not matched_dept:
                     continue
             

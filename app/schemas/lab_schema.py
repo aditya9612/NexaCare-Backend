@@ -62,15 +62,6 @@ class TestOrderUpdate(BaseSchema):
     priority: str | None = None
     notes: str | None = None
 
-class TestOrderUpdate(BaseSchema):
-    patient_id: int | None = None
-    doctor_id: int | None = None
-    lab_test_id: int | None = None
-    appointment_id: int | None = None
-    priority: str | None = None
-    notes: str | None = None
-    status: str | None = None
-
 
 class TestOrderResponse(BaseSchema):
     id: int

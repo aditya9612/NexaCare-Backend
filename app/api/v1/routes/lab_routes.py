@@ -134,7 +134,7 @@ async def get_test_order(
 
 
 @router.put("/test-orders/{order_id}", response_model=APIResponse[TestOrderResponse])
-async def update_test_order(
+async def update_test_order_legacy(
     order_id: int,
     data: TestOrderUpdate,
     db: DbSession,
@@ -146,7 +146,7 @@ async def update_test_order(
 
 
 @router.delete("/test-orders/{order_id}", response_model=APIResponse[MessageResponse])
-async def delete_test_order(
+async def delete_test_order_legacy(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,

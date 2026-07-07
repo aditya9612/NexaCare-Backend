@@ -234,34 +234,6 @@ class PharmacyService:
         ]
         return resp
 
-    async def get_prescription_by_id(self, prescription_id: int):
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
-
-        if not prescription:
-            raise NotFoundException("Prescription not found")
-
-        return self._prescription_response(prescription)
-
-    async def update_prescription(self, prescription_id: int, data):
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
-
-        if not prescription:
-            raise NotFoundException("Prescription not found")
-
-        for key, value in data.model_dump(exclude_unset=True).items():
-            setattr(prescription, key, value)
-
-        prescription = await self.prescription_repo.update(prescription)
-
-        return self._prescription_response(prescription)
-
-    async def delete_prescription(self, prescription_id: int):
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
-
-        if not prescription:
-            raise NotFoundException("Prescription not found")
-
-        await self.prescription_repo.delete(prescription) 
         
            
     # --- Invoices ---

@@ -57,6 +57,9 @@ class StaffRepository:
                 or_(
                     func.lower(Staff.full_name).like(pattern),
                     func.lower(Staff.email).like(pattern),
+                    func.lower(Staff.staff_code).like(pattern),
+                    func.lower(Staff.phone).like(pattern),
+                    func.lower(Staff.role_name).like(pattern),
                 )
             )
         if department_id is not None:
@@ -83,6 +86,9 @@ class StaffRepository:
                 or_(
                     func.lower(Staff.full_name).like(pattern),
                     func.lower(Staff.email).like(pattern),
+                    func.lower(Staff.staff_code).like(pattern),
+                    func.lower(Staff.phone).like(pattern),
+                    func.lower(Staff.role_name).like(pattern),
                 )
             )
         if department_id is not None:

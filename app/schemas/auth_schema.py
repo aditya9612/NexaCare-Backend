@@ -163,14 +163,7 @@ class RegisterRequest(BaseModel):
     @model_validator(mode="after")
     def validate_phone(self):
         if self.phone:
-            normalized = validate_phone_field(self.phone)
-            digits = "".join(c for c in normalized if c.isdigit())
-            if len(digits) < 10:
-                raise ValueError("Phone number must contain at least 10 digits")
-            local_num = digits[-10:]
-            if local_num[0] not in {"6", "7", "8", "9"}:
-                raise ValueError("Phone number must start with 6, 7, 8, or 9")
-            self.phone = normalized
+            self.phone = validate_phone_field(self.phone)
         return self
 
 
@@ -249,6 +242,13 @@ class ProfileUpdateRequest(BaseModel):
     gender: str | None = None
     date_of_birth: date | None = None
     profile_image: str | None = None
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def dob_in_past(cls, value: date | None) -> date | None:
+        if value and value >= date.today():
+            raise ValueError("date_of_birth must be in the past")
+        return value
 
     @model_validator(mode="after")
     def validate_phone(self):

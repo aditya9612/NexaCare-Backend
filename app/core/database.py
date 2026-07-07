@@ -90,12 +90,19 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     from app.models.role_model import Role, RolePermission
 
     role_names = list(UserRole.ALL)
-    result = await session.execute(select(Role).limit(1))
-    if result.scalar_one_or_none():
-        return
-
-    roles = {name: Role(name=name, description=f"{name} role") for name in role_names}
-    session.add_all(roles.values())
+    
+    # Load existing roles
+    existing_roles_res = await session.execute(select(Role))
+    existing_roles = {r.name: r for r in existing_roles_res.scalars().all()}
+    
+    roles = {}
+    for name in role_names:
+        if name not in existing_roles:
+            role_obj = Role(name=name, description=f"{name} role")
+            session.add(role_obj)
+            roles[name] = role_obj
+        else:
+            roles[name] = existing_roles[name]
     await session.flush()
 
     resources = [
@@ -113,24 +120,38 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         PermissionAction.ASSIGN,
     ]
 
+    # Load existing permissions
+    existing_perms_res = await session.execute(select(Permission))
+    existing_perms = {p.name: p for p in existing_perms_res.scalars().all()}
+
     permissions: list[Permission] = []
     for resource in resources:
         for action in actions:
-            permissions.append(
-                Permission(
-                    name=f"{resource}:{action}",
+            perm_name = f"{resource}:{action}"
+            if perm_name not in existing_perms:
+                perm_obj = Permission(
+                    name=perm_name,
                     resource=resource,
                     action=action,
                     description=f"{action} {resource}",
                 )
-            )
-    session.add_all(permissions)
+                session.add(perm_obj)
+                permissions.append(perm_obj)
+            else:
+                permissions.append(existing_perms[perm_name])
     await session.flush()
 
     super_admin = roles[UserRole.SUPER_ADMIN]
     hospital_admin = roles[UserRole.HOSPITAL_ADMIN]
+    
+    # Load existing role permissions to avoid duplicate inserts
+    existing_rp_res = await session.execute(select(RolePermission.role_id, RolePermission.permission_id))
+    existing_rp = {(rp[0], rp[1]) for rp in existing_rp_res.all()}
+
     for perm in permissions:
-        session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
+        if (super_admin.id, perm.id) not in existing_rp:
+            session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
+            
     admin_resources = {
         "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
@@ -139,7 +160,8 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
 
     for perm in permissions:
         if perm.resource in admin_resources:
-            session.add(RolePermission(role_id=hospital_admin.id, permission_id=perm.id))
+            if (hospital_admin.id, perm.id) not in existing_rp:
+                session.add(RolePermission(role_id=hospital_admin.id, permission_id=perm.id))
 
 
 async def _seed_phase3_permissions(session: AsyncSession) -> None:

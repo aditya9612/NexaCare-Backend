@@ -384,4 +384,63 @@ class NursePatientLabTestResponse(BaseSchema):
     created_at: datetime
 
 
-NursePatientLabTestListResponse = PaginatedResponse[NursePatientLabTestResponse]
+class NursePatientLabTestListResponse(BaseSchema):
+    pass
+
+
+class NursePrescriptionCreate(BaseSchema):
+    patient_id: int
+    doctor_id: int
+    doctor_name: str | None = None
+    medicine_name: str
+    dosage: str
+    frequency: str
+    start_date: date
+    end_date: date
+    meal_timing: str
+    time_of_day: list[str] | None = None
+    times: dict[str, str] | None = None
+    duration_value: str | None = None
+    duration_unit: str | None = None
+    special_instructions: str | None = None
+
+
+class NursePrescriptionResponse(BaseSchema):
+    id: int
+    patient_id: int
+    patient_name: str
+    doctor_id: int
+    doctor_name: str
+    medicine_name: str
+    dosage: str
+    frequency: str
+    start_date: date
+    end_date: date
+    meal_timing: str
+    time_of_day: list[str] | None = None
+    times: dict[str, str] | None = None
+    duration_value: str | None = None
+    duration_unit: str | None = None
+    special_instructions: str | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class NurseMedicationLogCreate(BaseSchema):
+    status: str
+    time_of_day_slot: str | None = None
+    notes: str | None = None
+    timestamp: datetime | None = None
+
+
+class NurseMedicationLogResponse(BaseSchema):
+    id: int
+    prescription_id: int
+    nurse_id: int | None = None
+    nurse_name: str | None = None
+    status: str
+    time_of_day_slot: str | None = None
+    notes: str | None = None
+    timestamp: datetime
+    created_at: datetime

@@ -23,6 +23,7 @@ router = APIRouter()
 @router.get("/doctors", response_model=APIResponse[List[PublicDoctorResponse]])
 async def list_public_doctors(
     db: DbSession,
+    department_id: Optional[int] = None,
     department: Optional[str] = None,
     specialty: Optional[str] = None,
     date: Optional[date] = None,
@@ -30,9 +31,10 @@ async def list_public_doctors(
     """
     Get available doctors with their availability slots and weekly schedule.
     `working_days` / `weekly_schedule.day_name` use MONDAY–SUNDAY (day_of_week 0–6).
-    Supports optional filters: department, specialty, date.
+    Supports optional filters: department_id, department, specialty, date.
     """
     doctors = await PublicService(db).list_public_doctors(
+        department_id=department_id,
         department=department,
         specialty=specialty,
         appointment_date=date,

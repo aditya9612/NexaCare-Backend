@@ -16,6 +16,7 @@ from app.schemas.appointment_schema import (
     CancelRequest,
     ConfirmRequest,
     RescheduleRequest,
+    TokenResponse,
 )
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
@@ -69,6 +70,17 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
         return AppointmentResponse.model_validate(appointment)
+
+    async def get_token(self, appointment_id: int) -> TokenResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+
+        if not appointment:
+           raise NotFoundException("Appointment not found")
+
+        return TokenResponse(
+            appointment_id=appointment.id,
+            token_number=appointment.token_number,
+    )     
 
     async def create(self, data: AppointmentCreate, user_id: int) -> AppointmentResponse:
         await self._validate_entities(data.patient_id, data.doctor_id)

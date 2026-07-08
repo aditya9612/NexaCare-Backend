@@ -200,4 +200,10 @@ class StaffService:
             raise NotFoundException("Staff member not found")
             
         await self.repo.soft_delete(staff)
+        if staff.email:
+            from app.models.user_model import User
+            from sqlalchemy import select
+            user = await self.db.scalar(select(User).where(sa.func.lower(User.email) == staff.email.lower())) if "sa" in globals() else await self.db.scalar(select(User).where(func.lower(User.email) == staff.email.lower()))
+            if user:
+                user.is_active = False
         await self.audit_repo.create("delete", "staff", user_id=current_user_id, resource_id=str(staff.id))

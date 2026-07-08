@@ -134,17 +134,23 @@ class PrescriptionRepository:
             .options(selectinload(Prescription.items))
         )
 
-    async def list_all(self, skip: int = 0, limit: int = 20, status: str | None = None) -> list[Prescription]:
+    async def list_all(
+        self, skip: int = 0, limit: int = 20, status: str | None = None, doctor_id: int | None = None
+    ) -> list[Prescription]:
         query = self._base_query()
         if status:
             query = query.where(Prescription.status == status)
+        if doctor_id is not None:
+            query = query.where(Prescription.doctor_id == doctor_id)
         result = await self.db.execute(query.order_by(Prescription.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None) -> int:
+    async def count_all(self, status: str | None = None, doctor_id: int | None = None) -> int:
         query = select(func.count()).select_from(Prescription).where(Prescription.is_deleted.is_(False))
         if status:
             query = query.where(Prescription.status == status)
+        if doctor_id is not None:
+            query = query.where(Prescription.doctor_id == doctor_id)
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, prescription_id: int) -> Prescription | None:
@@ -160,6 +166,34 @@ class PrescriptionRepository:
         await self.db.flush()
         await self.db.refresh(prescription)
         return prescription
+    async def delete_items(self, prescription_id: int) -> None:
+        items = await self.db.execute(
+            select(PrescriptionItem).where(
+                PrescriptionItem.prescription_id == prescription_id
+            )
+        )
+
+        for item in items.scalars().all():
+            await self.db.delete(item)
+
+        await self.db.flush()
+
+    async def update(self, prescription: Prescription, items: list[PrescriptionItem] | None = None) -> Prescription:
+        await self.db.flush()
+        if items is not None:
+            prescription.items.clear()
+            for item in items:
+                item.prescription_id = prescription.id
+                self.db.add(item)
+            await self.db.flush()
+        await self.db.refresh(prescription)
+        return prescription
+
+    async def soft_delete(self, prescription: Prescription) -> None:
+        prescription.is_deleted = True
+        prescription.deleted_at = utc_now()
+        prescription.status = "cancelled"
+        await self.db.flush()
 
 
 class PharmacyInvoiceRepository:
@@ -197,6 +231,17 @@ class PharmacyInvoiceRepository:
         await self.db.flush()
         result = await self.db.execute(self._base_query().where(PharmacyInvoice.id == invoice.id))
         return result.scalar_one()
+    
+    async def update(self, invoice: PharmacyInvoice) -> PharmacyInvoice:
+        await self.db.flush()
+        await self.db.refresh(invoice)
+        return invoice
+
+
+    async def soft_delete(self, invoice: PharmacyInvoice) -> None:
+        invoice.is_deleted = True
+        invoice.deleted_at = utc_now()
+        await self.db.flush()
 
     async def get_sales_report(self, start, end) -> dict:
         total = await self.db.scalar(
@@ -237,6 +282,24 @@ class SupplierRepository:
         await self.db.refresh(supplier)
         return supplier
 
+    async def get_by_id(self, supplier_id: int) -> Supplier | None:
+        result = await self.db.execute(
+            select(Supplier).where(
+                Supplier.id == supplier_id,
+                Supplier.is_deleted.is_(False)
+            )
+        )
+        return result.scalar_one_or_none() 
+
+    async def update(self, supplier: Supplier) -> Supplier:
+        await self.db.flush()
+        await self.db.refresh(supplier)
+        return supplier
+
+    async def soft_delete(self, supplier: Supplier) -> None:
+        supplier.is_deleted = True
+        supplier.deleted_at = utc_now()
+        await self.db.flush()    
 
 class PurchaseRepository:
     def __init__(self, db: AsyncSession):
@@ -257,7 +320,7 @@ class PurchaseRepository:
     async def get_by_id(self, purchase_id: int) -> Purchase | None:
         result = await self.db.execute(self._base_query().where(Purchase.id == purchase_id))
         return result.scalar_one_or_none()
-
+    
     async def create(self, purchase: Purchase, items: list[PurchaseItem]) -> Purchase:
         self.db.add(purchase)
         await self.db.flush()
@@ -267,3 +330,13 @@ class PurchaseRepository:
         await self.db.flush()
         await self.db.refresh(purchase)
         return purchase
+
+    async def update(self, purchase: Purchase) -> Purchase:
+        await self.db.flush()
+        await self.db.refresh(purchase)
+        return purchase
+
+    async def soft_delete(self, purchase: Purchase) -> None:
+        purchase.is_deleted = True
+        purchase.deleted_at = utc_now()
+        await self.db.flush()    

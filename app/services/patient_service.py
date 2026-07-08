@@ -59,6 +59,11 @@ class PatientService:
         if not patient:
             raise NotFoundException("Patient not found")
         await self.repo.soft_delete(patient)
+        if patient.user_id:
+            from app.models.user_model import User
+            user = await self.db.get(User, patient.user_id)
+            if user:
+                user.is_active = False
         await self.audit_repo.create("delete", "patients", user_id=user_id, resource_id=str(patient.id))
 
     async def search(self, q: str, page: int = 1, size: int = 20):

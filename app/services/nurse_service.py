@@ -137,6 +137,11 @@ class NurseService:
 
     async def delete(self, nurse_id: int, user_id: int) -> None:
         nurse = await self._get_nurse_or_raise(nurse_id)
+        if nurse.user_id:
+            from app.models.user_model import User
+            user = await self.db.get(User, nurse.user_id)
+            if user:
+                user.is_active = False
         await self.repo.delete(nurse)
         await self.audit_repo.create("delete", "nurses", user_id=user_id, resource_id=str(nurse_id))
 

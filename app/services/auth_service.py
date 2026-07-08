@@ -130,29 +130,104 @@ class AuthService:
 
         return user
 
+    async def _is_user_deleted(self, user: User) -> bool:
+        from app.models.doctor_model import Doctor
+        from app.models.nurse_model import Nurse
+        from app.models.patient_model import Patient
+        from app.models.staff_model import Staff
+        from sqlalchemy import select
+        
+        if user.role.name == UserRole.DOCTOR:
+            doctor = await self.db.scalar(select(Doctor).where(Doctor.user_id == user.id))
+            return doctor is None or doctor.is_deleted
+        elif user.role.name == UserRole.NURSE:
+            nurse = await self.db.scalar(select(Nurse).where(Nurse.user_id == user.id))
+            return nurse is None
+        elif user.role.name == UserRole.PATIENT:
+            patient = await self.db.scalar(select(Patient).where(Patient.user_id == user.id))
+            return patient is None or patient.is_deleted
+        elif user.role.name in {
+            UserRole.RECEPTIONIST,
+            UserRole.ACCOUNTANT,
+            UserRole.PHARMACIST,
+            UserRole.LAB_TECHNICIAN,
+        }:
+            staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
+            return staff is None or staff.is_deleted
+        return False
+
     async def send_otp(self, data: SendOTPRequest) -> None:
         user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
+        if not user or await self._is_user_deleted(user):
             raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "login")
 
-    async def login(self, data: LoginRequest) -> TokenResponse:
-        user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
-            raise UnauthorizedException("Invalid credentials")
+    async def login(
+        self,
+        data: LoginRequest,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> TokenResponse:
+        from app.services.security_service import SecurityService
 
-        if data.otp:
-            if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+        user = None
+        try:
+            user = await self._get_user_by_identifier(data.email, data.phone)
+            if not user:
                 raise UnauthorizedException("Invalid credentials")
-        elif not data.password or not verify_password(data.password, user.hashed_password):
-            raise UnauthorizedException("Invalid credentials")
 
-        if not user.is_active:
-            raise UnauthorizedException("Account not activated. Please verify OTP.")
+            if await self._is_user_deleted(user):
+                raise UnauthorizedException("Account deactivated or deleted")
 
-        user.last_login = utc_now()
-        await self.repo.update(user)
-        return await self._issue_tokens(user)
+            if data.otp:
+                if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+                    raise UnauthorizedException("Invalid credentials")
+            elif not data.password or not verify_password(
+                data.password, user.hashed_password
+            ):
+                raise UnauthorizedException("Invalid credentials")
+
+            if not user.is_active:
+                raise UnauthorizedException("Account not activated. Please verify OTP.")
+
+            user.last_login = utc_now()
+            await self.repo.update(user)
+            tokens = await self._issue_tokens(user)
+
+            # Record successful login safely
+            try:
+                await SecurityService(self.db).record_login(
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                    details="Login successful",
+                )
+            except Exception:
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    pass
+
+            return tokens
+
+        except UnauthorizedException as exc:
+            # Record failed login safely
+            try:
+                user_id = user.id if user else None
+                await SecurityService(self.db).record_login(
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILED",
+                    details=str(exc.detail),
+                )
+            except Exception:
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    pass
+            raise exc
 
     async def _issue_tokens(self, user: User) -> TokenResponse:
         access = create_access_token(user.id)
@@ -183,7 +258,7 @@ class AuthService:
             raise UnauthorizedException("Refresh token expired or revoked")
 
         user = await self.repo.get_by_id(int(payload["sub"]))
-        if not user or not user.is_active:
+        if not user or not user.is_active or await self._is_user_deleted(user):
             raise UnauthorizedException("User not found or inactive")
 
         await self.repo.revoke_refresh_token(stored)
@@ -191,7 +266,7 @@ class AuthService:
 
     async def forgot_password(self, data: ForgotPasswordRequest) -> None:
         user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
+        if not user or await self._is_user_deleted(user):
             raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "password reset")
 
@@ -199,8 +274,10 @@ class AuthService:
         if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user = await self._get_user_by_identifier(data.email, data.phone)
-        if not user:
+        if not user or await self._is_user_deleted(user):
             raise NotFoundException("User not found")
+        if not user.is_active:
+            raise BadRequestException("Account not activated")
         user.hashed_password = get_password_hash(data.new_password)
         await self.repo.update(user)
         await self.repo.revoke_all_user_tokens(user.id)

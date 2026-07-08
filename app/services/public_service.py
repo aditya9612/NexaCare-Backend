@@ -140,6 +140,17 @@ class PublicService:
         response_list = []
         for doc in doctors:
             dept_name = doc.department.department_name if doc.department else None
+            if department:
+                matched_dept = False
+                if department.isdigit() and doc.department_id == int(department):
+                    matched_dept = True
+                elif dept_name:
+                    import re
+                    pattern = rf"\b{re.escape(department.lower())}\b"
+                    if re.search(pattern, dept_name.lower()):
+                        matched_dept = True
+                if not matched_dept:
+                    continue
             
             working_days, weekly_schedule = self._build_weekly_schedule(doc.schedules)
             is_available_on_date = target_date.weekday() in {s.day_of_week for s in doc.schedules if s.is_active}

@@ -13,11 +13,13 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceResponse,
     PrescriptionCreate,
     PrescriptionResponse,
+    PrescriptionUpdate,
     PurchaseCreate,
     PurchaseResponse,
     SalesReport,
     SupplierCreate,
     SupplierResponse,
+    SupplierUpdate,
 )
 from app.services.pharmacy_service import PharmacyService
 from app.utils.pagination import PaginatedResult
@@ -118,6 +120,71 @@ async def list_prescriptions(
     return APIResponse(message="Prescriptions retrieved", data=result)
 
 
+
+
+@router.get("/prescriptions/{prescription_id}")
+async def get_prescription(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    prescription = await PharmacyService(db).get_prescription(
+        prescription_id,
+        doctor_id=doctor.id if doctor else None
+    )
+    return APIResponse(message="Prescription retrieved", data=prescription)
+
+
+@router.put("/prescriptions/{prescription_id}", response_model=APIResponse[PrescriptionResponse])
+async def update_prescription(
+    prescription_id: int,
+    data: PrescriptionUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    from app.repositories.doctor_repository import DoctorRepository
+    from app.core.exceptions import ForbiddenException
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    if not doctor:
+        raise ForbiddenException("Only registered doctors can modify prescriptions")
+    
+    prescription = await PharmacyService(db).update_prescription(
+        prescription_id=prescription_id,
+        data=data,
+        doctor_id=doctor.id,
+        user_id=current_user.id
+    )
+    return APIResponse(message="Prescription updated", data=prescription)
+
+
+@router.delete("/prescriptions/{prescription_id}", response_model=APIResponse[MessageResponse])
+async def delete_prescription(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "delete")),
+):
+    from app.repositories.doctor_repository import DoctorRepository
+    from app.core.exceptions import ForbiddenException
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    if not doctor:
+        raise ForbiddenException("Only registered doctors can delete prescriptions")
+        
+    await PharmacyService(db).delete_prescription(
+        prescription_id=prescription_id,
+        doctor_id=doctor.id,
+        user_id=current_user.id
+    )
+    return APIResponse(message="Prescription deleted", data=MessageResponse(message="Deleted successfully"))
+
+
+# --- Invoices ---    
+
+
 # --- Invoices ---
 @router.post("/invoices", response_model=APIResponse[PharmacyInvoiceResponse], status_code=201)
 async def create_pharmacy_invoice(
@@ -140,6 +207,49 @@ async def list_pharmacy_invoices(
 ):
     result = await PharmacyService(db).list_invoices(page=page, size=size)
     return APIResponse(message="Pharmacy invoices retrieved", data=result)
+
+@router.get("/invoices/{invoice_id}", response_model=APIResponse[PharmacyInvoiceResponse])
+async def get_pharmacy_invoice(
+    invoice_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    invoice = await PharmacyService(db).get_invoice_by_id(invoice_id)
+    return APIResponse(message="Pharmacy invoice retrieved", data=invoice)
+
+
+@router.put("/invoices/{invoice_id}", response_model=APIResponse[PharmacyInvoiceResponse])
+async def update_pharmacy_invoice(
+    invoice_id: int,
+    data: PharmacyInvoiceCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    invoice = await PharmacyService(db).update_invoice(invoice_id, data)
+    return APIResponse(message="Pharmacy invoice updated", data=invoice)
+
+
+@router.get("/invoices/{invoice_id}/download")
+async def download_pharmacy_invoice(
+    invoice_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    return await PharmacyService(db).download_invoice(invoice_id)
+
+
+@router.delete("/invoices/{invoice_id}", response_model=APIResponse[MessageResponse])
+async def delete_pharmacy_invoice(
+    invoice_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "delete")),
+):
+    await PharmacyService(db).delete_invoice(invoice_id)
+    return APIResponse(message="Pharmacy invoice deleted", data=MessageResponse(message="Soft deleted"))
 
 
 # --- Suppliers ---
@@ -165,6 +275,38 @@ async def list_suppliers(
     result = await PharmacyService(db).list_suppliers(page=page, size=size)
     return APIResponse(message="Suppliers retrieved", data=result)
 
+@router.get("/suppliers/{supplier_id}", response_model=APIResponse[SupplierResponse])
+async def get_supplier(
+    supplier_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    supplier = await PharmacyService(db).get_supplier(supplier_id)
+    return APIResponse(message="Supplier retrieved", data=supplier)
+
+@router.put("/suppliers/{supplier_id}", response_model=APIResponse[SupplierResponse])
+async def update_supplier(
+    supplier_id: int,
+    data: SupplierUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    supplier = await PharmacyService(db).update_supplier(supplier_id, data, current_user.id)
+    return APIResponse(message="Supplier updated", data=supplier)
+
+
+@router.delete("/suppliers/{supplier_id}", response_model=APIResponse[MessageResponse])
+async def delete_supplier(
+    supplier_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "delete")),
+):
+    await PharmacyService(db).delete_supplier(supplier_id, current_user.id)
+    return APIResponse(message="Supplier deleted", data=MessageResponse(message="Soft deleted"))
+
 
 # --- Purchases ---
 @router.post("/purchases", response_model=APIResponse[PurchaseResponse], status_code=201)
@@ -188,6 +330,46 @@ async def list_purchases(
 ):
     result = await PharmacyService(db).list_purchases(page=page, size=size)
     return APIResponse(message="Purchases retrieved", data=result)
+
+@router.get("/purchases/{purchase_id}", response_model=APIResponse[PurchaseResponse])
+async def get_purchase(
+    purchase_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    purchase = await PharmacyService(db).get_purchase(purchase_id)
+    return APIResponse(message="Purchase retrieved", data=purchase)
+
+
+@router.put("/purchases/{purchase_id}", response_model=APIResponse[PurchaseResponse])
+async def update_purchase(
+    purchase_id: int,
+    data: PurchaseCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    purchase = await PharmacyService(db).update_purchase(
+        purchase_id, data, current_user.id
+    )
+    return APIResponse(message="Purchase updated", data=purchase)
+
+
+@router.delete("/purchases/{purchase_id}", response_model=APIResponse[MessageResponse])
+async def delete_purchase(
+    purchase_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "delete")),
+):
+    await PharmacyService(db).delete_purchase(
+        purchase_id, current_user.id
+    )
+    return APIResponse(
+        message="Purchase deleted",
+        data=MessageResponse(message="Soft deleted"),
+    )    
 
 
 # --- Alerts & Reports ---

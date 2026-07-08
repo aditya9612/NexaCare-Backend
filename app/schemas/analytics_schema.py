@@ -107,3 +107,13 @@ class ExportReportResponse(BaseSchema):
     status: str
     file_path: Optional[str] = None
     message: str
+
+
+class ExportListItem(BaseSchema):
+    id: int
+    report_type: str
+    export_format: str
+    status: str
+    file_path: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime

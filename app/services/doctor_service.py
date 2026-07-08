@@ -129,6 +129,13 @@ class DoctorService:
         if existing_license:
             raise ConflictException("A doctor with this license number already exists")
 
+        if data.user_id:
+            user = await self.auth_repo.get_by_id(data.user_id)
+            if not user:
+                raise NotFoundException(f"User with ID {data.user_id} not found")
+
+        await self._validate_department(data.department_id)
+
         # Save uploaded image file if provided, otherwise use URL from data
         profile_image_path: Optional[str] = data.profile_image
         if image_file and image_file.filename:
@@ -278,12 +285,18 @@ class DoctorService:
         if not doctor:
             raise NotFoundException("Doctor not found")
         await self.repo.soft_delete(doctor)
+        if doctor.user_id:
+            from app.models.user_model import User
+            user = await self.db.get(User, doctor.user_id)
+            if user:
+                user.is_active = False
         await self.audit_repo.create("delete", "doctors", user_id=user_id, resource_id=str(doctor.id))
 
     async def search(self, q: str, page: int = 1, size: int = 20):
+        q_stripped = q.strip() if q else ""
         skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size)
-        total = await self.repo.count_search(q)
+        items = await self.repo.search(q_stripped, skip=skip, limit=size)
+        total = await self.repo.count_search(q_stripped)
         return build_paginated_result(
             [DoctorResponse.model_validate(d) for d in items], total, page, size
         )
@@ -310,3 +323,63 @@ class DoctorService:
         schedule = await self.repo.add_schedule(schedule)
         await self.audit_repo.create("create", "doctor_schedules", user_id=user_id, resource_id=str(schedule.id))
         return DoctorScheduleResponse.model_validate(schedule)
+
+    async def update_medical_record(
+        self,
+        record_id: int,
+        report_title: str | None,
+        report_type: str | None,
+        diagnosis: str | None,
+        notes: str | None,
+        user_id: int,
+    ):
+        record = await self.repo.get_medical_record_by_id(record_id)
+        if not record:
+            raise NotFoundException("Medical record not found")
+
+        if report_title is not None:
+            record.report_title = report_title
+        if report_type is not None:
+            record.report_type = report_type
+        if diagnosis is not None:
+            record.diagnosis = diagnosis
+        if notes is not None:
+            record.notes = notes
+
+        await self.repo.update_medical_record(record)
+        await self.audit_repo.create("update", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
+        
+        from app.schemas.doctor_medical_record_schema import MedicalRecordResponse
+        return MedicalRecordResponse.model_validate(record)
+
+    async def delete_medical_record(self, record_id: int, user_id: int) -> None:
+        record = await self.repo.get_medical_record_by_id(record_id)
+        if not record:
+            raise NotFoundException("Medical record not found")
+
+        await self.repo.delete_medical_record(record)
+        await self.audit_repo.create("delete", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
+
+    async def delete_all_schedules(self, doctor_id: int, user_id: int) -> None:
+        # Validate doctor exists
+        await self.get_by_id(doctor_id)
+
+        # Check if any schedules exist
+        count = await self.repo.count_schedules(doctor_id)
+        if count == 0:
+            raise NotFoundException("No schedule slots found for this doctor")
+
+        await self.repo.delete_all_schedules(doctor_id)
+        await self.audit_repo.create("delete", "doctor_schedules", user_id=user_id, resource_id=str(doctor_id))
+
+    async def delete_schedule_slot(self, doctor_id: int, slot_id: int, user_id: int) -> None:
+        # Validate doctor exists
+        await self.get_by_id(doctor_id)
+
+        # Get the schedule slot
+        slot = await self.repo.get_schedule_slot(doctor_id, slot_id)
+        if not slot:
+            raise NotFoundException("Schedule slot not found")
+
+        await self.repo.delete_schedule_slot(slot)
+        await self.audit_repo.create("delete", "doctor_schedules", user_id=user_id, resource_id=str(slot_id))

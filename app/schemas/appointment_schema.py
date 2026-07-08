@@ -47,6 +47,11 @@ class AppointmentResponse(BaseSchema):
     updated_at: datetime | None = None
 
 
+class TokenResponse(BaseSchema):
+    appointment_id: int
+    token_number: int    
+
+
 class RescheduleRequest(BaseSchema):
     appointment_id: int
     appointment_date: date

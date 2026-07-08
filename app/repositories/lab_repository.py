@@ -121,6 +121,11 @@ class TestOrderRepository:
         await self.db.refresh(order)
         return order
 
+    async def soft_delete(self, order: TestOrder) -> None:
+        order.is_deleted = True
+        order.deleted_at = utc_now()
+        await self.db.flush()
+
 
 class SampleRepository:
     def __init__(self, db: AsyncSession):
@@ -139,11 +144,26 @@ class SampleRepository:
             query = query.where(Sample.status == status)
         return (await self.db.scalar(query)) or 0
 
+    async def get_by_id(self, sample_id: int) -> Sample | None:
+        result = await self.db.execute(
+            select(Sample).where(Sample.id == sample_id)
+        )
+        return result.scalar_one_or_none()       
+
     async def create(self, sample: Sample) -> Sample:
         self.db.add(sample)
         await self.db.flush()
         await self.db.refresh(sample)
         return sample
+
+    async def update(self, sample: Sample) -> Sample:
+        await self.db.flush()
+        await self.db.refresh(sample)
+        return sample  
+
+    async def delete(self, sample: Sample) -> None:
+        await self.db.delete(sample)
+        await self.db.flush()       
 
 
 class TestResultRepository:

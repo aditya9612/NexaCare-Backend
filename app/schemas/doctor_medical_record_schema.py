@@ -6,26 +6,38 @@ from app.schemas.common_schema import BaseSchema
 
 class MedicalRecordUploadValidator(BaseSchema):
     patient_id: int
-    patient_name: str
-    report_title: str
-    report_type: str
-    diagnosis: str | None = None
+    appointment_id: int
+    doctor_id: int
+    diagnosis: str
+    report_title: str | None = None
+    report_type: str | None = None
     notes: str | None = None
 
-    @field_validator("patient_name", "report_title", "report_type")
+    @field_validator("diagnosis")
     @classmethod
-    def check_required_fields(cls, v: str, info) -> str:
-        field_name = info.field_name.replace("_", " ").title()
+    def check_diagnosis(cls, v: str) -> str:
         if not v or not v.strip() or v.lower() == "null":
+            raise ValueError("Diagnosis cannot be blank or 'null'")
+        if v.strip().lower() == "string":
+            raise ValueError("Diagnosis cannot contain placeholder value 'string'")
+        return v.strip()
+
+    @field_validator("report_title", "report_type")
+    @classmethod
+    def check_optional_string_fields(cls, v: str | None, info) -> str | None:
+        if v is None:
+            return v
+        field_name = info.field_name.replace("_", " ").title()
+        if not v.strip() or v.lower() == "null":
             raise ValueError(f"{field_name} cannot be blank or 'null'")
         if v.strip().lower() == "string":
             raise ValueError(f"{field_name} cannot contain placeholder value 'string'")
         cleaned = v.strip()
-        if not re.match(r"^[a-zA-Z\s\-\'\.]+$", cleaned):
-            raise ValueError(f"{field_name} must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
+        if not re.match(r"^[a-zA-Z0-9\s\-\'\.]+$", cleaned):
+            raise ValueError(f"{field_name} must contain only alphanumeric characters, spaces, hyphens, dots, or apostrophes")
         return cleaned
 
-    @field_validator("diagnosis", "notes")
+    @field_validator("notes")
     @classmethod
     def check_optional_fields(cls, v: str | None, info) -> str | None:
         if v is None:
@@ -46,12 +58,47 @@ class MedicalRecordResponse(BaseSchema):
     report_title: str
     report_type: str
     diagnosis: str | None
+    symptoms: str | None = None
     notes: str | None
     file_name: str
     file_type: str | None
     file_path: str
     created_at: datetime
     updated_at: datetime
+
+
+class MedicalRecordUpdate(BaseSchema):
+    report_title: str | None = None
+    report_type: str | None = None
+    diagnosis: str | None = None
+    notes: str | None = None
+
+    @field_validator("report_title", "report_type")
+    @classmethod
+    def check_optional_string_fields(cls, v: str | None, info) -> str | None:
+        if v is None:
+            return v
+        field_name = info.field_name.replace("_", " ").title()
+        if not v.strip() or v.lower() == "null":
+            raise ValueError(f"{field_name} cannot be blank or 'null'")
+        if v.strip().lower() == "string":
+            raise ValueError(f"{field_name} cannot contain placeholder value 'string'")
+        cleaned = v.strip()
+        if not re.match(r"^[a-zA-Z0-9\s\-\'\.]+$", cleaned):
+            raise ValueError(f"{field_name} must contain only alphanumeric characters, spaces, hyphens, dots, or apostrophes")
+        return cleaned
+
+    @field_validator("diagnosis", "notes")
+    @classmethod
+    def check_optional_fields(cls, v: str | None, info) -> str | None:
+        if v is None:
+            return v
+        field_name = info.field_name.replace("_", " ").title()
+        if not v.strip() or v.lower() == "null":
+            raise ValueError(f"{field_name} cannot be blank or 'null'")
+        if v.strip().lower() == "string":
+            raise ValueError(f"{field_name} cannot contain placeholder value 'string'")
+        return v.strip()
 
 
 class DiagnosisUpdate(BaseSchema):

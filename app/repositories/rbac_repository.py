@@ -54,6 +54,15 @@ class RBACRepository:
         result = await self.db.execute(select(Permission).where(Permission.id == permission_id))
         return result.scalar_one_or_none()
 
+    async def update_permission(self, permission: Permission) -> Permission:
+        await self.db.flush()
+        await self.db.refresh(permission)
+        return permission
+
+    async def delete_permission(self, permission: Permission) -> None:
+        await self.db.delete(permission)
+        await self.db.flush()
+
     async def assign_permission(self, role_permission: RolePermission) -> RolePermission:
         self.db.add(role_permission)
         await self.db.flush()

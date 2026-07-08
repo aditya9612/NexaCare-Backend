@@ -1,6 +1,6 @@
 from datetime import date, time
 from typing import List, Optional
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -49,6 +49,26 @@ class QuickBookingRequest(BaseSchema):
     time_slot: time
     symptoms: Optional[str] = None
 
+    @field_validator("date")
+    @classmethod
+    def validate_date_not_in_past(cls, value: date) -> date:
+        if value < date.today():
+            raise ValueError("Appointment date cannot be in the past")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: str) -> str:
+        from app.utils.phone_utils import validate_phone_field
+        normalized = validate_phone_field(value)
+        digits = "".join(c for c in normalized if c.isdigit())
+        if len(digits) < 10:
+            raise ValueError("Phone number must contain at least 10 digits")
+        local_num = digits[-10:]
+        if local_num[0] not in {"6", "7", "8", "9"}:
+            raise ValueError("Phone number must start with 6, 7, 8, or 9")
+        return normalized
+
 
 class SymptomAnalysisRequest(BaseSchema):
     symptoms: str
@@ -56,6 +76,28 @@ class SymptomAnalysisRequest(BaseSchema):
     patient_phone: Optional[str] = None
     gender: Optional[str] = None
     dob: Optional[date] = None
+
+    @field_validator("dob")
+    @classmethod
+    def validate_dob_not_in_future(cls, value: Optional[date]) -> Optional[date]:
+        if value and value > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value:
+            from app.utils.phone_utils import validate_phone_field
+            normalized = validate_phone_field(value)
+            digits = "".join(c for c in normalized if c.isdigit())
+            if len(digits) < 10:
+                raise ValueError("Phone number must contain at least 10 digits")
+            local_num = digits[-10:]
+            if local_num[0] not in {"6", "7", "8", "9"}:
+                raise ValueError("Phone number must start with 6, 7, 8, or 9")
+            return normalized
+        return value
 
 
 class SymptomAnalysisResponse(BaseSchema):
@@ -90,3 +132,23 @@ class AdvancedBookingRequest(BaseSchema):
     booking_date: date
     booking_time: time
     document_id: Optional[int] = None
+
+    @field_validator("booking_date")
+    @classmethod
+    def validate_booking_date_not_in_past(cls, value: date) -> date:
+        if value < date.today():
+            raise ValueError("Appointment date cannot be in the past")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: str) -> str:
+        from app.utils.phone_utils import validate_phone_field
+        normalized = validate_phone_field(value)
+        digits = "".join(c for c in normalized if c.isdigit())
+        if len(digits) < 10:
+            raise ValueError("Phone number must contain at least 10 digits")
+        local_num = digits[-10:]
+        if local_num[0] not in {"6", "7", "8", "9"}:
+            raise ValueError("Phone number must start with 6, 7, 8, or 9")
+        return normalized

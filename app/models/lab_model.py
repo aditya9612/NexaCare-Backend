@@ -59,8 +59,10 @@ class Sample(Base, TimestampMixin):
     sample_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     sample_type: Mapped[str] = mapped_column(String(100))
     collected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    collection_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     collected_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="samples")
@@ -79,6 +81,7 @@ class TestResult(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
     entered_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     entered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    document_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="results")
 

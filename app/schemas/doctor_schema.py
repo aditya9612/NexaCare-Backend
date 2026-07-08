@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 from enum import Enum
 import re
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
 from app.schemas.auth_schema import GenderOption
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
@@ -17,8 +17,8 @@ class DoctorGenderOption(str, Enum):
 def validate_specialization_value(v: str | None) -> str | None:
     if v is None:
         return v
-    if not v or v.lower() == "null":
-        raise ValueError("Specialization cannot be blank or 'null'")
+    if not v or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("Specialization cannot be blank, 'null', or 'string'")
     
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError("Specialization should not contain leading or trailing spaces")
@@ -141,9 +141,9 @@ def validate_dob_field(v: date | None) -> date | None:
 def validate_name_field(v: str | None, field_name: str) -> str | None:
     if v is None:
         return v
-    # Reject empty string, whitespace-only, and "null"
-    if not v or not v.strip() or v.lower() == "null":
-        raise ValueError(f"{field_name} cannot be blank or 'null'")
+    # Reject empty string, whitespace-only, "null", and "string"
+    if not v or not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError(f"{field_name} cannot be blank, 'null', or 'string'")
     # Reject leading/trailing spaces
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError(f"{field_name} must not contain leading or trailing spaces")
@@ -162,8 +162,8 @@ def validate_name_field(v: str | None, field_name: str) -> str | None:
 def validate_license_number(v: str | None) -> str | None:
     if v is None:
         return v
-    if not v or not v.strip() or v.lower() == "null":
-        raise ValueError("License number cannot be blank or 'null'")
+    if not v or not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError("License number cannot be blank, 'null', or 'string'")
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError("License number must not contain leading or trailing spaces")
     if not v.isascii():
@@ -177,8 +177,8 @@ def validate_license_number(v: str | None) -> str | None:
 def validate_optional_string(v: str | None, field_name: str) -> str | None:
     if v is None:
         return v
-    if not v.strip() or v.lower() == "null":
-        raise ValueError(f"{field_name} cannot be empty or 'null'")
+    if not v.strip() or v.lower() == "null" or v.lower() == "string":
+        raise ValueError(f"{field_name} cannot be empty, 'null', or 'string'")
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError(f"{field_name} must not contain leading or trailing spaces")
     return v
@@ -470,10 +470,31 @@ class DoctorAvailabilityUpdate(BaseSchema):
 
 
 class DoctorScheduleCreate(BaseSchema):
-    day_of_week: int = Field(..., ge=0, le=6)
+    day_of_week: int = Field(..., ge=1, le=7)
     start_time: time
     end_time: time
     slot_duration_minutes: int = Field(30, gt=0, le=180)
+
+    @field_validator("day_of_week")
+    @classmethod
+    def map_day_of_week_to_db(cls, v: int) -> int:
+        return v - 1
+
+    @model_validator(mode="after")
+    def validate_duration(self) -> "DoctorScheduleCreate":
+        # Calculate duration in minutes
+        dt_start = datetime.combine(date.today(), self.start_time)
+        dt_end = datetime.combine(date.today(), self.end_time)
+
+        if self.start_time >= self.end_time:
+            raise ValueError("Start time must be before end time")
+
+        duration = (dt_end - dt_start).total_seconds() / 60
+        if duration < self.slot_duration_minutes:
+            raise ValueError(
+                f"Schedule duration must be at least the slot duration of {self.slot_duration_minutes} minutes"
+            )
+        return self
 
 
 class DoctorScheduleResponse(BaseSchema):
@@ -484,6 +505,11 @@ class DoctorScheduleResponse(BaseSchema):
     end_time: time
     slot_duration_minutes: int
     is_active: bool
+
+    @field_validator("day_of_week", mode="before")
+    @classmethod
+    def map_day_of_week_to_ui(cls, v: int) -> int:
+        return v + 1
 
 
 DoctorListResponse = PaginatedResponse[DoctorResponse]

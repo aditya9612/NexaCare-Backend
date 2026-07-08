@@ -146,6 +146,49 @@ class PharmacyService:
             raise BadRequestException("Appointment ID is required to create prescription")
         if not data.items:
             raise BadRequestException("Prescription must contain at least one medicine item")
+
+        from sqlalchemy import select
+        from app.models.doctor_model import Doctor
+        from app.models.patient_model import Patient
+        from app.models.appointment_model import Appointment
+
+        # 1. Verify Doctor exists
+        doctor_exists = await self.db.scalar(
+            select(Doctor).where(Doctor.id == data.doctor_id)
+        )
+        if not doctor_exists:
+            raise NotFoundException("Doctor not found")
+
+        # 2. Verify Patient exists
+        patient_exists = await self.db.scalar(
+            select(Patient).where(Patient.id == data.patient_id)
+        )
+        if not patient_exists:
+            raise NotFoundException("Patient not found")
+
+        # 3. Verify Appointment exists and matches
+        appointment_result = await self.db.execute(
+            select(Appointment).where(Appointment.id == data.appointment_id)
+        )
+        appointment = appointment_result.scalar_one_or_none()
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+
+        if appointment.patient_id != data.patient_id:
+            raise BadRequestException("Patient ID does not match the appointment")
+        if appointment.doctor_id != data.doctor_id:
+            raise BadRequestException("Doctor ID does not match the appointment")
+
+        # 4. Verify no prescription exists for this appointment
+        existing_rx = await self.db.scalar(
+            select(Prescription).where(
+                Prescription.appointment_id == data.appointment_id,
+                Prescription.is_deleted.is_(False)
+            )
+        )
+        if existing_rx:
+            raise BadRequestException("A prescription already exists for this appointment")
+
         items = [
             PrescriptionItem(**item.model_dump()) for item in data.items
         ]

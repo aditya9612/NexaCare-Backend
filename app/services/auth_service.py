@@ -239,9 +239,24 @@ class AuthService:
         return TokenResponse(access_token=access, refresh_token=refresh)
 
     async def logout(self, refresh_token: str, user: User) -> None:
+        try:
+            payload = decode_token(refresh_token)
+        except ValueError as exc:
+            raise UnauthorizedException("Invalid refresh token") from exc
+
+        if payload.get("type") != "refresh":
+            raise UnauthorizedException("Invalid token type")
+
         stored = await self.repo.get_refresh_token(refresh_token)
-        if stored and stored.user_id == user.id:
-            await self.repo.revoke_refresh_token(stored)
+        if not stored or stored.expires_at < utc_now():
+            raise UnauthorizedException("Refresh token expired or revoked")
+
+        if stored.user_id != user.id or int(payload.get("sub", 0)) != user.id:
+            raise UnauthorizedException("Token does not belong to this user")
+
+        await self.repo.revoke_refresh_token(stored)
+        user.last_logout_at = utc_now()
+        await self.repo.update(user)
         await self.audit_repo.create("logout", "auth", user_id=user.id)
 
     async def refresh_token(self, refresh_token: str) -> TokenResponse:

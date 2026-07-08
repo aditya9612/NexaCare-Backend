@@ -34,10 +34,11 @@ def generate_device_api_key() -> str:
 
 
 def create_access_token(subject: str | Any, expires_delta: Optional[timedelta] = None) -> str:
-    expire = datetime.now(timezone.utc) + (
+    now = datetime.now(timezone.utc)
+    expire = now + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    payload = {"sub": str(subject), "exp": expire, "type": "access"}
+    payload = {"sub": str(subject), "exp": expire, "type": "access", "iat": now}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 

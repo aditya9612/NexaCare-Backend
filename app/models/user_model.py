@@ -27,6 +27,7 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_logout_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     role = relationship("Role", back_populates="users", lazy="joined")
     hospital = relationship("Hospital", back_populates="users")

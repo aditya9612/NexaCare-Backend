@@ -18,36 +18,46 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create clinical_records table
-    op.create_table('clinical_records',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('patient_id', sa.Integer(), nullable=False),
-    sa.Column('doctor_id', sa.Integer(), nullable=False),
-    sa.Column('appointment_id', sa.Integer(), nullable=True),
-    sa.Column('symptoms', sa.Text(), nullable=True),
-    sa.Column('diagnosis', sa.Text(), nullable=True),
-    sa.Column('treatment_plan', sa.Text(), nullable=True),
-    sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('is_deleted', sa.Boolean(), nullable=False, server_default=sa.text('0')),
-    sa.Column('deleted_at', sa.DateTime(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), nullable=False),
-    sa.ForeignKeyConstraint(['appointment_id'], ['appointments.id'], ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['doctor_id'], ['doctors.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_clinical_records_id'), 'clinical_records', ['id'], unique=False)
-    op.create_index(op.f('ix_clinical_records_patient_id'), 'clinical_records', ['patient_id'], unique=False)
-    op.create_index(op.f('ix_clinical_records_doctor_id'), 'clinical_records', ['doctor_id'], unique=False)
-    op.create_index(op.f('ix_clinical_records_appointment_id'), 'clinical_records', ['appointment_id'], unique=False)
-    op.create_index(op.f('ix_clinical_records_is_deleted'), 'clinical_records', ['is_deleted'], unique=False)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    tables = inspector.get_table_names()
+    
+    if 'clinical_records' not in tables:
+        # Create clinical_records table
+        op.create_table('clinical_records',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('patient_id', sa.Integer(), nullable=False),
+        sa.Column('doctor_id', sa.Integer(), nullable=False),
+        sa.Column('appointment_id', sa.Integer(), nullable=True),
+        sa.Column('symptoms', sa.Text(), nullable=True),
+        sa.Column('diagnosis', sa.Text(), nullable=True),
+        sa.Column('treatment_plan', sa.Text(), nullable=True),
+        sa.Column('notes', sa.Text(), nullable=True),
+        sa.Column('is_deleted', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+        sa.Column('deleted_at', sa.DateTime(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['appointment_id'], ['appointments.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['doctor_id'], ['doctors.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id')
+        )
+        op.create_index(op.f('ix_clinical_records_id'), 'clinical_records', ['id'], unique=False)
+        op.create_index(op.f('ix_clinical_records_patient_id'), 'clinical_records', ['patient_id'], unique=False)
+        op.create_index(op.f('ix_clinical_records_doctor_id'), 'clinical_records', ['doctor_id'], unique=False)
+        op.create_index(op.f('ix_clinical_records_appointment_id'), 'clinical_records', ['appointment_id'], unique=False)
+        op.create_index(op.f('ix_clinical_records_is_deleted'), 'clinical_records', ['is_deleted'], unique=False)
 
 
 def downgrade() -> None:
-    op.drop_index(op.f('ix_clinical_records_is_deleted'), table_name='clinical_records')
-    op.drop_index(op.f('ix_clinical_records_appointment_id'), table_name='clinical_records')
-    op.drop_index(op.f('ix_clinical_records_doctor_id'), table_name='clinical_records')
-    op.drop_index(op.f('ix_clinical_records_patient_id'), table_name='clinical_records')
-    op.drop_index(op.f('ix_clinical_records_id'), table_name='clinical_records')
-    op.drop_table('clinical_records')
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    tables = inspector.get_table_names()
+    
+    if 'clinical_records' in tables:
+        op.drop_index(op.f('ix_clinical_records_is_deleted'), table_name='clinical_records')
+        op.drop_index(op.f('ix_clinical_records_appointment_id'), table_name='clinical_records')
+        op.drop_index(op.f('ix_clinical_records_doctor_id'), table_name='clinical_records')
+        op.drop_index(op.f('ix_clinical_records_patient_id'), table_name='clinical_records')
+        op.drop_index(op.f('ix_clinical_records_id'), table_name='clinical_records')
+        op.drop_table('clinical_records')

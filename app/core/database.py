@@ -82,6 +82,7 @@ async def init_db():
         await _seed_expense_permissions(session)
         await _seed_lab_technician_permissions(session)
         await _seed_default_super_admin(session)
+        await _seed_nurse_adesh(session)
         await session.commit()
 
 
@@ -91,16 +92,23 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     from app.models.role_model import Role, RolePermission
 
     role_names = list(UserRole.ALL)
-    result = await session.execute(select(Role).limit(1))
-    if result.scalar_one_or_none():
-        return
-
-    roles = {name: Role(name=name, description=f"{name} role") for name in role_names}
-    session.add_all(roles.values())
+    
+    # Load existing roles
+    existing_roles_res = await session.execute(select(Role))
+    existing_roles = {r.name: r for r in existing_roles_res.scalars().all()}
+    
+    roles = {}
+    for name in role_names:
+        if name not in existing_roles:
+            role_obj = Role(name=name, description=f"{name} role")
+            session.add(role_obj)
+            roles[name] = role_obj
+        else:
+            roles[name] = existing_roles[name]
     await session.flush()
 
     resources = [
-        "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
+        "users", "roles", "permissions", "patients", "doctors", "nurses", "staff", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
         "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
     ]
@@ -114,33 +122,48 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         PermissionAction.ASSIGN,
     ]
 
+    # Load existing permissions
+    existing_perms_res = await session.execute(select(Permission))
+    existing_perms = {p.name: p for p in existing_perms_res.scalars().all()}
+
     permissions: list[Permission] = []
     for resource in resources:
         for action in actions:
-            permissions.append(
-                Permission(
-                    name=f"{resource}:{action}",
+            perm_name = f"{resource}:{action}"
+            if perm_name not in existing_perms:
+                perm_obj = Permission(
+                    name=perm_name,
                     resource=resource,
                     action=action,
                     description=f"{action} {resource}",
                 )
-            )
-    session.add_all(permissions)
+                session.add(perm_obj)
+                permissions.append(perm_obj)
+            else:
+                permissions.append(existing_perms[perm_name])
     await session.flush()
 
     super_admin = roles[UserRole.SUPER_ADMIN]
     hospital_admin = roles[UserRole.HOSPITAL_ADMIN]
+    
+    # Load existing role permissions to avoid duplicate inserts
+    existing_rp_res = await session.execute(select(RolePermission.role_id, RolePermission.permission_id))
+    existing_rp = {(rp[0], rp[1]) for rp in existing_rp_res.all()}
+
     for perm in permissions:
-        session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
+        if (super_admin.id, perm.id) not in existing_rp:
+            session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
+            
     admin_resources = {
-        "users", "roles", "permissions", "patients", "doctors", "appointments", "dashboard",
-        "billing", "pharmacy", "lab", "inventory",
-        "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
+        "users", "roles", "permissions", "patients", "doctors", "nurses", "staff", "appointments",
+        "dashboard", "billing", "pharmacy", "lab", "inventory", "ai_chat", "voice_reminder",
+        "whatsapp", "analytics", "departments",
     }
 
     for perm in permissions:
         if perm.resource in admin_resources:
-            session.add(RolePermission(role_id=hospital_admin.id, permission_id=perm.id))
+            if (hospital_admin.id, perm.id) not in existing_rp:
+                session.add(RolePermission(role_id=hospital_admin.id, permission_id=perm.id))
 
 
 async def _seed_phase3_permissions(session: AsyncSession) -> None:
@@ -452,6 +475,63 @@ async def _seed_default_super_admin(session: AsyncSession) -> None:
 
     if changed:
         await session.flush()
+
+
+async def _seed_nurse_adesh(session: AsyncSession) -> None:
+    """Ensure the specific nurse user adesh.kale@staff.com exists, is active/verified, and has a Nurse profile."""
+    from app.core.constants import UserRole
+    from app.core.logger import logger
+    from app.core.security import get_password_hash
+    from app.models.role_model import Role
+    from app.models.user_model import User
+    from app.models.nurse_model import Nurse
+    from app.utils.helpers import generate_user_code
+
+    # 1. Find the Nurse role
+    result = await session.execute(select(Role).where(Role.name == UserRole.NURSE))
+    role = result.scalar_one_or_none()
+    if not role:
+        logger.warning("Nurse role missing; cannot seed adesh.kale@staff.com.")
+        return
+
+    email = "adesh.kale@staff.com"
+    result = await session.execute(select(User).where(func.lower(User.email) == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(
+            user_code=generate_user_code(),
+            email=email,
+            hashed_password=get_password_hash("123456"),
+            full_name="Adesh Kale",
+            role_id=role.id,
+            is_active=True,
+            is_verified=True,
+        )
+        session.add(user)
+        await session.flush()
+        logger.info("Nurse user created for %s", email)
+    else:
+        # Ensure user is active, verified, has the right role, and password
+        user.is_active = True
+        user.is_verified = True
+        user.role_id = role.id
+        user.hashed_password = get_password_hash("123456")
+        await session.flush()
+
+    # 2. Ensure Nurse profile exists
+    result_nurse = await session.execute(select(Nurse).where(Nurse.user_id == user.id))
+    nurse = result_nurse.scalar_one_or_none()
+    if not nurse:
+        nurse = Nurse(
+            nurse_code=f"N-{user.user_code}",
+            user_id=user.id,
+            license_number="LIC-ADESHKALE-123",
+            shift="Day Shift (07:00 AM - 07:00 PM)",
+        )
+        session.add(nurse)
+        await session.flush()
+        logger.info("Nurse profile created for %s", email)
 
 
 async def _seed_expense_permissions(session: AsyncSession) -> None:

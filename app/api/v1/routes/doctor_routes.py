@@ -63,7 +63,7 @@ async def create_doctor(
             body = await request.json()
             doctor_data = DoctorCreate(**body)
         except ValidationError as e:
-            raise HTTPException(status_code=422, detail=e.errors())
+            raise RequestValidationError(e.errors())
         except Exception as e:
             raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": f"Invalid JSON payload: {str(e)}", "type": "json_invalid"}])
         image_file = None
@@ -100,7 +100,7 @@ async def create_doctor(
                 profile_image=None
             )
         except ValidationError as e:
-            raise HTTPException(status_code=422, detail=e.errors())
+            raise RequestValidationError(e.errors())
         image_file = profile_image
 
     doctor_obj = await DoctorService(db).create(doctor_data, current_user.id, image_file=image_file)
@@ -233,6 +233,7 @@ async def view_reports(
     result = await DoctorMedicalRecordService(db).list_reports(
         page=page,
         size=size,
+        user_id=current_user.id,
     )
     return APIResponse(message="Medical records retrieved", data=result)
 
@@ -244,7 +245,7 @@ async def download_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    record = await DoctorMedicalRecordService(db).get_report_file(record_id)
+    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id)
     return FileResponse(
         path=record.file_path,
         filename=record.file_name,
@@ -262,7 +263,7 @@ async def get_medical_record(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id)
+    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id, user_id=current_user.id)
     return APIResponse(message="Medical record retrieved", data=record)
 
 
@@ -459,7 +460,7 @@ async def update_doctor(
     try:
         data = DoctorUpdate(**update_args)
     except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
+        raise RequestValidationError(e.errors())
     doctor = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image)
     return APIResponse(message="Doctor updated", data=doctor)
 

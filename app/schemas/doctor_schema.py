@@ -105,10 +105,12 @@ def validate_password_strength(v: str) -> str:
     return v
 
 
-def validate_availability_status(v: str | None) -> str | None:
+def validate_availability_status(v: str | None, allow_unavailable: bool = True) -> str | None:
     if v is None:
         return v
-    allowed = {"available", "unavailable", "on_leave"}
+    allowed = {"available", "on_leave"}
+    if allow_unavailable:
+        allowed.add("unavailable")
     if v not in allowed:
         raise ValueError(f"Availability status must be one of: {', '.join(sorted(allowed))}")
     return v
@@ -233,7 +235,7 @@ class DoctorOnboardCreate(BaseSchema):
     @field_validator("availability_status")
     @classmethod
     def validate_availability(cls, v: str) -> str:
-        res = validate_availability_status(v)
+        res = validate_availability_status(v, allow_unavailable=False)
         if res is None:
             raise ValueError("Availability status is required")
         return res
@@ -323,7 +325,7 @@ class DoctorCreate(BaseSchema):
     @field_validator("availability_status")
     @classmethod
     def validate_availability(cls, v: str | None) -> str | None:
-        return validate_availability_status(v)
+        return validate_availability_status(v, allow_unavailable=False)
 
     @field_validator("bio")
     @classmethod
@@ -393,7 +395,7 @@ class DoctorUpdate(BaseSchema):
     @field_validator("availability_status")
     @classmethod
     def validate_availability(cls, v: str | None) -> str | None:
-        return validate_availability_status(v)
+        return validate_availability_status(v, allow_unavailable=False)
 
     @field_validator("bio")
     @classmethod
@@ -463,7 +465,7 @@ class DoctorAvailabilityUpdate(BaseSchema):
     @field_validator("availability_status")
     @classmethod
     def validate_availability(cls, v: str) -> str:
-        res = validate_availability_status(v)
+        res = validate_availability_status(v, allow_unavailable=False)
         if res is None:
             raise ValueError("Availability status is required")
         return res

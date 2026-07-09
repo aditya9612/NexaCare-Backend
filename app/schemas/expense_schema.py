@@ -127,6 +127,8 @@ class ExpenseResponse(BaseSchema):
     vendor: Optional[VendorResponse] = None
     created_at: datetime
     updated_at: datetime
+    source: str = "expense"
+
 
 
 class ExpenseQuery(PaginationQuery):

@@ -74,6 +74,7 @@ class BillingResponse(BaseSchema):
     items: List[BillItemResponse] = []
     created_at: datetime
     updated_at: datetime
+    source: Optional[str] = "billing"
 
 
 class PaymentCreate(BaseSchema):

@@ -27,6 +27,10 @@ from app.schemas.nurse_schema import (
     NurseTaskResponse,
     NurseTaskStatusUpdate,
     NursePatientLabTestResponse,
+    NursePrescriptionCreate,
+    NursePrescriptionResponse,
+    NurseMedicationLogCreate,
+    NurseMedicationLogResponse,
 )
 from app.services.nurse_service import NurseService
 from app.utils.pagination import PaginatedResult
@@ -494,3 +498,70 @@ async def list_nurse_notifications(
         sort_order=sort_order,
     )
     return APIResponse(message="Nurse notifications retrieved", data=result)
+
+
+@router.get("/prescriptions", response_model=APIResponse[list])
+async def list_prescriptions(
+    db: DbSession,
+    current_user: CurrentUser,
+    patient_id: int | None = None,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    prescriptions = await NurseService(db).list_prescriptions(patient_id)
+    return APIResponse(message="Prescriptions retrieved successfully", data=prescriptions)
+
+
+@router.post("/prescriptions", response_model=APIResponse[list])
+async def create_prescription(
+    data: NursePrescriptionCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "create")),
+):
+    prescriptions = await NurseService(db).create_prescription(data, current_user.id)
+    return APIResponse(message="Prescription created successfully", data=prescriptions)
+
+
+@router.delete("/prescriptions/{prescription_id}", response_model=APIResponse[MessageResponse])
+async def delete_prescription(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "delete")),
+):
+    await NurseService(db).delete_prescription(prescription_id, current_user.id)
+    return APIResponse(message="Prescription deleted successfully", data=MessageResponse(message="Deleted successfully"))
+
+
+@router.post("/prescriptions/{prescription_id}/logs")
+async def log_medication(
+    prescription_id: int,
+    data: NurseMedicationLogCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "create")),
+):
+    log = await NurseService(db).log_medication(prescription_id, data, current_user.id)
+    return APIResponse(message="Medication logged successfully", data=log)
+
+
+@router.delete("/prescriptions/{prescription_id}/logs/{log_id}", response_model=APIResponse[MessageResponse])
+async def delete_medication_log(
+    prescription_id: int,
+    log_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "delete")),
+):
+    await NurseService(db).delete_medication_log(prescription_id, log_id, current_user.id)
+    return APIResponse(message="Medication log deleted successfully", data=MessageResponse(message="Deleted successfully"))
+
+
+@router.get("/medication-schedules", response_model=APIResponse[list])
+async def list_medication_schedules(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    schedules = await NurseService(db).list_medication_schedules()
+    return APIResponse(message="Medication schedules retrieved successfully", data=schedules)

@@ -15,23 +15,27 @@ class LabTestRepository:
 
     async def list_all(
         self, skip: int = 0, limit: int = 20, sort_by: str = "created_at",
-        sort_order: str = "desc", category: str | None = None,
+        sort_order: str = "desc", category: str | None = None, doctor_id: int | None = None
     ) -> list[LabTest]:
         query = self._base_query()
         if category:
             query = query.where(LabTest.category == category)
+        if doctor_id is not None:
+            query = query.where(LabTest.doctor_id == doctor_id)
         column = getattr(LabTest, sort_by, LabTest.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, category: str | None = None) -> int:
+    async def count_all(self, category: str | None = None, doctor_id: int | None = None) -> int:
         query = select(func.count()).select_from(LabTest).where(LabTest.is_deleted.is_(False))
         if category:
             query = query.where(LabTest.category == category)
+        if doctor_id is not None:
+            query = query.where(LabTest.doctor_id == doctor_id)
         return (await self.db.scalar(query)) or 0
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[LabTest]:
+    async def search(self, q: str, skip: int = 0, limit: int = 20, doctor_id: int | None = None) -> list[LabTest]:
         pattern = f"%{q.lower()}%"
         query = self._base_query().where(
             or_(
@@ -40,20 +44,23 @@ class LabTestRepository:
                 func.lower(LabTest.category).like(pattern),
             )
         )
+        if doctor_id is not None:
+            query = query.where(LabTest.doctor_id == doctor_id)
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
+    async def count_search(self, q: str, doctor_id: int | None = None) -> int:
         pattern = f"%{q.lower()}%"
-        return (await self.db.scalar(
-            select(func.count()).select_from(LabTest).where(
-                LabTest.is_deleted.is_(False),
-                or_(
-                    func.lower(LabTest.test_name).like(pattern),
-                    func.lower(LabTest.test_code).like(pattern),
-                ),
-            )
-        )) or 0
+        query = select(func.count()).select_from(LabTest).where(
+            LabTest.is_deleted.is_(False),
+            or_(
+                func.lower(LabTest.test_name).like(pattern),
+                func.lower(LabTest.test_code).like(pattern),
+            ),
+        )
+        if doctor_id is not None:
+            query = query.where(LabTest.doctor_id == doctor_id)
+        return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, test_id: int) -> LabTest | None:
         result = await self.db.execute(self._base_query().where(LabTest.id == test_id))
@@ -88,62 +95,30 @@ class TestOrderRepository:
         )
 
     async def list_all(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        patient_id: int | None = None,
-        department_id: int | None = None,
-        entered_by: int | None = None,
-
+        self, skip: int = 0, limit: int = 20, status: str | None = None, patient_id: int | None = None, doctor_id: int | None = None, department_id: int | None = None
     ) -> list[TestOrder]:
         query = self._base_query()
         if status:
             query = query.where(TestOrder.status == status)
         if patient_id:
             query = query.where(TestOrder.patient_id == patient_id)
-        if department_id and entered_by:
-            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
-            query = query.where(
-                or_(
-                    TestOrder.department_id == department_id,
-                    TestResult.entered_by == entered_by,
-                )
-            )
-        elif department_id:
+        if doctor_id is not None:
+            query = query.where(TestOrder.doctor_id == doctor_id)
+        if department_id is not None:
             query = query.where(TestOrder.department_id == department_id)
-        elif entered_by:
-            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
-            query = query.where(TestResult.entered_by == entered_by)      
         result = await self.db.execute(query.order_by(TestOrder.ordered_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(
-        self,
-        status: str | None = None,
-        patient_id: int | None = None,
-        department_id: int | None = None,
-        entered_by: int | None = None,
-    ) -> int:
-
+    async def count_all(self, status: str | None = None, patient_id: int | None = None, doctor_id: int | None = None, department_id: int | None = None) -> int:
         query = select(func.count()).select_from(TestOrder).where(TestOrder.is_deleted.is_(False))
         if status:
             query = query.where(TestOrder.status == status)
         if patient_id:
             query = query.where(TestOrder.patient_id == patient_id)
-        if department_id and entered_by:
-            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
-            query = query.where(
-                or_(
-                    TestOrder.department_id == department_id,
-                    TestResult.entered_by == entered_by,
-                )
-            )
-        elif department_id:
+        if doctor_id is not None:
+            query = query.where(TestOrder.doctor_id == doctor_id)
+        if department_id is not None:
             query = query.where(TestOrder.department_id == department_id)
-        elif entered_by:
-            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
-            query = query.where(TestResult.entered_by == entered_by)  
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, order_id: int) -> TestOrder | None:

@@ -23,6 +23,7 @@ class PublicDoctorResponse(BaseSchema):
     name: str
     specialty: str
     department: Optional[str] = None
+    department_id: Optional[int] = None
     rating: float = 4.8
     experience: Optional[int] = None
     working_days: List[str] = Field(
@@ -59,14 +60,7 @@ class QuickBookingRequest(BaseSchema):
     @classmethod
     def validate_patient_phone(cls, value: str) -> str:
         from app.utils.phone_utils import validate_phone_field
-        normalized = validate_phone_field(value)
-        digits = "".join(c for c in normalized if c.isdigit())
-        if len(digits) < 10:
-            raise ValueError("Phone number must contain at least 10 digits")
-        local_num = digits[-10:]
-        if local_num[0] not in {"6", "7", "8", "9"}:
-            raise ValueError("Phone number must start with 6, 7, 8, or 9")
-        return normalized
+        return validate_phone_field(value)
 
 
 class SymptomAnalysisRequest(BaseSchema):
@@ -88,14 +82,7 @@ class SymptomAnalysisRequest(BaseSchema):
     def validate_patient_phone(cls, value: Optional[str]) -> Optional[str]:
         if value:
             from app.utils.phone_utils import validate_phone_field
-            normalized = validate_phone_field(value)
-            digits = "".join(c for c in normalized if c.isdigit())
-            if len(digits) < 10:
-                raise ValueError("Phone number must contain at least 10 digits")
-            local_num = digits[-10:]
-            if local_num[0] not in {"6", "7", "8", "9"}:
-                raise ValueError("Phone number must start with 6, 7, 8, or 9")
-            return normalized
+            return validate_phone_field(value)
         return value
 
 
@@ -104,6 +91,7 @@ class SymptomAnalysisResponse(BaseSchema):
     confidence_score: float
     specialty: str
     department: Optional[str] = None
+    department_id: Optional[int] = None
     suggested_doctor_id: Optional[int] = None
     suggested_doctor_name: Optional[str] = None
     available_slots: List[SuggestedSlotPublic] = []
@@ -142,11 +130,4 @@ class AdvancedBookingRequest(BaseSchema):
     @classmethod
     def validate_patient_phone(cls, value: str) -> str:
         from app.utils.phone_utils import validate_phone_field
-        normalized = validate_phone_field(value)
-        digits = "".join(c for c in normalized if c.isdigit())
-        if len(digits) < 10:
-            raise ValueError("Phone number must contain at least 10 digits")
-        local_num = digits[-10:]
-        if local_num[0] not in {"6", "7", "8", "9"}:
-            raise ValueError("Phone number must start with 6, 7, 8, or 9")
-        return normalized
+        return validate_phone_field(value)

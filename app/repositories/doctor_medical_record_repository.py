@@ -32,19 +32,24 @@ class DoctorMedicalRecordRepository:
         self,
         skip: int = 0,
         limit: int = 20,
+        doctor_id: int | None = None,
     ) -> list[DoctorMedicalRecord]:
+        query = select(DoctorMedicalRecord)
+        if doctor_id is not None:
+            query = query.where(DoctorMedicalRecord.doctor_id == doctor_id)
+        
         result = await self.db.execute(
-            select(DoctorMedicalRecord)
-            .order_by(DoctorMedicalRecord.created_at.desc())
+            query.order_by(DoctorMedicalRecord.created_at.desc())
             .offset(skip)
             .limit(limit)
         )
         return list(result.scalars().all())
 
-    async def count_records(self) -> int:
-        return await self.db.scalar(
-            select(func.count()).select_from(DoctorMedicalRecord)
-        ) or 0
+    async def count_records(self, doctor_id: int | None = None) -> int:
+        query = select(func.count()).select_from(DoctorMedicalRecord)
+        if doctor_id is not None:
+            query = query.where(DoctorMedicalRecord.doctor_id == doctor_id)
+        return await self.db.scalar(query) or 0
 
     async def get_record_by_id(
         self,

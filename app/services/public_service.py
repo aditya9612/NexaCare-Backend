@@ -3,13 +3,14 @@ from typing import List, Optional
 import os
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus, DayOfWeek
 from app.core.exceptions import ConflictException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.models.patient_model import Patient, PatientDocument
+from app.models.department_model import Department
 from app.models.doctor_model import Doctor, DoctorSchedule
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
@@ -101,6 +102,7 @@ class PublicService:
 
     async def list_public_doctors(
         self,
+        department_id: Optional[int] = None,
         department: Optional[str] = None,
         specialty: Optional[str] = None,
         appointment_date: Optional[date] = None,
@@ -114,6 +116,18 @@ class PublicService:
             Doctor.is_deleted.is_(False),
             Doctor.availability_status == "available"
         )
+
+        resolved_department_id = department_id
+        if resolved_department_id is None and department:
+            if department.isdigit():
+                resolved_department_id = int(department)
+            else:
+                query = query.join(Doctor.department).where(
+                    func.lower(Department.department_name) == department.lower().strip()
+                )
+
+        if resolved_department_id is not None:
+            query = query.where(Doctor.department_id == resolved_department_id)
         
         if specialty:
             query = query.where(Doctor.specialization.ilike(f"%{specialty}%"))
@@ -125,7 +139,6 @@ class PublicService:
         
         response_list = []
         for doc in doctors:
-            # Check department filter (can be ID or Name)
             dept_name = doc.department.department_name if doc.department else None
             if department:
                 matched_dept = False
@@ -155,6 +168,7 @@ class PublicService:
                     name=f"Dr. {doc.first_name} {doc.last_name}",
                     specialty=doc.specialization,
                     department=dept_name,
+                    department_id=doc.department_id,
                     experience=doc.experience,
                     working_days=working_days,
                     weekly_schedule=weekly_schedule,
@@ -240,11 +254,13 @@ class PublicService:
         suggested_doc_id = None
         suggested_doc_name = None
         dept_name = None
+        dept_id = None
         
         if suggested_doctor:
             suggested_doc_id = suggested_doctor.id
             suggested_doc_name = f"Dr. {suggested_doctor.first_name} {suggested_doctor.last_name}"
             dept_name = suggested_doctor.department.department_name if suggested_doctor.department else None
+            dept_id = suggested_doctor.department_id
             
             target_date = date.today() + timedelta(days=1)
             available_times = await self.get_doctor_available_slots(suggested_doctor.id, target_date)
@@ -260,6 +276,7 @@ class PublicService:
             confidence_score=0.85,  # Placeholder score
             specialty=specialist,
             department=dept_name,
+            department_id=dept_id,
             suggested_doctor_id=suggested_doc_id,
             suggested_doctor_name=suggested_doc_name,
             available_slots=slots,

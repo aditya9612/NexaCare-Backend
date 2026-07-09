@@ -69,6 +69,7 @@ class TestOrderResponse(BaseSchema):
     patient_id: int
     doctor_id: int | None
     lab_test_id: int
+    department_id: int | None = None
     appointment_id: int | None
     status: str
     priority: str
@@ -135,6 +136,7 @@ class TestResultResponse(BaseSchema):
     normal_range: str | None
     is_critical: bool
     status: str
+    entered_by: int | None
     entered_at: datetime | None
     document_url: str | None
     created_at: datetime

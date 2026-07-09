@@ -98,5 +98,6 @@ class LabReport(Base, TimestampMixin):
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    generated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="reports")

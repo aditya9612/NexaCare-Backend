@@ -88,26 +88,62 @@ class TestOrderRepository:
         )
 
     async def list_all(
-        self, skip: int = 0, limit: int = 20, status: str | None = None, patient_id: int | None = None, department_id: int | None = None
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        patient_id: int | None = None,
+        department_id: int | None = None,
+        entered_by: int | None = None,
+
     ) -> list[TestOrder]:
         query = self._base_query()
         if status:
             query = query.where(TestOrder.status == status)
         if patient_id:
             query = query.where(TestOrder.patient_id == patient_id)
-        if department_id:
-            query = query.where(TestOrder.department_id == department_id)    
+        if department_id and entered_by:
+            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
+            query = query.where(
+                or_(
+                    TestOrder.department_id == department_id,
+                    TestResult.entered_by == entered_by,
+                )
+            )
+        elif department_id:
+            query = query.where(TestOrder.department_id == department_id)
+        elif entered_by:
+            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
+            query = query.where(TestResult.entered_by == entered_by)      
         result = await self.db.execute(query.order_by(TestOrder.ordered_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None, patient_id: int | None = None, department_id: int | None = None) -> int:
+    async def count_all(
+        self,
+        status: str | None = None,
+        patient_id: int | None = None,
+        department_id: int | None = None,
+        entered_by: int | None = None,
+    ) -> int:
+
         query = select(func.count()).select_from(TestOrder).where(TestOrder.is_deleted.is_(False))
         if status:
             query = query.where(TestOrder.status == status)
         if patient_id:
             query = query.where(TestOrder.patient_id == patient_id)
-        if department_id:
-            query = query.where(TestOrder.department_id == department_id)     
+        if department_id and entered_by:
+            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
+            query = query.where(
+                or_(
+                    TestOrder.department_id == department_id,
+                    TestResult.entered_by == entered_by,
+                )
+            )
+        elif department_id:
+            query = query.where(TestOrder.department_id == department_id)
+        elif entered_by:
+            query = query.outerjoin(TestResult, TestResult.test_order_id == TestOrder.id)
+            query = query.where(TestResult.entered_by == entered_by)  
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, order_id: int) -> TestOrder | None:
@@ -135,23 +171,36 @@ class SampleRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_all(self, skip: int = 0, limit: int = 20, status: str | None = None) -> list[Sample]:
-        query = select(Sample)
+    async def list_all(self, skip: int = 0, limit: int = 20, status: str | None = None, department_id: int | None = None) -> list[Sample]:
+        query = select(Sample).join(TestOrder, Sample.test_order_id == TestOrder.id)
         if status:
             query = query.where(Sample.status == status)
+        if department_id:
+                query = query.where(TestOrder.department_id == department_id)
         result = await self.db.execute(query.order_by(Sample.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, status: str | None = None) -> int:
-        query = select(func.count()).select_from(Sample)
+    async def count_all(self, status: str | None = None, department_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Sample).join(TestOrder, Sample.test_order_id == TestOrder.id)
         if status:
             query = query.where(Sample.status == status)
+        if department_id:
+            query = query.where(TestOrder.department_id == department_id)
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, sample_id: int) -> Sample | None:
         result = await self.db.execute(
             select(Sample).where(Sample.id == sample_id)
         )
+        return result.scalar_one_or_none() 
+
+    async def get_by_test_order(self, test_order_id: int) -> Sample | None:
+        result = await self.db.execute(
+            select(Sample)
+            .where(Sample.test_order_id == test_order_id)
+            .order_by(Sample.created_at.desc())
+            .limit(1)
+       )
         return result.scalar_one_or_none()       
 
     async def create(self, sample: Sample) -> Sample:
@@ -175,23 +224,40 @@ class TestResultRepository:
         self.db = db
 
     async def list_all(
-        self, skip: int = 0, limit: int = 20, test_order_id: int | None = None, is_critical: bool | None = None
+        self, skip: int = 0, limit: int = 20, test_order_id: int | None = None, is_critical: bool | None = None, department_id: int | None = None
     ) -> list[TestResult]:
-        query = select(TestResult)
+        query = (
+            select(TestResult)
+            .join(TestOrder, TestResult.test_order_id == TestOrder.id)
+        )
         if test_order_id:
             query = query.where(TestResult.test_order_id == test_order_id)
         if is_critical is not None:
             query = query.where(TestResult.is_critical.is_(is_critical))
+        if department_id:
+            query = query.where(TestOrder.department_id == department_id)    
         result = await self.db.execute(query.order_by(TestResult.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, test_order_id: int | None = None, is_critical: bool | None = None) -> int:
-        query = select(func.count()).select_from(TestResult)
+    async def count_all(self, test_order_id: int | None = None, is_critical: bool | None = None, department_id: int | None = None) -> int:
+        query = (
+            select(func.count())
+            .select_from(TestResult)
+            .join(TestOrder, TestResult.test_order_id == TestOrder.id)
+        )
         if test_order_id:
             query = query.where(TestResult.test_order_id == test_order_id)
         if is_critical is not None:
             query = query.where(TestResult.is_critical.is_(is_critical))
+        if department_id:
+            query = query.where(TestOrder.department_id == department_id)
         return (await self.db.scalar(query)) or 0
+
+    async def get_by_test_order(self, test_order_id: int) -> TestResult | None:
+        result = await self.db.execute(
+            select(TestResult).where(TestResult.test_order_id == test_order_id)
+        )
+        return result.scalar_one_or_none()    
 
     async def create(self, result: TestResult) -> TestResult:
         self.db.add(result)
@@ -199,13 +265,44 @@ class TestResultRepository:
         await self.db.refresh(result)
         return result
 
-    async def get_critical_alerts(self, skip: int = 0, limit: int = 50) -> list[TestResult]:
+    async def get_by_id(self, result_id: int) -> TestResult | None:
         result = await self.db.execute(
+            select(TestResult).where(TestResult.id == result_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update(self, result: TestResult) -> TestResult:
+        await self.db.flush()
+        await self.db.refresh(result)
+        return result    
+
+    async def get_critical_alerts(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        current_user_id: int | None = None,
+        department_id: int | None = None,
+    ) -> list[TestResult]:
+        query = (
             select(TestResult)
-            .where(TestResult.is_critical.is_(True), TestResult.status == "pending")
-            .order_by(TestResult.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+            .join(TestOrder, TestResult.test_order_id == TestOrder.id)
+            .where(TestResult.is_critical.is_(True))
+        )
+
+        if current_user_id and department_id:
+            query = query.where(
+                or_(
+                    TestResult.entered_by == current_user_id,
+                    TestOrder.department_id == department_id,
+                )
+            )
+        elif current_user_id:
+            query = query.where(TestResult.entered_by == current_user_id)
+        elif department_id:
+            query = query.where(TestOrder.department_id == department_id)
+
+        result = await self.db.execute(
+            query.order_by(TestResult.created_at.desc()).offset(skip).limit(limit)
         )
         return list(result.scalars().all())
 
@@ -214,19 +311,68 @@ class LabReportRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_all(self, skip: int = 0, limit: int = 20, status: str | None = None) -> list[LabReport]:
-        query = select(LabReport)
+    async def list_all(
+       self,
+       skip: int = 0,
+       limit: int = 20,
+       status: str | None = None,
+       department_id: int | None = None,
+       generated_by: int | None = None,
+    ) -> list[LabReport]:
+        query = (
+           select(LabReport)
+           .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+        )
+
         if status:
             query = query.where(LabReport.status == status)
-        result = await self.db.execute(query.order_by(LabReport.created_at.desc()).offset(skip).limit(limit))
+
+        if department_id and generated_by:
+            query = query.where(
+                or_(
+                    TestOrder.department_id == department_id,
+                    LabReport.generated_by == generated_by,
+                )
+            )
+        elif department_id:
+            query = query.where(TestOrder.department_id == department_id)
+        elif generated_by:
+            query = query.where(LabReport.generated_by == generated_by) 
+
+        result = await self.db.execute(
+            query.order_by(LabReport.created_at.desc()).offset(skip).limit(limit)
+        )
         return list(result.scalars().all())
 
-    async def count_all(self, status: str | None = None) -> int:
-        query = select(func.count()).select_from(LabReport)
+    async def count_all(
+        self,
+        status: str | None = None,
+        department_id: int | None = None,
+        generated_by: int | None = None,
+    ) -> int:
+        query = (
+            select(func.count())
+            .select_from(LabReport)
+            .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+        )
+
         if status:
             query = query.where(LabReport.status == status)
-        return (await self.db.scalar(query)) or 0
 
+        if department_id and generated_by:
+            query = query.where(
+                or_(
+                    TestOrder.department_id == department_id,
+                    LabReport.generated_by == generated_by,
+                )
+            )
+        elif department_id:
+            query = query.where(TestOrder.department_id == department_id)
+        elif generated_by:
+            query = query.where(LabReport.generated_by == generated_by)
+        
+        return (await self.db.scalar(query)) or 0
+      
     async def get_by_id(self, report_id: int) -> LabReport | None:
         result = await self.db.execute(select(LabReport).where(LabReport.id == report_id))
         return result.scalar_one_or_none()

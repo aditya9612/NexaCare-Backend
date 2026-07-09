@@ -52,12 +52,16 @@ async def list_lab_tests(
     q: str | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    doctor_id = doctor.id if doctor else None
+
     service = LabService(db)
     if q:
-        result = await service.search_tests(q, page=page, size=size)
+        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id)
     else:
         result = await service.list_tests(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id
         )
     return APIResponse(message="Lab tests retrieved", data=result)
 
@@ -118,7 +122,13 @@ async def list_test_orders(
     patient_id: int | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).list_orders(page=page, size=size, status=status, patient_id=patient_id)
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    doctor_id = doctor.id if doctor else None
+
+    result = await LabService(db).list_orders(
+        page=page, size=size, status=status, patient_id=patient_id, doctor_id=doctor_id
+    )
     return APIResponse(message="Test orders retrieved", data=result)
 
 

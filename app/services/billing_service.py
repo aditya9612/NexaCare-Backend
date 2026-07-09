@@ -45,7 +45,52 @@ class BillingService:
     def _to_response(self, billing: Billing) -> BillingResponse:
         data = BillingResponse.model_validate(billing)
         data.items = [BillItemResponse.model_validate(i) for i in billing.items]
+        data.source = "billing"
         return data
+
+    def _pharmacy_invoice_to_billing_response(self, invoice) -> BillingResponse:
+        bill_items = []
+        for item in (invoice.items or []):
+            medicine_name = item.medicine.name if (hasattr(item, "medicine") and item.medicine) else f"Medicine #{item.medicine_id}"
+            bill_items.append(
+                BillItemResponse(
+                    id=item.id,
+                    billing_id=invoice.id,
+                    description=f"{medicine_name} (Qty: {item.quantity})",
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    gst_rate=invoice.tax_percentage,
+                    gst_amount=invoice.gst_amount / len(invoice.items) if invoice.items else 0.0,
+                    line_total=item.line_total,
+                    item_type="pharmacy_item",
+                    created_at=item.created_at or invoice.created_at or utc_now(),
+                )
+            )
+        
+        return BillingResponse(
+            id=invoice.id,
+            patient_id=invoice.patient_id or 0,
+            bill_number=invoice.invoice_number,
+            subtotal=invoice.subtotal,
+            discount_percent=invoice.discount_percentage,
+            discount_amount=invoice.discount_amount,
+            gst_rate=invoice.tax_percentage,
+            gst_amount=invoice.gst_amount,
+            tax_amount=invoice.tax_amount,
+            total_amount=invoice.total_amount,
+            paid_amount=invoice.paid_amount,
+            balance_amount=round(max(invoice.total_amount - invoice.paid_amount, 0.0), 2),
+            status=invoice.status,
+            due_date=invoice.created_at,
+            notes=f"Pharmacy Invoice (Prescription ID: {invoice.prescription_id})",
+            insurance_id=None,
+            invoice_path=None,
+            appointment_id=None,
+            items=bill_items,
+            created_at=invoice.created_at or utc_now(),
+            updated_at=invoice.updated_at or utc_now(),
+            source="pharmacy"
+        )
 
     async def _recalculate_billing(self, billing: Billing) -> Billing:
         from sqlalchemy import inspect
@@ -163,22 +208,122 @@ class BillingService:
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
     ):
+        from app.models.billing_model import Billing
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        billing_query = select(Billing).where(Billing.is_deleted == False).options(
+            selectinload(Billing.items), selectinload(Billing.payments)
+        )
+        if status:
+            billing_query = billing_query.where(Billing.status == status)
+        if patient_id:
+            billing_query = billing_query.where(Billing.patient_id == patient_id)
+
+        billings_res = await self.db.execute(billing_query)
+        billings_list = list(billings_res.scalars().unique().all())
+
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        invoice_query = select(PharmacyInvoice).where(PharmacyInvoice.is_deleted == False).options(
+            selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+        )
+        if status:
+            invoice_query = invoice_query.where(PharmacyInvoice.status == status)
+        if patient_id:
+            invoice_query = invoice_query.where(PharmacyInvoice.patient_id == patient_id)
+
+        invoices_res = await self.db.execute(invoice_query)
+        invoices_list = list(invoices_res.scalars().unique().all())
+
+        all_items = []
+        for b in billings_list:
+            all_items.append(self._to_response(b))
+
+        for inv in invoices_list:
+            all_items.append(self._pharmacy_invoice_to_billing_response(inv))
+
+        reverse = (sort_order == "desc")
+        def get_sort_key(item: BillingResponse):
+            val = getattr(item, sort_by, None)
+            if val is None:
+                if sort_by == "created_at":
+                    val = item.created_at
+                else:
+                    val = 0
+            return val
+
+        all_items.sort(key=get_sort_key, reverse=reverse)
+
         skip = (page - 1) * size
-        items = await self.repo.list_all(skip=skip, limit=size, sort_by=sort_by, sort_order=sort_order,
-                                         status=status, patient_id=patient_id)
-        total = await self.repo.count_all(status=status, patient_id=patient_id)
-        return build_paginated_result([self._to_response(b) for b in items], total, page, size)
+        total = len(all_items)
+        paginated = all_items[skip : skip + size]
+
+        return build_paginated_result(paginated, total, page, size)
 
     async def search(self, q: str, page: int = 1, size: int = 20, status: str | None = None):
+        from app.models.billing_model import Billing
+        from sqlalchemy import select, or_, func
+        from sqlalchemy.orm import selectinload
+
+        pattern = f"%{q.lower()}%"
+        billing_query = select(Billing).where(Billing.is_deleted == False).where(
+            or_(
+                func.lower(Billing.bill_number).like(pattern),
+                func.lower(Billing.notes).like(pattern),
+            )
+        ).options(
+            selectinload(Billing.items), selectinload(Billing.payments)
+        )
+        if status:
+            billing_query = billing_query.where(Billing.status == status)
+
+        billings_res = await self.db.execute(billing_query)
+        billings_list = list(billings_res.scalars().unique().all())
+
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        invoice_query = select(PharmacyInvoice).where(PharmacyInvoice.is_deleted == False).where(
+            func.lower(PharmacyInvoice.invoice_number).like(pattern)
+        ).options(
+            selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+        )
+        if status:
+            invoice_query = invoice_query.where(PharmacyInvoice.status == status)
+
+        invoices_res = await self.db.execute(invoice_query)
+        invoices_list = list(invoices_res.scalars().unique().all())
+
+        all_items = []
+        for b in billings_list:
+            all_items.append(self._to_response(b))
+
+        for inv in invoices_list:
+            all_items.append(self._pharmacy_invoice_to_billing_response(inv))
+
+        all_items.sort(key=lambda x: x.created_at, reverse=True)
+
         skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size, status=status)
-        total = await self.repo.count_search(q, status=status)
-        return build_paginated_result([self._to_response(b) for b in items], total, page, size)
+        total = len(all_items)
+        paginated = all_items[skip : skip + size]
+
+        return build_paginated_result(paginated, total, page, size)
 
     async def get_by_id(self, billing_id: int) -> BillingResponse:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            return self._pharmacy_invoice_to_billing_response(invoice)
         return self._to_response(billing)
 
     async def update(self, billing_id: int, data: BillingUpdate, user_id: int) -> BillingResponse:
@@ -316,11 +461,74 @@ class BillingService:
 
     async def get_revenue_summary(self) -> BillingSummary:
         data = await self.repo.get_revenue_summary()
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0)
+        ).where(
+            PharmacyInvoice.is_deleted == False
+        )
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+
+        pharm_billed = float(row[0] if row else 0.0)
+        pharm_collected = float(row[1] if row else 0.0)
+        pharm_pending = max(0.0, pharm_billed - pharm_collected)
+
+        pharm_pending_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount
+        )
+        pharm_pending_count = await self.db.scalar(pharm_pending_count_stmt) or 0
+
+        pharm_overdue_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.status == "overdue"
+        )
+        pharm_overdue = await self.db.scalar(pharm_overdue_count_stmt) or 0
+
+        data["total_revenue"] = round(data["total_revenue"] + pharm_collected, 2)
+        data["total_paid"] = round(data["total_paid"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["overdue_count"] = data["overdue_count"] + pharm_overdue
+        data["pending_count"] = data["pending_count"] + pharm_pending_count
+
         return BillingSummary(**data)
 
     async def get_daily_report(self, target_date: date | None = None) -> DailyCollectionSummary:
         target = target_date or date.today()
         data = await self.repo.get_daily_collection(target)
+
+        start = datetime.combine(target, datetime.min.time())
+        end = datetime.combine(target, datetime.max.time())
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id)
+        ).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end,
+            PharmacyInvoice.paid_amount > 0.0
+        )
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+        pharm_collected = float(row[0] if row else 0.0)
+        pharm_count = int(row[1] if row else 0)
+
+        if pharm_collected > 0:
+            data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
+            data["payment_count"] = data["payment_count"] + pharm_count
+            by_method = dict(data.get("by_method", {}))
+            by_method["pharmacy"] = round(by_method.get("pharmacy", 0.0) + pharm_collected, 2)
+            data["by_method"] = by_method
+
         return DailyCollectionSummary(date=str(target), **data)
 
     async def get_period_report(self, period: str) -> RevenueReport:
@@ -338,6 +546,42 @@ class BillingService:
             end = now
             label = str(now.year)
         data = await self.repo.get_period_report(start, end)
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id)
+        ).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end
+        )
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+
+        pharm_billed = float(row[0] if row else 0.0)
+        pharm_collected = float(row[1] if row else 0.0)
+        pharm_bill_count = int(row[2] if row else 0)
+
+        pharm_pending = max(0.0, pharm_billed - pharm_collected)
+
+        pharm_pay_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end,
+            PharmacyInvoice.paid_amount > 0.0
+        )
+        pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
+
+        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
+        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["bill_count"] = data["bill_count"] + pharm_bill_count
+        data["payment_count"] = data["payment_count"] + pharm_payment_count
+
         return RevenueReport(period=label, **data)
 
 

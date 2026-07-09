@@ -23,6 +23,7 @@ class LabTest(Base, TimestampMixin, SoftDeleteMixin):
     normal_range: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.department_id"), nullable=True, index=True)
+    doctor_id: Mapped[int | None] = mapped_column(ForeignKey("doctors.id"), nullable=True, index=True)
 
     orders: Mapped[list["TestOrder"]] = relationship(back_populates="lab_test")
     department = relationship("Department", back_populates="lab_tests")

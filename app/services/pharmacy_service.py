@@ -179,6 +179,16 @@ class PharmacyService:
         if appointment.doctor_id != data.doctor_id:
             raise BadRequestException("Doctor ID does not match the appointment")
 
+        # 3b. Verify appointment date is not in the future
+        from datetime import date
+        from app.core.constants import AppointmentStatus
+        if appointment.appointment_date is not None and appointment.appointment_date > date.today():
+            raise BadRequestException("Cannot create prescription for future date appointments")
+
+        # 3c. Verify appointment is completed
+        if appointment.appointment_status != AppointmentStatus.COMPLETED:
+            raise BadRequestException("Can only create prescription for completed appointments")
+
         # 4. Verify no prescription exists for this appointment
         existing_rx = await self.db.scalar(
             select(Prescription).where(
@@ -212,11 +222,12 @@ class PharmacyService:
         self,
         page: int = 1,
         size: int = 20,
-        status: str | None = None
+        status: str | None = None,
+        doctor_id: int | None = None
     ):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status)
-        total = await self.prescription_repo.count_all(status=status)
+        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status, doctor_id=doctor_id)
+        total = await self.prescription_repo.count_all(status=status, doctor_id=doctor_id)
 
         return build_paginated_result(
             [self._prescription_response(p) for p in items],
@@ -332,10 +343,35 @@ class PharmacyService:
             created_by=user_id,
         )
         invoice = await self.invoice_repo.create(invoice, invoice_items)
-        prescription.status = "completed"
-        prescription.dispensed_at = utc_now()
-        await self.prescription_repo.update(prescription)
+        if data.prescription_id is not None:
+            prescription.status = "completed"
+            prescription.dispensed_at = utc_now()
+            await self.prescription_repo.update(prescription)
         await self.audit_repo.create("create", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        tx_service = TransactionHistoryService(self.db)
+        await tx_service.create_event(
+            event_type="INVOICE_CREATED",
+            reference_no=invoice.invoice_number,
+            description=f"Pharmacy Invoice Created: {invoice.invoice_number}",
+            amount=invoice.total_amount,
+            source_module="pharmacy_billing",
+            source_id=invoice.id,
+            status="completed",
+            user_id=user_id
+        )
+        await tx_service.create_event(
+            event_type="PAYMENT_RECEIVED",
+            reference_no=invoice.invoice_number,
+            description=f"Pharmacy Invoice Paid: {invoice.invoice_number}",
+            amount=invoice.total_amount,
+            source_module="pharmacy_billing",
+            source_id=invoice.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return self._invoice_response(invoice)
 
     async def list_invoices(self, page: int = 1, size: int = 20):
@@ -373,6 +409,22 @@ class PharmacyService:
         invoice.paid_amount = invoice.total_amount
 
         invoice = await self.invoice_repo.update(invoice)
+
+        # Update transaction history
+        from app.models.transaction_history_model import TransactionHistory
+        from sqlalchemy import select
+        tx_result = await self.db.execute(
+            select(TransactionHistory).where(
+                TransactionHistory.source_module == "pharmacy_billing",
+                TransactionHistory.source_id == invoice.id,
+                TransactionHistory.is_deleted == False
+            )
+        )
+        tx_records = tx_result.scalars().all()
+        for tx in tx_records:
+            tx.amount = invoice.total_amount
+            await self.db.flush()
+
         return self._invoice_response(invoice)
 
     async def delete_invoice(self, invoice_id: int) -> None:
@@ -380,6 +432,22 @@ class PharmacyService:
         if not invoice:
             raise NotFoundException("Pharmacy invoice not found")
         await self.invoice_repo.soft_delete(invoice)
+
+        # Soft delete transaction history
+        from app.models.transaction_history_model import TransactionHistory
+        from sqlalchemy import select
+        tx_result = await self.db.execute(
+            select(TransactionHistory).where(
+                TransactionHistory.source_module == "pharmacy_billing",
+                TransactionHistory.source_id == invoice.id,
+                TransactionHistory.is_deleted == False
+            )
+        )
+        tx_records = tx_result.scalars().all()
+        for tx in tx_records:
+            tx.is_deleted = True
+            tx.deleted_at = utc_now()
+            await self.db.flush()
 
     async def download_invoice(self, invoice_id: int):
         invoice = await self.invoice_repo.get_by_id(invoice_id)
@@ -469,6 +537,19 @@ class PharmacyService:
         
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="EXPENSE_RECORDED",
+            reference_no=purchase.purchase_number,
+            description=f"Pharmacy Purchase: {purchase.purchase_number}",
+            amount=purchase.total_amount,
+            source_module="pharmacy_purchases",
+            source_id=purchase.id,
+            status="completed",
+            user_id=user_id
+        )
+
         return self._purchase_response(purchase)
 
     async def list_purchases(self, page: int = 1, size: int = 20):
@@ -514,6 +595,22 @@ class PharmacyService:
             resource_id=str(purchase.id),
         )
 
+        # Update transaction history
+        from app.models.transaction_history_model import TransactionHistory
+        from sqlalchemy import select
+        tx_result = await self.db.execute(
+            select(TransactionHistory).where(
+                TransactionHistory.source_module == "pharmacy_purchases",
+                TransactionHistory.source_id == purchase.id,
+                TransactionHistory.is_deleted == False
+            )
+        )
+        tx_records = tx_result.scalars().all()
+        for tx in tx_records:
+            tx.amount = purchase.total_amount
+            tx.description = f"Pharmacy Purchase: {purchase.purchase_number}"
+            await self.db.flush()
+
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         return self._purchase_response(purchase)
 
@@ -531,7 +628,23 @@ class PharmacyService:
             "pharmacy_purchase",
             user_id=user_id,
             resource_id=str(purchase.id),
-        )    
+        )
+
+        # Soft delete transaction history
+        from app.models.transaction_history_model import TransactionHistory
+        from sqlalchemy import select
+        tx_result = await self.db.execute(
+            select(TransactionHistory).where(
+                TransactionHistory.source_module == "pharmacy_purchases",
+                TransactionHistory.source_id == purchase.id,
+                TransactionHistory.is_deleted == False
+            )
+        )
+        tx_records = tx_result.scalars().all()
+        for tx in tx_records:
+            tx.is_deleted = True
+            tx.deleted_at = utc_now()
+            await self.db.flush()
 
     async def get_sales_report(self, period: str = "monthly") -> SalesReport:
         now = utc_now()

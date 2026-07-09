@@ -2,7 +2,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import NotFoundException, ConflictException
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
@@ -39,6 +39,16 @@ class PatientService:
         return PatientResponse.model_validate(patient)
 
     async def create(self, data: PatientCreate, user_id: int) -> PatientResponse:
+        if data.phone:
+            existing_phone = await self.repo.get_by_phone(data.phone)
+            if existing_phone:
+                raise ConflictException("Patient with this phone number already exists")
+
+        if data.email:
+            existing_email = await self.repo.get_by_email(data.email)
+            if existing_email:
+                raise ConflictException("Patient with this email already exists")
+
         patient = Patient(patient_code=generate_mrn(), **data.model_dump())
         patient = await self.repo.create(patient)
         await self.audit_repo.create("create", "patients", user_id=user_id, resource_id=str(patient.id))
@@ -48,6 +58,17 @@ class PatientService:
         patient = await self.repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
+
+        if data.phone is not None and data.phone != patient.phone:
+            existing_phone = await self.repo.get_by_phone(data.phone)
+            if existing_phone:
+                raise ConflictException("Patient with this phone number already exists")
+
+        if data.email is not None and data.email != patient.email:
+            existing_email = await self.repo.get_by_email(data.email)
+            if existing_email:
+                raise ConflictException("Patient with this email already exists")
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(patient, key, value)
         patient = await self.repo.update(patient)

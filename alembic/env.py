@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, inspect, text
 
 from app.core.config import settings
 from app.core.database import Base
@@ -35,6 +35,13 @@ import app.models.voice_model  # noqa: F401
 import app.models.whatsapp_model  # noqa: F401
 import app.models.analytics_model  # noqa: F401
 import app.models.clinical_record_model  # noqa: F401
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.schema import CreateTable
+
+@compiles(CreateTable, "mysql")
+def _compile_create_table(element, compiler, **kw):
+    element.element.kwargs["mysql_engine"] = "InnoDB"
+    return compiler.visit_create_table(element, **kw)
 
 config = context.config
 database_url = settings.DATABASE_URL_SYNC.replace("%", "%%")
@@ -60,6 +67,16 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        try:
+            inspector = inspect(connection)
+            if "alembic_version" in inspector.get_table_names():
+                current_version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+                if current_version in ("21449ef446a4", "d9144b0be309"):
+                    connection.execute(text("UPDATE alembic_version SET version_num = '4a59273b8083'"))
+                    connection.commit()
+        except Exception:
+            pass
+
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

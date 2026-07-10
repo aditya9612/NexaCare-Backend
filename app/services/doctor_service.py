@@ -253,6 +253,14 @@ class DoctorService:
             existing_email = await self.repo.get_by_email(data.email)
             if existing_email:
                 raise ConflictException("Email already exists")
+            existing_user_email = await self.auth_repo.get_by_email(data.email)
+            if existing_user_email and existing_user_email.id != doctor.user_id:
+                raise ConflictException("Email already registered to another user")
+
+        if data.phone and data.phone != doctor.phone:
+            existing_user_phone = await self.auth_repo.get_by_phone(data.phone)
+            if existing_user_phone and existing_user_phone.id != doctor.user_id:
+                raise ConflictException("Phone number already registered to another user")
 
         if data.license_number and data.license_number != doctor.license_number:
             existing_license = await self.repo.get_by_license(data.license_number)
@@ -274,6 +282,20 @@ class DoctorService:
 
         try:
             doctor = await self.repo.update(doctor)
+            
+            # Synchronise the updated details with the associated User record
+            if doctor.user_id:
+                user = await self.auth_repo.get_by_id(doctor.user_id)
+                if user:
+                    user.full_name = f"{doctor.first_name} {doctor.last_name}".strip()
+                    if data.email:
+                        user.email = data.email.strip().lower()
+                    if data.phone:
+                        user.phone = data.phone
+                    if "profile_image" in update_data:
+                        user.profile_image = update_data["profile_image"]
+                    await self.auth_repo.update(user)
+                    
         except IntegrityError as exc:
             self._raise_doctor_integrity_error(exc)
         await self.audit_repo.create("update", "doctors", user_id=user_id, resource_id=str(doctor.id))

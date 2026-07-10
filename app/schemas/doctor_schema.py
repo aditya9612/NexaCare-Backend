@@ -108,7 +108,17 @@ def validate_password_strength(v: str) -> str:
 def validate_availability_status(v: str | None, allow_unavailable: bool = True) -> str | None:
     if v is None:
         return v
-    allowed = {"available", "on_leave"}
+    
+    # Normalize to lowercase and strip all spaces/underscores
+    v_norm = v.lower().strip().replace("_", "").replace(" ", "")
+    if v_norm == "onleave":
+        v = "onleave"
+    elif v_norm == "available":
+        v = "available"
+    elif v_norm == "unavailable":
+        v = "unavailable"
+
+    allowed = {"available", "onleave"}
     if allow_unavailable:
         allowed.add("unavailable")
     if v not in allowed:
@@ -446,6 +456,13 @@ class DoctorResponse(BaseSchema):
     bio: str | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("availability_status", mode="before")
+    @classmethod
+    def serialize_availability(cls, v: str | None) -> str | None:
+        if v == "on_leave":
+            return "onleave"
+        return v
 
 
 class DoctorOnboardResponse(BaseSchema):

@@ -54,7 +54,7 @@ class PatientStatus:
 class DoctorAvailability:
     AVAILABLE = "available"
     BUSY = "busy"
-    ON_LEAVE = "on_leave"
+    ON_LEAVE = "onleave"
     UNAVAILABLE = "unavailable"
 
 

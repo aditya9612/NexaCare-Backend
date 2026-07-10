@@ -217,7 +217,7 @@ class BedAllocationService:
         room = await self.get_room(room_id)
 
         if len(room.beds) >= room.capacity:
-            raise BadRequestException(f"Cannot add bed. Room capacity of {room.capacity} beds has been reached.")
+            room.capacity = len(room.beds) + 1
 
         existing = await self.repo.get_bed_by_name(room_id, data.name)
         if existing:

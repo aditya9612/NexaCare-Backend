@@ -43,15 +43,43 @@ class PatientRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_email(self, email: str) -> Patient | None:
+        result = await self.db.execute(
+            self._base_query().where(Patient.email == email)
+        )
+        return result.scalar_one_or_none()
+
     def _search_filter(self, q: str):
-        pattern = f"%{q.lower()}%"
-        return or_(
+        q_clean = q.strip().lower()
+        pattern = f"%{q_clean}%"
+        concat_name = func.lower(Patient.first_name) + " " + func.lower(Patient.last_name)
+        base_filter = or_(
             func.lower(Patient.first_name).like(pattern),
             func.lower(Patient.last_name).like(pattern),
             func.lower(Patient.patient_code).like(pattern),
             func.lower(cast(Patient.phone, String)).like(pattern),
             func.lower(cast(Patient.email, String)).like(pattern),
+            concat_name.like(pattern),
         )
+        
+        words = q_clean.split()
+        if len(words) > 1:
+            from sqlalchemy import and_
+            word_filters = []
+            for word in words:
+                word_pattern = f"%{word}%"
+                word_filters.append(
+                    or_(
+                        func.lower(Patient.first_name).like(word_pattern),
+                        func.lower(Patient.last_name).like(word_pattern),
+                        func.lower(Patient.patient_code).like(word_pattern),
+                        func.lower(cast(Patient.phone, String)).like(word_pattern),
+                        func.lower(cast(Patient.email, String)).like(word_pattern),
+                    )
+                )
+            return or_(base_filter, and_(*word_filters))
+            
+        return base_filter
 
     async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Patient]:
         query = self._base_query().where(self._search_filter(q))

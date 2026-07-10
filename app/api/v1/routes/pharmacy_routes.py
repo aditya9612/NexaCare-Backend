@@ -116,7 +116,12 @@ async def list_prescriptions(
     status: str | None = None,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    result = await PharmacyService(db).list_prescriptions(page=page, size=size, status=status)
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    
+    result = await PharmacyService(db).list_prescriptions(
+        page=page, size=size, status=status, doctor_id=doctor.id if doctor else None
+    )
     return APIResponse(message="Prescriptions retrieved", data=result)
 
 

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.core.security import (
 )
 from app.models.refresh_token_model import RefreshToken
 from app.models.user_model import User
+from app.models.department_model import Department
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.rbac_repository import RBACRepository
@@ -123,6 +125,38 @@ class AuthService:
         )
         try:
             user = await self.repo.create(user)
+            # Fetch user with role name loaded
+            user = await self.repo.get_by_id(user.id)
+            if user and user.role and user.role.name in {
+                UserRole.RECEPTIONIST,
+                UserRole.ACCOUNTANT,
+                UserRole.PHARMACIST,
+                UserRole.LAB_TECHNICIAN,
+            }:
+                from app.models.staff_model import Staff
+                from app.utils.helpers import generate_staff_code
+
+                department = await self.db.scalar(
+                    select(Department).order_by(Department.department_id.asc())
+                )
+
+                if not department:
+                    raise BadRequestException(
+                        "No department found. Please create a department before registering staff."
+    )        
+                
+                staff = Staff(
+                    full_name=user.full_name,
+                    email=user.email,
+                    phone=user.phone,
+                    staff_code=generate_staff_code(),
+                    department_id=department.department_id,
+                    role_name=user.role.name,
+                    status=1,
+                )
+                self.db.add(staff)
+                await self.db.flush()
+
             await self._issue_and_deliver_otp(user, "account activation")
             await self.audit_repo.create("register", "users", user_id=user.id, resource_id=str(user.id))
         except IntegrityError as exc:

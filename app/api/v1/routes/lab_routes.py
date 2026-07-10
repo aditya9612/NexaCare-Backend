@@ -52,12 +52,16 @@ async def list_lab_tests(
     q: str | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    doctor_id = doctor.id if doctor else None
+
     service = LabService(db)
     if q:
-        result = await service.search_tests(q, page=page, size=size)
+        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id)
     else:
         result = await service.list_tests(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id
         )
     return APIResponse(message="Lab tests retrieved", data=result)
 
@@ -118,9 +122,10 @@ async def list_test_orders(
     patient_id: int | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).list_orders(page=page, size=size, status=status, patient_id=patient_id)
+    result = await LabService(db).list_orders(
+        page=page, size=size, status=status, patient_id=patient_id, current_user=current_user
+    )
     return APIResponse(message="Test orders retrieved", data=result)
-
 
 @router.get("/orders/{order_id}", response_model=APIResponse[TestOrderResponse])
 async def get_test_order(
@@ -187,7 +192,7 @@ async def collect_sample(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    sample = await LabService(db).collect_sample(data, current_user.id)
+    sample = await LabService(db).collect_sample(data, current_user)
     return APIResponse(message="Sample collected", data=sample)
 
 
@@ -200,7 +205,7 @@ async def list_samples(
     status: str | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).list_samples(page=page, size=size, status=status)
+    result = await LabService(db).list_samples(page=page, size=size, status=status, current_user=current_user)
     return APIResponse(message="Samples retrieved", data=result)
 
 @router.get("/samples/{sample_id}", response_model=APIResponse[SampleResponse])
@@ -261,7 +266,7 @@ async def enter_test_result(
         is_critical=is_critical,
     )
 
-    result = await LabService(db).enter_result(data, current_user.id, document)
+    result = await LabService(db).enter_result(data, current_user, document)
     return APIResponse(message="Test result entered", data=result)
 
 
@@ -276,7 +281,7 @@ async def list_test_results(
     _: User = Depends(require_permission("lab", "read")),
 ):
     result = await LabService(db).list_results(
-        page=page, size=size, test_order_id=test_order_id, is_critical=is_critical
+        page=page, size=size, test_order_id=test_order_id, is_critical=is_critical, current_user=current_user
     )
     return APIResponse(message="Test results retrieved", data=result)
 
@@ -312,7 +317,7 @@ async def create_lab_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    report = await LabService(db).create_report(data, current_user.id)
+    report = await LabService(db).create_report(data, current_user)
     return APIResponse(message="Lab report created", data=report)
 
 
@@ -325,7 +330,7 @@ async def list_lab_reports(
     status: str | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).list_reports(page=page, size=size, status=status)
+    result = await LabService(db).list_reports(page=page, size=size, status=status,  current_user=current_user)
     return APIResponse(message="Lab reports retrieved", data=result)
 
 
@@ -348,7 +353,7 @@ async def approve_lab_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "approve")),
 ):
-    report = await LabService(db).approve_report(report_id, data, current_user.id)
+    report = await LabService(db).approve_report(report_id, data,  current_user)
     return APIResponse(message="Lab report processed", data=report)
 
 
@@ -366,9 +371,26 @@ async def download_lab_report(
     report = await LabReportRepository(db).get_by_id(report_id)
     if not report:
         raise NotFoundException("Report file not found")
+
+    await LabService(db)._validate_lab_report_access(
+        report,
+        current_user,
+        "download",
+    )
         
+    def resolve_disk_path(path_str: str | None) -> str | None:
+        if not path_str:
+            return None
+        p = path_str.replace("\\", "/")
+        if p.startswith("/"):
+            p = p.lstrip("/")
+        if p.startswith("uploads/"):
+            return os.path.join("app", p)
+        return p
+
+    disk_path = resolve_disk_path(report.report_path)
     need_generation = False
-    if not report.report_path or not report.report_path.endswith(".pdf") or not os.path.exists(report.report_path):
+    if not disk_path or not report.report_path.endswith(".pdf") or not os.path.exists(disk_path):
         need_generation = True
         
     if need_generation:
@@ -425,9 +447,16 @@ async def download_lab_report(
         )
         report.report_path = path
         await LabReportRepository(db).update(report)
+        disk_path = resolve_disk_path(report.report_path)
         
-    return FileResponse(report.report_path, media_type="application/pdf", filename=f"lab_report_{report_id}.pdf")
+    if not disk_path or not os.path.exists(disk_path):
+        raise NotFoundException("Report PDF file not found")
 
+    return FileResponse(
+        disk_path,
+        media_type="application/pdf",
+        filename=f"lab_report_{report_id}.pdf",
+    )
 
 # --- Analytics ---
 @router.get("/pending-tests", response_model=APIResponse[PaginatedResult[TestOrderResponse]])
@@ -438,7 +467,7 @@ async def pending_tests(
     size: int = 20,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).get_pending_tests(page=page, size=size)
+    result = await LabService(db).get_pending_tests(page=page, size=size, current_user=current_user)
     return APIResponse(message="Pending tests", data=result)
 
 
@@ -450,7 +479,7 @@ async def completed_tests(
     size: int = 20,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).get_completed_tests(page=page, size=size)
+    result = await LabService(db).get_completed_tests(page=page, size=size, current_user=current_user)
     return APIResponse(message="Completed tests", data=result)
 
 
@@ -460,5 +489,5 @@ async def critical_alerts(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    alerts = await LabService(db).get_critical_alerts()
+    alerts = await LabService(db).get_critical_alerts(current_user=current_user)
     return APIResponse(message="Critical alerts", data=alerts)

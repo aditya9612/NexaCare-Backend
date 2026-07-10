@@ -24,8 +24,19 @@ class PaginatedResponse(BaseModel, Generic[T]):
     pages: int
 
 
+from pydantic import field_validator
+from datetime import datetime
+
 class BaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def coerce_zero_datetime(cls, v: any) -> any:
+        if isinstance(v, str) and (v.startswith("0000-00-00") or v == "0000-00-00 00:00:00"):
+            return datetime(1970, 1, 1)
+        return v
+
 
 
 class IDSchema(BaseSchema):

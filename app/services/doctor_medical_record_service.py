@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.core.config import settings
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException
 from app.models.doctor_medical_record_model import (
     DoctorMedicalRecord,
     PatientDiagnosis,
@@ -45,6 +45,10 @@ class DoctorMedicalRecordService:
         file: UploadFile | None,
         user_id: int,
     ) -> MedicalRecordResponse:
+        logged_in_doctor_id = await self._get_doctor_id(user_id)
+        if logged_in_doctor_id is not None and doctor_id != logged_in_doctor_id:
+            raise ForbiddenException("You can only create medical records for your own patients")
+
         patient = await self.patient_repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
@@ -100,10 +104,14 @@ class DoctorMedicalRecordService:
             response_data.symptoms = diagnosis_record.symptoms
         return response_data
 
-    async def list_reports(self, page: int = 1, size: int = 20):
+    async def list_reports(self, page: int = 1, size: int = 20, user_id: int | None = None):
+        logged_in_doctor_id = None
+        if user_id is not None:
+            logged_in_doctor_id = await self._get_doctor_id(user_id)
+
         skip = (page - 1) * size
-        items = await self.repo.list_records(skip=skip, limit=size)
-        total = await self.repo.count_records()
+        items = await self.repo.list_records(skip=skip, limit=size, doctor_id=logged_in_doctor_id)
+        total = await self.repo.count_records(doctor_id=logged_in_doctor_id)
 
         res_list = []
         for item in items:
@@ -120,10 +128,16 @@ class DoctorMedicalRecordService:
             size,
         )
 
-    async def get_report_by_id(self, record_id: int) -> MedicalRecordResponse:
+    async def get_report_by_id(self, record_id: int, user_id: int | None = None) -> MedicalRecordResponse:
         record = await self.repo.get_record_by_id(record_id)
         if not record:
             raise NotFoundException("Medical record not found")
+
+        if user_id is not None:
+            logged_in_doctor_id = await self._get_doctor_id(user_id)
+            if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+                raise ForbiddenException("You can only view your own patients' medical records")
+
         response_data = MedicalRecordResponse.model_validate(record)
         diagnosis_record = await self.repo.get_diagnosis(record.patient_id)
         if diagnosis_record:
@@ -143,6 +157,10 @@ class DoctorMedicalRecordService:
         record = await self.repo.get_record_by_id(record_id)
         if not record:
             raise NotFoundException("Medical record not found")
+
+        logged_in_doctor_id = await self._get_doctor_id(user_id)
+        if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+            raise ForbiddenException("You can only modify your own medical records")
 
         if report_title is not None:
             record.report_title = report_title or "Medical Record"
@@ -175,14 +193,24 @@ class DoctorMedicalRecordService:
         record = await self.repo.get_record_by_id(record_id)
         if not record:
             raise NotFoundException("Medical record not found")
+
+        logged_in_doctor_id = await self._get_doctor_id(user_id)
+        if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+            raise ForbiddenException("You can only delete your own medical records")
+
         await self.repo.delete_record(record)
         await self.audit_repo.create("delete", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
 
-    async def get_report_file(self, record_id: int):
+    async def get_report_file(self, record_id: int, user_id: int | None = None):
         record = await self.repo.get_record_by_id(record_id)
 
         if not record:
             raise NotFoundException("Medical record not found")
+
+        if user_id is not None:
+            logged_in_doctor_id = await self._get_doctor_id(user_id)
+            if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+                raise ForbiddenException("You can only access your own patients' medical record files")
 
         path = Path(record.file_path)
         if not path.exists():

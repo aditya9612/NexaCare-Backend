@@ -63,6 +63,80 @@ class TransactionHistoryService:
         await self.audit_repo.create("create", "transaction_history", user_id=user_id or 1, resource_id=str(tx_history.id))
         return tx_history
 
+    async def _sync_pharmacy_transactions(self) -> None:
+        from app.models.pharmacy_model import PharmacyInvoice, Purchase
+        from sqlalchemy import select
+        
+        # Sync Invoices
+        invoice_query = select(PharmacyInvoice).outerjoin(
+            TransactionHistory,
+            (TransactionHistory.source_module == "pharmacy_billing") &
+            (TransactionHistory.source_id == PharmacyInvoice.id) &
+            (TransactionHistory.is_deleted == False)
+        ).where(
+            TransactionHistory.id.is_(None),
+            PharmacyInvoice.is_deleted == False
+        )
+        invoice_result = await self.db.execute(invoice_query)
+        invoices_to_sync = invoice_result.scalars().all()
+        
+        for invoice in invoices_to_sync:
+            # Create INVOICE_CREATED
+            self.db.add(TransactionHistory(
+                event_type="INVOICE_CREATED",
+                reference_no=invoice.invoice_number,
+                description=f"Pharmacy Invoice Created: {invoice.invoice_number}",
+                amount=invoice.total_amount,
+                source_module="pharmacy_billing",
+                source_id=invoice.id,
+                status="completed",
+                event_date=invoice.created_at or utc_now(),
+                created_at=invoice.created_at or utc_now(),
+                updated_at=invoice.updated_at or utc_now()
+            ))
+            # Create PAYMENT_RECEIVED
+            self.db.add(TransactionHistory(
+                event_type="PAYMENT_RECEIVED",
+                reference_no=invoice.invoice_number,
+                description=f"Pharmacy Invoice Paid: {invoice.invoice_number}",
+                amount=invoice.total_amount,
+                source_module="pharmacy_billing",
+                source_id=invoice.id,
+                status="completed",
+                event_date=invoice.created_at or utc_now(),
+                created_at=invoice.created_at or utc_now(),
+                updated_at=invoice.updated_at or utc_now()
+            ))
+
+        # Sync Purchases
+        purchase_query = select(Purchase).outerjoin(
+            TransactionHistory,
+            (TransactionHistory.source_module == "pharmacy_purchases") &
+            (TransactionHistory.source_id == Purchase.id) &
+            (TransactionHistory.is_deleted == False)
+        ).where(
+            TransactionHistory.id.is_(None)
+        )
+        purchase_result = await self.db.execute(purchase_query)
+        purchases_to_sync = purchase_result.scalars().all()
+        
+        for purchase in purchases_to_sync:
+            self.db.add(TransactionHistory(
+                event_type="EXPENSE_RECORDED",
+                reference_no=purchase.purchase_number,
+                description=f"Pharmacy Purchase: {purchase.purchase_number}",
+                amount=purchase.total_amount,
+                source_module="pharmacy_purchases",
+                source_id=purchase.id,
+                status="completed",
+                event_date=purchase.created_at or utc_now(),
+                created_at=purchase.created_at or utc_now(),
+                updated_at=purchase.updated_at or utc_now()
+            ))
+
+        if invoices_to_sync or purchases_to_sync:
+            await self.db.flush()
+
     async def list_transaction_histories(
         self,
         page: int = 1,
@@ -76,6 +150,7 @@ class TransactionHistoryService:
         reference_no: str | None = None,
         q: str | None = None,
     ):
+        await self._sync_pharmacy_transactions()
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip,
@@ -114,6 +189,7 @@ class TransactionHistoryService:
         await self.audit_repo.create("delete", "transaction_history", user_id=user_id, resource_id=str(tx_id))
 
     async def get_dashboard_summary(self) -> DashboardSummaryResponse:
+        await self._sync_pharmacy_transactions()
         stats = await self.repo.get_aggregated_stats()
 
         totals = {

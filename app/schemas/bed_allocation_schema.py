@@ -21,6 +21,14 @@ class FloorType(str, Enum):
     ICU = "ICU"
     EMERGENCY = "Emergency"
     DELUXE = "Deluxe"
+    CLINICAL_FLOOR = "Clinical Floor"
+    PATIENT_WARD_FLOOR = "Patient Ward Floor"
+    SURGICAL_FLOOR = "Surgical Floor"
+    DIAGNOSTIC_FLOOR = "Diagnostic Floor"
+    ADMINISTRATIVE_FLOOR = "Administrative Floor"
+    SERVICE_FLOOR = "Service Floor"
+    PARKING_FLOOR = "Parking Floor"
+    UTILITY_FLOOR = "Utility Floor"
 
 
 class RoomType(str, Enum):
@@ -93,20 +101,11 @@ class BedUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     type: Optional[BedType] = None
     status: Optional[BedStatus] = None
-    patient_id: Optional[int] = Field(None, gt=0)
-    allocation_time: Optional[datetime] = None
-    admission_date: Optional[datetime] = None
 
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: Optional[str]) -> Optional[str]:
         return validate_bed_name(value)
-
-    @field_validator("allocation_time", "admission_date")
-    @classmethod
-    def validate_dates(cls, value: Optional[datetime], info) -> Optional[datetime]:
-        field_name = info.field_name.replace("_", " ").title()
-        return validate_date_range(value, field_name)
 
 
 class BedResponse(BaseSchema):

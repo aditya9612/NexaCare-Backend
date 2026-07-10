@@ -233,6 +233,7 @@ async def view_reports(
     result = await DoctorMedicalRecordService(db).list_reports(
         page=page,
         size=size,
+        user_id=current_user.id,
     )
     return APIResponse(message="Medical records retrieved", data=result)
 
@@ -244,7 +245,7 @@ async def download_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    record = await DoctorMedicalRecordService(db).get_report_file(record_id)
+    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id)
     return FileResponse(
         path=record.file_path,
         filename=record.file_name,
@@ -262,7 +263,7 @@ async def get_medical_record(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id)
+    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id, user_id=current_user.id)
     return APIResponse(message="Medical record retrieved", data=record)
 
 

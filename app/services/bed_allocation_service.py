@@ -255,16 +255,9 @@ class BedAllocationService:
             bed.type = data.type
 
         if data.status is not None:
-            if data.status == "Occupied" and not bed.patient_id and not data.patient_id:
+            if data.status == "Occupied" and not bed.patient_id:
                 raise BadRequestException("Cannot set bed status to Occupied without an associated patient.")
             bed.status = data.status
-
-        if data.patient_id is not None:
-            bed.patient_id = data.patient_id
-        if data.allocation_time is not None:
-            bed.allocation_time = data.allocation_time
-        if data.admission_date is not None:
-            bed.admission_date = data.admission_date
 
         await self.db.flush()
 
@@ -308,6 +301,8 @@ class BedAllocationService:
     async def allocate_bed(self, bed_id: int, data: BedAllocationRequest) -> Bed:
         bed = await self.get_bed(bed_id)
         if bed.status != "Available":
+            if bed.status == "Occupied":
+                raise BadRequestException("Bed is already occupied")
             raise BadRequestException(f"Bed {bed.name} is not available. Current status: {bed.status}.")
 
         patient = await self.get_patient(data.patientId)
@@ -377,6 +372,8 @@ class BedAllocationService:
 
         target_bed = await self.get_bed(data.targetBedId)
         if target_bed.status != "Available":
+            if target_bed.status == "Occupied":
+                raise BadRequestException("Bed is already occupied")
             raise BadRequestException(f"Target bed {target_bed.name} is not available. Status: {target_bed.status}.")
 
         patient = await self.get_patient(source_bed.patient_id)

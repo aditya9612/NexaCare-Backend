@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import NotFoundException, BadRequestException, ConflictException
 from app.models.clinical_record_model import ClinicalRecord
 from app.repositories.clinical_record_repository import ClinicalRecordRepository
 from app.repositories.patient_repository import PatientRepository
@@ -24,7 +24,7 @@ class ClinicalRecordService:
         self.appointment_repo = AppointmentRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def _validate_related_entities(self, patient_id: int, doctor_id: int, appointment_id: int | None = None):
+    async def _validate_related_entities(self, patient_id: int, doctor_id: int, appointment_id: int | None = None, exclude_record_id: int | None = None):
         patient = await self.patient_repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException(f"Patient with ID {patient_id} not found")
@@ -37,6 +37,23 @@ class ClinicalRecordService:
             appointment = await self.appointment_repo.get_by_id(appointment_id)
             if not appointment:
                 raise NotFoundException(f"Appointment with ID {appointment_id} not found")
+            if appointment.patient_id != patient_id or appointment.doctor_id != doctor_id:
+                raise BadRequestException(
+                    f"Appointment ID {appointment_id} does not match patient ID {patient_id} and doctor ID {doctor_id}"
+                )
+            
+            # Prevent duplicate records with the same appointment_id
+            existing_records = await self.record_repo.list_all(appointment_id=appointment_id)
+            if exclude_record_id is not None:
+                existing_records = [r for r in existing_records if r.id != exclude_record_id]
+            if len(existing_records) > 0:
+                raise ConflictException(f"Clinical record already exists for appointment ID {appointment_id}")
+        else:
+            has_appointment = await self.appointment_repo.count_all(patient_id=patient_id, doctor_id=doctor_id) > 0
+            if not has_appointment:
+                raise BadRequestException(
+                    f"No appointment exists for patient ID {patient_id} and doctor ID {doctor_id}. A clinical record can only be created if an appointment exists."
+                )
 
     def _to_response_schema(self, record: ClinicalRecord) -> ClinicalRecordResponse:
         resp = ClinicalRecordResponse.model_validate(record)
@@ -86,7 +103,7 @@ class ClinicalRecordService:
         patient_id = data.patient_id if data.patient_id is not None else record.patient_id
         doctor_id = data.doctor_id if data.doctor_id is not None else record.doctor_id
         appointment_id = data.appointment_id if data.appointment_id is not None else record.appointment_id
-        await self._validate_related_entities(patient_id, doctor_id, appointment_id)
+        await self._validate_related_entities(patient_id, doctor_id, appointment_id, exclude_record_id=record_id)
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(record, key, value)

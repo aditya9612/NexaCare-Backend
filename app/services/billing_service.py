@@ -126,13 +126,18 @@ class BillingService:
         else:
             billing.gst_amount = totals["gst_amount"]
 
+        due_date_naive = billing.due_date
+        if due_date_naive and due_date_naive.tzinfo is not None:
+            from datetime import timezone as py_timezone
+            due_date_naive = due_date_naive.astimezone(py_timezone.utc).replace(tzinfo=None)
+
         billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
         if billing.balance_amount <= 0:
             billing.status = BillingStatus.PAID
         elif billing.paid_amount > 0:
             billing.status = BillingStatus.PARTIAL
-        elif billing.due_date and billing.due_date < utc_now():
+        elif due_date_naive and due_date_naive < utc_now():
             billing.status = BillingStatus.OVERDUE
         else:
             billing.status = BillingStatus.PENDING
@@ -152,6 +157,11 @@ class BillingService:
             if not appointment:
                 raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
 
+        due_date = data.due_date
+        if due_date and due_date.tzinfo is not None:
+            from datetime import timezone as py_timezone
+            due_date = due_date.astimezone(py_timezone.utc).replace(tzinfo=None)
+
         billing = Billing(
             patient_id=data.patient_id,
             bill_number=generate_bill_number(),
@@ -159,7 +169,7 @@ class BillingService:
             discount_amount=data.discount_amount,
             gst_rate=data.gst_rate,
             tax_amount=data.tax_amount,
-            due_date=data.due_date,
+            due_date=due_date,
             notes=data.notes,
             insurance_id=data.insurance_id,
             appointment_id=data.appointment_id,
@@ -341,7 +351,38 @@ class BillingService:
             if not insurance:
                 raise NotFoundException(f"Insurance record with ID {data.insurance_id} not found")
 
-        for key, value in data.model_dump(exclude_unset=True).items():
+        dump = data.model_dump(exclude_unset=True)
+        if "due_date" in dump and dump["due_date"] is not None:
+            dt = dump["due_date"]
+            if dt.tzinfo is not None:
+                from datetime import timezone as py_timezone
+                dump["due_date"] = dt.astimezone(py_timezone.utc).replace(tzinfo=None)
+
+        if "items" in dump:
+            items_data = dump.pop("items")
+            # Remove old items
+            billing.items.clear()
+            if items_data:
+                for item_data in items_data:
+                    desc = item_data.description
+                    qty = item_data.quantity
+                    price = item_data.unit_price
+                    gst_r = item_data.gst_rate
+                    item_t = item_data.item_type
+                    _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
+                    item = BillItem(
+                        billing_id=billing.id,
+                        description=desc,
+                        quantity=qty,
+                        unit_price=price,
+                        gst_rate=gst_r,
+                        gst_amount=gst_amt,
+                        line_total=line_total,
+                        item_type=item_t
+                    )
+                    billing.items.append(item)
+
+        for key, value in dump.items():
             setattr(billing, key, value)
         billing = await self._recalculate_billing(billing)
         billing = await self.repo.get_by_id(billing.id)

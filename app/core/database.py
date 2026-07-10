@@ -80,6 +80,7 @@ async def init_db():
         await _seed_bed_allocation_permissions(session)
         await _seed_icu_telemetry_permissions(session)
         await _seed_expense_permissions(session)
+        await _seed_lab_technician_permissions(session)
         await _seed_default_super_admin(session)
         await _seed_nurse_adesh(session)
         await session.commit()
@@ -583,4 +584,48 @@ async def _seed_expense_permissions(session: AsyncSession) -> None:
                 )
                 if not rp.scalar_one_or_none():
                     session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+
+
+async def _seed_lab_technician_permissions(session: AsyncSession) -> None:
+    """Grant Lab Technician role permissions for lab operations, patients, doctors, and departments."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    result = await session.execute(select(Role).where(Role.name == UserRole.LAB_TECHNICIAN))
+    tech_role = result.scalar_one_or_none()
+    if not tech_role:
+        return
+
+    tech_grants = [
+        # Lab permissions
+        ("lab", PermissionAction.CREATE),
+        ("lab", PermissionAction.READ),
+        ("lab", PermissionAction.UPDATE),
+        ("lab", PermissionAction.DELETE),
+        ("lab", PermissionAction.EXPORT),
+        ("lab", PermissionAction.APPROVE),
+        ("lab", PermissionAction.ASSIGN),
+        # Read-only associations needed for lookup/validation in lab service
+        ("patients", PermissionAction.READ),
+        ("doctors", PermissionAction.READ),
+        ("departments", PermissionAction.READ),
+    ]
+
+    for resource, action in tech_grants:
+        action_value = action.value if hasattr(action, "value") else action
+        perm_name = f"{resource}:{action_value}"
+        result = await session.execute(select(Permission).where(Permission.name == perm_name))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            continue
+
+        rp = await session.execute(
+            select(RolePermission).where(
+                RolePermission.role_id == tech_role.id,
+                RolePermission.permission_id == perm.id,
+            )
+        )
+        if not rp.scalar_one_or_none():
+            session.add(RolePermission(role_id=tech_role.id, permission_id=perm.id))
 

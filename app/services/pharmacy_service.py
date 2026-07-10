@@ -301,6 +301,8 @@ class PharmacyService:
             prescription = await self.prescription_repo.get_by_id(data.prescription_id)
             if not prescription:
                 raise NotFoundException("Prescription not found")
+            if prescription.patient_id != data.patient_id:
+                raise BadRequestException("Prescription does not belong to this patient")    
 
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []

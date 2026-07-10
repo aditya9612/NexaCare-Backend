@@ -10,8 +10,8 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "NesaCare HMS"
     APP_ENV: str = "development"
-    DEBUG: bool = True
-    SQLALCHEMY_ECHO: bool = True
+    DEBUG: bool = False
+    SQLALCHEMY_ECHO: bool = False
     API_V1_PREFIX: str = "/api/v1"
 
  

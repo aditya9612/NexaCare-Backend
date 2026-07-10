@@ -73,17 +73,39 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # async with AsyncSessionLocal() as session:
+    #     await _seed_roles_and_permissions(session)
+    #     await _seed_phase3_permissions(session)
+    #     await _seed_patient_permissions(session)
+    #     await _seed_bed_allocation_permissions(session)
+    #     await _seed_icu_telemetry_permissions(session)
+    #     await _seed_expense_permissions(session)
+    #     await _seed_lab_technician_permissions(session)
+    #     await _seed_default_super_admin(session)
+    #     await _seed_nurse_adesh(session)
+    #     await session.commit()
+    
     async with AsyncSessionLocal() as session:
-        await _seed_roles_and_permissions(session)
-        await _seed_phase3_permissions(session)
-        await _seed_patient_permissions(session)
-        await _seed_bed_allocation_permissions(session)
-        await _seed_icu_telemetry_permissions(session)
-        await _seed_expense_permissions(session)
-        await _seed_lab_technician_permissions(session)
-        await _seed_default_super_admin(session)
-        await _seed_nurse_adesh(session)
-        await session.commit()
+        try:
+            print("Running seed_roles...")
+            await _seed_roles_and_permissions(session)
+
+            print("Running lab...")
+            await _seed_lab_technician_permissions(session)
+
+            print("Running super admin...")
+            await _seed_default_super_admin(session)
+
+            print("Running nurse...")
+            await _seed_nurse_adesh(session)
+
+            await session.commit()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(e)
+            await session.rollback()
+            raise
 
 
 async def _seed_roles_and_permissions(session: AsyncSession) -> None:

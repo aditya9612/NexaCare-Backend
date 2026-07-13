@@ -13,6 +13,15 @@ class DoctorGenderOption(str, Enum):
     FEMALE = "FEMALE"
     OTHER = "OTHER"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            val_upper = value.strip().upper()
+            for member in cls:
+                if member.value == val_upper or member.name == val_upper:
+                    return member
+        return None
+
 
 def validate_specialization_value(v: str | None) -> str | None:
     if v is None:

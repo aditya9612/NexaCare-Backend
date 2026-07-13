@@ -37,6 +37,15 @@ class GenderOption(str, Enum):
     FEMALE = "Female"
     OTHER = "Other"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            val_upper = value.strip().upper()
+            for member in cls:
+                if member.value.upper() == val_upper or member.name == val_upper:
+                    return member
+        return None
+
 
 class EmailOrPhoneRequest(BaseModel):
     email: EmailStr | None = None

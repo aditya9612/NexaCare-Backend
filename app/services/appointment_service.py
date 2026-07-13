@@ -24,6 +24,7 @@ from app.utils.pagination import build_paginated_result
 
 class AppointmentService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = AppointmentRepository(db)
         self.patient_repo = PatientRepository(db)
         self.doctor_repo = DoctorRepository(db)
@@ -37,6 +38,21 @@ class AppointmentService:
             raise NotFoundException("Doctor not found")
         if doctor.availability_status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
+
+    async def _validate_doctor_schedule(self, doctor_id: int, appointment_date: date) -> None:
+        from app.models.doctor_model import DoctorSchedule
+        from sqlalchemy import select
+        day_of_week = appointment_date.weekday()
+        
+        schedule_res = await self.db.execute(
+            select(DoctorSchedule).where(
+                DoctorSchedule.doctor_id == doctor_id,
+                DoctorSchedule.day_of_week == day_of_week,
+                DoctorSchedule.is_active.is_(True)
+            )
+        )
+        if not schedule_res.scalars().all():
+            raise ConflictException("Doctor is not scheduled to work on this day")
 
     async def _check_conflict(self, doctor_id: int, appointment_date: date, appointment_time, exclude_id=None):
         if await self.repo.exists_conflict(doctor_id, appointment_date, appointment_time, exclude_id):
@@ -84,6 +100,7 @@ class AppointmentService:
 
     async def create(self, data: AppointmentCreate, user_id: int) -> AppointmentResponse:
         await self._validate_entities(data.patient_id, data.doctor_id)
+        await self._validate_doctor_schedule(data.doctor_id, data.appointment_date)
         await self._check_conflict(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
@@ -105,6 +122,10 @@ class AppointmentService:
         update_data = data.model_dump(exclude_unset=True)
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
+        
+        if "appointment_date" in update_data:
+            await self._validate_doctor_schedule(appointment.doctor_id, new_date)
+            
         if "appointment_date" in update_data or "appointment_time" in update_data:
             await self._check_conflict(appointment.doctor_id, new_date, new_time, exclude_id=appointment_id)
 
@@ -125,6 +146,7 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        await self._validate_doctor_schedule(appointment.doctor_id, data.appointment_date)
         await self._check_conflict(
             appointment.doctor_id, data.appointment_date, data.appointment_time, exclude_id=appointment.id
         )

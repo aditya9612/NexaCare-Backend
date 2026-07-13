@@ -38,25 +38,31 @@ def upgrade() -> None:
     from sqlalchemy import inspect
     bind = op.get_bind()
     insp = inspect(bind)
+    table_names = insp.get_table_names()
 
     # 1. Billings table changes
-    billings_cols = [col['name'] for col in insp.get_columns('billings')]
-    if 'appointment_id' not in billings_cols:
-        op.add_column('billings', sa.Column('appointment_id', sa.Integer(), nullable=True))
-        
-    billings_fks = insp.get_foreign_keys('billings')
-    has_apt_fk = any('appointment_id' in fk['constrained_columns'] for fk in billings_fks)
-    if not has_apt_fk:
-        op.create_foreign_key(None, 'billings', 'appointments', ['appointment_id'], ['id'])
+    if 'billings' in table_names:
+        billings_cols = [col['name'] for col in insp.get_columns('billings')]
+        if 'appointment_id' not in billings_cols:
+            op.add_column('billings', sa.Column('appointment_id', sa.Integer(), nullable=True))
+            
+        billings_fks = insp.get_foreign_keys('billings')
+        has_apt_fk = any('appointment_id' in fk['constrained_columns'] for fk in billings_fks)
+        if not has_apt_fk:
+            op.create_foreign_key(None, 'billings', 'appointments', ['appointment_id'], ['id'])
 
     # 2. Indexes creation helper
     def safe_create_index(index_name, table_name, columns, unique=False):
+        if table_name not in table_names:
+            return
         indexes = insp.get_indexes(table_name)
         existing = [idx['name'] for idx in indexes]
         if index_name not in existing:
             op.create_index(op.f(index_name), table_name, columns, unique=unique)
 
     def safe_drop_index(index_name, table_name):
+        if table_name not in table_names:
+            return
         indexes = insp.get_indexes(table_name)
         existing = [idx['name'] for idx in indexes]
         if index_name in existing:
@@ -72,6 +78,8 @@ def upgrade() -> None:
 
     # 3. Alter columns nullability helper
     def safe_alter_column(table_name, column_name, nullable, type_):
+        if table_name not in table_names:
+            return
         cols = insp.get_columns(table_name)
         for col in cols:
             if col['name'] == column_name:
@@ -86,43 +94,58 @@ def upgrade() -> None:
     safe_create_index('ix_staff_created_at', 'staff', ['created_at'])
 
     # 4. Subscriptions table changes (Already safe)
-    fks = insp.get_foreign_keys('subscriptions')
-    for fk in fks:
-        if 'hospital_id' in fk['constrained_columns']:
-            op.drop_constraint(fk['name'], 'subscriptions', type_='foreignkey')
-    
-    indexes = insp.get_indexes('subscriptions')
-    index_names = [idx['name'] for idx in indexes]
-    if 'ix_subscriptions_hospital_id' in index_names:
-        op.drop_index('ix_subscriptions_hospital_id', table_name='subscriptions')
+    if 'subscriptions' in table_names:
+        fks = insp.get_foreign_keys('subscriptions')
+        for fk in fks:
+            if 'hospital_id' in fk['constrained_columns']:
+                op.drop_constraint(fk['name'], 'subscriptions', type_='foreignkey')
         
-    columns = [col['name'] for col in insp.get_columns('subscriptions')]
-    if 'hospital_id' in columns:
-        op.drop_column('subscriptions', 'hospital_id')
+        indexes = insp.get_indexes('subscriptions')
+        index_names = [idx['name'] for idx in indexes]
+        if 'ix_subscriptions_hospital_id' in index_names:
+            op.drop_index('ix_subscriptions_hospital_id', table_name='subscriptions')
+            
+        columns = [col['name'] for col in insp.get_columns('subscriptions')]
+        if 'hospital_id' in columns:
+            op.drop_column('subscriptions', 'hospital_id')
 
     # 5. Transaction history indexes
     safe_create_index('ix_transaction_history_created_at', 'transaction_history', ['created_at'])
     safe_create_index('ix_transaction_history_is_deleted', 'transaction_history', ['is_deleted'])
+
+    # 6. Release any beds occupied by soft-deleted patients
+    if 'beds' in table_names and 'patients' in table_names:
+        op.execute(
+            "UPDATE beds SET status = 'Available', patient_id = NULL, allocation_time = NULL, admission_date = NULL "
+            "WHERE patient_id IN (SELECT id FROM patients WHERE is_deleted = 1)"
+        )
 
 
 def downgrade() -> None:
     from sqlalchemy import inspect
     bind = op.get_bind()
     insp = inspect(bind)
+    table_names = insp.get_table_names()
 
     def safe_create_index(index_name, table_name, columns, unique=False):
+        if table_name not in table_names:
+            return
         indexes = insp.get_indexes(table_name)
         existing = [idx['name'] for idx in indexes]
         if index_name not in existing:
             op.create_index(op.f(index_name), table_name, columns, unique=unique)
 
     def safe_drop_index(index_name, table_name):
+        if table_name not in table_names:
+            return
         indexes = insp.get_indexes(table_name)
         existing = [idx['name'] for idx in indexes]
         if index_name in existing:
             op.drop_index(op.f(index_name), table_name=table_name)
 
     def safe_alter_column(table_name, column_name, nullable, type_):
+        if table_name not in table_names:
+            return
         cols = insp.get_columns(table_name)
         for col in cols:
             if col['name'] == column_name:
@@ -134,16 +157,17 @@ def downgrade() -> None:
     safe_drop_index('ix_transaction_history_created_at', 'transaction_history')
 
     # 2. Subscriptions
-    columns = [col['name'] for col in insp.get_columns('subscriptions')]
-    if 'hospital_id' not in columns:
-        op.add_column('subscriptions', sa.Column('hospital_id', mysql.INTEGER(), autoincrement=False, nullable=False))
-        
-    fks = insp.get_foreign_keys('subscriptions')
-    has_hospital_fk = any('hospital_id' in fk['constrained_columns'] for fk in fks)
-    if not has_hospital_fk:
-        op.create_foreign_key(op.f('subscriptions_ibfk_1'), 'subscriptions', 'hospitals', ['hospital_id'], ['id'], ondelete='CASCADE')
+    if 'subscriptions' in table_names:
+        columns = [col['name'] for col in insp.get_columns('subscriptions')]
+        if 'hospital_id' not in columns:
+            op.add_column('subscriptions', sa.Column('hospital_id', mysql.INTEGER(), autoincrement=False, nullable=False))
+            
+        fks = insp.get_foreign_keys('subscriptions')
+        has_hospital_fk = any('hospital_id' in fk['constrained_columns'] for fk in fks)
+        if not has_hospital_fk:
+            op.create_foreign_key(op.f('subscriptions_ibfk_1'), 'subscriptions', 'hospitals', ['hospital_id'], ['id'], ondelete='CASCADE')
 
-    safe_create_index('ix_subscriptions_hospital_id', 'subscriptions', ['hospital_id'])
+        safe_create_index('ix_subscriptions_hospital_id', 'subscriptions', ['hospital_id'])
 
     # 3. Staff and Pharmacy Invoices
     safe_drop_index('ix_staff_created_at', 'staff')
@@ -163,12 +187,13 @@ def downgrade() -> None:
     safe_drop_index('ix_clinical_records_created_at', 'clinical_records')
 
     # 6. Billings
-    billings_fks = insp.get_foreign_keys('billings')
-    for fk in billings_fks:
-        if 'appointment_id' in fk['constrained_columns']:
-            op.drop_constraint(fk['name'], 'billings', type_='foreignkey')
+    if 'billings' in table_names:
+        billings_fks = insp.get_foreign_keys('billings')
+        for fk in billings_fks:
+            if 'appointment_id' in fk['constrained_columns']:
+                op.drop_constraint(fk['name'], 'billings', type_='foreignkey')
 
-    billings_cols = [col['name'] for col in insp.get_columns('billings')]
-    if 'appointment_id' in billings_cols:
-        op.drop_column('billings', 'appointment_id')
+        billings_cols = [col['name'] for col in insp.get_columns('billings')]
+        if 'appointment_id' in billings_cols:
+            op.drop_column('billings', 'appointment_id')
     # ### end Alembic commands ###

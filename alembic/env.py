@@ -68,12 +68,12 @@ def run_migrations_online() -> None:
     )
     with connectable.connect() as connection:
         try:
-            inspector = inspect(connection)
-            if "alembic_version" in inspector.get_table_names():
-                current_version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-                if current_version in ("21449ef446a4", "d9144b0be309"):
-                    connection.execute(text("UPDATE alembic_version SET version_num = '4a59273b8083'"))
-                    connection.commit()
+            with connection.begin():
+                inspector = inspect(connection)
+                if "alembic_version" in inspector.get_table_names():
+                    current_version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+                    if current_version in ("21449ef446a4", "d9144b0be309"):
+                        connection.execute(text("UPDATE alembic_version SET version_num = '4a59273b8083'"))
         except Exception:
             pass
 

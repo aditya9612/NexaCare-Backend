@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Response, Query
 from fastapi.responses import FileResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -73,9 +73,10 @@ async def daily_collection_report(
 async def monthly_revenue_report(
     db: DbSession,
     current_user: CurrentUser,
+    target_date: date | None = Query(default=None),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_period_report("monthly")
+    report = await BillingService(db).get_period_report("monthly", target_date)
     return APIResponse(message="Monthly revenue report", data=report)
 
 
@@ -83,9 +84,10 @@ async def monthly_revenue_report(
 async def yearly_revenue_report(
     db: DbSession,
     current_user: CurrentUser,
+    target_date: date | None = Query(default=None),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_period_report("yearly")
+    report = await BillingService(db).get_period_report("yearly", target_date)
     return APIResponse(message="Yearly revenue report", data=report)
 
 

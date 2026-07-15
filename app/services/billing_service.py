@@ -572,20 +572,37 @@ class BillingService:
 
         return DailyCollectionSummary(date=str(target), **data)
 
-    async def get_period_report(self, period: str) -> RevenueReport:
-        now = utc_now()
-        if period == "daily":
-            start = datetime.combine(now.date(), datetime.min.time())
-            end = now
-            label = str(now.date())
-        elif period == "monthly":
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            end = now
-            label = start.strftime("%Y-%m")
+    async def get_period_report(self, period: str, target_date: date | None = None) -> RevenueReport:
+        if target_date:
+            y, m = target_date.year, target_date.month
+            if period == "daily":
+                start = datetime.combine(target_date, datetime.min.time())
+                end = datetime.combine(target_date, datetime.max.time())
+                label = str(target_date)
+            elif period == "monthly":
+                import calendar
+                last_day = calendar.monthrange(y, m)[1]
+                start = datetime.combine(date(y, m, 1), datetime.min.time())
+                end = datetime.combine(date(y, m, last_day), datetime.max.time())
+                label = start.strftime("%Y-%m")
+            else: # yearly
+                start = datetime.combine(date(y, 1, 1), datetime.min.time())
+                end = datetime.combine(date(y, 12, 31), datetime.max.time())
+                label = str(y)
         else:
-            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-            end = now
-            label = str(now.year)
+            now = utc_now()
+            if period == "daily":
+                start = datetime.combine(now.date(), datetime.min.time())
+                end = now
+                label = str(now.date())
+            elif period == "monthly":
+                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = now
+                label = start.strftime("%Y-%m")
+            else:
+                start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = now
+                label = str(now.year)
         data = await self.repo.get_period_report(start, end)
 
         from app.models.pharmacy_model import PharmacyInvoice

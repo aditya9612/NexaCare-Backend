@@ -203,10 +203,21 @@ def validate_optional_string(v: str | None, field_name: str) -> str | None:
     if v.startswith(" ") or v.endswith(" "):
         raise ValueError(f"{field_name} must not contain leading or trailing spaces")
     return v
+def trim_string_values(data: any) -> any:
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, str):
+                data[k] = v.strip()
+    return data
 
 
 class DoctorOnboardCreate(BaseSchema):
     """Create a login account and doctor profile in one request."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def trim_spaces(cls, data: any) -> any:
+        return trim_string_values(data)
 
     first_name: str
     last_name: str
@@ -313,6 +324,11 @@ class DoctorOnboardUserSummary(BaseSchema):
 
 
 class DoctorCreate(BaseSchema):
+    @model_validator(mode="before")
+    @classmethod
+    def trim_spaces(cls, data: any) -> any:
+        return trim_string_values(data)
+
     first_name: str
     last_name: str
     specialization: str
@@ -387,6 +403,11 @@ class DoctorCreate(BaseSchema):
 
 
 class DoctorUpdate(BaseSchema):
+    @model_validator(mode="before")
+    @classmethod
+    def trim_spaces(cls, data: any) -> any:
+        return trim_string_values(data)
+
     first_name: str | None = None
     last_name: str | None = None
     specialization: str | None = None

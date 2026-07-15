@@ -32,10 +32,28 @@ class BedAllocationService:
         floor = await self.repo.get_floor_by_id(floor_id)
         if not floor:
             raise NotFoundException("Floor not found")
+        for room in floor.rooms:
+            for bed in room.beds:
+                if bed.patient and getattr(bed.patient, "is_deleted", False):
+                    bed.status = "Available"
+                    bed.patient_id = None
+                    bed.patient = None
+                    bed.allocation_time = None
+                    bed.admission_date = None
         return floor
 
     async def list_floors(self) -> List[Floor]:
-        return await self.repo.list_floors()
+        floors = await self.repo.list_floors()
+        for floor in floors:
+            for room in floor.rooms:
+                for bed in room.beds:
+                    if bed.patient and getattr(bed.patient, "is_deleted", False):
+                        bed.status = "Available"
+                        bed.patient_id = None
+                        bed.patient = None
+                        bed.allocation_time = None
+                        bed.admission_date = None
+        return floors
 
     async def create_floor(self, data: FloorCreate) -> Floor:
         existing = await self.repo.get_floor_by_number(data.number)
@@ -120,6 +138,13 @@ class BedAllocationService:
         room = await self.repo.get_room_by_id(room_id)
         if not room:
             raise NotFoundException("Room not found")
+        for bed in room.beds:
+            if bed.patient and getattr(bed.patient, "is_deleted", False):
+                bed.status = "Available"
+                bed.patient_id = None
+                bed.patient = None
+                bed.allocation_time = None
+                bed.admission_date = None
         return room
 
     async def create_room(self, floor_id: int, data: RoomCreate) -> Room:
@@ -211,6 +236,12 @@ class BedAllocationService:
         bed = await self.repo.get_bed_by_id(bed_id)
         if not bed:
             raise NotFoundException("Bed not found")
+        if bed.patient and getattr(bed.patient, "is_deleted", False):
+            bed.status = "Available"
+            bed.patient_id = None
+            bed.patient = None
+            bed.allocation_time = None
+            bed.admission_date = None
         return bed
 
     async def create_bed(self, room_id: int, data: BedCreate) -> Bed:

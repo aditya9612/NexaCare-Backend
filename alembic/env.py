@@ -35,6 +35,7 @@ import app.models.voice_model  # noqa: F401
 import app.models.whatsapp_model  # noqa: F401
 import app.models.analytics_model  # noqa: F401
 import app.models.clinical_record_model  # noqa: F401
+import app.models.doctor_medical_record_model  # noqa: F401
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.schema import CreateTable
 

@@ -21,6 +21,7 @@ from app.utils.pagination import build_paginated_result
 
 class PatientService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = PatientRepository(db)
         self.audit_repo = AuditRepository(db)
 
@@ -80,6 +81,29 @@ class PatientService:
         if not patient:
             raise NotFoundException("Patient not found")
         await self.repo.soft_delete(patient)
+        
+        # Free any beds allocated to this patient
+        from app.models.bed_allocation_model import Bed, BedActivityLog
+        from sqlalchemy import select
+        result = await self.db.execute(select(Bed).where(Bed.patient_id == patient_id))
+        beds = result.scalars().all()
+        for bed in beds:
+            bed.status = "Available"
+            bed.patient_id = None
+            bed.allocation_time = None
+            bed.admission_date = None
+            
+            # Log the release activity
+            log = BedActivityLog(
+                type="release",
+                message=f"Automatically released Bed {bed.name} because patient {patient.first_name} {patient.last_name} was deleted.",
+                floor_id=None,
+                room_id=bed.room_id,
+                bed_id=bed.id,
+                patient_id=patient_id,
+            )
+            self.db.add(log)
+            
         if patient.user_id:
             from app.models.user_model import User
             user = await self.db.get(User, patient.user_id)

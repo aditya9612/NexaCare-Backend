@@ -68,6 +68,7 @@ async def init_db():
         whatsapp_model,
         expense_model,
         vendor_model,
+        doctor_medical_record_model,
     )
 
     async with engine.begin() as conn:

@@ -261,6 +261,17 @@ class ExpenseService:
         # Sort all items
         reverse = (query.sort_order == "desc")
         def get_sort_key(item: ExpenseResponse):
+            if query.sort_by == "category":
+                return item.category.name.lower() if (item.category and item.category.name) else ""
+            elif query.sort_by == "vendor":
+                return item.vendor.name.lower() if (item.vendor and item.vendor.name) else ""
+            elif query.sort_by == "vendor_id":
+                return item.vendor_id or 0
+            elif query.sort_by == "description":
+                return item.description.lower() if item.description else ""
+            elif query.sort_by == "status":
+                return item.status.lower() if item.status else ""
+            
             val = getattr(item, query.sort_by, None)
             if val is None:
                 if query.sort_by == "created_at":
@@ -268,7 +279,7 @@ class ExpenseService:
                 elif query.sort_by == "expense_date":
                     val = item.expense_date
                 else:
-                    val = 0
+                    val = item.created_at
             return val
 
         all_items.sort(key=get_sort_key, reverse=reverse)
@@ -454,12 +465,12 @@ class ExpenseService:
             )
             status_res = await self.db.execute(status_stmt)
             for r in status_res.all():
-                status_key = r.status.capitalize()
+                status_key = (r.status or "").capitalize()
                 if status_key == "Received":
                     status_key = "Paid"
                 found_status = False
                 for item in by_status:
-                    if item.get("status").capitalize() == status_key:
+                    if (item.get("status") or "").capitalize() == status_key:
                         item["total_amount"] = round(item["total_amount"] + float(r.total_amount), 2)
                         item["count"] = item["count"] + int(r.count)
                         found_status = True
@@ -487,6 +498,8 @@ class ExpenseService:
             )
             monthly_res = await self.db.execute(monthly_stmt)
             for r in monthly_res.all():
+                if r.year is None or r.month is None:
+                    continue
                 year_val = int(r.year)
                 month_val = int(r.month)
                 found_month = False

@@ -301,6 +301,33 @@ class SupplierRepository:
         supplier.deleted_at = utc_now()
         await self.db.flush()    
 
+    async def get_by_phone(self, phone: str) -> Supplier | None:
+        result = await self.db.execute(
+            select(Supplier).where(
+                Supplier.phone == phone,
+                Supplier.is_deleted.is_(False)
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_email(self, email: str) -> Supplier | None:
+        result = await self.db.execute(
+            select(Supplier).where(
+                Supplier.email == email,
+                Supplier.is_deleted.is_(False)
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_gst(self, gst_number: str) -> Supplier | None:
+        result = await self.db.execute(
+            select(Supplier).where(
+                Supplier.gst_number == gst_number,
+                Supplier.is_deleted.is_(False)
+            )
+        )
+        return result.scalar_one_or_none()
+
 class PurchaseRepository:
     def __init__(self, db: AsyncSession):
         self.db = db

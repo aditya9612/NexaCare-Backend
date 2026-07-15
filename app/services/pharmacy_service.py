@@ -459,6 +459,21 @@ class PharmacyService:
 
     # --- Suppliers ---
     async def create_supplier(self, data: SupplierCreate, user_id: int) -> SupplierResponse:
+        if data.phone:
+            existing_phone = await self.supplier_repo.get_by_phone(data.phone)
+            if existing_phone:
+                raise ConflictException("Supplier with this phone number already exists")
+
+        if data.email:
+            existing_email = await self.supplier_repo.get_by_email(data.email)
+            if existing_email:
+                raise ConflictException("Supplier with this email already exists")
+
+        if data.gst_number:
+            existing_gst = await self.supplier_repo.get_by_gst(data.gst_number)
+            if existing_gst:
+                raise ConflictException("Supplier with this GST number already exists")
+
         supplier = Supplier(**data.model_dump())
         supplier = await self.supplier_repo.create(supplier)
         await self.audit_repo.create("create", "pharmacy_supplier", user_id=user_id, resource_id=str(supplier.id))

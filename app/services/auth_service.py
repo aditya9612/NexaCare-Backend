@@ -383,17 +383,21 @@ class AuthService:
         await self.repo.revoke_all_user_tokens(user.id)
 
     async def verify_otp_code(self, data: OTPVerifyRequest) -> None:
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
-            raise BadRequestException("Invalid or expired OTP")
-
-    async def activate_account(self, data: ActivateAccountRequest) -> None:
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
-            raise BadRequestException("Invalid or expired OTP")
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
             raise NotFoundException("User not found")
-        user.is_active = True
+        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+            raise BadRequestException("Invalid or expired OTP")
         user.is_verified = True
+        await self.repo.update(user)
+
+    async def activate_account(self, data: ActivateAccountRequest) -> None:
+        user = await self._get_user_by_identifier(data.email, data.phone)
+        if not user:
+            raise NotFoundException("User not found")
+        if not user.is_verified:
+            raise BadRequestException("Please verify OTP before activating your account.")
+        user.is_active = True
         await self.repo.update(user)
 
     async def get_profile(self, user: User) -> UserProfileResponse:

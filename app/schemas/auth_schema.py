@@ -119,19 +119,32 @@ class RegisterRequest(BaseModel):
 
     @field_validator("full_name")
     @classmethod
-    def strip_full_name(cls, value: str) -> str:
-        name = value.strip()
-        if len(name) < 2:
-            raise ValueError("full_name must be at least 2 characters")
-        
-        parts = name.split()
-        if not parts:
-            raise ValueError("full_name cannot be empty")
-        first_name = parts[0]
+    def validate_full_name(cls, value: str) -> str:
         import re
-        if not re.match(r"^[a-zA-Z\s\-'.]+$", first_name):
-            raise ValueError("First name must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
+        if value is None:
+            raise ValueError("Full name cannot be empty")
+        name = value.strip()
+        if len(name) < 1:
+            raise ValueError("Full name cannot be empty or only spaces")
+        if not re.match(r"^[a-zA-Z]+(?:\s[a-zA-Z]+)*$", name):
+            raise ValueError("Full name must contain only alphabetic characters and single spaces between words")
         return name
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone_number(cls, v: str | None) -> str | None:
+        if v is not None:
+            if " " in v:
+                raise ValueError("Phone number must not contain spaces")
+            import re
+            if not re.match(r"^[0-9]+$", v):
+                raise ValueError("Phone number must contain only numeric digits")
+            if len(v) != 10:
+                raise ValueError("Phone number must be exactly 10 digits")
+            if v[0] not in ("6", "7", "8", "9"):
+                raise ValueError("Phone number must start with 6, 7, 8, or 9")
+            return v
+        return v
 
     @field_validator("password")
     @classmethod

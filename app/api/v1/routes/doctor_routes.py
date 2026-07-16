@@ -36,7 +36,22 @@ from fastapi import Query
 router = APIRouter()
 
 
-@router.post("", response_model=APIResponse[DoctorResponse], status_code=201)
+@router.post(
+    "",
+    response_model=APIResponse[DoctorResponse],
+    status_code=201,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "required": ["first_name", "last_name", "specialization", "license_number", "experience"]
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_doctor(
     request: Request,
     db: DbSession,
@@ -78,6 +93,8 @@ async def create_doctor(
             missing_fields.append({"type": "missing", "loc": ["body", "specialization"], "msg": "Field required", "input": None})
         if not license_number:
             missing_fields.append({"type": "missing", "loc": ["body", "license_number"], "msg": "Field required", "input": None})
+        if experience is None:
+            missing_fields.append({"type": "missing", "loc": ["body", "experience"], "msg": "Field required", "input": None})
         
         if missing_fields:
             raise HTTPException(status_code=422, detail=missing_fields)

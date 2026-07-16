@@ -63,6 +63,11 @@ class InventoryService:
         await self._validate_department(data.department_id)
         await self._validate_warehouse(data.warehouse_id)
         await self._validate_vendor(data.vendor_id)
+
+        # Check duplicate name case-insensitive ignoring leading/trailing spaces
+        existing_name = await self.item_repo.get_by_name(data.name)
+        if existing_name:
+            raise ConflictException("Inventory item with this name already exists.")
         
         sku = data.sku
         if sku:
@@ -155,6 +160,23 @@ class InventoryService:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
+
+        # Validate reference_type if provided
+        if data.reference_type is not None:
+            CANONICAL_REF_TYPES = {
+                "purchase order": "Purchase Order",
+                "sales order": "Sales Order",
+                "adjustment": "Adjustment",
+                "transfer": "Transfer",
+                "return": "Return",
+                "opening stock": "Opening Stock"
+            }
+            ref_type_lower = data.reference_type.lower()
+            if ref_type_lower not in CANONICAL_REF_TYPES:
+                raise BadRequestException(
+                    "Invalid reference_type. Allowed values are: Purchase Order, Sales Order, Adjustment, Transfer, Return, Opening Stock."
+                )
+            data.reference_type = CANONICAL_REF_TYPES[ref_type_lower]
             
         await self._validate_warehouse(data.warehouse_id)
         await self._validate_warehouse(data.target_warehouse_id)

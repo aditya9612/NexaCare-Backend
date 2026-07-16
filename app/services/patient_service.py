@@ -1,8 +1,9 @@
+from datetime import date
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundException, ConflictException
+from app.core.exceptions import NotFoundException, ConflictException, BadRequestException
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
@@ -25,10 +26,28 @@ class PatientService:
         self.repo = PatientRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def list_patients(self, page: int = 1, size: int = 20, sort_by: str = "created_at", sort_order: str = "desc"):
+    async def list_patients(
+        self,
+        page: int = 1,
+        size: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ):
+        if start_date and end_date and start_date > end_date:
+            raise BadRequestException("Start date cannot be greater than end date")
+
         skip = (page - 1) * size
-        items = await self.repo.list_all(skip=skip, limit=size, sort_by=sort_by, sort_order=sort_order)
-        total = await self.repo.count_all()
+        items = await self.repo.list_all(
+            skip=skip,
+            limit=size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        total = await self.repo.count_all(start_date=start_date, end_date=end_date)
         return build_paginated_result(
             [PatientResponse.model_validate(p) for p in items], total, page, size
         )

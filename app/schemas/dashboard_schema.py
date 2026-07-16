@@ -28,11 +28,14 @@ class PrescriptionSummary(BaseModel):
     recent_prescriptions: list[PrescriptionResponse]
 
 
+from app.schemas.lab_schema import LabReportResponse
+
 class DoctorDashboardResponse(BaseModel):
     today_patients: int
     upcoming_appointments: list[AppointmentResponse]
     completed_consultations: int
     prescription_summary: PrescriptionSummary
+    upcoming_lab_reports: list[LabReportResponse]
 
 
 class PatientDashboardResponse(BaseModel):

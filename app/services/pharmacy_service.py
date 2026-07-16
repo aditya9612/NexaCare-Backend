@@ -14,6 +14,7 @@ from app.models.pharmacy_model import (
     PurchaseItem,
     Supplier,
 )
+from app.models.user_model import User
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
 from app.repositories.pharmacy_repository import (
@@ -186,8 +187,10 @@ class PharmacyService:
             raise BadRequestException("Cannot create prescription for future date appointments")
 
         # 3c. Verify appointment is completed
-        if appointment.appointment_status != AppointmentStatus.COMPLETED:
-            raise BadRequestException("Can only create prescription for completed appointments")
+        appointment_status = (appointment.appointment_status or "").strip().lower()
+        completed_status = AppointmentStatus.COMPLETED.strip().lower()
+        if appointment_status != completed_status:
+            raise BadRequestException("Prescription can be created only for completed appointments.")
 
         # 4. Verify no prescription exists for this appointment
         existing_rx = await self.db.scalar(
@@ -244,13 +247,27 @@ class PharmacyService:
             raise ForbiddenException("You do not have permission to access this prescription")
         return self._prescription_response(prescription)
 
-    async def update_prescription(self, prescription_id: int, data: PrescriptionUpdate, doctor_id: int, user_id: int) -> PrescriptionResponse:
+    async def update_prescription(
+        self,
+        prescription_id: int,
+        data: PrescriptionUpdate,
+        doctor_id: int,
+        user_id: int,
+        current_user: User
+    ) -> PrescriptionResponse:
         prescription = await self.prescription_repo.get_by_id(prescription_id)
         if not prescription:
             raise NotFoundException("Prescription not found")
         if prescription.doctor_id != doctor_id:
             raise ForbiddenException("You do not have permission to modify this prescription")
         
+        from app.core.constants import UserRole
+        if current_user.role and current_user.role.name == UserRole.DOCTOR:
+            if data.status is not None:
+                status_clean = data.status.strip().lower()
+                if status_clean not in {"pending", "sent_to_pharmacy"}:
+                    raise BadRequestException("Doctors can only update prescription status to 'pending' or 'sent_to_pharmacy'.")
+
         if data.patient_id is not None:
             prescription.patient_id = data.patient_id
         if data.instructions is not None:

@@ -91,6 +91,7 @@ class DoctorService:
 
     async def list_doctors(
         self,
+        current_user: User,
         page: int = 1,
         size: int = 20,
         department_id: int | None = None,
@@ -98,6 +99,13 @@ class DoctorService:
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ):
+        if current_user.role and current_user.role.name == UserRole.DOCTOR:
+            doctor = await self.repo.get_by_user_id(current_user.id)
+            if not doctor:
+                raise NotFoundException("Doctor profile not found")
+            items = [DoctorResponse.model_validate(doctor)] if page == 1 else []
+            return build_paginated_result(items, 1, page, size)
+
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip, limit=size, department_id=department_id,

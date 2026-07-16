@@ -42,6 +42,7 @@ class DoctorMedicalRecordService:
         report_title: str | None,
         report_type: str | None,
         notes: str | None,
+        symptoms: str | None,
         file: UploadFile | None,
         user_id: int,
     ) -> MedicalRecordResponse:
@@ -98,10 +99,26 @@ class DoctorMedicalRecordService:
         )
 
         record = await self.repo.create_record(record)
-        response_data = MedicalRecordResponse.model_validate(record)
+
         diagnosis_record = await self.repo.get_diagnosis(patient_id)
         if diagnosis_record:
-            response_data.symptoms = diagnosis_record.symptoms
+            if symptoms is not None:
+                diagnosis_record.symptoms = symptoms
+            diagnosis_record.diagnosis = diagnosis
+            diagnosis_record.doctor_id = doctor_id
+            await self.repo.update_diagnosis(diagnosis_record)
+        else:
+            diagnosis_record = PatientDiagnosis(
+                patient_id=patient_id,
+                doctor_id=doctor_id,
+                diagnosis=diagnosis,
+                symptoms=symptoms,
+                notes=notes,
+            )
+            await self.repo.save_diagnosis(diagnosis_record)
+
+        response_data = MedicalRecordResponse.model_validate(record)
+        response_data.symptoms = diagnosis_record.symptoms
         return response_data
 
     async def list_reports(self, page: int = 1, size: int = 20, user_id: int | None = None):

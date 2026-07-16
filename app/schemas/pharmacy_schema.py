@@ -436,3 +436,11 @@ class SalesReport(BaseSchema):
     total_sales: float
     invoice_count: int
     top_medicines: List[dict]
+
+
+class PharmacyDashboardResponse(BaseSchema):
+    total_medicines: int
+    low_stock_alerts: int
+    expired_medicines_alerts: int
+    daily_sales: float
+    monthly_sales: float

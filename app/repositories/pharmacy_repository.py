@@ -122,6 +122,37 @@ class MedicineRepository:
         result = await self.db.execute(query.order_by(Medicine.expiry_date.asc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
+    async def get_dashboard_counts(self) -> dict:
+        total_medicines = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True)
+            )
+        )) or 0
+        
+        low_stock = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.stock_quantity <= Medicine.reorder_level
+            )
+        )) or 0
+        
+        expired = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.expiry_date.isnot(None),
+                Medicine.expiry_date < utc_now().date()
+            )
+        )) or 0
+        
+        return {
+            "total_medicines": total_medicines,
+            "low_stock_alerts": low_stock,
+            "expired_medicines_alerts": expired
+        }
+
 
 class PrescriptionRepository:
     def __init__(self, db: AsyncSession):
@@ -259,6 +290,39 @@ class PharmacyInvoiceRepository:
             )
         )
         return {"total_sales": float(total or 0), "invoice_count": count or 0}
+
+    async def get_dashboard_sales(self) -> dict:
+        now = utc_now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start = today_start + timedelta(days=1)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if month_start.month == 12:
+            next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            next_month_start = month_start.replace(month=month_start.month + 1)
+
+        daily_sales = (await self.db.scalar(
+            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= today_start,
+                PharmacyInvoice.created_at < tomorrow_start
+            )
+        )) or 0.0
+
+        monthly_sales = (await self.db.scalar(
+            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= month_start,
+                PharmacyInvoice.created_at < next_month_start
+            )
+        )) or 0.0
+
+        return {
+            "daily_sales": round(float(daily_sales), 2),
+            "monthly_sales": round(float(monthly_sales), 2)
+        }
 
 
 class SupplierRepository:

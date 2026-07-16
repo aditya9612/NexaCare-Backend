@@ -32,6 +32,7 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceCreate,
     PharmacyInvoiceResponse,
     PharmacyInvoiceItemResponse,
+    PharmacyDashboardResponse,
     PrescriptionCreate,
     PrescriptionItemResponse,
     PrescriptionResponse,
@@ -680,3 +681,8 @@ class PharmacyService:
             start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         data = await self.invoice_repo.get_sales_report(start, now)
         return SalesReport(period=period, top_medicines=[], **data)
+
+    async def get_dashboard_summary(self) -> PharmacyDashboardResponse:
+        counts = await self.medicine_repo.get_dashboard_counts()
+        sales = await self.invoice_repo.get_dashboard_sales()
+        return PharmacyDashboardResponse(**counts, **sales)

@@ -602,6 +602,13 @@ class PharmacyService:
 
         purchase.supplier_id = data.supplier_id
         purchase.notes = data.notes
+        if data.status:
+            allowed_statuses = {PurchaseStatus.ORDERED, PurchaseStatus.RECEIVED, PurchaseStatus.CANCELLED}
+            if data.status not in allowed_statuses:
+                raise BadRequestException(
+                    f"Invalid purchase status. Must be one of: {', '.join(allowed_statuses)}"
+                )
+            purchase.status = data.status
 
         purchase = await self.purchase_repo.update(purchase)
 

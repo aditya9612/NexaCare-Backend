@@ -388,6 +388,7 @@ class PurchaseCreate(BaseSchema):
     supplier_id: int
     notes: str | None = None
     items: List[PurchaseItemCreate] = Field(..., min_length=1)
+    status: str | None = None
 
 
 class PurchaseItemResponse(BaseSchema):

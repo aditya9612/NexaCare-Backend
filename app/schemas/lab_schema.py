@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -151,7 +151,18 @@ class LabReportCreate(BaseSchema):
 
 class LabReportApprove(BaseSchema):
     approved: bool = True
-    summary: str | None = None
+    remark: str | None = None
+
+
+class RejectLabReportRequest(BaseSchema):
+    remarks: str = Field(..., min_length=1, description="Remarks explaining why the lab report was rejected")
+
+    @field_validator("remarks")
+    @classmethod
+    def validate_remarks(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Remarks cannot be empty")
+        return v.strip()
 
 
 class LabReportResponse(BaseSchema):
@@ -160,6 +171,7 @@ class LabReportResponse(BaseSchema):
     report_number: str
     status: str
     summary: str | None
+    remarks: str | None = None
     report_path: str | None
     approved_by: int | None
     approved_at: datetime | None

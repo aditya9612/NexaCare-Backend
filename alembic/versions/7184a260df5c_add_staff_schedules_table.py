@@ -1,7 +1,7 @@
 """Add staff_schedules table
 
 Revision ID: 7184a260df5c
-Revises: 8aab6fa594d5
+Revises: c4ae81de4724
 Create Date: 2026-07-17 17:05:37.161735
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 revision: str = '7184a260df5c'
-down_revision: Union[str, None] = '8aab6fa594d5'
+down_revision: Union[str, None] = 'c4ae81de4724'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

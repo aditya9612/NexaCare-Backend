@@ -4,6 +4,11 @@ import re
 from pydantic import EmailStr, Field, field_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
+from app.utils.common_validators import (
+    validate_full_name as common_validate_full_name,
+    validate_mobile as common_validate_mobile,
+    validate_not_future_date as common_validate_not_future_date,
+)
 
 
 VALID_BLOOD_GROUPS = {"A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"}
@@ -12,33 +17,17 @@ VALID_PATIENT_STATUSES = {"active", "inactive", "deceased"}
 
 
 def validate_name_field(v: str | None, field_name: str) -> str | None:
-    if v is None:
-        return v
-    cleaned = v.strip()
-    if not cleaned or cleaned.lower() == "null":
-        raise ValueError(f"{field_name} cannot be blank or 'null'")
-    if not re.match(r"^[a-zA-Z\s\-\'\.]+$", cleaned):
-        raise ValueError(f"{field_name} must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
-    return cleaned
+    return common_validate_full_name(v, field_name)
 
 
 def validate_phone_number_field(v: str | None, field_name: str) -> str | None:
-    if v is None:
-        return v
-    cleaned = v.strip()
-    if not cleaned or cleaned.lower() == "null":
-        raise ValueError(f"{field_name} cannot be blank or 'null'")
-    if not cleaned.isdigit() or len(cleaned) != 10:
-        raise ValueError(f"{field_name} must contain exactly 10 numeric digits")
-    if cleaned[0] not in {"6", "7", "8", "9"}:
-        raise ValueError(f"{field_name} must start with 6, 7, 8, or 9")
-    return cleaned
+    if v is not None:
+        return common_validate_mobile(v, field_name)
+    return v
 
 
 def validate_dob_field(v: date | None) -> date | None:
-    if v and v >= date.today():
-        raise ValueError("Date of birth must be in the past")
-    return v
+    return common_validate_not_future_date(v, "Date of birth")
 
 
 def validate_blood_group_field(v: str | None) -> str | None:

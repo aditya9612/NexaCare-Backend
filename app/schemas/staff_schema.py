@@ -6,7 +6,13 @@ from pydantic import EmailStr, Field, field_validator
 from app.schemas.common_schema import BaseSchema
 from app.schemas.department_schema import DepartmentResponse
 from app.schemas.rbac_schema import RoleResponse
-
+from app.utils.common_validators import (
+    validate_full_name as common_validate_full_name,
+    validate_mobile as common_validate_mobile,
+    validate_password as common_validate_password,
+    validate_code_identifier as common_validate_code_identifier,
+    validate_start_end_times as common_validate_start_end_times,
+)
 
 class StaffStatus(int, Enum):
     ACTIVE = 1
@@ -14,105 +20,21 @@ class StaffStatus(int, Enum):
 
 
 def validate_staff_name(v: str | None, field_name: str = "Full name") -> str | None:
-    if v is None:
-        return v
-    # Reject empty string, whitespace-only, and "null"
-    if not v or not v.strip() or v.lower() == "null":
-        raise ValueError(f"{field_name} cannot be blank or 'null'")
-    # Reject leading/trailing spaces
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError(f"{field_name} must not contain leading or trailing spaces")
-    # Reject multiple consecutive spaces
-    if "  " in v:
-        raise ValueError(f"{field_name} must not contain multiple consecutive spaces")
-    # Reject Unicode characters (must contain only ASCII)
-    if not v.isascii():
-        raise ValueError(f"{field_name} must contain only standard ASCII characters")
-    # Allow only ASCII alphabets, spaces, apostrophe, hyphen and dot
-    if not re.match(r"^[a-zA-Z\s\-\'\.]+$", v):
-        raise ValueError(f"{field_name} must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
-    return v
+    return common_validate_full_name(v, field_name)
 
 
 def validate_staff_phone(v: str | None) -> str | None:
-    if v is None:
-        raise ValueError("Phone number cannot be null")
-    # Reject empty string and whitespace-only
-    if not v or not v.strip() or v.lower() == "null":
-        raise ValueError("Phone number cannot be blank or 'null'")
-    # Reject leading/trailing spaces or in-between spaces
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError("Phone number should not contain leading or trailing spaces")
-    if " " in v:
-        raise ValueError("Phone number should not contain spaces")
-        
-    raw_num = v
-    if v.startswith("+91"):
-        raw_num = v[3:]
-    elif v.startswith("91") and len(v) == 12:
-        raw_num = v[2:]
-        
-    if len(raw_num) != 10:
-        raise ValueError("Phone number must contain exactly 10 digits")
-        
-    if not raw_num.isdigit():
-        raise ValueError("Phone number must contain only numeric digits")
-        
-    if raw_num[0] not in {"6", "7", "8", "9"}:
-        raise ValueError("Phone number must start with 6, 7, 8, or 9")
-        
-    if len(set(raw_num)) == 1:
-        raise ValueError("Phone number cannot consist of repeated identical digits")
-        
-    return raw_num
+    if v is not None:
+        return common_validate_mobile(v, "Phone number")
+    return v
 
 
 def validate_staff_password(v: str) -> str:
-    if not v:
-        raise ValueError("Password is required")
-    if len(v) < 8 or len(v) > 20:
-        raise ValueError("Password must be between 8 and 20 characters in length")
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError("Password must not contain leading or trailing spaces")
-    if not v.strip():
-        raise ValueError("Password must not be only whitespace")
-    if not v.isascii():
-        raise ValueError("Password must contain only standard ASCII characters")
-        
-    if not any(c.isupper() for c in v):
-        raise ValueError("Password must contain at least one uppercase letter")
-    if not any(c.islower() for c in v):
-        raise ValueError("Password must contain at least one lowercase letter")
-    if not any(c.isdigit() for c in v):
-        raise ValueError("Password must contain at least one numeric digit")
-    if not any(not (c.isalnum() or c.isspace()) for c in v):
-        raise ValueError("Password must contain at least one special character")
-        
-    common_passwords = {
-        "password@123",
-        "admin@123",
-        "welcome@123",
-        "qwerty@123",
-        "12345678",
-    }
-    if v.lower() in common_passwords:
-        raise ValueError("Password is too common or easily guessable")
-        
-    return v
+    return common_validate_password(v)
 
 
 def validate_staff_code(v: str | None) -> str | None:
-    if v is None:
-        return v
-    if not v.strip() or v.lower() == "null":
-        raise ValueError("Staff code cannot be empty or 'null'")
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError("Staff code must not contain leading or trailing spaces")
-    if not v.isascii():
-        raise ValueError("Staff code must contain only standard ASCII characters")
-    if not re.match(r"^[a-zA-Z0-9\-\/]+$", v):
-        raise ValueError("Staff code must contain only alphanumeric characters, hyphens, or slashes")
-    return v
+    return common_validate_code_identifier(v, "Staff code")
 
 
 def validate_staff_role_name(v: str | None) -> str | None:
@@ -241,8 +163,8 @@ class StaffScheduleCreate(BaseSchema):
     @classmethod
     def validate_time_range(cls, v, info):
         start = info.data.get("start_time")
-        if start and v <= start:
-            raise ValueError("end_time must be after start_time")
+        if start:
+            return common_validate_start_end_times(start, v)
         return v
 
 

@@ -3,6 +3,7 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.common_schema import BaseSchema
 from app.utils.validators import validate_gst_number
+from app.utils.common_validators import validate_mobile as common_validate_mobile
 
 
 class VendorCreate(BaseModel):
@@ -38,13 +39,13 @@ class VendorCreate(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            stripped = value.strip()
-            if stripped != "":
-                from app.utils.phone_utils import validate_phone_field
-                return validate_phone_field(stripped)
+        if value is None:
             return None
-        return value
+
+        if value.strip() == "":
+            return None
+
+        return common_validate_mobile(value, "Phone number")
 
     @field_validator("email")
     @classmethod
@@ -140,13 +141,13 @@ class VendorUpdate(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            stripped = value.strip()
-            if stripped != "":
-                from app.utils.phone_utils import validate_phone_field
-                return validate_phone_field(stripped)
+        if value is None:
             return None
-        return value
+
+        if value.strip() == "":
+            return None
+
+        return common_validate_mobile(value, "Phone number")
 
     @field_validator("email")
     @classmethod

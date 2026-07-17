@@ -1,6 +1,6 @@
-from datetime import date
-
-from sqlalchemy import func, select
+from datetime import date, timedelta
+from sqlalchemy import func, select, and_, or_
+from app.utils.helpers import utc_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus
@@ -66,10 +66,9 @@ class DashboardService:
         )
 
     async def doctor_dashboard(self, user: User) -> DoctorDashboardResponse:
-        from sqlalchemy.orm import selectinload
-        from app.models.pharmacy_model import Prescription
-        from app.schemas.dashboard_schema import PrescriptionSummary
-        from app.schemas.pharmacy_schema import PrescriptionResponse, PrescriptionItemResponse
+        from app.models.lab_model import TestOrder
+        from app.core.constants import LabOrderStatus
+        from app.schemas.dashboard_schema import PendingLabReportsSummary, PendingLabReportItem
 
         doctor_result = await self.db.execute(
             select(Doctor).where(Doctor.user_id == user.id, Doctor.is_deleted.is_(False))
@@ -80,87 +79,87 @@ class DashboardService:
                 today_patients=0,
                 upcoming_appointments=[],
                 completed_consultations=0,
-                prescription_summary=PrescriptionSummary(
-                    total_prescriptions=0,
-                    pending_prescriptions=0,
-                    dispensed_prescriptions=0,
-                    recent_prescriptions=[]
-                ),
-                upcoming_lab_reports=[]
+                pending_lab_reports=PendingLabReportsSummary(
+                    count=0,
+                    recent=[]
+                )
             )
 
-        today = date.today()
+        now = utc_now()
+        today = now.date()
+        tomorrow = today + timedelta(days=1)
+        current_time = now.time()
+
         today_appts = await self.appointment_repo.list_all(
             doctor_id=doctor.id, appointment_date=today, limit=100
         )
         patient_ids = {a.patient_id for a in today_appts}
 
-        upcoming = await self.appointment_repo.get_upcoming_appointments(
-            doctor_id=doctor.id, limit=10
+        upcoming_query = (
+            select(Appointment)
+            .where(
+                Appointment.doctor_id == doctor.id,
+                ~Appointment.appointment_status.in_(list(AppointmentStatus.TERMINAL)),
+                or_(
+                    and_(Appointment.appointment_date == today, Appointment.appointment_time >= current_time),
+                    Appointment.appointment_date == tomorrow
+                )
+            )
+            .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
+            .limit(10)
         )
+        upcoming_result = await self.db.execute(upcoming_query)
+        upcoming = list(upcoming_result.scalars().all())
+
         completed = await self.appointment_repo.count_all(
             doctor_id=doctor.id, status=AppointmentStatus.COMPLETED
         )
 
-        total_prescriptions = await self.db.scalar(
-            select(func.count()).select_from(Prescription).where(
-                Prescription.doctor_id == doctor.id,
-                Prescription.is_deleted.is_(False)
+        pending_statuses = [LabOrderStatus.ORDERED, LabOrderStatus.SAMPLE_COLLECTED, LabOrderStatus.IN_PROGRESS]
+
+        # Count total pending test orders
+        total_pending_labs = await self.db.scalar(
+            select(func.count()).select_from(TestOrder).where(
+                TestOrder.doctor_id == doctor.id,
+                TestOrder.is_deleted.is_(False),
+                TestOrder.status.in_(pending_statuses)
             )
         ) or 0
 
-        pending_prescriptions = await self.db.scalar(
-            select(func.count()).select_from(Prescription).where(
-                Prescription.doctor_id == doctor.id,
-                Prescription.status == "pending",
-                Prescription.is_deleted.is_(False)
-            )
-        ) or 0
-
-        dispensed_prescriptions = await self.db.scalar(
-            select(func.count()).select_from(Prescription).where(
-                Prescription.doctor_id == doctor.id,
-                Prescription.status == "dispensed",
-                Prescription.is_deleted.is_(False)
-            )
-        ) or 0
-
-        recent_result = await self.db.execute(
-            select(Prescription)
+        # Fetch 5 most recent pending test orders
+        recent_labs_result = await self.db.execute(
+            select(TestOrder)
             .where(
-                Prescription.doctor_id == doctor.id,
-                Prescription.is_deleted.is_(False)
+                TestOrder.doctor_id == doctor.id,
+                TestOrder.is_deleted.is_(False),
+                TestOrder.status.in_(pending_statuses)
             )
-            .options(selectinload(Prescription.items))
-            .order_by(Prescription.created_at.desc())
+            .order_by(TestOrder.created_at.desc())
             .limit(5)
         )
-        recent_prescriptions_list = list(recent_result.scalars().unique().all())
+        recent_labs = list(recent_labs_result.scalars().all())
 
-        recent_prescriptions = []
-        for p in recent_prescriptions_list:
-            resp = PrescriptionResponse.model_validate(p)
-            resp.items = [PrescriptionItemResponse.model_validate(i) for i in p.items]
-            recent_prescriptions.append(resp)
-
-        from app.repositories.lab_repository import LabReportRepository
-        from app.schemas.lab_schema import LabReportResponse
-
-        upcoming_labs = await LabReportRepository(self.db).get_upcoming_lab_reports(
-            doctor_id=doctor.id, limit=10
-        )
+        recent_lab_items = [
+            PendingLabReportItem(
+                id=o.id,
+                patient_id=o.patient_id,
+                lab_test_id=o.lab_test_id,
+                appointment_id=o.appointment_id,
+                status=o.status,
+                priority=o.priority,
+                created_at=o.created_at
+            )
+            for o in recent_labs
+        ]
 
         return DoctorDashboardResponse(
             today_patients=len(patient_ids),
             upcoming_appointments=[AppointmentResponse.model_validate(a) for a in upcoming],
             completed_consultations=completed,
-            prescription_summary=PrescriptionSummary(
-                total_prescriptions=total_prescriptions,
-                pending_prescriptions=pending_prescriptions,
-                dispensed_prescriptions=dispensed_prescriptions,
-                recent_prescriptions=recent_prescriptions
-            ),
-            upcoming_lab_reports=[LabReportResponse.model_validate(r) for r in upcoming_labs]
+            pending_lab_reports=PendingLabReportsSummary(
+                count=total_pending_labs,
+                recent=recent_lab_items
+            )
         )
 
     async def patient_dashboard(self, user: User) -> PatientDashboardResponse:

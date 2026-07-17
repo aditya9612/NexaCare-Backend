@@ -35,7 +35,7 @@ from app.models.pharmacy_model import (
 from app.models.refresh_token_model import RefreshToken
 from app.models.role_model import Role, RolePermission
 from app.models.user_model import User
-from app.models.staff_model import Staff
+from app.models.staff_model import Staff, StaffSchedule
 from app.models.voice_model import CallAnalytics, CallSchedule, VoiceCall, VoiceCallLog, VoiceResponse
 from app.models.expense_model import ExpenseCategory, Expense, VendorPayment
 from app.models.whatsapp_model import (
@@ -131,6 +131,7 @@ __all__ = [
     "Bed",
     "BedActivityLog",
     "Staff",
+    "StaffSchedule",
     "IcuDevice",
     "IcuVitalReading",
     "IcuTelemetryAlert",

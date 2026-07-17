@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from enum import Enum
 import re
 from pydantic import EmailStr, Field, field_validator
@@ -228,3 +228,31 @@ class StaffResponse(BaseSchema):
 
     department: DepartmentResponse | None = None
     role: RoleResponse | None = None
+
+
+class StaffScheduleCreate(BaseSchema):
+    day_of_week: int = Field(..., ge=0, le=6, description="0=Monday, 6=Sunday")
+    start_time: time
+    end_time: time
+    slot_duration_minutes: int = Field(30, ge=5, le=1440)
+    is_active: bool = True
+
+    @field_validator("end_time")
+    @classmethod
+    def validate_time_range(cls, v, info):
+        start = info.data.get("start_time")
+        if start and v <= start:
+            raise ValueError("end_time must be after start_time")
+        return v
+
+
+class StaffScheduleResponse(BaseSchema):
+    id: int
+    staff_id: int
+    day_of_week: int
+    start_time: time
+    end_time: time
+    slot_duration_minutes: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime

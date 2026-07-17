@@ -193,7 +193,9 @@ class LabService:
             raise BadRequestException("Cannot create test order for future date appointments")
 
         # Check completed appointments only
-        if appointment.appointment_status != AppointmentStatus.COMPLETED:
+        appointment_status = (appointment.appointment_status or "").strip().lower()
+        completed_status = AppointmentStatus.COMPLETED.strip().lower()
+        if appointment_status != completed_status:
             raise BadRequestException("Can only create test order for completed appointments")
 
         # Resolve doctor profile of logged-in user

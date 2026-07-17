@@ -162,7 +162,8 @@ async def update_prescription(
         prescription_id=prescription_id,
         data=data,
         doctor_id=doctor.id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        current_user=current_user
     )
     return APIResponse(message="Prescription updated", data=prescription)
 

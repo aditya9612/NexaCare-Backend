@@ -85,7 +85,8 @@ class DashboardService:
                     pending_prescriptions=0,
                     dispensed_prescriptions=0,
                     recent_prescriptions=[]
-                )
+                ),
+                upcoming_lab_reports=[]
             )
 
         today = date.today()
@@ -94,8 +95,8 @@ class DashboardService:
         )
         patient_ids = {a.patient_id for a in today_appts}
 
-        upcoming = await self.appointment_repo.list_all(
-            doctor_id=doctor.id, status=AppointmentStatus.CONFIRMED, limit=10
+        upcoming = await self.appointment_repo.get_upcoming_appointments(
+            doctor_id=doctor.id, limit=10
         )
         completed = await self.appointment_repo.count_all(
             doctor_id=doctor.id, status=AppointmentStatus.COMPLETED
@@ -142,6 +143,13 @@ class DashboardService:
             resp.items = [PrescriptionItemResponse.model_validate(i) for i in p.items]
             recent_prescriptions.append(resp)
 
+        from app.repositories.lab_repository import LabReportRepository
+        from app.schemas.lab_schema import LabReportResponse
+
+        upcoming_labs = await LabReportRepository(self.db).get_upcoming_lab_reports(
+            doctor_id=doctor.id, limit=10
+        )
+
         return DoctorDashboardResponse(
             today_patients=len(patient_ids),
             upcoming_appointments=[AppointmentResponse.model_validate(a) for a in upcoming],
@@ -151,7 +159,8 @@ class DashboardService:
                 pending_prescriptions=pending_prescriptions,
                 dispensed_prescriptions=dispensed_prescriptions,
                 recent_prescriptions=recent_prescriptions
-            )
+            ),
+            upcoming_lab_reports=[LabReportResponse.model_validate(r) for r in upcoming_labs]
         )
 
     async def patient_dashboard(self, user: User) -> PatientDashboardResponse:

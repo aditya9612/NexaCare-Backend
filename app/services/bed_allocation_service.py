@@ -286,6 +286,9 @@ class BedAllocationService:
             bed.type = data.type
 
         if data.status is not None:
+            is_occupied = (bed.patient_id is not None) or (bed.status == "Occupied")
+            if is_occupied and data.status != bed.status:
+                raise ConflictException("Cannot change bed status while the bed is occupied.")
             if data.status == "Occupied" and not bed.patient_id:
                 raise BadRequestException("Cannot set bed status to Occupied without an associated patient.")
             bed.status = data.status
@@ -337,6 +340,14 @@ class BedAllocationService:
             raise BadRequestException(f"Bed {bed.name} is not available. Current status: {bed.status}.")
 
         patient = await self.get_patient(data.patientId)
+
+        from app.models.appointment_model import Appointment
+        from sqlalchemy import select, func
+        appt_exists = await self.db.scalar(
+            select(func.count(Appointment.id)).where(Appointment.patient_id == patient.id)
+        )
+        if not appt_exists:
+            raise BadRequestException("Cannot allocate bed: Patient has no booked appointment.")
 
         bed.status = "Occupied"
         bed.patient_id = patient.id
@@ -398,14 +409,24 @@ class BedAllocationService:
             raise BadRequestException("Source and target beds cannot be the same.")
 
         source_bed = await self.get_bed(data.sourceBedId)
-        if source_bed.status != "Occupied" or not source_bed.patient_id:
-            raise BadRequestException(f"Source bed {source_bed.name} is not occupied.")
+        if source_bed.status == "Maintenance":
+            raise BadRequestException(f"Source bed '{source_bed.name}' is under maintenance.")
+        elif source_bed.status == "Cleaning":
+            raise BadRequestException(f"Source bed '{source_bed.name}' is currently under cleaning.")
+        elif source_bed.status in ("Inactive", "Blocked", "Unavailable", "Reserved"):
+            raise BadRequestException(f"Source bed '{source_bed.name}' is currently unavailable.")
+        elif source_bed.status != "Occupied" or not source_bed.patient_id:
+            raise BadRequestException(f"Source bed '{source_bed.name}' is not occupied.")
 
         target_bed = await self.get_bed(data.targetBedId)
-        if target_bed.status != "Available":
-            if target_bed.status == "Occupied":
-                raise BadRequestException("Bed is already occupied")
-            raise BadRequestException(f"Target bed {target_bed.name} is not available. Status: {target_bed.status}.")
+        if target_bed.status == "Occupied":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is already occupied.")
+        elif target_bed.status == "Maintenance":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is under maintenance.")
+        elif target_bed.status == "Cleaning":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is currently under cleaning.")
+        elif target_bed.status in ("Inactive", "Blocked", "Unavailable", "Reserved") or target_bed.status != "Available":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is currently unavailable.")
 
         patient = await self.get_patient(source_bed.patient_id)
 

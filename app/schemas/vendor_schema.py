@@ -25,9 +25,14 @@ class VendorCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
+        import re
         stripped = value.strip()
         if len(stripped) < 1:
-            raise ValueError("name cannot be empty or only spaces")
+            raise ValueError("Vendor name cannot be empty or only spaces")
+        if re.match(r"^[0-9\s]+$", stripped):
+            raise ValueError("Vendor name must not be numeric-only")
+        if not re.match(r"^[a-zA-Z0-9\s\-\&\.\(\)]+$", stripped):
+            raise ValueError("Vendor name contains invalid characters")
         return stripped
 
     @field_validator("phone")
@@ -41,11 +46,56 @@ class VendorCreate(BaseModel):
             return None
         return value
 
-    @field_validator("contact_person", "email", "address", "service_type")
+    @field_validator("email")
     @classmethod
-    def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+    def strip_email(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             return value.strip()
+        return value
+
+    @field_validator("contact_person")
+    @classmethod
+    def validate_contact_person(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            import re
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("Contact person cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Contact person must not be numeric-only")
+            if not re.match(r"^[a-zA-Z\s\.\'\-]+$", stripped):
+                raise ValueError("Contact person name contains invalid characters")
+            return stripped
+        return value
+
+    @field_validator("address")
+    @classmethod
+    def validate_address(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            import re
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("Address cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Address must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\.\(\)]+$", stripped):
+                raise ValueError("Address contains invalid characters")
+            return stripped
+        return value
+
+    @field_validator("service_type")
+    @classmethod
+    def validate_service_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            import re
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("Service type cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Service type must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\-\&\(\)]+$", stripped):
+                raise ValueError("Service type contains invalid characters")
+            return stripped
         return value
 
     @field_validator("gst_number")
@@ -76,9 +126,14 @@ class VendorUpdate(BaseModel):
     @classmethod
     def validate_name(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
+            import re
             stripped = value.strip()
             if len(stripped) < 1:
-                raise ValueError("name cannot be empty or only spaces")
+                raise ValueError("Vendor name cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Vendor name must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\-\&\.\(\)]+$", stripped):
+                raise ValueError("Vendor name contains invalid characters")
             return stripped
         return value
 
@@ -93,11 +148,56 @@ class VendorUpdate(BaseModel):
             return None
         return value
 
-    @field_validator("contact_person", "email", "address", "service_type")
+    @field_validator("email")
     @classmethod
-    def strip_optional_strings(cls, value: Optional[str]) -> Optional[str]:
+    def strip_email(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             return value.strip()
+        return value
+
+    @field_validator("contact_person")
+    @classmethod
+    def validate_contact_person(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            import re
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("Contact person cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Contact person must not be numeric-only")
+            if not re.match(r"^[a-zA-Z\s\.\'\-]+$", stripped):
+                raise ValueError("Contact person name contains invalid characters")
+            return stripped
+        return value
+
+    @field_validator("address")
+    @classmethod
+    def validate_address(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            import re
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("Address cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Address must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\.\(\)]+$", stripped):
+                raise ValueError("Address contains invalid characters")
+            return stripped
+        return value
+
+    @field_validator("service_type")
+    @classmethod
+    def validate_service_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            import re
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("Service type cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Service type must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\-\&\(\)]+$", stripped):
+                raise ValueError("Service type contains invalid characters")
+            return stripped
         return value
 
     @field_validator("gst_number")

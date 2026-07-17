@@ -12,6 +12,7 @@ class MedicalRecordUploadValidator(BaseSchema):
     report_title: str | None = None
     report_type: str | None = None
     notes: str | None = None
+    symptoms: str | None = None
 
     @field_validator("diagnosis")
     @classmethod
@@ -37,7 +38,7 @@ class MedicalRecordUploadValidator(BaseSchema):
             raise ValueError(f"{field_name} must contain only alphanumeric characters, spaces, hyphens, dots, or apostrophes")
         return cleaned
 
-    @field_validator("notes")
+    @field_validator("notes", "symptoms")
     @classmethod
     def check_optional_fields(cls, v: str | None, info) -> str | None:
         if v is None:

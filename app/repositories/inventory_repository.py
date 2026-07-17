@@ -81,6 +81,12 @@ class InventoryRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_name(self, name: str) -> InventoryItem | None:
+        result = await self.db.execute(
+            self._base_query().where(func.lower(InventoryItem.name) == name.strip().lower())
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, item: InventoryItem) -> InventoryItem:
         self.db.add(item)
         await self.db.flush()

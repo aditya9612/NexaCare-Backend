@@ -36,7 +36,22 @@ from fastapi import Query
 router = APIRouter()
 
 
-@router.post("", response_model=APIResponse[DoctorResponse], status_code=201)
+@router.post(
+    "",
+    response_model=APIResponse[DoctorResponse],
+    status_code=201,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "required": ["first_name", "last_name", "specialization", "license_number", "experience"]
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_doctor(
     request: Request,
     db: DbSession,
@@ -78,6 +93,8 @@ async def create_doctor(
             missing_fields.append({"type": "missing", "loc": ["body", "specialization"], "msg": "Field required", "input": None})
         if not license_number:
             missing_fields.append({"type": "missing", "loc": ["body", "license_number"], "msg": "Field required", "input": None})
+        if experience is None:
+            missing_fields.append({"type": "missing", "loc": ["body", "experience"], "msg": "Field required", "input": None})
         
         if missing_fields:
             raise HTTPException(status_code=422, detail=missing_fields)
@@ -135,6 +152,7 @@ async def list_doctors(
     _: User = Depends(require_permission("doctors", "read")),
 ):
     result = await DoctorService(db).list_doctors(
+        current_user=current_user,
         page=page, size=size, department_id=department_id,
         availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
     )
@@ -185,6 +203,7 @@ async def upload_report(
     report_title: Optional[str] = Form(None),
     report_type: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
+    symptoms: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
@@ -197,11 +216,13 @@ async def upload_report(
             report_title=report_title,
             report_type=report_type,
             notes=notes,
+            symptoms=symptoms,
         )
         report_title = validated.report_title
         report_type = validated.report_type
         diagnosis = validated.diagnosis
         notes = validated.notes
+        symptoms = validated.symptoms
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 
@@ -213,6 +234,7 @@ async def upload_report(
         report_title=report_title,
         report_type=report_type,
         notes=notes,
+        symptoms=symptoms,
         file=file,
         user_id=current_user.id,
     )

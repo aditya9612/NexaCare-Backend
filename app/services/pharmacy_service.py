@@ -34,6 +34,7 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceResponse,
     PharmacyInvoiceItemResponse,
     PharmacyDashboardResponse,
+    PharmacyInventoryOverviewResponse,
     PrescriptionCreate,
     PrescriptionItemResponse,
     PrescriptionResponse,
@@ -703,3 +704,16 @@ class PharmacyService:
         counts = await self.medicine_repo.get_dashboard_counts()
         sales = await self.invoice_repo.get_dashboard_sales()
         return PharmacyDashboardResponse(**counts, **sales)
+
+    async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:
+        counts = await self.medicine_repo.get_inventory_counts()
+        daily_deductions = await self.invoice_repo.get_daily_stock_deductions()
+        most_selling = await self.invoice_repo.get_most_selling_medicines()
+        date_wise = await self.invoice_repo.get_date_wise_medicines()
+        
+        return PharmacyInventoryOverviewResponse(
+            **counts,
+            daily_stock_deductions=daily_deductions,
+            most_selling_medicines=most_selling,
+            date_wise_medicines=date_wise
+        )

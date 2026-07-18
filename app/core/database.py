@@ -71,8 +71,8 @@ async def init_db():
         doctor_medical_record_model,
     )
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # async with engine.begin() as conn:
+    #     await conn.run_sync(Base.metadata.create_all)
 
     # async with AsyncSessionLocal() as session:
     #     await _seed_roles_and_permissions(session)

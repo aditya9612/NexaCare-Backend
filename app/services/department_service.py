@@ -18,7 +18,13 @@ class DepartmentService:
         if existing:
             raise ConflictException(f"Department with name '{data.department_name}' already exists")
         
+        if data.department_code:
+            existing_code = await self.repo.get_by_code(data.department_code)
+            if existing_code:
+                raise ConflictException(f"Department with code '{data.department_code}' already exists")
+        
         department = Department(
+            department_code=data.department_code,
             department_name=data.department_name
         )
         department = await self.repo.create(department)
@@ -45,6 +51,12 @@ class DepartmentService:
         department = await self.repo.get_by_id(department_id)
         if not department:
             raise NotFoundException(f"Department with ID {department_id} not found")
+
+        if data.department_code is not None:
+            existing_code = await self.repo.get_by_code(data.department_code)
+            if existing_code and existing_code.department_id != department_id:
+                raise ConflictException(f"Department with code '{data.department_code}' already exists")
+            department.department_code = data.department_code
 
         if data.department_name is not None:
             existing = await self.repo.get_by_name(data.department_name)

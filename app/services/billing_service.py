@@ -364,11 +364,11 @@ class BillingService:
             billing.items.clear()
             if items_data:
                 for item_data in items_data:
-                    desc = item_data.description
-                    qty = item_data.quantity
-                    price = item_data.unit_price
-                    gst_r = item_data.gst_rate
-                    item_t = item_data.item_type
+                    desc = item_data.get("description")
+                    qty = item_data.get("quantity", 1)
+                    price = item_data.get("unit_price")
+                    gst_r = item_data.get("gst_rate", 18.0)
+                    item_t = item_data.get("item_type", "service")
                     _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
                     item = BillItem(
                         billing_id=billing.id,

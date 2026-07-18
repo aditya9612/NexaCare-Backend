@@ -21,6 +21,7 @@ from app.repositories.lab_repository import (
 from app.schemas.lab_schema import (
     CriticalAlert,
     LabReportApprove,
+    RejectLabReportRequest,
     LabReportCreate,
     LabReportResponse,
     LabTestCreate,
@@ -787,8 +788,8 @@ class LabService:
         report.status = LabReportStatus.APPROVED if data.approved else LabReportStatus.REJECTED
         report.approved_by = current_user.id
         report.approved_at = utc_now()
-        if data.summary:
-            report.summary = data.summary
+        if data.remark:
+            report.summary = data.remark
 
         order = await self.order_repo.get_by_id(report.test_order_id)
         if order and data.approved:
@@ -847,5 +848,36 @@ class LabService:
             "lab_report",
             user_id=current_user.id,
             resource_id=str(report.id),
-    )
+        )
         return LabReportResponse.model_validate(report)
+
+    async def reject_lab_report(
+        self,
+        report_id: int,
+        data: RejectLabReportRequest,
+        user_id: int
+    ) -> LabReportResponse:
+        report = await self.report_repo.get_by_id(report_id)
+        if not report:
+            raise NotFoundException("Lab report not found")
+
+        from app.core.constants import LabReportStatus
+        if report.status == LabReportStatus.APPROVED:
+            raise BadRequestException("Already approved report cannot be rejected")
+
+        report = await self.report_repo.reject_report(
+            report_id=report_id,
+            remarks=data.remarks,
+            rejected_by=user_id
+        )
+
+        await self.audit_repo.create(
+            action="REPORT_REJECTED",
+            resource="lab_report",
+            user_id=user_id,
+            resource_id=str(report.id),
+            details=data.remarks
+        )
+
+        return LabReportResponse.model_validate(report)
+

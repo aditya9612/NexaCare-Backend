@@ -95,6 +95,7 @@ class LabReport(Base, TimestampMixin):
     report_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

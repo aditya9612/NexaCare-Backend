@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import FileResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -132,36 +133,250 @@ async def reports(
     return APIResponse(message="Reports retrieved", data=result)
 
 
-@router.post("/export/pdf", response_model=APIResponse[ExportReportResponse], status_code=202)
+@router.get("/export/pdf")
 async def export_pdf(
-    data: ExportReportRequest,
+    report_type: str,
     db: DbSession,
     current_user: CurrentUser,
+    start_date: date | None = None,
+    end_date: date | None = None,
     _: User = Depends(require_permission("analytics", "export")),
 ):
-    result = await AnalyticsService(db).request_export(data, current_user.id)
-    return APIResponse(message="PDF export queued", data=result)
+    from app.services.analytics_service import AnalyticsService
+    from app.schemas.analytics_schema import ExportReportRequest
+    from app.models.analytics_model import ReportExport, ReportExportFormat, ReportExportStatus
+    from app.core.exceptions import NotFoundException
+    import json
+    import os
+
+    filters = {}
+    if start_date:
+        filters["start_date"] = start_date.isoformat()
+    if end_date:
+        filters["end_date"] = end_date.isoformat()
+
+    data = ExportReportRequest(
+        report_type=report_type,
+        start_date=start_date,
+        end_date=end_date,
+        filters=filters
+    )
+
+    service = AnalyticsService(db)
+    export = ReportExport(
+        report_type=data.report_type,
+        export_format=ReportExportFormat.PDF,
+        status=ReportExportStatus.PENDING,
+        filters=json.dumps(data.filters or {}),
+        requested_by=current_user.id,
+    )
+    export = await service.repo.create_export(export)
+    await service.process_export(export.id)
+    await db.refresh(export)
+
+    def resolve_disk_path(path_str: str | None) -> str | None:
+        if not path_str:
+            return None
+        p = path_str.replace("\\", "/")
+        if p.startswith("/"):
+            p = p.lstrip("/")
+        if p.startswith("uploads/"):
+            return os.path.join("app", p)
+        return p
+
+    disk_path = resolve_disk_path(export.file_path)
+    if not disk_path or not os.path.exists(disk_path):
+        raise NotFoundException("Exported PDF file not found or generation failed")
+
+    return FileResponse(
+        disk_path,
+        media_type="application/pdf",
+        filename=f"{report_type}_report_{export.id}.pdf",
+    )
 
 
-@router.post("/export/excel", response_model=APIResponse[ExportReportResponse], status_code=202)
+@router.get("/export/excel")
 async def export_excel(
-    data: ExportReportRequest,
+    report_type: str,
     db: DbSession,
     current_user: CurrentUser,
+    start_date: date | None = None,
+    end_date: date | None = None,
     _: User = Depends(require_permission("analytics", "export")),
 ):
-    result = await AnalyticsService(db).request_export_excel(data, current_user.id)
-    return APIResponse(message="Excel export queued", data=result)
+    from app.services.analytics_service import AnalyticsService
+    from app.schemas.analytics_schema import ExportReportRequest
+    from app.models.analytics_model import ReportExport, ReportExportFormat, ReportExportStatus
+    from app.core.exceptions import NotFoundException
+    import json
+    import os
+
+    filters = {}
+    if start_date:
+        filters["start_date"] = start_date.isoformat()
+    if end_date:
+        filters["end_date"] = end_date.isoformat()
+
+    data = ExportReportRequest(
+        report_type=report_type,
+        start_date=start_date,
+        end_date=end_date,
+        filters=filters
+    )
+
+    service = AnalyticsService(db)
+    export = ReportExport(
+        report_type=data.report_type,
+        export_format=ReportExportFormat.EXCEL,
+        status=ReportExportStatus.PENDING,
+        filters=json.dumps(data.filters or {}),
+        requested_by=current_user.id,
+    )
+    export = await service.repo.create_export(export)
+    await service.process_export(export.id)
+    await db.refresh(export)
+
+    def resolve_disk_path(path_str: str | None) -> str | None:
+        if not path_str:
+            return None
+        p = path_str.replace("\\", "/")
+        if p.startswith("/"):
+            p = p.lstrip("/")
+        if p.startswith("uploads/"):
+            return os.path.join("app", p)
+        return p
+
+    disk_path = resolve_disk_path(export.file_path)
+    if not disk_path or not os.path.exists(disk_path):
+        raise NotFoundException("Exported Excel file not found or generation failed")
+
+    # Dynamically select media_type and filename based on file extension
+    ext = os.path.splitext(disk_path)[1].lower()
+    if ext == ".xlsx":
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = f"{report_type}_report_{export.id}.xlsx"
+    elif ext == ".csv":
+        media_type = "text/csv"
+        filename = f"{report_type}_report_{export.id}.csv"
+    else:
+        media_type = "application/octet-stream"
+        filename = f"{report_type}_report_{export.id}{ext}"
+
+    return FileResponse(
+        disk_path,
+        media_type=media_type,
+        filename=filename,
+    )
 
 
-@router.get("/exports", response_model=APIResponse[PaginatedResult[ExportListItem]])
+@router.get("/exports", response_model=None)
 async def list_exports(
     db: DbSession,
     current_user: CurrentUser,
     page: int = 1,
     size: int = 20,
     report_type: str | None = None,
+    export_id: int | None = None,
     _: User = Depends(require_permission("analytics", "read")),
 ):
+    from app.services.analytics_service import AnalyticsService
+    from app.core.exceptions import NotFoundException
+    from app.schemas.common_schema import APIResponse
+    import os
+
+    # If export_id is provided, download that file
+    if export_id is not None:
+        service = AnalyticsService(db)
+        export = await service.repo.get_export(export_id)
+        if not export:
+            raise NotFoundException("Export not found")
+            
+        def resolve_disk_path(path_str: str | None) -> str | None:
+            if not path_str:
+                return None
+            p = path_str.replace("\\", "/")
+            if p.startswith("/"):
+                p = p.lstrip("/")
+            if p.startswith("uploads/"):
+                return os.path.join("app", p)
+            return p
+
+        disk_path = resolve_disk_path(export.file_path)
+        if not disk_path or not os.path.exists(disk_path):
+            raise NotFoundException("Export file not found or generation not completed")
+
+        # Dynamically select media_type and filename based on file extension
+        ext = os.path.splitext(disk_path)[1].lower()
+        if ext == ".pdf":
+            media_type = "application/pdf"
+            filename = f"{export.report_type}_report_{export.id}.pdf"
+        elif ext == ".xlsx":
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            filename = f"{export.report_type}_report_{export.id}.xlsx"
+        elif ext == ".csv":
+            media_type = "text/csv"
+            filename = f"{export.report_type}_report_{export.id}.csv"
+        else:
+            media_type = "application/octet-stream"
+            filename = f"{export.report_type}_report_{export.id}{ext}"
+
+        return FileResponse(
+            disk_path,
+            media_type=media_type,
+            filename=filename,
+        )
+
     result = await AnalyticsService(db).list_exports(page, size, report_type)
     return APIResponse(message="Exports retrieved", data=result)
+
+
+@router.get("/exports/{export_id}/download")
+async def download_export(
+    export_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("analytics", "read")),
+):
+    from app.services.analytics_service import AnalyticsService
+    from app.core.exceptions import NotFoundException
+    import os
+
+    service = AnalyticsService(db)
+    export = await service.repo.get_export(export_id)
+    if not export:
+        raise NotFoundException("Export not found")
+        
+    def resolve_disk_path(path_str: str | None) -> str | None:
+        if not path_str:
+            return None
+        p = path_str.replace("\\", "/")
+        if p.startswith("/"):
+            p = p.lstrip("/")
+        if p.startswith("uploads/"):
+            return os.path.join("app", p)
+        return p
+
+    disk_path = resolve_disk_path(export.file_path)
+    if not disk_path or not os.path.exists(disk_path):
+        raise NotFoundException("Export file not found or generation not completed")
+
+    # Dynamically select media_type and filename based on file extension
+    ext = os.path.splitext(disk_path)[1].lower()
+    if ext == ".pdf":
+        media_type = "application/pdf"
+        filename = f"{export.report_type}_report_{export.id}.pdf"
+    elif ext == ".xlsx":
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = f"{export.report_type}_report_{export.id}.xlsx"
+    elif ext == ".csv":
+        media_type = "text/csv"
+        filename = f"{export.report_type}_report_{export.id}.csv"
+    else:
+        media_type = "application/octet-stream"
+        filename = f"{export.report_type}_report_{export.id}{ext}"
+
+    return FileResponse(
+        disk_path,
+        media_type=media_type,
+        filename=filename,
+    )

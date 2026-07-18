@@ -478,21 +478,19 @@ class LabService:
         current_user,
         document: UploadFile | None = None,
     ) -> TestResultResponse:
-        order = await self.order_repo.get_by_id(data.test_order_id)
-        if not order:
-            raise NotFoundException("Test order not found")
- 
-
-        # Sample must be collected before entering result
-        sample = await self.sample_repo.get_by_test_order(data.test_order_id)
-
+        sample = await self.sample_repo.get_by_id(data.sample_id)
         if not sample:
-            raise BadRequestException("Sample not found for this test order")
+            raise NotFoundException("Sample not found")
 
         if sample.status != SampleStatus.COLLECTED:
             raise BadRequestException(
                 "You cannot enter test result before collecting sample"
             )
+
+        order = await self.order_repo.get_by_id(sample.test_order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
@@ -524,12 +522,16 @@ class LabService:
 
             document_url = file_path
 
+        dump_data = data.model_dump()
+        dump_data.pop("sample_id", None)
+        dump_data["test_order_id"] = sample.test_order_id
+
         result = TestResult(
             entered_by=current_user.id,
             entered_at=utc_now(),
             status="completed",
             document_url=document_url,
-            **data.model_dump(),
+            **dump_data,
         )
 
         result = await self.result_repo.create(result)
@@ -632,28 +634,27 @@ class LabService:
     
     # --- Reports ---
     async def create_report(self, data: LabReportCreate, current_user) -> LabReportResponse:
-        order = await self.order_repo.get_by_id(data.test_order_id)
+        result = await self.result_repo.get_by_id(data.test_result_id)
+        if not result:
+            raise NotFoundException("Test result not found")
+
+        order = await self.order_repo.get_by_id(result.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
-        sample = await self.sample_repo.get_by_test_order(data.test_order_id)
+
+        sample = await self.sample_repo.get_by_test_order(result.test_order_id)
 
         if not sample or sample.status != SampleStatus.COLLECTED:
             raise BadRequestException(
                 "Cannot create lab report before collecting sample"
             )
 
-        result = await self.result_repo.get_by_test_order(data.test_order_id)
-
-        if not result:
-            raise BadRequestException(
-                "Cannot create lab report before entering test results"
-            )
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
             staff_result = await self.db.execute(
                 select(Staff).where(Staff.email == current_user.email)
-           )
+            )
             staff = staff_result.scalar_one_or_none()
 
             if not staff or not staff.department_id:
@@ -665,7 +666,7 @@ class LabService:
                 )        
                
         report = LabReport(
-            test_order_id=data.test_order_id,
+            test_order_id=result.test_order_id,
             report_number=generate_lab_report_number(),
             summary=data.summary,
             status=LabReportStatus.DRAFT,

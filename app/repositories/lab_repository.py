@@ -363,6 +363,23 @@ class LabReportRepository:
         await self.db.refresh(report)
         return report
 
+    async def reject_report(
+        self,
+        report_id: int,
+        remarks: str,
+        rejected_by: int
+    ) -> LabReport | None:
+        report = await self.get_by_id(report_id)
+        if not report:
+            return None
+        from app.core.constants import LabReportStatus
+        report.status = LabReportStatus.REJECTED
+        report.remarks = remarks
+        await self.db.flush()
+        await self.db.refresh(report)
+        return report
+
+
     async def get_upcoming_lab_reports(self, doctor_id: int, limit: int = 10) -> list[LabReport]:
         from app.core.constants import LabReportStatus
         query = (

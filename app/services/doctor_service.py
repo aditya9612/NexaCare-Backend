@@ -349,6 +349,14 @@ class DoctorService:
         await self.get_by_id(doctor_id)
         if data.start_time >= data.end_time:
             raise ConflictException("Start time must be before end time")
+
+        # Check for overlaps
+        existing_schedules = await self.repo.get_schedule(doctor_id)
+        for sched in existing_schedules:
+            if sched.day_of_week == data.day_of_week:
+                if not (data.end_time <= sched.start_time or data.start_time >= sched.end_time):
+                    raise ConflictException("Schedule overlaps with an existing slot")
+
         schedule = DoctorSchedule(doctor_id=doctor_id, **data.model_dump())
         schedule = await self.repo.add_schedule(schedule)
         await self.audit_repo.create("create", "doctor_schedules", user_id=user_id, resource_id=str(schedule.id))

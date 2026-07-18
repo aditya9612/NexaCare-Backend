@@ -186,11 +186,10 @@ class PharmacyService:
         if appointment.appointment_date is not None and appointment.appointment_date > date.today():
             raise BadRequestException("Cannot create prescription for future date appointments")
 
-        # 3c. Verify appointment is completed
+        # 3c. Verify appointment is confirmed or completed
         appointment_status = (appointment.appointment_status or "").strip().lower()
-        completed_status = AppointmentStatus.COMPLETED.strip().lower()
-        if appointment_status != completed_status:
-            raise BadRequestException("Prescription can be created only for completed appointments.")
+        if appointment_status not in ["confirmed", "completed"]:
+            raise BadRequestException("Prescription can only be created for confirmed or completed appointments.")
 
         # 4. Verify no prescription exists for this appointment
         existing_rx = await self.db.scalar(

@@ -171,11 +171,26 @@ class StockTransactionRepository:
             query = query.where(StockTransaction.transaction_type == transaction_type)
         return (await self.db.scalar(query)) or 0
 
+    async def get_by_id(self, transaction_id: int) -> StockTransaction | None:
+        result = await self.db.execute(
+            select(StockTransaction).where(StockTransaction.id == transaction_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, transaction: StockTransaction) -> StockTransaction:
         self.db.add(transaction)
         await self.db.flush()
         await self.db.refresh(transaction)
         return transaction
+
+    async def update(self, transaction: StockTransaction) -> StockTransaction:
+        await self.db.flush()
+        await self.db.refresh(transaction)
+        return transaction
+
+    async def delete(self, transaction: StockTransaction) -> None:
+        await self.db.delete(transaction)
+        await self.db.flush()
 
     async def get_consumption_report(self, start, end) -> list[dict]:
         result = await self.db.execute(
@@ -241,6 +256,17 @@ class WarehouseRepository:
         await self.db.flush()
         await self.db.refresh(warehouse)
         return warehouse
+
+    async def update(self, warehouse: Warehouse) -> Warehouse:
+        await self.db.flush()
+        await self.db.refresh(warehouse)
+        return warehouse
+
+    async def soft_delete(self, warehouse: Warehouse) -> None:
+        warehouse.is_deleted = True
+        warehouse.deleted_at = utc_now()
+        warehouse.is_active = False
+        await self.db.flush()
 
 
 class ReorderAlertRepository:

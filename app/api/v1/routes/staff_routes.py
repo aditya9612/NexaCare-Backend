@@ -10,6 +10,8 @@ from app.schemas.staff_schema import (
     StaffResponse,
     StaffStatusUpdate,
     StaffUpdate,
+    StaffScheduleCreate,
+    StaffScheduleResponse,
 )
 from app.services.staff_service import StaffService
 from app.utils.pagination import PaginatedResult
@@ -110,3 +112,55 @@ async def delete_staff(
 ):
     await StaffService(db).delete_staff(staff_id, current_user.id)
     return APIResponse(message="Staff soft deleted successfully", data=MessageResponse(message="Soft deleted"))
+
+
+@router.get("/{staff_id}/schedule", response_model=APIResponse[List[StaffScheduleResponse]])
+async def get_staff_schedule(
+    staff_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("staff", "read")),
+):
+    schedule = await StaffService(db).get_schedule(staff_id)
+    return APIResponse(message="Schedule retrieved", data=schedule)
+
+
+@router.post("/{staff_id}/schedule", response_model=APIResponse[StaffScheduleResponse], status_code=status.HTTP_201_CREATED)
+async def add_staff_schedule(
+    staff_id: int,
+    data: StaffScheduleCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("staff", "update")),
+):
+    schedule = await StaffService(db).add_schedule(staff_id, data, current_user.id)
+    return APIResponse(message="Schedule added", data=schedule)
+
+
+@router.delete("/{staff_id}/schedule", response_model=APIResponse[MessageResponse])
+async def delete_all_staff_schedules(
+    staff_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("staff", "delete")),
+):
+    await StaffService(db).delete_all_schedules(staff_id, current_user.id)
+    return APIResponse(
+        message="All schedule slots removed successfully",
+        data=MessageResponse(message="All schedule slots removed"),
+    )
+
+
+@router.delete("/{staff_id}/schedule/{slot_id}", response_model=APIResponse[MessageResponse])
+async def delete_staff_schedule_slot(
+    staff_id: int,
+    slot_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("staff", "delete")),
+):
+    await StaffService(db).delete_schedule_slot(staff_id, slot_id, current_user.id)
+    return APIResponse(
+        message="Schedule slot removed successfully",
+        data=MessageResponse(message="Schedule slot removed"),
+    )

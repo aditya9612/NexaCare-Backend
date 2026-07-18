@@ -341,13 +341,31 @@ class BedAllocationService:
 
         patient = await self.get_patient(data.patientId)
 
+        if data.admissionDate.date() < utc_now().date():
+            raise BadRequestException("Admission date cannot be in the past.")
+
         from app.models.appointment_model import Appointment
-        from sqlalchemy import select, func
-        appt_exists = await self.db.scalar(
-            select(func.count(Appointment.id)).where(Appointment.patient_id == patient.id)
+        from sqlalchemy import select, desc
+        stmt = (
+            select(Appointment)
+            .where(Appointment.patient_id == patient.id)
+            .order_by(desc(Appointment.appointment_date), desc(Appointment.appointment_time))
+            .limit(1)
         )
-        if not appt_exists:
-            raise BadRequestException("Cannot allocate bed: Patient has no booked appointment.")
+        res = await self.db.execute(stmt)
+        appointment = res.scalar_one_or_none()
+
+        if not appointment:
+            raise HTTPException(
+                status_code=404,
+                detail="No appointment found for this patient."
+            )
+
+        if appointment.appointment_status == "Cancelled":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate bed for a cancelled appointment."
+            )
 
         bed.status = "Occupied"
         bed.patient_id = patient.id

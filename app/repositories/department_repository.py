@@ -24,6 +24,12 @@ class DepartmentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_code(self, code: str) -> Department | None:
+        result = await self.db.execute(
+            select(Department).where(Department.department_code == code)
+        )
+        return result.scalar_one_or_none()
+
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[Department]:
         result = await self.db.execute(
             select(Department).offset(skip).limit(limit)

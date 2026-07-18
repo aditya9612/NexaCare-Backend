@@ -7,6 +7,7 @@ from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.lab_schema import (
     CriticalAlert,
     LabReportApprove,
+    RejectLabReportRequest,
     LabReportCreate,
     LabReportResponse,
     LabTestCreate,
@@ -355,6 +356,18 @@ async def approve_lab_report(
 ):
     report = await LabService(db).approve_report(report_id, data,  current_user)
     return APIResponse(message="Lab report processed", data=report)
+
+
+@router.patch("/reports/{report_id}/reject", response_model=APIResponse[LabReportResponse])
+async def reject_lab_report(
+    report_id: int,
+    data: RejectLabReportRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    report = await LabService(db).reject_lab_report(report_id, data, current_user.id)
+    return APIResponse(message="Lab report rejected successfully.", data=report)
 
 
 @router.get("/reports/{report_id}/download")

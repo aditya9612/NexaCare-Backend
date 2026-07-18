@@ -23,6 +23,7 @@ from app.schemas.doctor_schema import (
     DoctorResponse,
     DoctorScheduleCreate,
     DoctorScheduleResponse,
+    DoctorScheduleUpdate,
     DoctorUpdate,
 )
 from app.utils.file_upload import save_upload
@@ -421,3 +422,53 @@ class DoctorService:
 
         await self.repo.delete_schedule_slot(slot)
         await self.audit_repo.create("delete", "doctor_schedules", user_id=user_id, resource_id=str(slot_id))
+
+    async def update_schedule_slot(
+        self, doctor_id: int, slot_id: int, data: DoctorScheduleUpdate, user_id: int
+    ) -> DoctorScheduleResponse:
+        await self.get_by_id(doctor_id)
+        slot = await self.repo.get_schedule_slot(doctor_id, slot_id)
+        if not slot:
+            raise NotFoundException("Schedule slot not found")
+
+        update_data = data.model_dump(exclude_unset=True)
+        if not update_data:
+            return DoctorScheduleResponse.model_validate(slot)
+
+        new_day = update_data.get("day_of_week", slot.day_of_week)
+        new_start = update_data.get("start_time", slot.start_time)
+        new_end = update_data.get("end_time", slot.end_time)
+
+        if new_start >= new_end:
+            raise ConflictException("Start time must be before end time")
+
+        existing_schedules = await self.repo.get_schedule(doctor_id)
+        for sched in existing_schedules:
+            if sched.id != slot_id and sched.day_of_week == new_day:
+                if not (new_end <= sched.start_time or new_start >= sched.end_time):
+                    raise ConflictException("Schedule overlaps with an existing slot")
+
+        for key, val in update_data.items():
+            setattr(slot, key, val)
+
+        slot = await self.repo.update_schedule_slot(slot)
+        await self.audit_repo.create("update", "doctor_schedules", user_id=user_id, resource_id=str(slot.id))
+        return DoctorScheduleResponse.model_validate(slot)
+
+    async def update_doctor_schedule(
+        self, doctor_id: int, data_list: list[DoctorScheduleCreate], user_id: int
+    ) -> list[DoctorScheduleResponse]:
+        await self.get_by_id(doctor_id)
+        await self.repo.delete_all_schedules(doctor_id)
+
+        created_slots = []
+        for slot_data in data_list:
+            if slot_data.start_time >= slot_data.end_time:
+                raise ConflictException(f"Start time must be before end time for day {slot_data.day_of_week + 1}")
+            schedule = DoctorSchedule(doctor_id=doctor_id, **slot_data.model_dump())
+            schedule = await self.repo.add_schedule(schedule)
+            created_slots.append(schedule)
+
+        await self.audit_repo.create("update", "doctor_schedules", user_id=user_id, resource_id=str(doctor_id))
+        return [DoctorScheduleResponse.model_validate(s) for s in created_slots]
+

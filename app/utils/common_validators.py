@@ -9,17 +9,28 @@ def validate_full_name(v: Optional[str], field_name: str = "Full name") -> Optio
     if v is None:
         return v
 
-    v = v.strip()
+    stripped = v.strip()
 
-    if not v or v.lower() == "null":
+    if not stripped or stripped.lower() in ("null", "string"):
+        if field_name == "Full name":
+            raise ValueError("Full name cannot be empty or only spaces")
         raise ValueError(f"{field_name} cannot be blank or 'null'")
 
-    if not re.match(r"^[a-zA-Z\s\-\'\.]+$", v):
+    if "  " in v or "  " in stripped:
+        raise ValueError(f"{field_name} must contain only alphabetic characters and single spaces between words")
+
+    if re.search(r"\d", stripped):
+        raise ValueError(f"{field_name} must contain only alphabetic characters and single spaces between words")
+
+    if not re.match(r"^[a-zA-Z\s\-\'\.]+$", stripped):
         raise ValueError(
-            f"{field_name} must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes"
+            f"{field_name} must contain only alphabetic characters and single spaces between words"
         )
 
-    return v
+    return stripped
+
+
+
 
 
 def validate_mobile(v: Optional[str], field_name: str = "Phone number") -> Optional[str]:
@@ -28,11 +39,11 @@ def validate_mobile(v: Optional[str], field_name: str = "Phone number") -> Optio
 
     v = v.strip()
 
-    if not v or v.lower() == "null":
+    if not v or v.lower() in ("null", "string"):
         raise ValueError(f"{field_name} cannot be blank or 'null'")
 
     if " " in v:
-        raise ValueError(f"{field_name} should not contain spaces")
+        raise ValueError(f"{field_name} must not contain spaces")
 
     raw_num = v
 
@@ -41,16 +52,18 @@ def validate_mobile(v: Optional[str], field_name: str = "Phone number") -> Optio
     elif v.startswith("91") and len(v) == 12:
         raw_num = v[2:]
 
-    if len(raw_num) != 10:
-        raise ValueError(f"{field_name} must contain exactly 10 digits")
-
     if not raw_num.isdigit():
         raise ValueError(f"{field_name} must contain only numeric digits")
 
-    if raw_num[0] not in {"6", "7", "8", "9"}:
-        raise ValueError(f"{field_name} must start with 6, 7, 8, or 9 (Indian mobile format)")
+    if len(raw_num) != 10:
+        raise ValueError(f"{field_name} must be exactly 10 digits")
 
-    return raw_num
+    if raw_num[0] not in {"6", "7", "8", "9"}:
+        raise ValueError(f"{field_name} must start with 6, 7, 8, or 9")
+
+    return f"+91{raw_num}"
+
+
 
 
 def validate_password(v: str) -> str:

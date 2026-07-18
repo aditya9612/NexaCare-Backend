@@ -45,3 +45,40 @@ class LabDashboardResponse(BaseModel):
     recent_test_orders: List[RecentTestOrder]
     critical_alerts: List[LabDashboardCriticalAlert]
     pending_report_approvals: List[PendingReportApproval]
+
+
+class CategoryVolumeMetric(BaseModel):
+    category: str
+    count: int
+    percentage: float = 0.0
+
+
+class TurnaroundTrendMetric(BaseModel):
+    label: str
+    avg_hours: float
+
+
+class CategoryPerformanceMetric(BaseModel):
+    category: str
+    total_tests: int
+    approved_reports: int
+    avg_turnaround_hours: float
+    completion_rate: float
+    abnormal_rate: float
+
+
+class LabAnalyticsSummaryResponse(BaseModel):
+    total_approved_reports: int
+    approved_reports_growth_percentage: float = 0.0
+    approved_reports_subtext: str = "+0% from previous period"
+    avg_turnaround_hours: float
+    turnaround_target_benchmark_hours: float = 3.0
+    turnaround_subtext: str = "Target benchmark: < 3.0 Hours"
+    abnormal_detect_rate: float
+    abnormal_detect_subtext: str = "Includes critical STAT values"
+    completion_rate: float
+    completion_rate_subtext: str = "Specimen to verified report ratio"
+    volume_by_category: List[CategoryVolumeMetric]
+    turnaround_time_trend: List[TurnaroundTrendMetric]
+    category_performance_metrics: List[CategoryPerformanceMetric]
+

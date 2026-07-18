@@ -16,6 +16,7 @@ from app.schemas.doctor_schema import (
     DoctorResponse,
     DoctorScheduleCreate,
     DoctorScheduleResponse,
+    DoctorScheduleUpdate,
     DoctorUpdate,
 )
 from app.schemas.doctor_medical_record_schema import (
@@ -532,7 +533,34 @@ async def add_doctor_schedule(
     return APIResponse(message="Schedule added", data=schedule)
 
 
+@router.put("/{doctor_id}/schedule", response_model=APIResponse[List[DoctorScheduleResponse]])
+async def update_doctor_schedule(
+    doctor_id: int,
+    data: List[DoctorScheduleCreate],
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "update")),
+):
+    schedule = await DoctorService(db).update_doctor_schedule(doctor_id, data, current_user.id)
+    return APIResponse(message="Doctor schedule updated successfully", data=schedule)
+
+
+@router.put("/{doctor_id}/schedule/{slot_id}", response_model=APIResponse[DoctorScheduleResponse])
+@router.patch("/{doctor_id}/schedule/{slot_id}", response_model=APIResponse[DoctorScheduleResponse])
+async def update_doctor_schedule_slot(
+    doctor_id: int,
+    slot_id: int,
+    data: DoctorScheduleUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "update")),
+):
+    schedule = await DoctorService(db).update_schedule_slot(doctor_id, slot_id, data, current_user.id)
+    return APIResponse(message="Schedule slot updated successfully", data=schedule)
+
+
 @router.delete("/{doctor_id}/schedule", response_model=APIResponse[MessageResponse])
+
 async def delete_all_doctor_schedules(
     doctor_id: int,
     db: DbSession,

@@ -36,6 +36,9 @@ class DoctorDashboardResponse(BaseModel):
     completed_consultations: int
     prescription_summary: PrescriptionSummary
     upcoming_lab_reports: list[LabReportResponse]
+    pending_lab_reports_count: int = 0
+    pending_lab_reports: list[LabReportResponse] = []
+
 
 
 class PatientDashboardResponse(BaseModel):

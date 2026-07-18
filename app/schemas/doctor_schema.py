@@ -91,14 +91,15 @@ def validate_availability_status(v: str | None, allow_unavailable: bool = True) 
 
 def validate_bio_field(v: str | None) -> str | None:
     if v is None:
-        return v
-    if not v.strip() or v.lower() == "null":
-        raise ValueError("Bio cannot be empty or 'null'")
-    if len(v) < 10:
+        return None
+    v_clean = v.strip()
+    if not v_clean or v_clean.lower() in ("null", "string"):
+        return None
+    if len(v_clean) < 10:
         raise ValueError("Bio must be at least 10 characters in length")
-    if len(v) > 500:
+    if len(v_clean) > 500:
         raise ValueError("Bio must not exceed 500 characters in length")
-    return v
+    return v_clean
 
 
 def validate_dob_field(v: date | None) -> date | None:
@@ -132,14 +133,13 @@ def validate_license_number(v: str | None) -> str | None:
     return v
 
 
-def validate_optional_string(v: str | None, field_name: str) -> str | None:
+def validate_optional_string(v: str | None, field_name: str = "Field") -> str | None:
     if v is None:
-        return v
-    if not v.strip() or v.lower() == "null" or v.lower() == "string":
-        raise ValueError(f"{field_name} cannot be empty, 'null', or 'string'")
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError(f"{field_name} must not contain leading or trailing spaces")
-    return v
+        return None
+    v_clean = v.strip()
+    if not v_clean or v_clean.lower() in ("null", "string"):
+        return None
+    return v_clean
 def trim_string_values(data: any) -> any:
     if isinstance(data, dict):
         for k, v in data.items():
@@ -483,6 +483,21 @@ class DoctorScheduleCreate(BaseSchema):
         return self
 
 
+class DoctorScheduleUpdate(BaseSchema):
+    day_of_week: int | None = Field(None, ge=1, le=7)
+    start_time: time | None = None
+    end_time: time | None = None
+    slot_duration_minutes: int | None = Field(None, gt=0, le=180)
+    is_active: bool | None = None
+
+    @field_validator("day_of_week")
+    @classmethod
+    def map_day_of_week_to_db(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        return v - 1
+
+
 class DoctorScheduleResponse(BaseSchema):
     id: int
     doctor_id: int
@@ -499,3 +514,4 @@ class DoctorScheduleResponse(BaseSchema):
 
 
 DoctorListResponse = PaginatedResponse[DoctorResponse]
+

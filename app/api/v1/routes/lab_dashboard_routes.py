@@ -6,13 +6,13 @@ from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.core.exceptions import BadRequestException
 from app.schemas.common_schema import APIResponse
-from app.schemas.lab_dashboard_schema import LabDashboardResponse
+from app.schemas.lab_dashboard_schema import LabDashboardResponse, LabAnalyticsSummaryResponse
 from app.services.lab_dashboard_service import LabDashboardService
 from app.utils.lab_dashboard_pdf import generate_lab_dashboard_pdf
 
 router = APIRouter()
 
-ALLOWED_FILTERS = {"today", "month", "3_month", "overall", "custom"}
+ALLOWED_FILTERS = {"today", "7_days", "30_days", "month_to_date", "month", "3_month", "overall", "custom"}
 
 def _validate_filter_params(
     time_filter: str,
@@ -44,6 +44,26 @@ async def get_lab_dashboard(
         end_date=end_date
     )
     return APIResponse(message="Lab dashboard data retrieved", data=dashboard_data)
+
+
+@router.get("/analytics", response_model=APIResponse[LabAnalyticsSummaryResponse])
+async def get_lab_analytics_dashboard(
+    db: DbSession,
+    current_user: CurrentUser,
+    time_filter: str = Query("7_days", alias="filter"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    _validate_filter_params(time_filter, start_date, end_date)
+
+    analytics_data = await LabDashboardService(db).get_analytics_data(
+        time_filter=time_filter,
+        start_date=start_date,
+        end_date=end_date
+    )
+    return APIResponse(message="Lab reports & analytics retrieved", data=analytics_data)
+
 
 @router.get("/download/pdf")
 async def download_lab_dashboard_pdf(

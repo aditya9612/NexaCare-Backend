@@ -216,7 +216,7 @@ class ActivateAccountRequest(EmailOrPhoneRequest):
 class ProfileUpdateRequest(BaseModel):
     full_name: str | None = None
     phone: str | None = Field(default=None, min_length=10, max_length=20)
-    gender: str | None = None
+    gender: GenderOption | None = None
     date_of_birth: date | None = None
     profile_image: str | None = None
 
@@ -226,6 +226,16 @@ class ProfileUpdateRequest(BaseModel):
         if value is None:
             return value
         return common_validate_full_name(value)
+
+    @field_validator("profile_image")
+    @classmethod
+    def validate_profile_image(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        v_str = value.strip().lower()
+        if v_str in ("", "null", "string", "none"):
+            return None
+        return value.strip()
 
     @field_validator("date_of_birth")
     @classmethod
@@ -238,6 +248,7 @@ class ProfileUpdateRequest(BaseModel):
         if value is None:
             return value
         return validate_mobile(value)
+
 
 
 class UserProfileResponse(BaseSchema):

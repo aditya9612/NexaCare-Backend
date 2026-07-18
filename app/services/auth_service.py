@@ -396,9 +396,12 @@ class AuthService:
         if not user:
             raise NotFoundException("User not found")
         if not user.is_verified:
-            raise BadRequestException("Please verify OTP before activating your account.")
+            if not data.otp or not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+                raise BadRequestException("Invalid or expired OTP. Please verify OTP before activating your account.")
+            user.is_verified = True
         user.is_active = True
         await self.repo.update(user)
+
 
     async def get_profile(self, user: User) -> UserProfileResponse:
         return UserProfileResponse(

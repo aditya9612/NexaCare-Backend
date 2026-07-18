@@ -145,10 +145,24 @@ class DashboardService:
 
         from app.repositories.lab_repository import LabReportRepository
         from app.schemas.lab_schema import LabReportResponse
+        from app.models.lab_model import LabReport, TestOrder
+        from app.core.constants import LabReportStatus
 
         upcoming_labs = await LabReportRepository(self.db).get_upcoming_lab_reports(
             doctor_id=doctor.id, limit=10
         )
+        lab_reports_list = [LabReportResponse.model_validate(r) for r in upcoming_labs]
+
+        pending_labs_count_val = await self.db.scalar(
+            select(func.count(LabReport.id))
+            .select_from(LabReport)
+            .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+            .where(
+                TestOrder.doctor_id == doctor.id,
+                TestOrder.is_deleted.is_(False),
+                LabReport.status != LabReportStatus.APPROVED,
+            )
+        ) or len(lab_reports_list)
 
         return DoctorDashboardResponse(
             today_patients=len(patient_ids),
@@ -160,8 +174,11 @@ class DashboardService:
                 dispensed_prescriptions=dispensed_prescriptions,
                 recent_prescriptions=recent_prescriptions
             ),
-            upcoming_lab_reports=[LabReportResponse.model_validate(r) for r in upcoming_labs]
+            upcoming_lab_reports=lab_reports_list,
+            pending_lab_reports_count=pending_labs_count_val,
+            pending_lab_reports=lab_reports_list,
         )
+
 
     async def patient_dashboard(self, user: User) -> PatientDashboardResponse:
         patient_result = await self.db.execute(

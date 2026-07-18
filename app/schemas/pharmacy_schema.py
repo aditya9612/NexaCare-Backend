@@ -453,6 +453,47 @@ class SalesReport(BaseSchema):
     top_medicines: List[dict]
 
 
+class PharmacyDashboardResponse(BaseSchema):
+    total_medicines: int
+    low_stock_alerts: int
+    expired_medicines_alerts: int
+    daily_sales: float
+    monthly_sales: float
+
+
+class DailyStockDeduction(BaseSchema):
+    date: date
+    deduction_quantity: int
+
+
+class MostSellingMedicine(BaseSchema):
+    medicine_id: int
+    name: str
+    generic_name: str | None = None
+    sku: str
+    total_sold_quantity: int
+
+
+class DateWiseMedicineItem(BaseSchema):
+    name: str
+    quantity: int
+
+
+class DateWiseMedicine(BaseSchema):
+    date: date
+    medicines: List[DateWiseMedicineItem]
+
+
+class PharmacyInventoryOverviewResponse(BaseSchema):
+    in_stock_medicines: int
+    low_stock_medicines: int
+    out_of_stock_medicines: int
+    expiring_medicines: int
+    daily_stock_deductions: List[DailyStockDeduction]
+    most_selling_medicines: List[MostSellingMedicine]
+    date_wise_medicines: List[DateWiseMedicine]
+
+
 class LowStockItemAlert(BaseSchema):
     id: int
     name: str

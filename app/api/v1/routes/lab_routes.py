@@ -249,9 +249,10 @@ async def delete_sample(
 async def enter_test_result(
     db: DbSession,
     current_user: CurrentUser,
-    test_order_id: int = Form(...),
+    sample_id: int = Form(...),
     parameter_name: str = Form(...),
     result_value: str = Form(...),
+    remark: str = Form(...),
     unit: str | None = Form(None),
     normal_range: str | None = Form(None),
     is_critical: bool = Form(False),
@@ -259,9 +260,10 @@ async def enter_test_result(
     _: User = Depends(require_permission("lab", "create")),
 ):
     data = TestResultCreate(
-        test_order_id=test_order_id,
+        sample_id=sample_id,
         parameter_name=parameter_name,
         result_value=result_value,
+        remark=remark,
         unit=unit,
         normal_range=normal_range,
         is_critical=is_critical,

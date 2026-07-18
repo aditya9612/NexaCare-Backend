@@ -111,15 +111,17 @@ class SampleResponse(BaseSchema):
 
 
 class TestResultCreate(BaseSchema):
-    test_order_id: int
+    sample_id: int
     parameter_name: str
     result_value: str
+    remark: str
     unit: str | None = None
     normal_range: str | None = None
     is_critical: bool = False
 
 
 class TestResultUpdate(BaseSchema):
+    remark: str
     parameter_name: str | None = None
     result_value: str | None = None
     unit: str | None = None
@@ -140,12 +142,13 @@ class TestResultResponse(BaseSchema):
     entered_by: int | None
     entered_at: datetime | None
     document_url: str | None
+    remark: str
     created_at: datetime
     
 
 
 class LabReportCreate(BaseSchema):
-    test_order_id: int
+    test_result_id: int
     summary: str | None = None
 
 

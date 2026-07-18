@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -37,6 +38,8 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceUpdate,
     PharmacyInvoiceResponse,
     PharmacyInvoiceItemResponse,
+    PharmacyDashboardResponse,
+    PharmacyInventoryOverviewResponse,
 
     PrescriptionCreate,
     PrescriptionItemResponse,
@@ -918,3 +921,21 @@ class PharmacyService:
             start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         data = await self.invoice_repo.get_sales_report(start, now)
         return SalesReport(period=period, top_medicines=[], **data)
+
+    async def get_dashboard_summary(self) -> PharmacyDashboardResponse:
+        counts = await self.medicine_repo.get_dashboard_counts()
+        sales = await self.invoice_repo.get_dashboard_sales()
+        return PharmacyDashboardResponse(**counts, **sales)
+
+    async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:
+        counts = await self.medicine_repo.get_inventory_counts()
+        daily_deductions = await self.invoice_repo.get_daily_stock_deductions()
+        most_selling = await self.invoice_repo.get_most_selling_medicines()
+        date_wise = await self.invoice_repo.get_date_wise_medicines()
+        
+        return PharmacyInventoryOverviewResponse(
+            **counts,
+            daily_stock_deductions=daily_deductions,
+            most_selling_medicines=most_selling,
+            date_wise_medicines=date_wise
+        )

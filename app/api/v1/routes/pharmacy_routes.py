@@ -15,6 +15,8 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceCreate,
     PharmacyInvoiceUpdate,
     PharmacyInvoiceResponse,
+    PharmacyDashboardResponse,
+    PharmacyInventoryOverviewResponse,
     PrescriptionCreate,
     PrescriptionResponse,
     PrescriptionUpdate,
@@ -447,3 +449,23 @@ async def sales_report(
 ):
     report = await PharmacyService(db).get_sales_report(period=period)
     return APIResponse(message="Sales report", data=report)
+
+
+@router.get("/dashboard/summary", response_model=APIResponse[PharmacyDashboardResponse])
+async def get_dashboard_summary(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    summary = await PharmacyService(db).get_dashboard_summary()
+    return APIResponse(message="Pharmacy dashboard summary retrieved", data=summary)
+
+
+@router.get("/inventory/overview", response_model=APIResponse[PharmacyInventoryOverviewResponse])
+async def get_inventory_overview(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    overview = await PharmacyService(db).get_inventory_overview()
+    return APIResponse(message="Pharmacy inventory overview retrieved", data=overview)

@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus
@@ -161,4 +161,27 @@ class AppointmentRepository:
                 Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
             )
         )
+        return list(result.scalars().all())
+
+    async def get_upcoming_appointments(self, doctor_id: int, limit: int = 10) -> list[Appointment]:
+        now = datetime.now()
+        current_date = now.date()
+        current_time = now.time()
+        query = (
+            select(Appointment)
+            .where(
+                Appointment.doctor_id == doctor_id,
+                Appointment.appointment_status == AppointmentStatus.CONFIRMED,
+                or_(
+                    Appointment.appointment_date > current_date,
+                    and_(
+                        Appointment.appointment_date == current_date,
+                        Appointment.appointment_time >= current_time,
+                    ),
+                ),
+            )
+            .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
         return list(result.scalars().all())

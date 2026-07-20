@@ -2,6 +2,7 @@ from datetime import date, datetime
 from pydantic import EmailStr, Field, field_validator, model_validator
 from app.schemas.common_schema import BaseSchema
 from app.schemas.auth_schema import GenderOption
+from app.utils.common_validators import validate_full_name as common_validate_full_name
 from app.utils.phone_utils import validate_phone_field
 
 class UserCreate(BaseSchema):
@@ -14,9 +15,17 @@ class UserCreate(BaseSchema):
     gender: GenderOption | None = None
     date_of_birth: date | None = None
 
-    @field_validator("full_name", "password")
+    @field_validator("full_name")
     @classmethod
-    def strip_strings(cls, value: str) -> str:
+    def validate_full_name(cls, value: str) -> str:
+        res = common_validate_full_name(value)
+        if res is None:
+            raise ValueError("Full name cannot be null")
+        return res
+
+    @field_validator("password")
+    @classmethod
+    def strip_password(cls, value: str) -> str:
         stripped = value.strip()
         if len(stripped) < 1:
             raise ValueError("Field cannot be empty or only spaces")
@@ -40,13 +49,11 @@ class UserUpdate(BaseSchema):
 
     @field_validator("full_name")
     @classmethod
-    def strip_strings(cls, value: str | None) -> str | None:
+    def validate_full_name(cls, value: str | None) -> str | None:
         if value is not None:
-            stripped = value.strip()
-            if len(stripped) < 1:
-                raise ValueError("Field cannot be empty or only spaces")
-            return stripped
+            return common_validate_full_name(value)
         return value
+
 
     @model_validator(mode="after")
     def validate_phone(self):

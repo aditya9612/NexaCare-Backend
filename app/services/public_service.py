@@ -3,13 +3,14 @@ from typing import List, Optional
 import os
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus, DayOfWeek
 from app.core.exceptions import ConflictException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.models.patient_model import Patient, PatientDocument
+from app.models.department_model import Department
 from app.models.doctor_model import Doctor, DoctorSchedule
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
@@ -54,7 +55,7 @@ class PublicService:
         
         slots_time = []
         if not schedules:
-            slots_time = DEFAULT_SLOTS[:]
+            return []
         else:
             for sched in schedules:
                 curr = datetime.combine(target_date, sched.start_time)
@@ -101,6 +102,7 @@ class PublicService:
 
     async def list_public_doctors(
         self,
+        department_id: Optional[int] = None,
         department: Optional[str] = None,
         specialty: Optional[str] = None,
         appointment_date: Optional[date] = None,
@@ -114,9 +116,46 @@ class PublicService:
             Doctor.is_deleted.is_(False),
             Doctor.availability_status == "available"
         )
+
+        resolved_department_id = department_id
+        if resolved_department_id is None and department:
+            if department.isdigit():
+                resolved_department_id = int(department)
+            else:
+                query = query.join(Doctor.department).where(
+                    Department.department_name.ilike(f"%{department.strip()}%")
+                )
+
+        if resolved_department_id is not None:
+            query = query.where(Doctor.department_id == resolved_department_id)
         
         if specialty:
-            query = query.where(Doctor.specialization.ilike(f"%{specialty}%"))
+            term = specialty.strip().lower()
+            variations = [term]
+            if term == "urology" or term == "urologist":
+                variations.extend(["urology", "urologist"])
+            elif term == "cardiology" or term == "cardiologist":
+                variations.extend(["cardiology", "cardiologist"])
+            elif term == "neurology" or term == "neurologist":
+                variations.extend(["neurology", "neurologist"])
+            elif term == "dermatology" or term == "dermatologist":
+                variations.extend(["dermatology", "dermatologist"])
+            elif term == "gynecology" or term == "gynecologist":
+                variations.extend(["gynecology", "gynecologist"])
+            elif term == "pediatrics" or term == "pediatrician":
+                variations.extend(["pediatrics", "pediatrician"])
+            elif term == "orthopedics" or term == "orthopedic" or term == "orthopedist":
+                variations.extend(["orthopedics", "orthopedic", "orthopedist"])
+            
+            from sqlalchemy import or_
+            # Make sure we outerjoin department if not already joined
+            query = query.outerjoin(Doctor.department)
+            
+            conds = []
+            for var in variations:
+                conds.append(Doctor.specialization.ilike(f"%{var}%"))
+                conds.append(Department.department_name.ilike(f"%{var}%"))
+            query = query.where(or_(*conds))
             
         result = await self.db.execute(query)
         doctors = result.scalars().all()
@@ -125,14 +164,35 @@ class PublicService:
         
         response_list = []
         for doc in doctors:
-            # Check department filter (can be ID or Name)
             dept_name = doc.department.department_name if doc.department else None
             if department:
                 matched_dept = False
                 if department.isdigit() and doc.department_id == int(department):
                     matched_dept = True
-                elif dept_name and department.lower() in dept_name.lower():
-                    matched_dept = True
+                elif dept_name:
+                    term = department.lower().strip()
+                    vars_check = [term]
+                    if term == "urology" or term == "urologist":
+                        vars_check.extend(["urology", "urologist"])
+                    elif term == "cardiology" or term == "cardiologist":
+                        vars_check.extend(["cardiology", "cardiologist"])
+                    elif term == "neurology" or term == "neurologist":
+                        vars_check.extend(["neurology", "neurologist"])
+                    elif term == "dermatology" or term == "dermatologist":
+                        vars_check.extend(["dermatology", "dermatologist"])
+                    elif term == "gynecology" or term == "gynecologist":
+                        vars_check.extend(["gynecology", "gynecologist"])
+                    elif term == "pediatrics" or term == "pediatrician":
+                        vars_check.extend(["pediatrics", "pediatrician"])
+                    elif term == "orthopedics" or term == "orthopedic" or term == "orthopedist":
+                        vars_check.extend(["orthopedics", "orthopedic", "orthopedist"])
+                    
+                    import re
+                    for vc in vars_check:
+                        pattern = rf"\b{re.escape(vc)}\b"
+                        if re.search(pattern, dept_name.lower()):
+                            matched_dept = True
+                            break
                 if not matched_dept:
                     continue
             
@@ -152,6 +212,7 @@ class PublicService:
                     name=f"Dr. {doc.first_name} {doc.last_name}",
                     specialty=doc.specialization,
                     department=dept_name,
+                    department_id=doc.department_id,
                     experience=doc.experience,
                     working_days=working_days,
                     weekly_schedule=weekly_schedule,
@@ -185,6 +246,18 @@ class PublicService:
         if doctor.availability_status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
             
+        # Verify doctor has an active schedule on the requested day of the week
+        day_of_week = data.date.weekday()
+        schedule_res = await self.db.execute(
+            select(DoctorSchedule).where(
+                DoctorSchedule.doctor_id == data.doctor_id,
+                DoctorSchedule.day_of_week == day_of_week,
+                DoctorSchedule.is_active.is_(True)
+            )
+        )
+        if not schedule_res.scalars().all():
+            raise ConflictException("Doctor is not scheduled to work on this day")
+
         conflict = await self.repo.exists_conflict(data.doctor_id, data.date, data.time_slot)
         if conflict:
             raise ConflictException("Doctor already has an appointment at this slot")
@@ -237,11 +310,13 @@ class PublicService:
         suggested_doc_id = None
         suggested_doc_name = None
         dept_name = None
+        dept_id = None
         
         if suggested_doctor:
             suggested_doc_id = suggested_doctor.id
             suggested_doc_name = f"Dr. {suggested_doctor.first_name} {suggested_doctor.last_name}"
             dept_name = suggested_doctor.department.department_name if suggested_doctor.department else None
+            dept_id = suggested_doctor.department_id
             
             target_date = date.today() + timedelta(days=1)
             available_times = await self.get_doctor_available_slots(suggested_doctor.id, target_date)
@@ -257,6 +332,7 @@ class PublicService:
             confidence_score=0.85,  # Placeholder score
             specialty=specialist,
             department=dept_name,
+            department_id=dept_id,
             suggested_doctor_id=suggested_doc_id,
             suggested_doctor_name=suggested_doc_name,
             available_slots=slots,

@@ -25,4 +25,5 @@ pytest-asyncio>=0.23.4
 xhtml2pdf>=0.2.17
 pyngrok
 groq
+google-genai>=1.0.0
 langgraph

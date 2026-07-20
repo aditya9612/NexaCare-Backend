@@ -21,6 +21,14 @@ class FloorType(str, Enum):
     ICU = "ICU"
     EMERGENCY = "Emergency"
     DELUXE = "Deluxe"
+    CLINICAL_FLOOR = "Clinical Floor"
+    PATIENT_WARD_FLOOR = "Patient Ward Floor"
+    SURGICAL_FLOOR = "Surgical Floor"
+    DIAGNOSTIC_FLOOR = "Diagnostic Floor"
+    ADMINISTRATIVE_FLOOR = "Administrative Floor"
+    SERVICE_FLOOR = "Service Floor"
+    PARKING_FLOOR = "Parking Floor"
+    UTILITY_FLOOR = "Utility Floor"
 
 
 class RoomType(str, Enum):
@@ -28,6 +36,8 @@ class RoomType(str, Enum):
     ICU = "ICU"
     EMERGENCY = "Emergency"
     DELUXE = "Deluxe"
+    PRIVATE = "Private"
+    SEMI_PRIVATE = "Semi-Private"
 
 
 class BedType(str, Enum):
@@ -35,9 +45,49 @@ class BedType(str, Enum):
     ICU = "ICU"
     VENTILATOR = "Ventilator"
     DELUXE = "Deluxe"
+    EMERGENCY = "Emergency"
+    PRIVATE = "Private"
+    SEMI_PRIVATE = "Semi-Private"
 
 
 # Bed Schemas
+def validate_bed_name(v: str | None) -> str | None:
+    if v is None:
+        return v
+    stripped = v.strip()
+    # Reject empty string, whitespace-only, and placeholders "null", "string"
+    if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+        raise ValueError("Bed name cannot be blank, 'null', or 'string'")
+    # Reject multiple consecutive spaces
+    if "  " in stripped:
+        raise ValueError("Bed name must not contain multiple consecutive spaces")
+    # Reject Unicode characters (must contain only ASCII)
+    if not stripped.isascii():
+        raise ValueError("Bed name must contain only standard ASCII characters")
+    # Allow only ASCII alphabets, numbers, spaces, hyphens, or slashes
+    import re
+    if not re.match(r"^[a-zA-Z0-9\s\-\/]+$", stripped):
+        raise ValueError("Bed name must contain only alphabetic characters, numbers, spaces, hyphens, or slashes")
+    return stripped
+
+
+def validate_description_or_notes(v: str | None, field_name: str) -> str | None:
+    if v is None:
+        return v
+    stripped = v.strip()
+    if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+        raise ValueError(f"{field_name} cannot be blank, 'null', or 'string'")
+    return stripped
+
+
+def validate_date_range(v: datetime | None, field_name: str) -> datetime | None:
+    if v is None:
+        return v
+    if v.year < 2000 or v.year > 2100:
+        raise ValueError(f"{field_name} must be a valid date between 2000 and 2100")
+    return v
+
+
 class BedCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     type: BedType
@@ -46,29 +96,21 @@ class BedCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: str) -> str:
-        stripped = value.strip()
-        if len(stripped) < 1:
-            raise ValueError("name cannot be empty or only spaces")
-        return stripped
+        res = validate_bed_name(value)
+        if res is None:
+            raise ValueError("Bed name is required")
+        return res
 
 
 class BedUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     type: Optional[BedType] = None
     status: Optional[BedStatus] = None
-    patient_id: Optional[int] = Field(None, gt=0)
-    allocation_time: Optional[datetime] = None
-    admission_date: Optional[datetime] = None
 
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            stripped = value.strip()
-            if len(stripped) < 1:
-                raise ValueError("name cannot be empty or only spaces")
-            return stripped
-        return value
+        return validate_bed_name(value)
 
 
 class BedResponse(BaseSchema):
@@ -86,6 +128,26 @@ class BedResponse(BaseSchema):
 
 
 # Room Schemas
+def validate_room_name(v: str | None) -> str | None:
+    if v is None:
+        return v
+    stripped = v.strip()
+    # Reject empty string, whitespace-only, and placeholders "null", "string"
+    if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+        raise ValueError("Room name cannot be blank, 'null', or 'string'")
+    # Reject multiple consecutive spaces
+    if "  " in stripped:
+        raise ValueError("Room name must not contain multiple consecutive spaces")
+    # Reject Unicode characters (must contain only ASCII)
+    if not stripped.isascii():
+        raise ValueError("Room name must contain only standard ASCII characters")
+    # Allow only ASCII alphabets and spaces
+    import re
+    if not re.match(r"^[a-zA-Z\s]+$", stripped):
+        raise ValueError("Room name must contain only alphabetic characters and spaces")
+    return stripped
+
+
 class RoomCreate(BaseModel):
     number: int = Field(..., ge=1)
     name: str = Field(..., min_length=1, max_length=100)
@@ -96,17 +158,15 @@ class RoomCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: str) -> str:
-        stripped = value.strip()
-        if len(stripped) < 1:
-            raise ValueError("name cannot be empty or only spaces")
-        return stripped
+        res = validate_room_name(value)
+        if res is None:
+            raise ValueError("Room name is required")
+        return res
 
     @field_validator("description")
     @classmethod
     def strip_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+        return validate_description_or_notes(value, "Description")
 
 
 class RoomUpdate(BaseModel):
@@ -119,19 +179,12 @@ class RoomUpdate(BaseModel):
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            stripped = value.strip()
-            if len(stripped) < 1:
-                raise ValueError("name cannot be empty or only spaces")
-            return stripped
-        return value
+        return validate_room_name(value)
 
     @field_validator("description")
     @classmethod
     def strip_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+        return validate_description_or_notes(value, "Description")
 
 
 class RoomResponse(BaseSchema):
@@ -148,6 +201,26 @@ class RoomResponse(BaseSchema):
 
 
 # Floor Schemas
+def validate_floor_name(v: str | None) -> str | None:
+    if v is None:
+        return v
+    stripped = v.strip()
+    # Reject empty string, whitespace-only, and placeholders "null", "string"
+    if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+        raise ValueError("Floor name cannot be blank, 'null', or 'string'")
+    # Reject multiple consecutive spaces
+    if "  " in stripped:
+        raise ValueError("Floor name must not contain multiple consecutive spaces")
+    # Reject Unicode characters (must contain only ASCII)
+    if not stripped.isascii():
+        raise ValueError("Floor name must contain only standard ASCII characters")
+    # Allow only ASCII alphabets and spaces
+    import re
+    if not re.match(r"^[a-zA-Z\s]+$", stripped):
+        raise ValueError("Floor name must contain only alphabetic characters and spaces")
+    return stripped
+
+
 class FloorCreate(BaseModel):
     number: int = Field(..., ge=0)
     name: str = Field(..., min_length=1, max_length=100)
@@ -158,17 +231,15 @@ class FloorCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: str) -> str:
-        stripped = value.strip()
-        if len(stripped) < 1:
-            raise ValueError("name cannot be empty or only spaces")
-        return stripped
+        res = validate_floor_name(value)
+        if res is None:
+            raise ValueError("Floor name is required")
+        return res
 
     @field_validator("description")
     @classmethod
     def strip_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+        return validate_description_or_notes(value, "Description")
 
 
 class FloorUpdate(BaseModel):
@@ -180,19 +251,12 @@ class FloorUpdate(BaseModel):
     @field_validator("name")
     @classmethod
     def strip_name(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            stripped = value.strip()
-            if len(stripped) < 1:
-                raise ValueError("name cannot be empty or only spaces")
-            return stripped
-        return value
+        return validate_floor_name(value)
 
     @field_validator("description")
     @classmethod
     def strip_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+        return validate_description_or_notes(value, "Description")
 
 
 class FloorResponse(BaseSchema):
@@ -215,16 +279,15 @@ class BedAllocationRequest(BaseModel):
     @field_validator("notes")
     @classmethod
     def strip_notes(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+        return validate_description_or_notes(value, "Notes")
 
     @field_validator("admissionDate")
     @classmethod
     def validate_date(cls, value: datetime) -> datetime:
-        if value.year < 2000 or value.year > 2100:
-            raise ValueError("admissionDate must be a valid date between 2000 and 2100")
-        return value
+        res = validate_date_range(value, "admissionDate")
+        if res is None:
+            raise ValueError("admissionDate is required")
+        return res
 
 
 class BedReleaseRequest(BaseModel):
@@ -233,9 +296,7 @@ class BedReleaseRequest(BaseModel):
     @field_validator("dischargeNotes")
     @classmethod
     def strip_notes(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+        return validate_description_or_notes(value, "Discharge notes")
 
 
 class BedTransferRequest(BaseModel):

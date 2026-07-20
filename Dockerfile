@@ -2,14 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Build deps for cryptography/bcrypt; image libs for Pillow/PDF generation
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
+    gcc \
+    libjpeg62-turbo-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+RUN mkdir -p app/uploads app/static
 
 EXPOSE 8000
 

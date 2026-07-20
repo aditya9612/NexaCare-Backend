@@ -117,30 +117,180 @@ class ExpenseService:
         return ExpenseResponse.model_validate(expense)
 
     async def list_expenses(self, query: ExpenseQuery):
+        # Resolve pharmacy category ID
+        from app.models.expense_model import ExpenseCategory
+        from sqlalchemy import select, func, or_
+        from sqlalchemy.orm import selectinload
+        from app.utils.helpers import utc_now
+
+        cat_stmt = select(ExpenseCategory.id, ExpenseCategory.name).where(
+            func.lower(ExpenseCategory.name) == "pharmacy"
+        )
+        cat_res = await self.db.execute(cat_stmt)
+        cat_row = cat_res.first()
+        if cat_row:
+            pharm_cat_id = cat_row[0]
+            pharm_cat_name = cat_row[1]
+        else:
+            pharm_cat_id = 999
+            pharm_cat_name = "Pharmacy"
+
+        # Determine whether to query general expenses
+        query_general = True
+        if query.category_id is not None and query.category_id != pharm_cat_id:
+            query_general = True
+        elif query.category_id == pharm_cat_id:
+            query_general = False
+
+        # Determine whether to query pharmacy purchases
+        query_pharmacy = True
+        if query.category_id is not None and query.category_id == pharm_cat_id:
+            query_pharmacy = True
+        elif query.category_id is not None and query.category_id != pharm_cat_id:
+            query_pharmacy = False
+
+        expenses_list = []
+        if query_general:
+            # Fetch all matching general expenses up to a reasonable limit for combining in memory
+            expenses_list = await self.expense_repo.list_all(
+                skip=0,
+                limit=100000,
+                sort_by=query.sort_by,
+                sort_order=query.sort_order,
+                category_id=query.category_id,
+                vendor_id=query.vendor_id,
+                status=query.status,
+                start_date=query.start_date,
+                end_date=query.end_date,
+                description=query.description
+            )
+
+        purchases_list = []
+        if query_pharmacy:
+            from app.models.pharmacy_model import Purchase, Supplier
+            from datetime import datetime
+
+            purchase_stmt = select(Purchase).options(
+                selectinload(Purchase.supplier)
+            )
+            if query.vendor_id is not None:
+                purchase_stmt = purchase_stmt.where(Purchase.supplier_id == query.vendor_id)
+            if query.status:
+                p_status = query.status.lower().strip()
+                if p_status == "paid":
+                    purchase_stmt = purchase_stmt.where(func.lower(Purchase.status) == "received")
+                elif p_status == "pending":
+                    purchase_stmt = purchase_stmt.where(func.lower(Purchase.status) == "pending")
+                else:
+                    purchase_stmt = purchase_stmt.where(func.lower(Purchase.status) == p_status)
+            if query.start_date:
+                start_dt = datetime.combine(query.start_date, datetime.min.time())
+                purchase_stmt = purchase_stmt.where(Purchase.ordered_at >= start_dt)
+            if query.end_date:
+                end_dt = datetime.combine(query.end_date, datetime.max.time())
+                purchase_stmt = purchase_stmt.where(Purchase.ordered_at <= end_dt)
+            if query.description:
+                pattern = f"%{query.description.lower().strip()}%"
+                purchase_stmt = purchase_stmt.where(
+                    or_(
+                        func.lower(Purchase.purchase_number).like(pattern),
+                        func.lower(Purchase.notes).like(pattern)
+                    )
+                )
+
+            purch_res = await self.db.execute(purchase_stmt)
+            purchases_list = list(purch_res.scalars().unique().all())
+
+        all_items = []
+        for e in expenses_list:
+            resp = ExpenseResponse.model_validate(e)
+            resp.source = "expense"
+            all_items.append(resp)
+
+        from app.schemas.expense_schema import ExpenseCategoryResponse
+        from app.schemas.vendor_schema import VendorResponse
+        for p in purchases_list:
+            vendor_data = None
+            if p.supplier:
+                vendor_data = VendorResponse(
+                    id=p.supplier.id,
+                    name=p.supplier.name,
+                    vendor_type="supplier",
+                    contact_person=p.supplier.contact_person,
+                    phone=p.supplier.phone,
+                    email=p.supplier.email,
+                    address=p.supplier.address,
+                    is_active=p.supplier.is_active,
+                    created_at=p.supplier.created_at,
+                    updated_at=p.supplier.updated_at
+                )
+
+            cat_data = ExpenseCategoryResponse(
+                id=pharm_cat_id,
+                name=pharm_cat_name,
+                description="Pharmacy Inventory and Supplies Purchases",
+                is_active=True,
+                created_at=p.created_at or utc_now(),
+                updated_at=p.created_at or utc_now()
+            )
+
+            status_val = p.status.capitalize()
+            if status_val == "Received":
+                status_val = "Paid"
+
+            desc_val = f"Pharmacy Purchase {p.purchase_number}"
+            if p.notes:
+                desc_val += f". Notes: {p.notes}"
+
+            resp = ExpenseResponse(
+                id=p.id,
+                category_id=pharm_cat_id,
+                vendor_id=p.supplier_id,
+                amount=p.total_amount,
+                description=desc_val,
+                expense_date=p.ordered_at.date(),
+                status=status_val,
+                category=cat_data,
+                vendor=vendor_data,
+                created_at=p.created_at or utc_now(),
+                updated_at=p.created_at or utc_now(),
+                source="pharmacy"
+            )
+            all_items.append(resp)
+
+        # Sort all items
+        reverse = (query.sort_order == "desc")
+        def get_sort_key(item: ExpenseResponse):
+            if query.sort_by == "category":
+                return item.category.name.lower() if (item.category and item.category.name) else ""
+            elif query.sort_by == "vendor":
+                return item.vendor.name.lower() if (item.vendor and item.vendor.name) else ""
+            elif query.sort_by == "vendor_id":
+                return item.vendor_id or 0
+            elif query.sort_by == "description":
+                return item.description.lower() if item.description else ""
+            elif query.sort_by == "status":
+                return item.status.lower() if item.status else ""
+            
+            val = getattr(item, query.sort_by, None)
+            if val is None:
+                if query.sort_by == "created_at":
+                    val = item.created_at
+                elif query.sort_by == "expense_date":
+                    val = item.expense_date
+                else:
+                    val = item.created_at
+            return val
+
+        all_items.sort(key=get_sort_key, reverse=reverse)
+
+        # Paginate
         skip = (query.page - 1) * query.size
-        expenses = await self.expense_repo.list_all(
-            skip=skip,
-            limit=query.size,
-            sort_by=query.sort_by,
-            sort_order=query.sort_order,
-            category_id=query.category_id,
-            vendor_id=query.vendor_id,
-            status=query.status,
-            start_date=query.start_date,
-            end_date=query.end_date,
-            description=query.description
-        )
-        total = await self.expense_repo.count_all(
-            category_id=query.category_id,
-            vendor_id=query.vendor_id,
-            status=query.status,
-            start_date=query.start_date,
-            end_date=query.end_date,
-            description=query.description
-        )
-        return build_paginated_result(
-            [ExpenseResponse.model_validate(e) for e in expenses], total, query.page, query.size
-        )
+        total = len(all_items)
+        paginated = all_items[skip : skip + query.size]
+
+        return build_paginated_result(paginated, total, query.page, query.size)
+
 
     async def get_expense(self, expense_id: int) -> ExpenseResponse:
         expense = await self.expense_repo.get_by_id(expense_id)
@@ -167,10 +317,47 @@ class ExpenseService:
             setattr(expense, key, value)
 
         expense = await self.expense_repo.update(expense)
-        await self._update_expense_status(expense.id)
+        if "status" not in data.model_fields_set:
+            await self._update_expense_status(expense.id)
         # Re-fetch with loaded relationships
         expense = await self.expense_repo.get_by_id(expense.id)
         await self.audit_repo.create("update", "expense", user_id=user_id, resource_id=str(expense.id))
+
+        # Sync transaction history
+        from sqlalchemy import select
+        from app.models.transaction_history_model import TransactionHistory
+        stmt = select(TransactionHistory).where(
+            TransactionHistory.source_module == "expenses",
+            TransactionHistory.source_id == expense.id,
+            TransactionHistory.is_deleted.is_(False)
+        )
+        tx_result = await self.db.execute(stmt)
+        tx_history = tx_result.scalar_one_or_none()
+
+        from datetime import datetime, time
+        event_datetime = datetime.combine(expense.expense_date, time.min)
+
+        if tx_history:
+            tx_history.amount = expense.amount
+            tx_history.description = f"Expense Recorded: {expense.description or ''}"
+            tx_history.event_date = event_datetime
+            tx_history.status = expense.status
+            from app.repositories.transaction_history_repository import TransactionHistoryRepository
+            await TransactionHistoryRepository(self.db).update(tx_history)
+        else:
+            from app.services.transaction_history_service import TransactionHistoryService
+            await TransactionHistoryService(self.db).create_event(
+                event_type="EXPENSE_RECORDED",
+                reference_no=f"EXP-{expense.id}",
+                description=f"Expense Recorded: {expense.description or ''}",
+                amount=expense.amount,
+                source_module="expenses",
+                source_id=expense.id,
+                status=expense.status,
+                event_date=event_datetime,
+                user_id=user_id
+            )
+
         return ExpenseResponse.model_validate(expense)
 
     async def delete_expense(self, expense_id: int, user_id: int) -> None:
@@ -183,6 +370,155 @@ class ExpenseService:
 
     async def get_expense_summary(self, start_date: date | None = None, end_date: date | None = None) -> ExpenseSummaryResponse:
         summary = await self.expense_repo.get_summary(start_date, end_date)
+
+        # Now query and aggregate pharmacy purchases (expenses)
+        from app.models.pharmacy_model import Purchase, Supplier
+        from app.models.expense_model import ExpenseCategory
+        from sqlalchemy import select, func
+        from datetime import datetime
+
+        purchase_filter = []
+        if start_date is not None:
+            start_dt = datetime.combine(start_date, datetime.min.time())
+            purchase_filter.append(Purchase.ordered_at >= start_dt)
+        if end_date is not None:
+            end_dt = datetime.combine(end_date, datetime.max.time())
+            purchase_filter.append(Purchase.ordered_at <= end_dt)
+
+        purch_stmt = select(
+            func.coalesce(func.sum(Purchase.total_amount), 0.0),
+            func.count(Purchase.id)
+        ).where(*purchase_filter)
+        purch_res = await self.db.execute(purch_stmt)
+        purch_row = purch_res.first()
+        purch_amount = float(purch_row[0] if purch_row else 0.0)
+        purch_count = int(purch_row[1] if purch_row else 0)
+
+        if purch_count > 0:
+            summary["total_amount"] = round(summary["total_amount"] + purch_amount, 2)
+            summary["total_count"] = summary["total_count"] + purch_count
+
+            # 1. Category aggregate
+            cat_stmt = select(ExpenseCategory.id, ExpenseCategory.name).where(
+                func.lower(ExpenseCategory.name) == "pharmacy"
+            )
+            cat_res = await self.db.execute(cat_stmt)
+            cat_row = cat_res.first()
+            if cat_row:
+                pharm_cat_id = cat_row[0]
+                pharm_cat_name = cat_row[1]
+            else:
+                pharm_cat_id = 999
+                pharm_cat_name = "Pharmacy"
+
+            by_category = list(summary.get("by_category", []))
+            found_cat = False
+            for cat in by_category:
+                if cat.get("category_id") == pharm_cat_id or cat.get("name").lower() == "pharmacy":
+                    cat["total_amount"] = round(cat["total_amount"] + purch_amount, 2)
+                    cat["count"] = cat["count"] + purch_count
+                    found_cat = True
+                    break
+            if not found_cat:
+                by_category.append({
+                    "category_id": pharm_cat_id,
+                    "name": pharm_cat_name,
+                    "total_amount": purch_amount,
+                    "count": purch_count
+                })
+            summary["by_category"] = by_category
+
+            # 2. Vendor aggregate (suppliers mapped as vendors)
+            by_vendor = list(summary.get("by_vendor", []))
+            supplier_stmt = select(
+                Purchase.supplier_id.label("supplier_id"),
+                Supplier.name.label("name"),
+                func.coalesce(func.sum(Purchase.total_amount), 0.0).label("total_amount"),
+                func.count(Purchase.id).label("count")
+            ).join(
+                Supplier, Purchase.supplier_id == Supplier.id
+            ).where(
+                *purchase_filter
+            ).group_by(
+                Purchase.supplier_id, Supplier.name
+            )
+            supplier_res = await self.db.execute(supplier_stmt)
+            for r in supplier_res.all():
+                by_vendor.append({
+                    "vendor_id": r.supplier_id,
+                    "name": r.name,
+                    "total_amount": float(r.total_amount),
+                    "count": int(r.count)
+                })
+            summary["by_vendor"] = by_vendor
+
+            # 3. Status aggregate
+            by_status = list(summary.get("by_status", []))
+            status_stmt = select(
+                Purchase.status.label("status"),
+                func.coalesce(func.sum(Purchase.total_amount), 0.0).label("total_amount"),
+                func.count(Purchase.id).label("count")
+            ).where(
+                *purchase_filter
+            ).group_by(
+                Purchase.status
+            )
+            status_res = await self.db.execute(status_stmt)
+            for r in status_res.all():
+                status_key = (r.status or "").capitalize()
+                if status_key == "Received":
+                    status_key = "Paid"
+                found_status = False
+                for item in by_status:
+                    if (item.get("status") or "").capitalize() == status_key:
+                        item["total_amount"] = round(item["total_amount"] + float(r.total_amount), 2)
+                        item["count"] = item["count"] + int(r.count)
+                        found_status = True
+                        break
+                if not found_status:
+                    by_status.append({
+                        "status": status_key,
+                        "total_amount": float(r.total_amount),
+                        "count": int(r.count)
+                    })
+            summary["by_status"] = by_status
+
+            # 4. Monthly summary
+            monthly_summary = list(summary.get("monthly_summary", []))
+            monthly_stmt = select(
+                func.year(Purchase.ordered_at).label("year"),
+                func.month(Purchase.ordered_at).label("month"),
+                func.coalesce(func.sum(Purchase.total_amount), 0.0).label("total_amount"),
+                func.count(Purchase.id).label("count")
+            ).where(
+                *purchase_filter
+            ).group_by(
+                func.year(Purchase.ordered_at),
+                func.month(Purchase.ordered_at)
+            )
+            monthly_res = await self.db.execute(monthly_stmt)
+            for r in monthly_res.all():
+                if r.year is None or r.month is None:
+                    continue
+                year_val = int(r.year)
+                month_val = int(r.month)
+                found_month = False
+                for item in monthly_summary:
+                    if item.get("year") == year_val and item.get("month") == month_val:
+                        item["total_amount"] = round(item["total_amount"] + float(r.total_amount), 2)
+                        item["count"] = item["count"] + int(r.count)
+                        found_month = True
+                        break
+                if not found_month:
+                    monthly_summary.append({
+                        "year": year_val,
+                        "month": month_val,
+                        "total_amount": float(r.total_amount),
+                        "count": int(r.count)
+                    })
+            monthly_summary.sort(key=lambda x: (x.get("year"), x.get("month")), reverse=True)
+            summary["monthly_summary"] = monthly_summary
+
         return ExpenseSummaryResponse.model_validate(summary)
 
     # --- Vendor Payment Services ---

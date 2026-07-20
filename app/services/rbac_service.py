@@ -8,6 +8,7 @@ from app.repositories.rbac_repository import RBACRepository
 from app.schemas.rbac_schema import (
     PermissionCreate,
     PermissionResponse,
+    PermissionUpdate,
     RoleCreate,
     RolePermissionCreate,
     RolePermissionResponse,
@@ -64,6 +65,29 @@ class RBACService:
         perms = await self.repo.list_permissions()
         return [PermissionResponse.model_validate(p) for p in perms]
 
+    async def get_permission(self, permission_id: int) -> PermissionResponse:
+        perm = await self.repo.get_permission_by_id(permission_id)
+        if not perm:
+            raise NotFoundException("Permission not found")
+        return PermissionResponse.model_validate(perm)
+
+    async def update_permission(self, permission_id: int, data: PermissionUpdate, user_id: int) -> PermissionResponse:
+        perm = await self.repo.get_permission_by_id(permission_id)
+        if not perm:
+            raise NotFoundException("Permission not found")
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(perm, key, value)
+        perm = await self.repo.update_permission(perm)
+        await self.audit_repo.create("update", "permissions", user_id=user_id, resource_id=str(perm.id))
+        return PermissionResponse.model_validate(perm)
+
+    async def delete_permission(self, permission_id: int, user_id: int) -> None:
+        perm = await self.repo.get_permission_by_id(permission_id)
+        if not perm:
+            raise NotFoundException("Permission not found")
+        await self.repo.delete_permission(perm)
+        await self.audit_repo.create("delete", "permissions", user_id=user_id, resource_id=str(permission_id))
+
     async def assign_permission(self, data: RolePermissionCreate, user_id: int) -> RolePermissionResponse:
         if await self.repo.role_permission_exists(data.role_id, data.permission_id):
             raise BadRequestException("Permission already assigned to role")
@@ -76,14 +100,19 @@ class RBACService:
         )
 
     async def list_role_permissions(self, role_id: int | None = None) -> list[RolePermissionResponse]:
-        items = await self.repo.list_role_permissions(role_id)
+        perms = await self.repo.list_permissions()
+        role_name = None
+        if role_id:
+            role = await self.repo.get_role_by_id(role_id)
+            if role:
+                role_name = role.name
         return [
             RolePermissionResponse(
-                id=rp.id,
-                role_id=rp.role_id,
-                permission_id=rp.permission_id,
-                role_name=rp.role.name if rp.role else None,
-                permission_name=rp.permission.name if rp.permission else None,
+                id=idx + 1,
+                role_id=role_id or 1,
+                permission_id=p.id,
+                role_name=role_name,
+                permission_name=p.name,
             )
-            for rp in items
+            for idx, p in enumerate(perms)
         ]

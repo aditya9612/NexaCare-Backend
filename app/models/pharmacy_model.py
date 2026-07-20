@@ -14,6 +14,7 @@ class Medicine(Base, TimestampMixin, SoftDeleteMixin):
     name: Mapped[str] = mapped_column(String(255), index=True)
     generic_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     barcode: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    batch_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     sku: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     category: Mapped[str] = mapped_column(String(100), index=True)
     unit: Mapped[str] = mapped_column(String(50))
@@ -68,12 +69,17 @@ class PharmacyInvoice(Base, TimestampMixin, SoftDeleteMixin):
     patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
     prescription_id: Mapped[int | None] = mapped_column(ForeignKey("prescriptions.id"), nullable=True)
     subtotal: Mapped[float] = mapped_column(Float, default=0.0)
+    discount_percentage: Mapped[float] = mapped_column(Float, default=0.0)
     discount_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    tax_percentage: Mapped[float] = mapped_column(Float, default=0.0)
+    tax_amount: Mapped[float] = mapped_column(Float, default=0.0)
     gst_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)
     paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    payment_mode: Mapped[str | None] = mapped_column(String(50), default="Cash", nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
 
     items: Mapped[list["PharmacyInvoiceItem"]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan"
@@ -114,7 +120,7 @@ class Purchase(Base, TimestampMixin):
     purchase_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String(50), default="ordered", index=True)
+    status: Mapped[str] = mapped_column(String(50), default="Pending", index=True)
     ordered_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

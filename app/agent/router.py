@@ -218,6 +218,12 @@ async def conversation_turn(
     digits = Digits.strip()
     _log_request("TURN", call_sid, Speech=speech, Digits=digits, Confidence=Confidence)
 
+    # Parse confidence — Twilio sends it as a string, sometimes empty
+    try:
+        confidence_float = float(Confidence) if Confidence.strip() else -1.0
+    except ValueError:
+        confidence_float = -1.0
+
     try:
         state = session_store.get_session(call_sid)
         if state is None:
@@ -230,7 +236,7 @@ async def conversation_turn(
         # ── collect_name ──────────────────────────────────────────────────
         if step == "collect_name":
             logger.info(f"  ↳ [{call_sid}] Processing name: {speech!r}")
-            result = book_node.process_collect_name(state, speech)
+            result = book_node.process_collect_name(state, speech, confidence=confidence_float)
             _apply(call_sid, result)
             logger.info(f"  ↳ [{call_sid}] Name result step: {result.get('step')}")
             return xml(result["_twiml"])
@@ -238,7 +244,7 @@ async def conversation_turn(
         # ── collect_problem ───────────────────────────────────────────────
         if step == "collect_problem":
             logger.info(f"  ↳ [{call_sid}] Processing problem: {speech!r}")
-            result = book_node.process_collect_problem(state, speech)
+            result = book_node.process_collect_problem(state, speech, confidence=confidence_float)
             _apply(call_sid, result)
 
             if result.get("_pending") == "suggest_doctors":
@@ -327,6 +333,68 @@ async def agent_health():
         "twilio_incoming_webhook": f"{base_url}/agent/v1/voice/incoming",
         "twilio_status_webhook": f"{base_url}/agent/v1/voice/status",
     }
+
+
+# ── Route 7: Reminder call TwiML ───────────────────────────────────────────────
+@router.get("/reminder-twiml")
+async def reminder_twiml(
+    doctor:  str = "",
+    time:    str = "",
+    lang:    str = "en",
+    appt_no: str = "",
+    phone:   str = "",
+):
+    """
+    Served when Twilio connects a reminder call to the patient.
+    Plays the appointment reminder in the patient's language then hangs up.
+    """
+    from app.agent.reminder import build_reminder_twiml
+    logger.info(f"▶ REMINDER-TWIML | phone={phone} | appt={appt_no} | lang={lang}")
+    twiml = build_reminder_twiml(
+        lang=lang,
+        doctor=doctor,
+        time_str=time,
+        appt_no=appt_no,
+    )
+    return xml(twiml)
+
+
+# ── Route 8: Reminder call status callback ─────────────────────────────────────
+@router.post("/reminder-status")
+async def reminder_status(
+    CallStatus: str = Form(default=""),
+    doctor:     str = "",
+    time:       str = "",
+    lang:       str = "en",
+    appt_no:    str = "",
+    phone:      str = "",
+):
+    """
+    Twilio posts here when a reminder call ends.
+    If patient did not answer, send SMS instead.
+    """
+    from app.agent.reminder import send_reminder_sms
+    logger.info(
+        f"▶ REMINDER-STATUS | status={CallStatus} | "
+        f"phone={phone} | appt={appt_no}"
+    )
+
+    no_answer_statuses = {"no-answer", "busy", "failed"}
+    if CallStatus.lower() in no_answer_statuses:
+        logger.warning(
+            f"  ↳ Call {CallStatus} for {appt_no} — sending SMS to {phone}"
+        )
+        await send_reminder_sms(
+            phone=phone,
+            lang=lang,
+            doctor=doctor,
+            time_str=time,
+            appt_no=appt_no,
+        )
+    else:
+        logger.info(f"  ↳ Reminder call {CallStatus} for {appt_no}")
+
+    return PlainTextResponse("ok")
 
 
 # ── Internal helper ────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.core.config import settings
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException
 from app.models.doctor_medical_record_model import (
     DoctorMedicalRecord,
     PatientDiagnosis,
@@ -26,6 +26,8 @@ class DoctorMedicalRecordService:
     def __init__(self, db):
         self.repo = DoctorMedicalRecordRepository(db)
         self.patient_repo = PatientRepository(db)
+        from app.repositories.audit_repository import AuditRepository
+        self.audit_repo = AuditRepository(db)
 
     async def _get_doctor_id(self, user_id: int) -> int | None:
         doctor = await self.repo.get_doctor_by_user_id(user_id)
@@ -34,59 +36,198 @@ class DoctorMedicalRecordService:
     async def upload_report(
         self,
         patient_id: int,
-        patient_name: str,
-        report_title: str,
-        report_type: str,
-        diagnosis: str | None,
+        appointment_id: int,
+        doctor_id: int,
+        diagnosis: str,
+        report_title: str | None,
+        report_type: str | None,
         notes: str | None,
-        file: UploadFile,
+        symptoms: str | None,
+        file: UploadFile | None,
         user_id: int,
     ) -> MedicalRecordResponse:
+        logged_in_doctor_id = await self._get_doctor_id(user_id)
+        if logged_in_doctor_id is not None and doctor_id != logged_in_doctor_id:
+            raise ForbiddenException("You can only create medical records for your own patients")
+
         patient = await self.patient_repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
 
-        allowed_types = {"application/pdf", "image/jpeg", "image/png"}
-        if file.content_type not in allowed_types:
-            raise BadRequestException("Only PDF, JPG and PNG files are allowed")
+        from app.repositories.doctor_repository import DoctorRepository
+        doctor_repo = DoctorRepository(self.repo.db)
+        doctor = await doctor_repo.get_by_id(doctor_id)
+        if not doctor:
+            raise NotFoundException("Doctor not found")
 
-        doctor_id = await self._get_doctor_id(user_id)
+        from sqlalchemy import select
+        from app.models.appointment_model import Appointment
+        stmt = select(Appointment).where(Appointment.id == appointment_id)
+        res = await self.repo.db.execute(stmt)
+        appointment = res.scalar_one_or_none()
+        if not appointment:
+            raise NotFoundException("Appointment not found")
 
-        file_path = await save_upload_file(file, settings.UPLOAD_DIR)
+        if appointment.patient_id != patient_id or appointment.doctor_id != doctor_id:
+            raise BadRequestException("Appointment does not match patient and doctor")
+
+        db_full_name = f"{patient.first_name} {patient.last_name}".strip()
+
+        if file:
+            allowed_types = {"application/pdf", "image/jpeg", "image/png"}
+            if file.content_type not in allowed_types:
+                raise BadRequestException("Only PDF, JPG and PNG files are allowed")
+            file_path = await save_upload_file(file, settings.UPLOAD_DIR)
+            file_name = file.filename or "report"
+            file_type = file.content_type
+        else:
+            file_path = ""
+            file_name = ""
+            file_type = None
 
         record = DoctorMedicalRecord(
             patient_id=patient_id,
             doctor_id=doctor_id,
-            patient_name=patient_name,
-            report_title=report_title,
-            report_type=report_type,
+            patient_name=db_full_name,
+            report_title=report_title or "Medical Record",
+            report_type=report_type or "General",
             diagnosis=diagnosis,
             notes=notes,
             file_path=file_path,
-            file_name=file.filename or "report",
-            file_type=file.content_type,
+            file_name=file_name,
+            file_type=file_type,
         )
 
         record = await self.repo.create_record(record)
-        return MedicalRecordResponse.model_validate(record)
 
-    async def list_reports(self, page: int = 1, size: int = 20):
+        diagnosis_record = await self.repo.get_diagnosis(patient_id)
+        if diagnosis_record:
+            if symptoms is not None:
+                diagnosis_record.symptoms = symptoms
+            diagnosis_record.diagnosis = diagnosis
+            diagnosis_record.doctor_id = doctor_id
+            await self.repo.update_diagnosis(diagnosis_record)
+        else:
+            diagnosis_record = PatientDiagnosis(
+                patient_id=patient_id,
+                doctor_id=doctor_id,
+                diagnosis=diagnosis,
+                symptoms=symptoms,
+                notes=notes,
+            )
+            await self.repo.save_diagnosis(diagnosis_record)
+
+        response_data = MedicalRecordResponse.model_validate(record)
+        response_data.symptoms = diagnosis_record.symptoms
+        return response_data
+
+    async def list_reports(self, page: int = 1, size: int = 20, user_id: int | None = None):
+        logged_in_doctor_id = None
+        if user_id is not None:
+            logged_in_doctor_id = await self._get_doctor_id(user_id)
+
         skip = (page - 1) * size
-        items = await self.repo.list_records(skip=skip, limit=size)
-        total = await self.repo.count_records()
+        items = await self.repo.list_records(skip=skip, limit=size, doctor_id=logged_in_doctor_id)
+        total = await self.repo.count_records(doctor_id=logged_in_doctor_id)
+
+        res_list = []
+        for item in items:
+            response_data = MedicalRecordResponse.model_validate(item)
+            diagnosis_record = await self.repo.get_diagnosis(item.patient_id)
+            if diagnosis_record:
+                response_data.symptoms = diagnosis_record.symptoms
+            res_list.append(response_data)
 
         return build_paginated_result(
-            [MedicalRecordResponse.model_validate(item) for item in items],
+            res_list,
             total,
             page,
             size,
         )
 
-    async def get_report_file(self, record_id: int):
+    async def get_report_by_id(self, record_id: int, user_id: int | None = None) -> MedicalRecordResponse:
+        record = await self.repo.get_record_by_id(record_id)
+        if not record:
+            raise NotFoundException("Medical record not found")
+
+        if user_id is not None:
+            logged_in_doctor_id = await self._get_doctor_id(user_id)
+            if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+                raise ForbiddenException("You can only view your own patients' medical records")
+
+        response_data = MedicalRecordResponse.model_validate(record)
+        diagnosis_record = await self.repo.get_diagnosis(record.patient_id)
+        if diagnosis_record:
+            response_data.symptoms = diagnosis_record.symptoms
+        return response_data
+
+    async def update_report(
+        self,
+        record_id: int,
+        report_title: str | None,
+        report_type: str | None,
+        diagnosis: str | None,
+        notes: str | None,
+        file: UploadFile | None,
+        user_id: int,
+    ) -> MedicalRecordResponse:
+        record = await self.repo.get_record_by_id(record_id)
+        if not record:
+            raise NotFoundException("Medical record not found")
+
+        logged_in_doctor_id = await self._get_doctor_id(user_id)
+        if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+            raise ForbiddenException("You can only modify your own medical records")
+
+        if report_title is not None:
+            record.report_title = report_title or "Medical Record"
+        if report_type is not None:
+            record.report_type = report_type or "General"
+        if diagnosis is not None:
+            record.diagnosis = diagnosis
+        if notes is not None:
+            record.notes = notes
+
+        if file:
+            allowed_types = {"application/pdf", "image/jpeg", "image/png"}
+            if file.content_type not in allowed_types:
+                raise BadRequestException("Only PDF, JPG and PNG files are allowed")
+            file_path = await save_upload_file(file, settings.UPLOAD_DIR)
+            record.file_path = file_path
+            record.file_name = file.filename or "report"
+            record.file_type = file.content_type
+
+        record = await self.repo.update_record(record)
+        await self.audit_repo.create("update", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
+
+        response_data = MedicalRecordResponse.model_validate(record)
+        diagnosis_record = await self.repo.get_diagnosis(record.patient_id)
+        if diagnosis_record:
+            response_data.symptoms = diagnosis_record.symptoms
+        return response_data
+
+    async def delete_report(self, record_id: int, user_id: int) -> None:
+        record = await self.repo.get_record_by_id(record_id)
+        if not record:
+            raise NotFoundException("Medical record not found")
+
+        logged_in_doctor_id = await self._get_doctor_id(user_id)
+        if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+            raise ForbiddenException("You can only delete your own medical records")
+
+        await self.repo.delete_record(record)
+        await self.audit_repo.create("delete", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
+
+    async def get_report_file(self, record_id: int, user_id: int | None = None):
         record = await self.repo.get_record_by_id(record_id)
 
         if not record:
             raise NotFoundException("Medical record not found")
+
+        if user_id is not None:
+            logged_in_doctor_id = await self._get_doctor_id(user_id)
+            if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
+                raise ForbiddenException("You can only access your own patients' medical record files")
 
         path = Path(record.file_path)
         if not path.exists():

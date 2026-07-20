@@ -39,6 +39,18 @@ async def get_current_user(
     user = await repo.get_by_id(int(user_id))
     if not user or not user.is_active:
         raise UnauthorizedException("User not found or inactive")
+
+    if user.last_logout_at:
+        iat = payload.get("iat")
+        if not iat and "exp" in payload:
+            from app.core.config import settings
+            iat = payload["exp"] - (settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+        if iat:
+            from datetime import datetime, timezone
+            iat_dt = datetime.fromtimestamp(iat, tz=timezone.utc).replace(tzinfo=None)
+            if iat_dt < user.last_logout_at:
+                raise UnauthorizedException("Token has been revoked by logout")
+
     return user
 
 

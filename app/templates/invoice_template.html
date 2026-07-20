@@ -22,6 +22,17 @@
     <tr><td>{{ item.description }}</td><td>{{ item.amount }}</td></tr>
     {% endfor %}
   </table>
+  <p><strong>Subtotal:</strong> {{ subtotal }}</p>
+  {% if discount_amount != "0.00" %}
+  <p><strong>Discount ({{ discount_percent }}%):</strong> -{{ discount_amount }}</p>
+  {% endif %}
+  {% if gst_amount != "0.00" %}
+  <p><strong>GST ({{ gst_rate }}%):</strong> +{{ gst_amount }}</p>
+  {% endif %}
+  {% if tax_amount != "0.00" %}
+  <p><strong>Tax Amount:</strong> +{{ tax_amount }}</p>
+  {% endif %}
   <p><strong>Total:</strong> {{ total_amount }}</p>
+  <p><strong>Balance:</strong> {{ balance_amount }}</p>
 </body>
 </html>

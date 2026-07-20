@@ -84,6 +84,25 @@ class BillingRepository:
         result = await self.db.execute(self._base_query().where(Billing.id == billing_id))
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(self, billing_id: int) -> Billing | None:
+        result = await self.db.execute(
+            self._base_query().where(Billing.id == billing_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_patient_and_appointment(
+        self,
+        patient_id: int,
+        appointment_id: int,
+    ) -> Billing | None:
+        result = await self.db.execute(
+            self._base_query().where(
+                Billing.patient_id == patient_id,
+                Billing.appointment_id == appointment_id,
+            )
+        )
+        return result.scalars().first()
+
     async def create(self, billing: Billing) -> Billing:
         self.db.add(billing)
         await self.db.flush()
@@ -178,6 +197,20 @@ class BillingRepository:
             .group_by(Payment.payment_method)
         )
         by_method = {row[0]: float(row[1]) for row in result.all()}
+        
+        refunds_result = await self.db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0.0))
+            .where(
+                Payment.is_refund.is_(True),
+                Payment.status == "completed",
+                Payment.payment_date >= start,
+                Payment.payment_date <= end,
+            )
+        )
+        refund_total = float(refunds_result or 0.0)
+        if refund_total > 0:
+            by_method["refund"] = -refund_total
+
         total = sum(by_method.values())
         count = await self.db.scalar(
             select(func.count())
@@ -189,7 +222,8 @@ class BillingRepository:
                 Payment.payment_date <= end,
             )
         )
-        return {"total_collected": total, "payment_count": count or 0, "by_method": by_method}
+        return {"total_collected": round(total, 2), "payment_count": count or 0, "by_method": by_method}
+
 
     async def get_period_report(self, start: datetime, end: datetime) -> dict:
         billed = await self.db.scalar(

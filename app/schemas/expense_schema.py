@@ -10,7 +10,7 @@ from app.schemas.vendor_schema import VendorResponse
 
 class ExpenseCategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=255)
+    description: str = Field(..., min_length=1, max_length=255)
 
     @field_validator("name")
     @classmethod
@@ -22,15 +22,17 @@ class ExpenseCategoryCreate(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def strip_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+    def validate_description(cls, value: str) -> str:
+        stripped = value.strip()
+        if len(stripped) < 1:
+            raise ValueError("description cannot be empty or only spaces")
+        return stripped
 
 
 class ExpenseCategoryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=255)
+    is_active: Optional[bool] = None
 
     @field_validator("name")
     @classmethod
@@ -54,6 +56,7 @@ class ExpenseCategoryResponse(BaseSchema):
     id: int
     name: str
     description: Optional[str]
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 
@@ -67,7 +70,7 @@ class ExpenseCreate(BaseModel):
     category_id: int = Field(..., gt=0)
     vendor_id: Optional[int] = Field(None, gt=0)
     amount: float = Field(..., gt=0)
-    description: Optional[str] = Field(None, max_length=500)
+    description: str = Field(..., min_length=1, max_length=500)
     expense_date: date
     status: str = Field("Pending", pattern="^(Paid|Pending)$")
 
@@ -80,10 +83,11 @@ class ExpenseCreate(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def strip_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            return value.strip()
-        return value
+    def validate_description(cls, value: str) -> str:
+        stripped = value.strip()
+        if len(stripped) < 1:
+            raise ValueError("description cannot be empty or only spaces")
+        return stripped
 
 
 class ExpenseUpdate(BaseModel):
@@ -123,6 +127,8 @@ class ExpenseResponse(BaseSchema):
     vendor: Optional[VendorResponse] = None
     created_at: datetime
     updated_at: datetime
+    source: str = "expense"
+
 
 
 class ExpenseQuery(PaginationQuery):

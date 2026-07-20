@@ -23,6 +23,7 @@ router = APIRouter()
 @router.get("/doctors", response_model=APIResponse[List[PublicDoctorResponse]])
 async def list_public_doctors(
     db: DbSession,
+    department_id: Optional[int] = None,
     department: Optional[str] = None,
     specialty: Optional[str] = None,
     date: Optional[date] = None,
@@ -30,9 +31,10 @@ async def list_public_doctors(
     """
     Get available doctors with their availability slots and weekly schedule.
     `working_days` / `weekly_schedule.day_name` use MONDAY–SUNDAY (day_of_week 0–6).
-    Supports optional filters: department, specialty, date.
+    Supports optional filters: department_id, department, specialty, date.
     """
     doctors = await PublicService(db).list_public_doctors(
+        department_id=department_id,
         department=department,
         specialty=specialty,
         appointment_date=date,
@@ -76,9 +78,19 @@ async def upload_public_report(
     Upload a medical report PDF/Image and associate it with a patient.
     Creates a new patient if they do not exist by phone.
     """
+    from app.utils.phone_utils import validate_phone_field
+    from fastapi import HTTPException
+    try:
+        normalized = validate_phone_field(patient_phone)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc) if str(exc) else "Invalid phone number format"
+        )
+
     upload_result = await PublicService(db).upload_public_report(
         file=file,
-        patient_phone=patient_phone,
+        patient_phone=normalized,
         patient_name=patient_name,
     )
     return APIResponse(message="Report uploaded successfully", data=upload_result)

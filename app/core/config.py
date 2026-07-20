@@ -14,10 +14,17 @@ class Settings(BaseSettings):
     SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
+   
+
     # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
     # DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
     DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
     DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
+
+    
+    
+
+   
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"
@@ -36,6 +43,9 @@ class Settings(BaseSettings):
     WHATSAPP_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""

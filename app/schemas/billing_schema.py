@@ -10,7 +10,7 @@ class BillItemCreate(BaseSchema):
     description: str
     quantity: int = Field(1, ge=1)
     unit_price: float = Field(..., ge=0)
-    gst_rate: float = Field(18.0, ge=0)
+    gst_rate: float = Field(18.0, ge=0, le=18.0)
     item_type: str = "service"
 
 
@@ -31,23 +31,23 @@ class BillingCreate(BaseSchema):
     patient_id: int
     discount_percent: float = Field(0.0, ge=0, le=100)
     discount_amount: float = Field(0.0, ge=0)
-    gst_rate: float = Field(18.0, ge=0)
-    tax_amount: float = Field(0.0, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
     insurance_id: int | None = None
-    items: List[BillItemCreate] = Field(default_factory=list)
+    appointment_id: Optional[int] = None
+    items: List[BillItemCreate] = Field(..., min_length=1)
 
 
 class BillingUpdate(BaseSchema):
     discount_percent: float | None = Field(None, ge=0, le=100)
     discount_amount: float | None = Field(None, ge=0)
-    gst_rate: float | None = Field(None, ge=0)
+    gst_rate: float | None = Field(None, ge=0, le=18.0)
     tax_amount: float | None = Field(None, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
     insurance_id: int | None = None
     status: str | None = None
+    items: List[BillItemCreate] | None = None
 
 
 class BillingResponse(BaseSchema):
@@ -68,9 +68,11 @@ class BillingResponse(BaseSchema):
     notes: str | None
     insurance_id: int | None
     invoice_path: str | None
+    appointment_id: Optional[int] = None
     items: List[BillItemResponse] = []
     created_at: datetime
     updated_at: datetime
+    source: Optional[str] = "billing"
 
 
 class PaymentCreate(BaseSchema):

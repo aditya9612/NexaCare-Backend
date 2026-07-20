@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 
 from pydantic import Field, field_validator
@@ -22,7 +22,20 @@ class InventoryItemCreate(BaseSchema):
     department_id: Optional[int] = Field(None, gt=0)
     description: Optional[str] = None
 
-    @field_validator("name", "category", "unit")
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        import re
+        stripped = v.strip()
+        if len(stripped) < 1:
+            raise ValueError("Item name cannot be empty or only spaces")
+        if stripped.isdigit():
+            raise ValueError("Item name must not be numeric-only")
+        if not re.match(r"^[a-zA-Z0-9\s\-\(\)]+$", stripped):
+            raise ValueError("Item name contains invalid characters")
+        return stripped
+
+    @field_validator("category", "unit")
     @classmethod
     def validate_required_strings(cls, v: str) -> str:
         stripped = v.strip()
@@ -30,11 +43,41 @@ class InventoryItemCreate(BaseSchema):
             raise ValueError("cannot be empty or only spaces")
         return stripped
 
-    @field_validator("sku", "barcode", "description")
+    @field_validator("sku")
+    @classmethod
+    def validate_sku(cls, v: Optional[str]) -> Optional[str]:
+        import re
+        if v is not None:
+            stripped = v.strip()
+            if len(stripped) < 1:
+                raise ValueError("SKU cannot be empty or only spaces")
+            if len(v) != len(stripped):
+                raise ValueError("SKU cannot contain leading or trailing spaces")
+            if not re.match(r"^[a-zA-Z0-9\-_]+$", stripped):
+                raise ValueError("SKU must contain only alphanumeric characters, hyphens, or underscores")
+            if len(stripped) > 100:
+                raise ValueError("SKU length cannot exceed 100 characters")
+            return stripped
+        return v
+
+    @field_validator("description")
     @classmethod
     def validate_optional_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             return v.strip()
+        return v
+
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            stripped = v.strip()
+            if stripped != "":
+                if not stripped.isdigit():
+                    raise ValueError("Barcode must contain only numeric characters")
+                if len(stripped) != 13:
+                    raise ValueError("Barcode must be exactly 13 digits")
+                return stripped
         return v
 
 
@@ -53,7 +96,7 @@ class InventoryItemUpdate(BaseSchema):
     description: Optional[str] = None
     is_active: Optional[bool] = None
 
-    @field_validator("name", "barcode", "category", "unit")
+    @field_validator("name", "category", "unit")
     @classmethod
     def validate_required_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
@@ -61,6 +104,19 @@ class InventoryItemUpdate(BaseSchema):
             if len(stripped) < 1:
                 raise ValueError("cannot be empty or only spaces")
             return stripped
+        return v
+
+    @field_validator("barcode")
+    @classmethod
+    def validate_barcode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            stripped = v.strip()
+            if stripped != "":
+                if not stripped.isdigit():
+                    raise ValueError("Barcode must contain only numeric characters")
+                if len(stripped) != 13:
+                    raise ValueError("Barcode must be exactly 13 digits")
+                return stripped
         return v
 
     @field_validator("description")
@@ -110,7 +166,22 @@ class StockTransactionCreate(BaseSchema):
             raise ValueError(f"transaction_type must be one of {allowed}")
         return v_lower
 
-    @field_validator("reference_type", "notes")
+    @field_validator("reference_type")
+    @classmethod
+    def validate_reference_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            import re
+            stripped = v.strip()
+            if len(stripped) < 1:
+                raise ValueError("Reference type cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Reference type must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\-\_]+$", stripped):
+                raise ValueError("Reference type contains invalid characters")
+            return stripped
+        return v
+
+    @field_validator("notes")
     @classmethod
     def strip_optional_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
@@ -133,33 +204,88 @@ class StockTransactionResponse(BaseSchema):
     created_at: datetime
 
 
+class StockTransactionUpdate(BaseSchema):
+    quantity: Optional[int] = Field(None, ge=1)
+    unit_cost: Optional[float] = Field(None, ge=0)
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = Field(None, gt=0)
+    notes: Optional[str] = None
+
+    @field_validator("reference_type")
+    @classmethod
+    def validate_reference_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            import re
+            stripped = v.strip()
+            if len(stripped) < 1:
+                raise ValueError("Reference type cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Reference type must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\-\_]+$", stripped):
+                raise ValueError("Reference type contains invalid characters")
+            return stripped
+        return v
+
+    @field_validator("notes")
+    @classmethod
+    def strip_optional_strings(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return v.strip()
+        return v
+
+
 # --- Vendor Schemas (Moved to central vendor_schema) ---
 
 
 class WarehouseCreate(BaseSchema):
     name: str = Field(..., min_length=1, max_length=255)
-    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    code: str = Field(..., min_length=1, max_length=50)
     location: Optional[str] = Field(None, min_length=1, max_length=255)
     capacity: Optional[int] = Field(None, ge=0)
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
+        import re
         stripped = v.strip()
         if len(stripped) < 1:
-            raise ValueError("name cannot be empty or only spaces")
+            raise ValueError("Warehouse name cannot be empty or only spaces")
+        if re.match(r"^[0-9\s]+$", stripped):
+            raise ValueError("Warehouse name must not be numeric-only")
+        if not re.match(r"^[a-zA-Z0-9\s\-\&\(\)]+$", stripped):
+            raise ValueError("Warehouse name contains invalid characters")
         return stripped
 
-    @field_validator("code", "location")
+    @field_validator("code")
     @classmethod
-    def validate_optional_strings(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
-            return v.strip()
-        return v
+    def validate_code(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+            raise ValueError("Warehouse code cannot be blank, 'null', or 'string'")
+        import re
+        if not re.match(r"^[a-zA-Z0-9\-_]+$", stripped):
+            raise ValueError("Warehouse code must contain only letters, numbers, hyphens, and underscores")
+        return stripped
+
+    @field_validator("location")
+    @classmethod
+    def validate_location(cls, v: Optional[str]) -> str:
+        import re
+        if v is None:
+            raise ValueError("Location cannot be empty")
+        stripped = v.strip()
+        if len(stripped) < 1:
+            raise ValueError("Location cannot be empty or only spaces")
+        if re.match(r"^[0-9\s]+$", stripped):
+            raise ValueError("Location must not be numeric-only")
+        if not re.match(r"^[a-zA-Z0-9\s\,\-\/\(\)]+$", stripped):
+            raise ValueError("Location contains invalid characters")
+        return stripped
 
 
 class WarehouseUpdate(BaseSchema):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
     location: Optional[str] = Field(None, min_length=1, max_length=255)
     capacity: Optional[int] = Field(None, ge=0)
     is_active: Optional[bool] = None
@@ -168,9 +294,14 @@ class WarehouseUpdate(BaseSchema):
     @classmethod
     def validate_name(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
+            import re
             stripped = v.strip()
             if len(stripped) < 1:
-                raise ValueError("name cannot be empty or only spaces")
+                raise ValueError("Warehouse name cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Warehouse name must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\-\&\(\)]+$", stripped):
+                raise ValueError("Warehouse name contains invalid characters")
             return stripped
         return v
 
@@ -178,7 +309,28 @@ class WarehouseUpdate(BaseSchema):
     @classmethod
     def validate_location(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
-            return v.strip()
+            import re
+            stripped = v.strip()
+            if len(stripped) < 1:
+                raise ValueError("Location cannot be empty or only spaces")
+            if re.match(r"^[0-9\s]+$", stripped):
+                raise ValueError("Location must not be numeric-only")
+            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\(\)]+$", stripped):
+                raise ValueError("Location contains invalid characters")
+            return stripped
+        return v
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            stripped = v.strip()
+            if not stripped or stripped.lower() == "null" or stripped.lower() == "string":
+                raise ValueError("Warehouse code cannot be blank, 'null', or 'string'")
+            import re
+            if not re.match(r"^[a-zA-Z0-9\-_]+$", stripped):
+                raise ValueError("Warehouse code must contain only letters, numbers, hyphens, and underscores")
+            return stripped
         return v
 
 
@@ -190,6 +342,14 @@ class WarehouseResponse(BaseSchema):
     capacity: Optional[int]
     is_active: bool
     created_at: datetime
+
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def convert_created_at_to_ist(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        return v.astimezone(ist_tz)
 
 
 class ReorderAlertResponse(BaseSchema):

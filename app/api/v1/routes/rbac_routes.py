@@ -8,6 +8,7 @@ from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.rbac_schema import (
     PermissionCreate,
     PermissionResponse,
+    PermissionUpdate,
     RoleCreate,
     RolePermissionCreate,
     RolePermissionResponse,
@@ -87,6 +88,39 @@ async def list_permissions(
 ):
     perms = await RBACService(db).list_permissions()
     return APIResponse(message="Permissions retrieved", data=perms)
+
+
+@router.get("/permissions/{permission_id}", response_model=APIResponse[PermissionResponse])
+async def get_permission(
+    permission_id: int,
+    db: DbSession,
+    _: User = Depends(require_permission("permissions", "read")),
+):
+    perm = await RBACService(db).get_permission(permission_id)
+    return APIResponse(message="Permission retrieved", data=perm)
+
+
+@router.put("/permissions/{permission_id}", response_model=APIResponse[PermissionResponse])
+async def update_permission(
+    permission_id: int,
+    data: PermissionUpdate,
+    db: DbSession,
+    admin: AdminUser,
+    _: User = Depends(require_permission("permissions", "update")),
+):
+    perm = await RBACService(db).update_permission(permission_id, data, admin.id)
+    return APIResponse(message="Permission updated", data=perm)
+
+
+@router.delete("/permissions/{permission_id}", response_model=APIResponse[MessageResponse])
+async def delete_permission(
+    permission_id: int,
+    db: DbSession,
+    admin: AdminUser,
+    _: User = Depends(require_permission("permissions", "delete")),
+):
+    await RBACService(db).delete_permission(permission_id, admin.id)
+    return APIResponse(message="Permission deleted", data=MessageResponse(message="Deleted"))
 
 
 @router.post("/role-permissions", response_model=APIResponse[RolePermissionResponse], status_code=201)

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lab Technician Dashboard Report</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 20mm;
+    }
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      color: #333333;
+      line-height: 1.4;
+      font-size: 11pt;
+    }
+    .header {
+      border-bottom: 2px solid #1e40af;
+      padding-bottom: 15px;
+      margin-bottom: 25px;
+    }
+    .header h1 {
+      color: #1e40af;
+      margin: 0 0 5px 0;
+      font-size: 24pt;
+      font-weight: bold;
+    }
+    .header .meta {
+      font-size: 10pt;
+      color: #666666;
+    }
+    .meta-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    .meta-table td {
+      border: none;
+      padding: 3px 0;
+      font-size: 9.5pt;
+    }
+    .meta-label {
+      font-weight: bold;
+      color: #4b5563;
+      width: 15%;
+    }
+    .section-title {
+      color: #1e40af;
+      font-size: 14pt;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 5px;
+      margin-top: 25px;
+      margin-bottom: 12px;
+      font-weight: bold;
+    }
+    
+    /* Metrics Summary Cards Layout */
+    .metrics-container {
+      width: 100%;
+      margin-bottom: 25px;
+    }
+    .metrics-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 10px;
+      margin: -10px;
+    }
+    .metric-card {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 12px;
+      text-align: center;
+      width: 33%;
+    }
+    .metric-value {
+      font-size: 18pt;
+      font-weight: bold;
+      color: #111827;
+      margin-bottom: 4px;
+    }
+    .metric-label {
+      font-size: 9pt;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .metric-card.critical {
+      background: #fef2f2;
+      border-color: #fca5a5;
+    }
+    .metric-card.critical .metric-value {
+      color: #dc2626;
+    }
+    
+    /* Tables styling */
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 5px;
+    }
+    table.data-table th, table.data-table td {
+      border: 1px solid #e5e7eb;
+      padding: 8px 10px;
+      text-align: left;
+      font-size: 9.5pt;
+    }
+    table.data-table th {
+      background-color: #f3f4f6;
+      color: #374151;
+      font-weight: bold;
+    }
+    table.data-table tr:nth-child(even) {
+      background-color: #f9fafb;
+    }
+    
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      font-size: 8pt;
+      font-weight: bold;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .badge-normal { background-color: #e1f5fe; color: #0288d1; }
+    .badge-high { background-color: #fff3e0; color: #f57c00; }
+    .badge-critical { background-color: #ffebee; color: #c62828; }
+    .badge-completed { background-color: #e8f5e9; color: #2e7d32; }
+    .badge-pending { background-color: #fffde7; color: #fbc02d; }
+    
+    .no-data {
+      color: #6b7280;
+      font-style: italic;
+      padding: 10px 0;
+      font-size: 10pt;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Lab Technician Dashboard</h1>
+    <table class="meta-table">
+      <tr>
+        <td class="meta-label">Filter Applied:</td>
+        <td>{{ filter_applied | upper }}</td>
+        <td class="meta-label" style="text-align: right;">Generated On:</td>
+        <td style="text-align: right;">{{ generated_at }}</td>
+      </tr>
+      {% if date_range %}
+      <tr>
+        <td class="meta-label">Date Range:</td>
+        <td colspan="3">{{ date_range }}</td>
+      </tr>
+      {% endif %}
+    </table>
+  </div>
+
+  <div class="section-title">Dashboard Summary</div>
+  <div class="metrics-container">
+    <table class="metrics-table">
+      <tr>
+        <td class="metric-card">
+          <div class="metric-value">{{ total_tests }}</div>
+          <div class="metric-label">Total Tests</div>
+        </td>
+        <td class="metric-card">
+          <div class="metric-value">{{ pending_tests }}</div>
+          <div class="metric-label">Pending Tests</div>
+        </td>
+        <td class="metric-card">
+          <div class="metric-value">{{ tests_in_progress }}</div>
+          <div class="metric-label">In Progress</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="metric-card">
+          <div class="metric-value">{{ completed_tests }}</div>
+          <div class="metric-label">Completed Tests</div>
+        </td>
+        <td class="metric-card">
+          <div class="metric-value">{{ samples_collected }}</div>
+          <div class="metric-label">Samples Collected</div>
+        </td>
+        <td class="metric-card">
+          <div class="metric-value">{{ reports_pending_approval }}</div>
+          <div class="metric-label">Pending Approval</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="metric-card">
+          <div class="metric-value">{{ approved_reports }}</div>
+          <div class="metric-label">Approved Reports</div>
+        </td>
+        <td class="metric-card critical">
+          <div class="metric-value">{{ critical_reports }}</div>
+          <div class="metric-label">Critical Reports</div>
+        </td>
+        <td class="metric-card">
+          <div class="metric-value">{{ reports_delivered }}</div>
+          <div class="metric-label">Reports Delivered</div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="section-title">Critical Alerts</div>
+  {% if critical_alerts %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Order No.</th>
+        <th>Patient Name</th>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Normal Range</th>
+        <th>Entered At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for alert in critical_alerts %}
+      <tr>
+        <td style="font-weight: bold; color: #dc2626;">{{ alert.order_number }}</td>
+        <td>{{ alert.patient_name }}</td>
+        <td>{{ alert.parameter_name }}</td>
+        <td style="font-weight: bold; color: #dc2626;">{{ alert.result_value }}</td>
+        <td>{{ alert.normal_range or 'N/A' }}</td>
+        <td>{{ alert.entered_at.strftime('%Y-%m-%d %H:%M:%S') if alert.entered_at else 'N/A' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="no-data">No active critical alerts for the selected period.</div>
+  {% endif %}
+
+  <div class="section-title">Pending Report Approvals</div>
+  {% if pending_report_approvals %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Report No.</th>
+        <th>Order No.</th>
+        <th>Test Name</th>
+        <th>Patient Name</th>
+        <th>Generated At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for approval in pending_report_approvals %}
+      <tr>
+        <td style="font-weight: bold;">{{ approval.report_number }}</td>
+        <td>{{ approval.order_number }}</td>
+        <td>{{ approval.test_name }}</td>
+        <td>{{ approval.patient_name }}</td>
+        <td>{{ approval.generated_at.strftime('%Y-%m-%d %H:%M:%S') if approval.generated_at else 'N/A' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="no-data">No reports pending pathologist approval.</div>
+  {% endif %}
+
+  <div class="section-title">Recent Test Orders</div>
+  {% if recent_test_orders %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Order No.</th>
+        <th>Patient Name</th>
+        <th>Test Name</th>
+        <th>Priority</th>
+        <th>Status</th>
+        <th>Ordered At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for order in recent_test_orders %}
+      <tr>
+        <td style="font-weight: bold;">{{ order.order_number }}</td>
+        <td>{{ order.patient_name }}</td>
+        <td>{{ order.test_name }}</td>
+        <td>
+          {% if order.priority == 'high' or order.priority == 'urgent' %}
+          <span class="badge badge-high">{{ order.priority }}</span>
+          {% elif order.priority == 'critical' %}
+          <span class="badge badge-critical">{{ order.priority }}</span>
+          {% else %}
+          <span class="badge badge-normal">{{ order.priority }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if order.status == 'completed' %}
+          <span class="badge badge-completed">{{ order.status }}</span>
+          {% else %}
+          <span class="badge badge-pending">{{ order.status }}</span>
+          {% endif %}
+        </td>
+        <td>{{ order.ordered_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="no-data">No recent test orders found.</div>
+  {% endif %}
+
+</body>
+</html>

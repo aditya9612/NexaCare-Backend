@@ -1,6 +1,6 @@
 from datetime import date, time
 from typing import List, Optional
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -23,6 +23,7 @@ class PublicDoctorResponse(BaseSchema):
     name: str
     specialty: str
     department: Optional[str] = None
+    department_id: Optional[int] = None
     rating: float = 4.8
     experience: Optional[int] = None
     working_days: List[str] = Field(
@@ -48,6 +49,19 @@ class QuickBookingRequest(BaseSchema):
     time_slot: time
     symptoms: Optional[str] = None
 
+    @field_validator("date")
+    @classmethod
+    def validate_date_not_in_past(cls, value: date) -> date:
+        if value < date.today():
+            raise ValueError("Appointment date cannot be in the past")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: str) -> str:
+        from app.utils.phone_utils import validate_phone_field
+        return validate_phone_field(value)
+
 
 class SymptomAnalysisRequest(BaseSchema):
     symptoms: str
@@ -56,12 +70,28 @@ class SymptomAnalysisRequest(BaseSchema):
     gender: Optional[str] = None
     dob: Optional[date] = None
 
+    @field_validator("dob")
+    @classmethod
+    def validate_dob_not_in_future(cls, value: Optional[date]) -> Optional[date]:
+        if value and value > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value:
+            from app.utils.phone_utils import validate_phone_field
+            return validate_phone_field(value)
+        return value
+
 
 class SymptomAnalysisResponse(BaseSchema):
     urgency_level: str
     confidence_score: float
     specialty: str
     department: Optional[str] = None
+    department_id: Optional[int] = None
     suggested_doctor_id: Optional[int] = None
     suggested_doctor_name: Optional[str] = None
     available_slots: List[SuggestedSlotPublic] = []
@@ -88,3 +118,16 @@ class AdvancedBookingRequest(BaseSchema):
     booking_date: date
     booking_time: time
     document_id: Optional[int] = None
+
+    @field_validator("booking_date")
+    @classmethod
+    def validate_booking_date_not_in_past(cls, value: date) -> date:
+        if value < date.today():
+            raise ValueError("Appointment date cannot be in the past")
+        return value
+
+    @field_validator("patient_phone")
+    @classmethod
+    def validate_patient_phone(cls, value: str) -> str:
+        from app.utils.phone_utils import validate_phone_field
+        return validate_phone_field(value)

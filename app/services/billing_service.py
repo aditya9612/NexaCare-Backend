@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import BillingStatus
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
@@ -156,6 +156,13 @@ class BillingService:
             appointment = apt_result.scalar_one_or_none()
             if not appointment:
                 raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+            
+            if appointment.patient_id != data.patient_id:
+                raise BadRequestException("Appointment does not belong to the supplied patient")
+
+            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
+            if existing_billing:
+                raise ConflictException("Billing already exists for this patient and appointment.")
 
         due_date = data.due_date
         if due_date and due_date.tzinfo is not None:
@@ -167,8 +174,6 @@ class BillingService:
             bill_number=generate_bill_number(),
             discount_percent=data.discount_percent,
             discount_amount=data.discount_amount,
-            gst_rate=data.gst_rate,
-            tax_amount=data.tax_amount,
             due_date=due_date,
             notes=data.notes,
             insurance_id=data.insurance_id,
@@ -346,12 +351,10 @@ class BillingService:
             if field in data.model_fields_set and getattr(data, field) is None:
                 raise BadRequestException(f"Field '{field}' cannot be null")
 
-        if data.insurance_id is not None:
-            insurance = await InsuranceRepository(self.db).get_by_id(data.insurance_id)
-            if not insurance:
-                raise NotFoundException(f"Insurance record with ID {data.insurance_id} not found")
-
+        # Ignore and do not validate insurance_id from data
         dump = data.model_dump(exclude_unset=True)
+        dump.pop("insurance_id", None)  # Ignore insurance_id payload
+
         if "due_date" in dump and dump["due_date"] is not None:
             dt = dump["due_date"]
             if dt.tzinfo is not None:
@@ -384,6 +387,10 @@ class BillingService:
 
         for key, value in dump.items():
             setattr(billing, key, value)
+
+        # Always set insurance_id to None during billing update
+        billing.insurance_id = None
+
         billing = await self._recalculate_billing(billing)
         billing = await self.repo.get_by_id(billing.id)
         await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))

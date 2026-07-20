@@ -419,7 +419,7 @@ class PharmacyService:
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
         for item_data in data.items:
-            medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+            medicine = await self.medicine_repo.get_by_id_for_update(item_data.medicine_id)
             if not medicine:
                 raise NotFoundException(f"Medicine {item_data.medicine_id} not found")
             if medicine.stock_quantity < item_data.quantity:

@@ -69,6 +69,12 @@ class InventoryRepository:
         result = await self.db.execute(self._base_query().where(InventoryItem.id == item_id))
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(self, item_id: int) -> InventoryItem | None:
+        result = await self.db.execute(
+            self._base_query().where(InventoryItem.id == item_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_sku(self, sku: str) -> InventoryItem | None:
         result = await self.db.execute(
             self._base_query().where(func.lower(InventoryItem.sku) == sku.lower())

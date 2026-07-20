@@ -157,7 +157,7 @@ class InventoryService:
             await self.alert_repo.resolve_for_item(item.id)
 
     async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
-        item = await self.item_repo.get_by_id(data.item_id)
+        item = await self.item_repo.get_by_id_for_update(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
 

@@ -397,7 +397,7 @@ class BillingService:
         await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
 
     async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int) -> PaymentResponse:
-        billing = await self.repo.get_by_id(billing_id)
+        billing = await self.repo.get_by_id_for_update(billing_id)
         if not billing:
             raise NotFoundException("Billing record not found")
         if billing.status == BillingStatus.CANCELLED:
@@ -433,7 +433,7 @@ class BillingService:
         return PaymentResponse.model_validate(payment)
 
     async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int) -> PaymentResponse:
-        billing = await self.repo.get_by_id(billing_id)
+        billing = await self.repo.get_by_id_for_update(billing_id)
         if not billing:
             raise NotFoundException("Billing record not found")
         if data.amount > billing.paid_amount:

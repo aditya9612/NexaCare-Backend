@@ -72,6 +72,15 @@ class IcuDeviceCreate(BaseSchema):
     name: str
 
 
+class IcuDeviceUpdate(BaseSchema):
+    bed_id: int | None = None
+    name: str | None = None
+
+
+class IcuDeviceStatusUpdate(BaseSchema):
+    is_active: bool
+
+
 class IcuDeviceResponse(BaseSchema):
     id: int
     bed_id: int

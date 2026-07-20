@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Header
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -11,12 +13,15 @@ from app.schemas.icu_telemetry_schema import (
     IcuDeviceCreate,
     IcuDeviceCreatedResponse,
     IcuDeviceResponse,
+    IcuDeviceStatusUpdate,
+    IcuDeviceUpdate,
     TelemetryAlertResponse,
     TelemetryIngest,
     TelemetryIngestResponse,
     VitalReadingResponse,
 )
 from app.services.icu_telemetry_service import IcuTelemetryService
+from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
 
@@ -59,6 +64,58 @@ async def get_latest_vitals_for_icu_beds(
 ):
     result = await IcuTelemetryService(db).get_latest_for_icu_beds()
     return APIResponse(message="Latest ICU bed vitals retrieved", data=result)
+
+
+@router.get(
+    "/vitals/beds/{bed_id}/history",
+    response_model=APIResponse[PaginatedResult[VitalReadingResponse]],
+)
+async def get_vitals_history_for_bed(
+    bed_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    page: int = 1,
+    size: int = 50,
+    include_ecg: bool = False,
+    _: User = Depends(require_permission("icu_telemetry", "read")),
+):
+    result = await IcuTelemetryService(db).get_history_for_bed(
+        bed_id,
+        from_time=from_time,
+        to_time=to_time,
+        page=page,
+        size=size,
+        include_ecg=include_ecg,
+    )
+    return APIResponse(message="Vitals history retrieved", data=result)
+
+
+@router.get(
+    "/vitals/patients/{patient_id}/history",
+    response_model=APIResponse[PaginatedResult[VitalReadingResponse]],
+)
+async def get_vitals_history_for_patient(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    page: int = 1,
+    size: int = 50,
+    include_ecg: bool = False,
+    _: User = Depends(require_permission("icu_telemetry", "read")),
+):
+    result = await IcuTelemetryService(db).get_history_for_patient(
+        patient_id,
+        from_time=from_time,
+        to_time=to_time,
+        page=page,
+        size=size,
+        include_ecg=include_ecg,
+    )
+    return APIResponse(message="Vitals history retrieved", data=result)
 
 
 @router.get(
@@ -129,8 +186,41 @@ async def register_device(
     current_user: CurrentUser,
     _: User = Depends(require_permission("icu_telemetry", "create")),
 ):
-    result = await IcuTelemetryService(db).create_device(data)
+    result = await IcuTelemetryService(db).create_device(data, current_user.id)
     return APIResponse(message="ICU device registered", data=result)
+
+
+@router.patch(
+    "/devices/{device_id}",
+    response_model=APIResponse[IcuDeviceResponse],
+)
+async def update_device(
+    device_id: int,
+    data: IcuDeviceUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("icu_telemetry", "update")),
+):
+    result = await IcuTelemetryService(db).update_device(device_id, data, current_user.id)
+    return APIResponse(message="ICU device updated", data=result)
+
+
+@router.patch(
+    "/devices/{device_id}/status",
+    response_model=APIResponse[IcuDeviceResponse],
+)
+async def set_device_status(
+    device_id: int,
+    data: IcuDeviceStatusUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("icu_telemetry", "update")),
+):
+    result = await IcuTelemetryService(db).set_device_status(
+        device_id, data.is_active, current_user.id
+    )
+    message = "ICU device activated" if data.is_active else "ICU device deactivated"
+    return APIResponse(message=message, data=result)
 
 
 @router.get(

@@ -93,6 +93,8 @@ class Settings(BaseSettings):
 
     # ICU telemetry ingestion limits
     ICU_TELEMETRY_ECG_MAX_SAMPLES: int = 1000
+    ICU_TELEMETRY_HISTORY_DEFAULT_HOURS: int = 24
+    ICU_TELEMETRY_HISTORY_MAX_DAYS: int = 7
 
 
 @lru_cache

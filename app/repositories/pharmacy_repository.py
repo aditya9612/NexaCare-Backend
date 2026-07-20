@@ -76,6 +76,12 @@ class MedicineRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(self, medicine_id: int) -> Medicine | None:
+        result = await self.db.execute(
+            self._base_query().where(Medicine.id == medicine_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_barcode(self, barcode: str) -> Medicine | None:
         result = await self.db.execute(
             self._base_query().where(Medicine.barcode == barcode)

@@ -22,6 +22,7 @@ from app.schemas.inventory_schema import (
     StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
+    StockTransactionUpdate,
     # Vendor schemas removed (centralized)
     WarehouseCreate,
     WarehouseResponse,
@@ -33,6 +34,7 @@ from app.utils.pagination import build_paginated_result
 
 class InventoryService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.item_repo = InventoryRepository(db)
         self.transaction_repo = StockTransactionRepository(db)
         self.vendor_repo = VendorRepository(db)
@@ -223,6 +225,166 @@ class InventoryService:
             [StockTransactionResponse.model_validate(t) for t in items], total, page, size
         )
 
+    async def update_transaction(
+        self, transaction_id: int, data: StockTransactionUpdate, user_id: int
+    ) -> StockTransactionResponse:
+        transaction = await self.transaction_repo.get_by_id(transaction_id)
+        if not transaction:
+            raise NotFoundException("Stock transaction not found")
+
+        # If transaction type is adjustment and quantity is being updated, raise error
+        if transaction.transaction_type == StockTransactionType.ADJUSTMENT and data.quantity is not None:
+            raise BadRequestException("Adjustment transactions cannot have their quantity updated")
+
+        item = await self.item_repo.get_by_id(transaction.item_id)
+        if not item:
+            raise NotFoundException("Inventory item associated with transaction not found")
+
+        # Reverse the old transaction impact:
+        reverse_delta = 0
+        if transaction.transaction_type == StockTransactionType.INWARD:
+            reverse_delta = -transaction.quantity
+        elif transaction.transaction_type in (
+            StockTransactionType.OUTWARD,
+            StockTransactionType.CONSUMPTION,
+            StockTransactionType.TRANSFER,
+        ):
+            reverse_delta = transaction.quantity
+
+        # Validate that reversing the old impact does not make inventory negative
+        if item.quantity + reverse_delta < 0:
+            raise BadRequestException("Insufficient stock to reverse previous transaction impact")
+
+        # New impact:
+        new_quantity = data.quantity if data.quantity is not None else transaction.quantity
+        new_delta = 0
+        if transaction.transaction_type == StockTransactionType.INWARD:
+            new_delta = new_quantity
+        elif transaction.transaction_type in (
+            StockTransactionType.OUTWARD,
+            StockTransactionType.CONSUMPTION,
+            StockTransactionType.TRANSFER,
+        ):
+            new_delta = -new_quantity
+
+        # Validate that the new quantity and the final resulting inventory doesn't drop below 0
+        if item.quantity + reverse_delta + new_delta < 0:
+            raise BadRequestException("Insufficient stock for transaction update")
+
+        # Apply net delta to the item
+        net_delta = reverse_delta + new_delta
+        if net_delta != 0:
+            await self.item_repo.update_quantity(item.id, net_delta)
+
+        # Build details for audit logging before modifying the record
+        old_values = {
+            "quantity": transaction.quantity,
+            "unit_cost": transaction.unit_cost,
+            "reference_type": transaction.reference_type,
+            "reference_id": transaction.reference_id,
+            "notes": transaction.notes,
+        }
+
+        # Update fields on the transaction record
+        if data.quantity is not None:
+            transaction.quantity = data.quantity
+        if data.unit_cost is not None:
+            transaction.unit_cost = data.unit_cost
+        if data.reference_type is not None:
+            # Validate reference_type if provided
+            CANONICAL_REF_TYPES = {
+                "purchase order": "Purchase Order",
+                "sales order": "Sales Order",
+                "adjustment": "Adjustment",
+                "transfer": "Transfer",
+                "return": "Return",
+                "opening stock": "Opening Stock",
+            }
+            ref_type_lower = data.reference_type.lower()
+            if ref_type_lower not in CANONICAL_REF_TYPES:
+                raise BadRequestException(
+                    "Invalid reference_type. Allowed values are: Purchase Order, Sales Order, Adjustment, Transfer, Return, Opening Stock."
+                )
+            transaction.reference_type = CANONICAL_REF_TYPES[ref_type_lower]
+        if data.reference_id is not None:
+            transaction.reference_id = data.reference_id
+        if data.notes is not None:
+            transaction.notes = data.notes
+
+        transaction = await self.transaction_repo.update(transaction)
+
+        # Re-evaluate reorder alerts
+        refreshed_item = await self.item_repo.get_by_id(item.id)
+        if refreshed_item:
+            await self._check_reorder_alert(refreshed_item)
+
+        # Audit log
+        new_values = {
+            "quantity": transaction.quantity,
+            "unit_cost": transaction.unit_cost,
+            "reference_type": transaction.reference_type,
+            "reference_id": transaction.reference_id,
+            "notes": transaction.notes,
+        }
+        await self.audit_repo.create(
+            "update",
+            "inventory_transaction",
+            user_id=user_id,
+            resource_id=str(transaction.id),
+            details=f"Updated stock transaction fields. Old: {old_values}, New: {new_values}",
+        )
+
+        return StockTransactionResponse.model_validate(transaction)
+
+    async def delete_stock_transaction(self, transaction_id: int, user_id: int) -> None:
+        transaction = await self.transaction_repo.get_by_id(transaction_id)
+        if not transaction:
+            raise NotFoundException("Stock transaction not found")
+
+        # If transaction type is adjustment, raise error
+        if transaction.transaction_type == StockTransactionType.ADJUSTMENT:
+            raise BadRequestException("Adjustment transactions cannot be deleted to preserve stock checkpoints")
+
+        item = await self.item_repo.get_by_id(transaction.item_id)
+        if not item:
+            raise NotFoundException("Inventory item associated with transaction not found")
+
+        # Reverse the old transaction impact:
+        reverse_delta = 0
+        if transaction.transaction_type == StockTransactionType.INWARD:
+            reverse_delta = -transaction.quantity
+        elif transaction.transaction_type in (
+            StockTransactionType.OUTWARD,
+            StockTransactionType.CONSUMPTION,
+            StockTransactionType.TRANSFER,
+        ):
+            reverse_delta = transaction.quantity
+
+        # Validate that reversing the old impact does not make inventory negative
+        if item.quantity + reverse_delta < 0:
+            raise BadRequestException("Insufficient stock to reverse and delete transaction")
+
+        # Apply net delta to the item
+        if reverse_delta != 0:
+            await self.item_repo.update_quantity(item.id, reverse_delta)
+
+        # Hard delete
+        await self.transaction_repo.delete(transaction)
+
+        # Re-evaluate reorder alerts
+        refreshed_item = await self.item_repo.get_by_id(item.id)
+        if refreshed_item:
+            await self._check_reorder_alert(refreshed_item)
+
+        # Audit log
+        await self.audit_repo.create(
+            "delete",
+            "inventory_transaction",
+            user_id=user_id,
+            resource_id=str(transaction.id),
+            details=f"Deleted stock transaction of type '{transaction.transaction_type}' with quantity {transaction.quantity}",
+        )
+
     # --- Vendor Services Removed (Centralized in VendorService) ---
 
     async def create_warehouse(self, data: WarehouseCreate, user_id: int) -> WarehouseResponse:
@@ -247,6 +409,54 @@ class InventoryService:
         items = await self.warehouse_repo.list_all(skip=skip, limit=size)
         total = await self.warehouse_repo.count_all()
         return build_paginated_result([WarehouseResponse.model_validate(w) for w in items], total, page, size)
+
+    async def update_warehouse(self, warehouse_id: int, data: WarehouseUpdate, user_id: int) -> WarehouseResponse:
+        from sqlalchemy import select, func
+        warehouse = await self.warehouse_repo.get_by_id(warehouse_id)
+        if not warehouse:
+            raise NotFoundException(f"Warehouse with ID {warehouse_id} not found")
+
+        if data.code:
+            existing = await self.warehouse_repo.get_by_code(data.code)
+            if existing and existing.id != warehouse_id:
+                raise ConflictException("Warehouse with this code already exists")
+
+        if data.name:
+            existing_name = await self.db.scalar(
+                select(Warehouse).where(
+                    func.lower(Warehouse.name) == data.name.strip().lower(),
+                    Warehouse.id != warehouse_id,
+                    Warehouse.is_deleted.is_(False)
+                )
+            )
+            if existing_name:
+                raise ConflictException("Warehouse with this name already exists")
+
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(warehouse, key, value)
+
+        warehouse = await self.warehouse_repo.update(warehouse)
+        await self.audit_repo.create("update", "inventory_warehouse", user_id=user_id, resource_id=str(warehouse.id))
+        return WarehouseResponse.model_validate(warehouse)
+
+    async def delete_warehouse(self, warehouse_id: int, user_id: int) -> None:
+        from sqlalchemy import select, func
+        warehouse = await self.warehouse_repo.get_by_id(warehouse_id)
+        if not warehouse:
+            raise NotFoundException(f"Warehouse with ID {warehouse_id} not found")
+
+        # Check active inventory items dependency
+        item_exists = await self.db.scalar(
+            select(func.count()).select_from(InventoryItem).where(
+                InventoryItem.warehouse_id == warehouse_id,
+                InventoryItem.is_deleted.is_(False)
+            )
+        )
+        if item_exists and item_exists > 0:
+            raise BadRequestException("Cannot delete warehouse as it is linked to one or more active inventory items")
+
+        await self.warehouse_repo.soft_delete(warehouse)
+        await self.audit_repo.create("delete", "inventory_warehouse", user_id=user_id, resource_id=str(warehouse.id))
 
     async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
         skip = (page - 1) * size
@@ -280,3 +490,15 @@ class InventoryService:
             start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         rows = await self.transaction_repo.get_consumption_report(start, now)
         return [ConsumptionReport(period=period, **row) for row in rows]
+
+    async def get_warehouse(self, warehouse_id: int) -> WarehouseResponse:
+        warehouse = await self.warehouse_repo.get_by_id(warehouse_id)
+        if not warehouse:
+            raise NotFoundException("Warehouse not found")
+        return WarehouseResponse.model_validate(warehouse)
+
+    async def get_transaction(self, transaction_id: int) -> StockTransactionResponse:
+        transaction = await self.transaction_repo.get_by_id(transaction_id)
+        if not transaction:
+            raise NotFoundException("Stock transaction not found")
+        return StockTransactionResponse.model_validate(transaction)

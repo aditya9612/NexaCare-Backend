@@ -31,8 +31,6 @@ class BillingCreate(BaseSchema):
     patient_id: int
     discount_percent: float = Field(0.0, ge=0, le=100)
     discount_amount: float = Field(0.0, ge=0)
-    gst_rate: float = Field(18.0, ge=0, le=18.0)
-    tax_amount: float = Field(0.0, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
     insurance_id: int | None = None

@@ -84,6 +84,19 @@ class BillingRepository:
         result = await self.db.execute(self._base_query().where(Billing.id == billing_id))
         return result.scalar_one_or_none()
 
+    async def get_by_patient_and_appointment(
+        self,
+        patient_id: int,
+        appointment_id: int,
+    ) -> Billing | None:
+        result = await self.db.execute(
+            self._base_query().where(
+                Billing.patient_id == patient_id,
+                Billing.appointment_id == appointment_id,
+            )
+        )
+        return result.scalars().first()
+
     async def create(self, billing: Billing) -> Billing:
         self.db.add(billing)
         await self.db.flush()

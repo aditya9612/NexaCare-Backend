@@ -68,7 +68,10 @@ class DashboardService:
     async def doctor_dashboard(self, user: User) -> DoctorDashboardResponse:
         from app.models.lab_model import TestOrder
         from app.core.constants import LabOrderStatus
-        from app.schemas.dashboard_schema import PendingLabReportsSummary, PendingLabReportItem
+        from app.schemas.dashboard_schema import PendingLabReportsSummary, PendingLabReportItem, PrescriptionSummary
+        from app.models.pharmacy_model import Prescription
+        from app.schemas.pharmacy_schema import PrescriptionResponse, PrescriptionItemResponse
+        from sqlalchemy.orm import selectinload
 
         doctor_result = await self.db.execute(
             select(Doctor).where(Doctor.user_id == user.id, Doctor.is_deleted.is_(False))
@@ -82,7 +85,10 @@ class DashboardService:
                 pending_lab_reports=PendingLabReportsSummary(
                     count=0,
                     recent=[]
-                )
+                ),
+                prescription_summary=PrescriptionSummary(),
+                upcoming_lab_reports=[],
+                pending_lab_reports_count=0
             )
 
         now = utc_now()
@@ -151,6 +157,43 @@ class DashboardService:
             )
             for o in recent_labs
         ]
+
+        # Prescription summary metrics
+        total_prescriptions = await self.db.scalar(
+            select(func.count(Prescription.id)).where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.is_deleted.is_(False)
+            )
+        ) or 0
+
+        pending_prescriptions = await self.db.scalar(
+            select(func.count(Prescription.id)).where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.status == "pending",
+                Prescription.is_deleted.is_(False)
+            )
+        ) or 0
+
+        dispensed_prescriptions = await self.db.scalar(
+            select(func.count(Prescription.id)).where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.status == "dispensed",
+                Prescription.is_deleted.is_(False)
+            )
+        ) or 0
+
+        recent_prescriptions_result = await self.db.execute(
+            select(Prescription)
+            .options(selectinload(Prescription.items))
+            .where(
+                Prescription.doctor_id == doctor.id,
+                Prescription.is_deleted.is_(False)
+            )
+            .order_by(Prescription.created_at.desc())
+            .limit(5)
+        )
+        recent_prescriptions_list = list(recent_prescriptions_result.scalars().all())
+
         recent_prescriptions = []
         for p in recent_prescriptions_list:
             resp = PrescriptionResponse.model_validate(p)
@@ -159,7 +202,7 @@ class DashboardService:
 
         from app.repositories.lab_repository import LabReportRepository
         from app.schemas.lab_schema import LabReportResponse
-        from app.models.lab_model import LabReport, TestOrder
+        from app.models.lab_model import LabReport
         from app.core.constants import LabReportStatus
 
         upcoming_labs = await LabReportRepository(self.db).get_upcoming_lab_reports(
@@ -185,7 +228,7 @@ class DashboardService:
             pending_lab_reports=PendingLabReportsSummary(
                 count=total_pending_labs,
                 recent=recent_lab_items
-            )
+            ),
             prescription_summary=PrescriptionSummary(
                 total_prescriptions=total_prescriptions,
                 pending_prescriptions=pending_prescriptions,
@@ -194,7 +237,6 @@ class DashboardService:
             ),
             upcoming_lab_reports=lab_reports_list,
             pending_lab_reports_count=pending_labs_count_val,
-            pending_lab_reports=lab_reports_list,
         )
 
 

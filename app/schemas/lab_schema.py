@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -111,15 +111,17 @@ class SampleResponse(BaseSchema):
 
 
 class TestResultCreate(BaseSchema):
-    test_order_id: int
+    sample_id: int
     parameter_name: str
     result_value: str
+    remark: str
     unit: str | None = None
     normal_range: str | None = None
     is_critical: bool = False
 
 
 class TestResultUpdate(BaseSchema):
+    remark: str
     parameter_name: str | None = None
     result_value: str | None = None
     unit: str | None = None
@@ -140,18 +142,30 @@ class TestResultResponse(BaseSchema):
     entered_by: int | None
     entered_at: datetime | None
     document_url: str | None
+    remark: str
     created_at: datetime
     
 
 
 class LabReportCreate(BaseSchema):
-    test_order_id: int
+    test_result_id: int
     summary: str | None = None
 
 
 class LabReportApprove(BaseSchema):
     approved: bool = True
-    summary: str | None = None
+    remark: str | None = None
+
+
+class RejectLabReportRequest(BaseSchema):
+    remarks: str = Field(..., min_length=1, description="Remarks explaining why the lab report was rejected")
+
+    @field_validator("remarks")
+    @classmethod
+    def validate_remarks(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Remarks cannot be empty")
+        return v.strip()
 
 
 class LabReportResponse(BaseSchema):
@@ -160,6 +174,7 @@ class LabReportResponse(BaseSchema):
     report_number: str
     status: str
     summary: str | None
+    remarks: str | None = None
     report_path: str | None
     approved_by: int | None
     approved_at: datetime | None

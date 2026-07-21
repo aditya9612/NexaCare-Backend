@@ -10,6 +10,7 @@ from app.core.constants import (
 from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.core.security import generate_device_api_key, hash_api_key
 from app.models.icu_telemetry_model import IcuDevice, IcuTelemetryAlert, IcuVitalReading
+from app.repositories.audit_repository import AuditRepository
 from app.repositories.bed_allocation_repository import BedAllocationRepository
 from app.repositories.icu_telemetry_repository import (
     IcuDeviceRepository,
@@ -20,12 +21,14 @@ from app.schemas.icu_telemetry_schema import (
     IcuDeviceCreate,
     IcuDeviceCreatedResponse,
     IcuDeviceResponse,
+    IcuDeviceUpdate,
     TelemetryAlertResponse,
     TelemetryIngest,
     TelemetryIngestResponse,
     VitalReadingResponse,
 )
 from app.utils.helpers import utc_now
+from app.utils.pagination import PaginatedResult, build_paginated_result
 
 
 class IcuTelemetryService:
@@ -35,8 +38,9 @@ class IcuTelemetryService:
         self.reading_repo = IcuVitalReadingRepository(db)
         self.alert_repo = IcuTelemetryAlertRepository(db)
         self.bed_repo = BedAllocationRepository(db)
+        self.audit_repo = AuditRepository(db)
 
-    async def create_device(self, data: IcuDeviceCreate) -> IcuDeviceCreatedResponse:
+    async def create_device(self, data: IcuDeviceCreate, user_id: int) -> IcuDeviceCreatedResponse:
         bed = await self.bed_repo.get_bed_by_id(data.bed_id, load_patient=False)
         if not bed:
             raise NotFoundException("Bed not found")
@@ -44,6 +48,10 @@ class IcuTelemetryService:
         existing = await self.device_repo.get_by_serial(data.device_serial)
         if existing:
             raise ConflictException("Device serial already registered")
+
+        active_on_bed = await self.device_repo.get_active_for_bed(data.bed_id)
+        if active_on_bed:
+            raise ConflictException("An active device is already registered for this bed")
 
         api_key = generate_device_api_key()
         device = IcuDevice(
@@ -54,6 +62,13 @@ class IcuTelemetryService:
             is_active=True,
         )
         device = await self.device_repo.create(device)
+        await self.audit_repo.create(
+            "create",
+            "icu_devices",
+            user_id=user_id,
+            resource_id=str(device.id),
+            details=f"serial={device.device_serial}, bed_id={device.bed_id}",
+        )
         return IcuDeviceCreatedResponse(
             id=device.id,
             bed_id=device.bed_id,
@@ -69,6 +84,70 @@ class IcuTelemetryService:
     async def list_devices(self) -> list[IcuDeviceResponse]:
         devices = await self.device_repo.list_all()
         return [self._to_device_response(device) for device in devices]
+
+    async def update_device(
+        self, device_id: int, data: IcuDeviceUpdate, user_id: int
+    ) -> IcuDeviceResponse:
+        device = await self.device_repo.get_by_id(device_id)
+        if not device:
+            raise NotFoundException("Device not found")
+
+        updates = data.model_dump(exclude_unset=True)
+        if not updates:
+            raise BadRequestException("No fields to update")
+
+        if "bed_id" in updates:
+            bed = await self.bed_repo.get_bed_by_id(updates["bed_id"], load_patient=False)
+            if not bed:
+                raise NotFoundException("Bed not found")
+            if device.is_active:
+                active_on_bed = await self.device_repo.get_active_for_bed(
+                    updates["bed_id"], exclude_device_id=device.id
+                )
+                if active_on_bed:
+                    raise ConflictException("An active device is already registered for this bed")
+
+        for key, value in updates.items():
+            setattr(device, key, value)
+
+        device = await self.device_repo.save(device)
+        await self.audit_repo.create(
+            "update",
+            "icu_devices",
+            user_id=user_id,
+            resource_id=str(device.id),
+            details=f"fields={','.join(sorted(updates.keys()))}",
+        )
+        return self._to_device_response(device)
+
+    async def set_device_status(
+        self, device_id: int, is_active: bool, user_id: int
+    ) -> IcuDeviceResponse:
+        device = await self.device_repo.get_by_id(device_id)
+        if not device:
+            raise NotFoundException("Device not found")
+        if device.is_active == is_active:
+            state = "active" if is_active else "inactive"
+            raise BadRequestException(f"Device is already {state}")
+
+        if is_active:
+            active_on_bed = await self.device_repo.get_active_for_bed(
+                device.bed_id, exclude_device_id=device.id
+            )
+            if active_on_bed:
+                raise ConflictException("An active device is already registered for this bed")
+
+        device.is_active = is_active
+        device = await self.device_repo.save(device)
+        action = "activate" if is_active else "deactivate"
+        await self.audit_repo.create(
+            action,
+            "icu_devices",
+            user_id=user_id,
+            resource_id=str(device.id),
+            details=f"serial={device.device_serial}, is_active={is_active}",
+        )
+        return self._to_device_response(device)
 
     async def ingest_telemetry(
         self, device: IcuDevice, data: TelemetryIngest
@@ -152,6 +231,62 @@ class IcuTelemetryService:
             for reading in readings
         ]
 
+    async def get_history_for_bed(
+        self,
+        bed_id: int,
+        from_time=None,
+        to_time=None,
+        page: int = 1,
+        size: int = 50,
+        include_ecg: bool = False,
+    ) -> PaginatedResult[VitalReadingResponse]:
+        bed = await self.bed_repo.get_bed_by_id(bed_id, load_patient=False)
+        if not bed:
+            raise NotFoundException("Bed not found")
+
+        resolved_from, resolved_to = self._resolve_history_window(from_time, to_time)
+        skip = (page - 1) * size
+        readings = await self.reading_repo.list_history(
+            bed_id=bed_id,
+            from_time=resolved_from,
+            to_time=resolved_to,
+            skip=skip,
+            limit=size,
+        )
+        total = await self.reading_repo.count_history(
+            bed_id=bed_id,
+            from_time=resolved_from,
+            to_time=resolved_to,
+        )
+        items = [self._to_vital_response(reading, include_ecg=include_ecg) for reading in readings]
+        return build_paginated_result(items, total, page, size)
+
+    async def get_history_for_patient(
+        self,
+        patient_id: int,
+        from_time=None,
+        to_time=None,
+        page: int = 1,
+        size: int = 50,
+        include_ecg: bool = False,
+    ) -> PaginatedResult[VitalReadingResponse]:
+        resolved_from, resolved_to = self._resolve_history_window(from_time, to_time)
+        skip = (page - 1) * size
+        readings = await self.reading_repo.list_history(
+            patient_id=patient_id,
+            from_time=resolved_from,
+            to_time=resolved_to,
+            skip=skip,
+            limit=size,
+        )
+        total = await self.reading_repo.count_history(
+            patient_id=patient_id,
+            from_time=resolved_from,
+            to_time=resolved_to,
+        )
+        items = [self._to_vital_response(reading, include_ecg=include_ecg) for reading in readings]
+        return build_paginated_result(items, total, page, size)
+
     async def list_active_alerts(self, page: int = 1, size: int = 50) -> list[TelemetryAlertResponse]:
         skip = (page - 1) * size
         alerts = await self.alert_repo.list_active(skip=skip, limit=size)
@@ -169,7 +304,48 @@ class IcuTelemetryService:
         alert.acknowledged_at = utc_now()
         await self.db.flush()
         await self.db.refresh(alert)
+        await self.audit_repo.create(
+            "acknowledge",
+            "icu_telemetry_alerts",
+            user_id=user_id,
+            resource_id=str(alert.id),
+            details=f"vital_type={alert.vital_type}, severity={alert.severity}, bed_id={alert.bed_id}",
+        )
         return self._to_alert_response(alert)
+
+    def _normalize_history_datetime(self, value):
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.replace(tzinfo=None)
+        return value
+
+    def _resolve_history_window(self, from_time, to_time):
+        from datetime import timedelta
+
+        normalized_from = self._normalize_history_datetime(from_time)
+        normalized_to = self._normalize_history_datetime(to_time)
+        now = utc_now()
+
+        if normalized_from is None and normalized_to is None:
+            normalized_to = now
+            normalized_from = now - timedelta(hours=settings.ICU_TELEMETRY_HISTORY_DEFAULT_HOURS)
+        elif normalized_from is None:
+            normalized_to = normalized_to or now
+            normalized_from = normalized_to - timedelta(hours=settings.ICU_TELEMETRY_HISTORY_DEFAULT_HOURS)
+        elif normalized_to is None:
+            normalized_to = now
+
+        if normalized_from > normalized_to:
+            raise BadRequestException("from_time must be before or equal to to_time")
+
+        max_span = timedelta(days=settings.ICU_TELEMETRY_HISTORY_MAX_DAYS)
+        if normalized_to - normalized_from > max_span:
+            raise BadRequestException(
+                f"Time range cannot exceed {settings.ICU_TELEMETRY_HISTORY_MAX_DAYS} days"
+            )
+
+        return normalized_from, normalized_to
 
     async def _evaluate_thresholds(
         self, reading: IcuVitalReading, patient_id: int | None
@@ -270,7 +446,10 @@ class IcuTelemetryService:
         return f"{patient.first_name} {patient.last_name}".strip()
 
     def _to_vital_response(
-        self, reading: IcuVitalReading, has_active_alerts: bool
+        self,
+        reading: IcuVitalReading,
+        has_active_alerts: bool = False,
+        include_ecg: bool = True,
     ) -> VitalReadingResponse:
         bed = reading.bed
         patient = reading.patient
@@ -288,7 +467,7 @@ class IcuTelemetryService:
             spo2=reading.spo2,
             respiratory_rate=reading.respiratory_rate,
             temperature=reading.temperature,
-            ecg_data=reading.ecg_data,
+            ecg_data=reading.ecg_data if include_ecg else None,
             has_active_alerts=has_active_alerts,
         )
 

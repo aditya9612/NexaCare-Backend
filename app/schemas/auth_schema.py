@@ -5,8 +5,12 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, mo
 
 from app.core.constants import UserRole
 from app.schemas.common_schema import BaseSchema
-from app.utils.phone_utils import validate_phone_field
-
+from app.utils.common_validators import (
+    validate_full_name as common_validate_full_name,
+    validate_mobile,
+    validate_password,
+    validate_not_future_date,
+)
 
 class RegisterRoleName(str, Enum):
     """All roles — use exact name in Swagger, or aliases like admin / super admin."""
@@ -37,6 +41,15 @@ class GenderOption(str, Enum):
     FEMALE = "Female"
     OTHER = "Other"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            val_upper = value.strip().upper()
+            for member in cls:
+                if member.value.upper() == val_upper or member.name == val_upper:
+                    return member
+        return None
+
 
 class EmailOrPhoneRequest(BaseModel):
     email: EmailStr | None = None
@@ -49,7 +62,7 @@ class EmailOrPhoneRequest(BaseModel):
         if self.email and self.phone:
             raise ValueError("Provide either email or phone, not both")
         if self.phone:
-            self.phone = validate_phone_field(self.phone)
+            self.phone = validate_mobile(self.phone)
         return self
 
 
@@ -110,32 +123,20 @@ class RegisterRequest(BaseModel):
 
     @field_validator("full_name")
     @classmethod
-    def strip_full_name(cls, value: str) -> str:
-        name = value.strip()
-        if len(name) < 2:
-            raise ValueError("full_name must be at least 2 characters")
-        
-        parts = name.split()
-        if not parts:
-            raise ValueError("full_name cannot be empty")
-        first_name = parts[0]
-        import re
-        if not re.match(r"^[a-zA-Z\s\-'.]+$", first_name):
-            raise ValueError("First name must contain only alphabetic characters, spaces, hyphens, dots, or apostrophes")
-        return name
+    def validate_full_name(cls, value: str) -> str:
+        return common_validate_full_name(value)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone_number(cls, v: str | None) -> str | None:
+        if v is not None:
+            return validate_mobile(v)
+        return v
 
     @field_validator("password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
-        has_upper = any(c.isupper() for c in value)
-        has_lower = any(c.islower() for c in value)
-        has_digit = any(c.isdigit() for c in value)
-        import string
-        has_special = any(c in string.punctuation or not c.isalnum() for c in value)
-        
-        if not (has_upper and has_lower and has_digit and has_special):
-            raise ValueError("Password must include at least one uppercase letter, one lowercase letter, one number, and one special character")
-        return value
+        return validate_password(value)
 
     @field_validator("role_name", mode="before")
     @classmethod
@@ -156,15 +157,7 @@ class RegisterRequest(BaseModel):
     @field_validator("date_of_birth")
     @classmethod
     def dob_in_past(cls, value: date | None) -> date | None:
-        if value and value >= date.today():
-            raise ValueError("date_of_birth must be in the past")
-        return value
-
-    @model_validator(mode="after")
-    def validate_phone(self):
-        if self.phone:
-            self.phone = validate_phone_field(self.phone)
-        return self
+        return validate_not_future_date(value, "date_of_birth")
 
 
 class RegistrationRoleOption(BaseModel):
@@ -199,15 +192,7 @@ class ResetPasswordRequest(EmailOrPhoneRequest):
     @field_validator("new_password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
-        has_upper = any(c.isupper() for c in value)
-        has_lower = any(c.islower() for c in value)
-        has_digit = any(c.isdigit() for c in value)
-        import string
-        has_special = any(c in string.punctuation or not c.isalnum() for c in value)
-        
-        if not (has_upper and has_lower and has_digit and has_special):
-            raise ValueError("Password must include at least one uppercase letter, one lowercase letter, one number, and one special character")
-        return value
+        return validate_password(value)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -217,15 +202,7 @@ class ChangePasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
-        has_upper = any(c.isupper() for c in value)
-        has_lower = any(c.islower() for c in value)
-        has_digit = any(c.isdigit() for c in value)
-        import string
-        has_special = any(c in string.punctuation or not c.isalnum() for c in value)
-        
-        if not (has_upper and has_lower and has_digit and has_special):
-            raise ValueError("Password must include at least one uppercase letter, one lowercase letter, one number, and one special character")
-        return value
+        return validate_password(value)
 
 
 class OTPVerifyRequest(EmailOrPhoneRequest):
@@ -239,22 +216,39 @@ class ActivateAccountRequest(EmailOrPhoneRequest):
 class ProfileUpdateRequest(BaseModel):
     full_name: str | None = None
     phone: str | None = Field(default=None, min_length=10, max_length=20)
-    gender: str | None = None
+    gender: GenderOption | None = None
     date_of_birth: date | None = None
     profile_image: str | None = None
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return common_validate_full_name(value)
+
+    @field_validator("profile_image")
+    @classmethod
+    def validate_profile_image(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        v_str = value.strip().lower()
+        if v_str in ("", "null", "string", "none"):
+            return None
+        return value.strip()
 
     @field_validator("date_of_birth")
     @classmethod
     def dob_in_past(cls, value: date | None) -> date | None:
-        if value and value >= date.today():
-            raise ValueError("date_of_birth must be in the past")
-        return value
+        return validate_not_future_date(value, "date_of_birth")
+    
+    @field_validator("phone")
+    @classmethod
+    def validate_phone_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_mobile(value)
 
-    @model_validator(mode="after")
-    def validate_phone(self):
-        if self.phone:
-            self.phone = validate_phone_field(self.phone)
-        return self
 
 
 class UserProfileResponse(BaseSchema):

@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import BillingStatus
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
@@ -156,6 +156,13 @@ class BillingService:
             appointment = apt_result.scalar_one_or_none()
             if not appointment:
                 raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+            
+            if appointment.patient_id != data.patient_id:
+                raise BadRequestException("Appointment does not belong to the supplied patient")
+
+            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
+            if existing_billing:
+                raise ConflictException("Billing already exists for this patient and appointment.")
 
         due_date = data.due_date
         if due_date and due_date.tzinfo is not None:
@@ -167,8 +174,6 @@ class BillingService:
             bill_number=generate_bill_number(),
             discount_percent=data.discount_percent,
             discount_amount=data.discount_amount,
-            gst_rate=data.gst_rate,
-            tax_amount=data.tax_amount,
             due_date=due_date,
             notes=data.notes,
             insurance_id=data.insurance_id,
@@ -346,12 +351,10 @@ class BillingService:
             if field in data.model_fields_set and getattr(data, field) is None:
                 raise BadRequestException(f"Field '{field}' cannot be null")
 
-        if data.insurance_id is not None:
-            insurance = await InsuranceRepository(self.db).get_by_id(data.insurance_id)
-            if not insurance:
-                raise NotFoundException(f"Insurance record with ID {data.insurance_id} not found")
-
+        # Ignore and do not validate insurance_id from data
         dump = data.model_dump(exclude_unset=True)
+        dump.pop("insurance_id", None)  # Ignore insurance_id payload
+
         if "due_date" in dump and dump["due_date"] is not None:
             dt = dump["due_date"]
             if dt.tzinfo is not None:
@@ -364,11 +367,11 @@ class BillingService:
             billing.items.clear()
             if items_data:
                 for item_data in items_data:
-                    desc = item_data.description
-                    qty = item_data.quantity
-                    price = item_data.unit_price
-                    gst_r = item_data.gst_rate
-                    item_t = item_data.item_type
+                    desc = item_data.get("description")
+                    qty = item_data.get("quantity", 1)
+                    price = item_data.get("unit_price")
+                    gst_r = item_data.get("gst_rate", 18.0)
+                    item_t = item_data.get("item_type", "service")
                     _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
                     item = BillItem(
                         billing_id=billing.id,
@@ -384,6 +387,10 @@ class BillingService:
 
         for key, value in dump.items():
             setattr(billing, key, value)
+
+        # Always set insurance_id to None during billing update
+        billing.insurance_id = None
+
         billing = await self._recalculate_billing(billing)
         billing = await self.repo.get_by_id(billing.id)
         await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))
@@ -397,7 +404,7 @@ class BillingService:
         await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
 
     async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int) -> PaymentResponse:
-        billing = await self.repo.get_by_id(billing_id)
+        billing = await self.repo.get_by_id_for_update(billing_id)
         if not billing:
             raise NotFoundException("Billing record not found")
         if billing.status == BillingStatus.CANCELLED:
@@ -433,7 +440,7 @@ class BillingService:
         return PaymentResponse.model_validate(payment)
 
     async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int) -> PaymentResponse:
-        billing = await self.repo.get_by_id(billing_id)
+        billing = await self.repo.get_by_id_for_update(billing_id)
         if not billing:
             raise NotFoundException("Billing record not found")
         if data.amount > billing.paid_amount:
@@ -572,20 +579,37 @@ class BillingService:
 
         return DailyCollectionSummary(date=str(target), **data)
 
-    async def get_period_report(self, period: str) -> RevenueReport:
-        now = utc_now()
-        if period == "daily":
-            start = datetime.combine(now.date(), datetime.min.time())
-            end = now
-            label = str(now.date())
-        elif period == "monthly":
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            end = now
-            label = start.strftime("%Y-%m")
+    async def get_period_report(self, period: str, target_date: date | None = None) -> RevenueReport:
+        if target_date:
+            y, m = target_date.year, target_date.month
+            if period == "daily":
+                start = datetime.combine(target_date, datetime.min.time())
+                end = datetime.combine(target_date, datetime.max.time())
+                label = str(target_date)
+            elif period == "monthly":
+                import calendar
+                last_day = calendar.monthrange(y, m)[1]
+                start = datetime.combine(date(y, m, 1), datetime.min.time())
+                end = datetime.combine(date(y, m, last_day), datetime.max.time())
+                label = start.strftime("%Y-%m")
+            else: # yearly
+                start = datetime.combine(date(y, 1, 1), datetime.min.time())
+                end = datetime.combine(date(y, 12, 31), datetime.max.time())
+                label = str(y)
         else:
-            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-            end = now
-            label = str(now.year)
+            now = utc_now()
+            if period == "daily":
+                start = datetime.combine(now.date(), datetime.min.time())
+                end = now
+                label = str(now.date())
+            elif period == "monthly":
+                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = now
+                label = start.strftime("%Y-%m")
+            else:
+                start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = now
+                label = str(now.year)
         data = await self.repo.get_period_report(start, end)
 
         from app.models.pharmacy_model import PharmacyInvoice

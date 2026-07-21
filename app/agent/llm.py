@@ -14,7 +14,8 @@ import logging
 from enum import Enum
 from typing import Optional
 
-
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 

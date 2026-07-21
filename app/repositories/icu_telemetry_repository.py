@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import and_, func, select
@@ -50,6 +51,18 @@ class IcuDeviceRepository:
     async def update_last_seen(self, device: IcuDevice, seen_at) -> None:
         device.last_seen_at = seen_at
         await self.db.flush()
+
+    async def get_active_for_bed(self, bed_id: int, exclude_device_id: int | None = None) -> Optional[IcuDevice]:
+        query = select(IcuDevice).where(IcuDevice.bed_id == bed_id, IcuDevice.is_active.is_(True))
+        if exclude_device_id is not None:
+            query = query.where(IcuDevice.id != exclude_device_id)
+        result = await self.db.execute(query.limit(1))
+        return result.scalar_one_or_none()
+
+    async def save(self, device: IcuDevice) -> IcuDevice:
+        await self.db.flush()
+        await self.db.refresh(device)
+        return device
 
 
 class IcuVitalReadingRepository:
@@ -128,6 +141,75 @@ class IcuVitalReadingRepository:
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    def _history_filters(
+        self,
+        *,
+        bed_id: int | None = None,
+        patient_id: int | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+    ):
+        conditions = []
+        if bed_id is not None:
+            conditions.append(IcuVitalReading.bed_id == bed_id)
+        if patient_id is not None:
+            conditions.append(IcuVitalReading.patient_id == patient_id)
+        if from_time is not None:
+            conditions.append(IcuVitalReading.recorded_at >= from_time)
+        if to_time is not None:
+            conditions.append(IcuVitalReading.recorded_at <= to_time)
+        return conditions
+
+    async def list_history(
+        self,
+        *,
+        bed_id: int | None = None,
+        patient_id: int | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> list[IcuVitalReading]:
+        conditions = self._history_filters(
+            bed_id=bed_id,
+            patient_id=patient_id,
+            from_time=from_time,
+            to_time=to_time,
+        )
+        query = (
+            select(IcuVitalReading)
+            .where(*conditions)
+            .options(
+                selectinload(IcuVitalReading.bed),
+                selectinload(IcuVitalReading.patient),
+            )
+            .order_by(IcuVitalReading.recorded_at.desc(), IcuVitalReading.id.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def count_history(
+        self,
+        *,
+        bed_id: int | None = None,
+        patient_id: int | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+    ) -> int:
+        conditions = self._history_filters(
+            bed_id=bed_id,
+            patient_id=patient_id,
+            from_time=from_time,
+            to_time=to_time,
+        )
+        return (
+            await self.db.scalar(
+                select(func.count()).select_from(IcuVitalReading).where(*conditions)
+            )
+        ) or 0
 
 
 class IcuTelemetryAlertRepository:

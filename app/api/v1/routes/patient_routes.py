@@ -1,4 +1,5 @@
 from typing import List
+from datetime import date
 
 from fastapi import APIRouter, Depends, File, UploadFile, Query, Form, Request
 from fastapi.exceptions import RequestValidationError
@@ -43,9 +44,18 @@ async def list_patients(
     size: int = 20,
     sort_by: str = "created_at",
     sort_order: str = "desc",
+    start_date: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="End date (YYYY-MM-DD)"),
     _: User = Depends(require_permission("patients", "read")),
 ):
-    result = await PatientService(db).list_patients(page=page, size=size, sort_by=sort_by, sort_order=sort_order)
+    result = await PatientService(db).list_patients(
+        page=page,
+        size=size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return APIResponse(message="Patients retrieved", data=result)
 
 

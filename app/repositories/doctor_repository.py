@@ -192,9 +192,15 @@ class DoctorRepository:
         await self.db.delete(schedule)
         await self.db.flush()
 
+    async def update_schedule_slot(self, schedule: DoctorSchedule) -> DoctorSchedule:
+        await self.db.flush()
+        await self.db.refresh(schedule)
+        return schedule
+
     async def delete_all_schedules(self, doctor_id: int) -> None:
         from sqlalchemy import delete
         await self.db.execute(
             delete(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor_id)
         )
         await self.db.flush()
+

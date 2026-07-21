@@ -32,10 +32,28 @@ class BedAllocationService:
         floor = await self.repo.get_floor_by_id(floor_id)
         if not floor:
             raise NotFoundException("Floor not found")
+        for room in floor.rooms:
+            for bed in room.beds:
+                if bed.patient and getattr(bed.patient, "is_deleted", False):
+                    bed.status = "Available"
+                    bed.patient_id = None
+                    bed.patient = None
+                    bed.allocation_time = None
+                    bed.admission_date = None
         return floor
 
     async def list_floors(self) -> List[Floor]:
-        return await self.repo.list_floors()
+        floors = await self.repo.list_floors()
+        for floor in floors:
+            for room in floor.rooms:
+                for bed in room.beds:
+                    if bed.patient and getattr(bed.patient, "is_deleted", False):
+                        bed.status = "Available"
+                        bed.patient_id = None
+                        bed.patient = None
+                        bed.allocation_time = None
+                        bed.admission_date = None
+        return floors
 
     async def create_floor(self, data: FloorCreate) -> Floor:
         existing = await self.repo.get_floor_by_number(data.number)
@@ -120,6 +138,13 @@ class BedAllocationService:
         room = await self.repo.get_room_by_id(room_id)
         if not room:
             raise NotFoundException("Room not found")
+        for bed in room.beds:
+            if bed.patient and getattr(bed.patient, "is_deleted", False):
+                bed.status = "Available"
+                bed.patient_id = None
+                bed.patient = None
+                bed.allocation_time = None
+                bed.admission_date = None
         return room
 
     async def create_room(self, floor_id: int, data: RoomCreate) -> Room:
@@ -211,13 +236,19 @@ class BedAllocationService:
         bed = await self.repo.get_bed_by_id(bed_id)
         if not bed:
             raise NotFoundException("Bed not found")
+        if bed.patient and getattr(bed.patient, "is_deleted", False):
+            bed.status = "Available"
+            bed.patient_id = None
+            bed.patient = None
+            bed.allocation_time = None
+            bed.admission_date = None
         return bed
 
     async def create_bed(self, room_id: int, data: BedCreate) -> Bed:
         room = await self.get_room(room_id)
 
         if len(room.beds) >= room.capacity:
-            raise BadRequestException(f"Cannot add bed. Room capacity of {room.capacity} beds has been reached.")
+            room.capacity = len(room.beds) + 1
 
         existing = await self.repo.get_bed_by_name(room_id, data.name)
         if existing:
@@ -255,6 +286,9 @@ class BedAllocationService:
             bed.type = data.type
 
         if data.status is not None:
+            is_occupied = (bed.patient_id is not None) or (bed.status == "Occupied")
+            if is_occupied and data.status != bed.status:
+                raise ConflictException("Cannot change bed status while the bed is occupied.")
             if data.status == "Occupied" and not bed.patient_id:
                 raise BadRequestException("Cannot set bed status to Occupied without an associated patient.")
             bed.status = data.status
@@ -306,6 +340,32 @@ class BedAllocationService:
             raise BadRequestException(f"Bed {bed.name} is not available. Current status: {bed.status}.")
 
         patient = await self.get_patient(data.patientId)
+
+        if data.admissionDate.date() < utc_now().date():
+            raise BadRequestException("Admission date cannot be in the past.")
+
+        from app.models.appointment_model import Appointment
+        from sqlalchemy import select, desc
+        stmt = (
+            select(Appointment)
+            .where(Appointment.patient_id == patient.id)
+            .order_by(desc(Appointment.appointment_date), desc(Appointment.appointment_time))
+            .limit(1)
+        )
+        res = await self.db.execute(stmt)
+        appointment = res.scalar_one_or_none()
+
+        if not appointment:
+            raise HTTPException(
+                status_code=404,
+                detail="No appointment found for this patient."
+            )
+
+        if appointment.appointment_status == "Cancelled":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate bed for a cancelled appointment."
+            )
 
         bed.status = "Occupied"
         bed.patient_id = patient.id
@@ -367,14 +427,24 @@ class BedAllocationService:
             raise BadRequestException("Source and target beds cannot be the same.")
 
         source_bed = await self.get_bed(data.sourceBedId)
-        if source_bed.status != "Occupied" or not source_bed.patient_id:
-            raise BadRequestException(f"Source bed {source_bed.name} is not occupied.")
+        if source_bed.status == "Maintenance":
+            raise BadRequestException(f"Source bed '{source_bed.name}' is under maintenance.")
+        elif source_bed.status == "Cleaning":
+            raise BadRequestException(f"Source bed '{source_bed.name}' is currently under cleaning.")
+        elif source_bed.status in ("Inactive", "Blocked", "Unavailable", "Reserved"):
+            raise BadRequestException(f"Source bed '{source_bed.name}' is currently unavailable.")
+        elif source_bed.status != "Occupied" or not source_bed.patient_id:
+            raise BadRequestException(f"Source bed '{source_bed.name}' is not occupied.")
 
         target_bed = await self.get_bed(data.targetBedId)
-        if target_bed.status != "Available":
-            if target_bed.status == "Occupied":
-                raise BadRequestException("Bed is already occupied")
-            raise BadRequestException(f"Target bed {target_bed.name} is not available. Status: {target_bed.status}.")
+        if target_bed.status == "Occupied":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is already occupied.")
+        elif target_bed.status == "Maintenance":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is under maintenance.")
+        elif target_bed.status == "Cleaning":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is currently under cleaning.")
+        elif target_bed.status in ("Inactive", "Blocked", "Unavailable", "Reserved") or target_bed.status != "Available":
+            raise BadRequestException(f"Target bed '{target_bed.name}' is currently unavailable.")
 
         patient = await self.get_patient(source_bed.patient_id)
 

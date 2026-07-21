@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.exceptions import ConflictException, NotFoundException, BadRequestException
-from app.models.staff_model import Staff
+from app.models.staff_model import Staff, StaffSchedule
 from app.models.user_model import User
 from app.core.security import get_password_hash
 from app.utils.helpers import generate_user_code
@@ -13,6 +13,8 @@ from app.schemas.staff_schema import (
     StaffCreate,
     StaffUpdate,
     StaffResponse,
+    StaffScheduleCreate,
+    StaffScheduleResponse,
 )
 from app.utils.pagination import build_paginated_result, PaginatedResult
 
@@ -207,3 +209,70 @@ class StaffService:
             if user:
                 user.is_active = False
         await self.audit_repo.create("delete", "staff", user_id=current_user_id, resource_id=str(staff.id))
+
+    async def get_schedule(self, staff_id: int) -> list[StaffScheduleResponse]:
+        staff = await self.repo.get_by_id(staff_id)
+        if not staff:
+            raise NotFoundException("Staff member not found")
+            
+        result = await self.db.scalars(
+            select(StaffSchedule)
+            .where(StaffSchedule.staff_id == staff_id)
+            .order_by(StaffSchedule.day_of_week, StaffSchedule.start_time)
+        )
+        return [StaffScheduleResponse.model_validate(s) for s in result.all()]
+
+    async def add_schedule(self, staff_id: int, data: StaffScheduleCreate, current_user_id: int) -> StaffScheduleResponse:
+        staff = await self.repo.get_by_id(staff_id)
+        if not staff:
+            raise NotFoundException("Staff member not found")
+            
+        if staff.status != 1:
+            raise BadRequestException("Cannot create schedule for an inactive staff member")
+            
+        # Check for overlaps
+        existing_schedules = await self.db.scalars(
+            select(StaffSchedule)
+            .where(
+                StaffSchedule.staff_id == staff_id,
+                StaffSchedule.day_of_week == data.day_of_week
+            )
+        )
+        for sched in existing_schedules.all():
+            if not (data.end_time <= sched.start_time or data.start_time >= sched.end_time):
+                raise ConflictException("Schedule overlaps with an existing slot")
+                
+        new_schedule = StaffSchedule(
+            staff_id=staff_id,
+            **data.model_dump()
+        )
+        self.db.add(new_schedule)
+        await self.db.flush()
+        
+        await self.audit_repo.create("create_schedule", "staff", user_id=current_user_id, resource_id=str(staff_id))
+        return StaffScheduleResponse.model_validate(new_schedule)
+
+    async def delete_all_schedules(self, staff_id: int, current_user_id: int) -> None:
+        staff = await self.repo.get_by_id(staff_id)
+        if not staff:
+            raise NotFoundException("Staff member not found")
+            
+        from sqlalchemy import delete
+        await self.db.execute(
+            delete(StaffSchedule).where(StaffSchedule.staff_id == staff_id)
+        )
+        await self.db.flush()
+        await self.audit_repo.create("delete_all_schedules", "staff", user_id=current_user_id, resource_id=str(staff_id))
+
+    async def delete_schedule_slot(self, staff_id: int, slot_id: int, current_user_id: int) -> None:
+        staff = await self.repo.get_by_id(staff_id)
+        if not staff:
+            raise NotFoundException("Staff member not found")
+            
+        slot = await self.db.get(StaffSchedule, slot_id)
+        if not slot or slot.staff_id != staff_id:
+            raise NotFoundException("Schedule slot not found")
+            
+        await self.db.delete(slot)
+        await self.db.flush()
+        await self.audit_repo.create("delete_schedule_slot", "staff", user_id=current_user_id, resource_id=str(staff_id))

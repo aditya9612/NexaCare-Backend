@@ -69,6 +69,12 @@ class InventoryRepository:
         result = await self.db.execute(self._base_query().where(InventoryItem.id == item_id))
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(self, item_id: int) -> InventoryItem | None:
+        result = await self.db.execute(
+            self._base_query().where(InventoryItem.id == item_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_sku(self, sku: str) -> InventoryItem | None:
         result = await self.db.execute(
             self._base_query().where(func.lower(InventoryItem.sku) == sku.lower())
@@ -78,6 +84,12 @@ class InventoryRepository:
     async def get_by_barcode(self, barcode: str) -> InventoryItem | None:
         result = await self.db.execute(
             self._base_query().where(func.lower(InventoryItem.barcode) == barcode.lower())
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_name(self, name: str) -> InventoryItem | None:
+        result = await self.db.execute(
+            self._base_query().where(func.lower(InventoryItem.name) == name.strip().lower())
         )
         return result.scalar_one_or_none()
 
@@ -165,11 +177,26 @@ class StockTransactionRepository:
             query = query.where(StockTransaction.transaction_type == transaction_type)
         return (await self.db.scalar(query)) or 0
 
+    async def get_by_id(self, transaction_id: int) -> StockTransaction | None:
+        result = await self.db.execute(
+            select(StockTransaction).where(StockTransaction.id == transaction_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, transaction: StockTransaction) -> StockTransaction:
         self.db.add(transaction)
         await self.db.flush()
         await self.db.refresh(transaction)
         return transaction
+
+    async def update(self, transaction: StockTransaction) -> StockTransaction:
+        await self.db.flush()
+        await self.db.refresh(transaction)
+        return transaction
+
+    async def delete(self, transaction: StockTransaction) -> None:
+        await self.db.delete(transaction)
+        await self.db.flush()
 
     async def get_consumption_report(self, start, end) -> list[dict]:
         result = await self.db.execute(
@@ -235,6 +262,17 @@ class WarehouseRepository:
         await self.db.flush()
         await self.db.refresh(warehouse)
         return warehouse
+
+    async def update(self, warehouse: Warehouse) -> Warehouse:
+        await self.db.flush()
+        await self.db.refresh(warehouse)
+        return warehouse
+
+    async def soft_delete(self, warehouse: Warehouse) -> None:
+        warehouse.is_deleted = True
+        warehouse.deleted_at = utc_now()
+        warehouse.is_active = False
+        await self.db.flush()
 
 
 class ReorderAlertRepository:

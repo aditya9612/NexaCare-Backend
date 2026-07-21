@@ -7,6 +7,7 @@ from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.lab_schema import (
     CriticalAlert,
     LabReportApprove,
+    RejectLabReportRequest,
     LabReportCreate,
     LabReportResponse,
     LabTestCreate,
@@ -248,9 +249,10 @@ async def delete_sample(
 async def enter_test_result(
     db: DbSession,
     current_user: CurrentUser,
-    test_order_id: int = Form(...),
+    sample_id: int = Form(...),
     parameter_name: str = Form(...),
     result_value: str = Form(...),
+    remark: str = Form(...),
     unit: str | None = Form(None),
     normal_range: str | None = Form(None),
     is_critical: bool = Form(False),
@@ -258,9 +260,10 @@ async def enter_test_result(
     _: User = Depends(require_permission("lab", "create")),
 ):
     data = TestResultCreate(
-        test_order_id=test_order_id,
+        sample_id=sample_id,
         parameter_name=parameter_name,
         result_value=result_value,
+        remark=remark,
         unit=unit,
         normal_range=normal_range,
         is_critical=is_critical,
@@ -355,6 +358,18 @@ async def approve_lab_report(
 ):
     report = await LabService(db).approve_report(report_id, data,  current_user)
     return APIResponse(message="Lab report processed", data=report)
+
+
+@router.patch("/reports/{report_id}/reject", response_model=APIResponse[LabReportResponse])
+async def reject_lab_report(
+    report_id: int,
+    data: RejectLabReportRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    report = await LabService(db).reject_lab_report(report_id, data, current_user.id)
+    return APIResponse(message="Lab report rejected successfully.", data=report)
 
 
 @router.get("/reports/{report_id}/download")
@@ -491,3 +506,23 @@ async def critical_alerts(
 ):
     alerts = await LabService(db).get_critical_alerts(current_user=current_user)
     return APIResponse(message="Critical alerts", data=alerts)
+
+
+@router.get("/analytics", response_model=APIResponse)
+async def lab_analytics_alias(
+    db: DbSession,
+    current_user: CurrentUser,
+    time_filter: str = "7_days",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    from app.services.lab_dashboard_service import LabDashboardService
+    from datetime import datetime
+    s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+    e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+    data = await LabDashboardService(db).get_analytics_data(
+        time_filter=time_filter, start_date=s_date, end_date=e_date
+    )
+    return APIResponse(message="Lab analytics data retrieved", data=data)
+

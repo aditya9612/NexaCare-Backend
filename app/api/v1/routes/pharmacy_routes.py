@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Depends
+from datetime import date
+from typing import Optional
+from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
+from app.core.exceptions import BadRequestException
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.pharmacy_schema import (
     ExpiryAlert,
@@ -10,7 +13,10 @@ from app.schemas.pharmacy_schema import (
     MedicineResponse,
     MedicineUpdate,
     PharmacyInvoiceCreate,
+    PharmacyInvoiceUpdate,
     PharmacyInvoiceResponse,
+    PharmacyDashboardResponse,
+    PharmacyInventoryOverviewResponse,
     PrescriptionCreate,
     PrescriptionResponse,
     PrescriptionUpdate,
@@ -20,14 +26,47 @@ from app.schemas.pharmacy_schema import (
     SupplierCreate,
     SupplierResponse,
     SupplierUpdate,
+    PharmacyDashboardResponse,
 )
+
 from app.services.pharmacy_service import PharmacyService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
 
+ALLOWED_FILTERS = {"today", "7_days", "30_days", "month_to_date", "month", "3_month", "overall", "custom"}
+
+
+# --- Pharmacy Dashboard ---
+@router.get("/dashboard", response_model=APIResponse[PharmacyDashboardResponse])
+@router.get("/dashboard/summary", response_model=APIResponse[PharmacyDashboardResponse])
+async def get_pharmacy_dashboard(
+    db: DbSession,
+    current_user: CurrentUser,
+    time_filter: str = Query("7_days", alias="filter", description="Time range filter (default: 7_days)"),
+    start_date: Optional[date] = Query(None, description="Start date for custom filter (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for custom filter (YYYY-MM-DD)"),
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    if time_filter not in ALLOWED_FILTERS:
+        raise BadRequestException(f"Invalid filter. Allowed values: {', '.join(sorted(ALLOWED_FILTERS))}")
+    if time_filter == "custom":
+        if not start_date or not end_date:
+            raise BadRequestException("start_date and end_date are required when filter is 'custom'")
+        if start_date > end_date:
+            raise BadRequestException("start_date cannot be after end_date")
+
+    dashboard_data = await PharmacyService(db).get_dashboard_summary(
+        time_filter=time_filter,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return APIResponse(message="Pharmacy dashboard summary retrieved", data=dashboard_data)
+
+
 
 # --- Medicines ---
+
 @router.post("/medicines", response_model=APIResponse[MedicineResponse], status_code=201)
 async def create_medicine(
     data: MedicineCreate,
@@ -161,7 +200,8 @@ async def update_prescription(
         prescription_id=prescription_id,
         data=data,
         doctor_id=doctor.id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        current_user=current_user
     )
     return APIResponse(message="Prescription updated", data=prescription)
 
@@ -227,13 +267,14 @@ async def get_pharmacy_invoice(
 @router.put("/invoices/{invoice_id}", response_model=APIResponse[PharmacyInvoiceResponse])
 async def update_pharmacy_invoice(
     invoice_id: int,
-    data: PharmacyInvoiceCreate,
+    data: PharmacyInvoiceUpdate,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     invoice = await PharmacyService(db).update_invoice(invoice_id, data)
     return APIResponse(message="Pharmacy invoice updated", data=invoice)
+
 
 
 @router.get("/invoices/{invoice_id}/download")
@@ -408,3 +449,23 @@ async def sales_report(
 ):
     report = await PharmacyService(db).get_sales_report(period=period)
     return APIResponse(message="Sales report", data=report)
+
+
+@router.get("/dashboard/summary", response_model=APIResponse[PharmacyDashboardResponse])
+async def get_dashboard_summary(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    summary = await PharmacyService(db).get_dashboard_summary()
+    return APIResponse(message="Pharmacy dashboard summary retrieved", data=summary)
+
+
+@router.get("/inventory/overview", response_model=APIResponse[PharmacyInventoryOverviewResponse])
+async def get_inventory_overview(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    overview = await PharmacyService(db).get_inventory_overview()
+    return APIResponse(message="Pharmacy inventory overview retrieved", data=overview)

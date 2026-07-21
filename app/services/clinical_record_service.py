@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException, BadRequestException, ConflictException
+from app.core.constants import AppointmentStatus
 from app.models.clinical_record_model import ClinicalRecord
 from app.repositories.clinical_record_repository import ClinicalRecordRepository
 from app.repositories.patient_repository import PatientRepository
@@ -67,6 +68,13 @@ class ClinicalRecordService:
         await self._validate_related_entities(data.patient_id, data.doctor_id, data.appointment_id)
         record = ClinicalRecord(**data.model_dump())
         record = await self.record_repo.create(record)
+        
+        if data.appointment_id:
+            appointment = await self.appointment_repo.get_by_id(data.appointment_id)
+            if appointment:
+                appointment.appointment_status = AppointmentStatus.COMPLETED
+                await self.appointment_repo.update(appointment)
+
         await self.audit_repo.create("create", "clinical_records", user_id=user_id, resource_id=str(record.id))
         return self._to_response_schema(record)
 

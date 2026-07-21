@@ -1,8 +1,9 @@
+from datetime import date
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundException, ConflictException
+from app.core.exceptions import NotFoundException, ConflictException, BadRequestException
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
@@ -21,13 +22,32 @@ from app.utils.pagination import build_paginated_result
 
 class PatientService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = PatientRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def list_patients(self, page: int = 1, size: int = 20, sort_by: str = "created_at", sort_order: str = "desc"):
+    async def list_patients(
+        self,
+        page: int = 1,
+        size: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ):
+        if start_date and end_date and start_date > end_date:
+            raise BadRequestException("Start date cannot be greater than end date")
+
         skip = (page - 1) * size
-        items = await self.repo.list_all(skip=skip, limit=size, sort_by=sort_by, sort_order=sort_order)
-        total = await self.repo.count_all()
+        items = await self.repo.list_all(
+            skip=skip,
+            limit=size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        total = await self.repo.count_all(start_date=start_date, end_date=end_date)
         return build_paginated_result(
             [PatientResponse.model_validate(p) for p in items], total, page, size
         )
@@ -80,6 +100,29 @@ class PatientService:
         if not patient:
             raise NotFoundException("Patient not found")
         await self.repo.soft_delete(patient)
+        
+        # Free any beds allocated to this patient
+        from app.models.bed_allocation_model import Bed, BedActivityLog
+        from sqlalchemy import select
+        result = await self.db.execute(select(Bed).where(Bed.patient_id == patient_id))
+        beds = result.scalars().all()
+        for bed in beds:
+            bed.status = "Available"
+            bed.patient_id = None
+            bed.allocation_time = None
+            bed.admission_date = None
+            
+            # Log the release activity
+            log = BedActivityLog(
+                type="release",
+                message=f"Automatically released Bed {bed.name} because patient {patient.first_name} {patient.last_name} was deleted.",
+                floor_id=None,
+                room_id=bed.room_id,
+                bed_id=bed.id,
+                patient_id=patient_id,
+            )
+            self.db.add(log)
+            
         if patient.user_id:
             from app.models.user_model import User
             user = await self.db.get(User, patient.user_id)

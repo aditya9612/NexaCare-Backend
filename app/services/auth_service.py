@@ -176,10 +176,48 @@ class AuthService:
             return doctor is None or doctor.is_deleted
         elif user.role.name == UserRole.NURSE:
             nurse = await self.db.scalar(select(Nurse).where(Nurse.user_id == user.id))
-            return nurse is None
+            if nurse is None:
+                from app.utils.helpers import generate_nurse_code
+                from app.models.department_model import Department
+                department = await self.db.scalar(
+                    select(Department).order_by(Department.department_id.asc())
+                )
+                dept_id = department.department_id if department else None
+                
+                staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
+                if staff and staff.department_id:
+                    dept_id = staff.department_id
+                
+                nurse = Nurse(
+                    nurse_code=generate_nurse_code(),
+                    user_id=user.id,
+                    license_number=f"LIC-{generate_nurse_code()}",
+                    department_id=dept_id,
+                    shift="Morning Shift",
+                )
+                self.db.add(nurse)
+                await self.db.flush()
+            return False
         elif user.role.name == UserRole.PATIENT:
             patient = await self.db.scalar(select(Patient).where(Patient.user_id == user.id))
-            return patient is None or patient.is_deleted
+            if patient is None:
+                from app.utils.helpers import generate_mrn
+                parts = (user.full_name or "Patient User").split(maxsplit=1)
+                first_name = parts[0]
+                last_name = parts[1] if len(parts) > 1 else "User"
+                
+                patient = Patient(
+                    patient_code=generate_mrn(),
+                    user_id=user.id,
+                    first_name=first_name,
+                    last_name=last_name,
+                    phone=user.phone,
+                    email=user.email,
+                    status="active",
+                )
+                self.db.add(patient)
+                await self.db.flush()
+            return patient.is_deleted
         elif user.role.name in {
             UserRole.RECEPTIONIST,
             UserRole.ACCOUNTANT,
@@ -203,6 +241,7 @@ class AuthService:
         user_agent: str | None = None,
     ) -> TokenResponse:
         from app.services.security_service import SecurityService
+        from app.core.logger import logger
 
         user = None
         try:
@@ -237,7 +276,8 @@ class AuthService:
                     status="SUCCESS",
                     details="Login successful",
                 )
-            except Exception:
+            except Exception as e:
+                logger.exception("Failed to record login history", exc_info=True)
                 try:
                     await self.db.rollback()
                 except Exception:
@@ -256,11 +296,15 @@ class AuthService:
                     status="FAILED",
                     details=str(exc.detail),
                 )
-            except Exception:
+            except Exception as e:
+                logger.exception("Failed to record failed login history", exc_info=True)
                 try:
                     await self.db.rollback()
                 except Exception:
                     pass
+            raise exc
+        except Exception as exc:
+            logger.exception("Login failed with unexpected exception", exc_info=True)
             raise exc
 
     async def _issue_tokens(self, user: User) -> TokenResponse:
@@ -339,18 +383,25 @@ class AuthService:
         await self.repo.revoke_all_user_tokens(user.id)
 
     async def verify_otp_code(self, data: OTPVerifyRequest) -> None:
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
-            raise BadRequestException("Invalid or expired OTP")
-
-    async def activate_account(self, data: ActivateAccountRequest) -> None:
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
-            raise BadRequestException("Invalid or expired OTP")
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
             raise NotFoundException("User not found")
-        user.is_active = True
+        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+            raise BadRequestException("Invalid or expired OTP")
         user.is_verified = True
         await self.repo.update(user)
+
+    async def activate_account(self, data: ActivateAccountRequest) -> None:
+        user = await self._get_user_by_identifier(data.email, data.phone)
+        if not user:
+            raise NotFoundException("User not found")
+        if not user.is_verified:
+            if not data.otp or not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+                raise BadRequestException("Invalid or expired OTP. Please verify OTP before activating your account.")
+            user.is_verified = True
+        user.is_active = True
+        await self.repo.update(user)
+
 
     async def get_profile(self, user: User) -> UserProfileResponse:
         return UserProfileResponse(

@@ -76,8 +76,10 @@ class PharmacyInvoice(Base, TimestampMixin, SoftDeleteMixin):
     gst_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)
     paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    payment_mode: Mapped[str | None] = mapped_column(String(50), default="Cash", nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
 
     items: Mapped[list["PharmacyInvoiceItem"]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan"

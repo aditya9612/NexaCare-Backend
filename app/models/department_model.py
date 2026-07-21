@@ -9,6 +9,7 @@ class Department(Base, TimestampMixin):
     __tablename__ = "departments"
 
     department_id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    department_code: Mapped[str | None] = mapped_column(String(20), unique=True, index=True, nullable=True)
     department_name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
 
     # Existing relations

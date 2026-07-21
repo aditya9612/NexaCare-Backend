@@ -23,6 +23,7 @@ from app.schemas.doctor_schema import (
     DoctorResponse,
     DoctorScheduleCreate,
     DoctorScheduleResponse,
+    DoctorScheduleUpdate,
     DoctorUpdate,
 )
 from app.utils.file_upload import save_upload
@@ -91,6 +92,7 @@ class DoctorService:
 
     async def list_doctors(
         self,
+        current_user: User,
         page: int = 1,
         size: int = 20,
         department_id: int | None = None,
@@ -98,6 +100,13 @@ class DoctorService:
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ):
+        if current_user.role and current_user.role.name == UserRole.DOCTOR:
+            doctor = await self.repo.get_by_user_id(current_user.id)
+            if not doctor:
+                raise NotFoundException("Doctor profile not found")
+            items = [DoctorResponse.model_validate(doctor)] if page == 1 else []
+            return build_paginated_result(items, 1, page, size)
+
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip, limit=size, department_id=department_id,
@@ -253,6 +262,14 @@ class DoctorService:
             existing_email = await self.repo.get_by_email(data.email)
             if existing_email:
                 raise ConflictException("Email already exists")
+            existing_user_email = await self.auth_repo.get_by_email(data.email)
+            if existing_user_email and existing_user_email.id != doctor.user_id:
+                raise ConflictException("Email already registered to another user")
+
+        if data.phone and data.phone != doctor.phone:
+            existing_user_phone = await self.auth_repo.get_by_phone(data.phone)
+            if existing_user_phone and existing_user_phone.id != doctor.user_id:
+                raise ConflictException("Phone number already registered to another user")
 
         if data.license_number and data.license_number != doctor.license_number:
             existing_license = await self.repo.get_by_license(data.license_number)
@@ -274,6 +291,20 @@ class DoctorService:
 
         try:
             doctor = await self.repo.update(doctor)
+            
+            # Synchronise the updated details with the associated User record
+            if doctor.user_id:
+                user = await self.auth_repo.get_by_id(doctor.user_id)
+                if user:
+                    user.full_name = f"{doctor.first_name} {doctor.last_name}".strip()
+                    if data.email:
+                        user.email = data.email.strip().lower()
+                    if data.phone:
+                        user.phone = data.phone
+                    if "profile_image" in update_data:
+                        user.profile_image = update_data["profile_image"]
+                    await self.auth_repo.update(user)
+                    
         except IntegrityError as exc:
             self._raise_doctor_integrity_error(exc)
         await self.audit_repo.create("update", "doctors", user_id=user_id, resource_id=str(doctor.id))
@@ -319,6 +350,14 @@ class DoctorService:
         await self.get_by_id(doctor_id)
         if data.start_time >= data.end_time:
             raise ConflictException("Start time must be before end time")
+
+        # Check for overlaps
+        existing_schedules = await self.repo.get_schedule(doctor_id)
+        for sched in existing_schedules:
+            if sched.day_of_week == data.day_of_week:
+                if not (data.end_time <= sched.start_time or data.start_time >= sched.end_time):
+                    raise ConflictException("Schedule overlaps with an existing slot")
+
         schedule = DoctorSchedule(doctor_id=doctor_id, **data.model_dump())
         schedule = await self.repo.add_schedule(schedule)
         await self.audit_repo.create("create", "doctor_schedules", user_id=user_id, resource_id=str(schedule.id))
@@ -383,3 +422,53 @@ class DoctorService:
 
         await self.repo.delete_schedule_slot(slot)
         await self.audit_repo.create("delete", "doctor_schedules", user_id=user_id, resource_id=str(slot_id))
+
+    async def update_schedule_slot(
+        self, doctor_id: int, slot_id: int, data: DoctorScheduleUpdate, user_id: int
+    ) -> DoctorScheduleResponse:
+        await self.get_by_id(doctor_id)
+        slot = await self.repo.get_schedule_slot(doctor_id, slot_id)
+        if not slot:
+            raise NotFoundException("Schedule slot not found")
+
+        update_data = data.model_dump(exclude_unset=True)
+        if not update_data:
+            return DoctorScheduleResponse.model_validate(slot)
+
+        new_day = update_data.get("day_of_week", slot.day_of_week)
+        new_start = update_data.get("start_time", slot.start_time)
+        new_end = update_data.get("end_time", slot.end_time)
+
+        if new_start >= new_end:
+            raise ConflictException("Start time must be before end time")
+
+        existing_schedules = await self.repo.get_schedule(doctor_id)
+        for sched in existing_schedules:
+            if sched.id != slot_id and sched.day_of_week == new_day:
+                if not (new_end <= sched.start_time or new_start >= sched.end_time):
+                    raise ConflictException("Schedule overlaps with an existing slot")
+
+        for key, val in update_data.items():
+            setattr(slot, key, val)
+
+        slot = await self.repo.update_schedule_slot(slot)
+        await self.audit_repo.create("update", "doctor_schedules", user_id=user_id, resource_id=str(slot.id))
+        return DoctorScheduleResponse.model_validate(slot)
+
+    async def update_doctor_schedule(
+        self, doctor_id: int, data_list: list[DoctorScheduleCreate], user_id: int
+    ) -> list[DoctorScheduleResponse]:
+        await self.get_by_id(doctor_id)
+        await self.repo.delete_all_schedules(doctor_id)
+
+        created_slots = []
+        for slot_data in data_list:
+            if slot_data.start_time >= slot_data.end_time:
+                raise ConflictException(f"Start time must be before end time for day {slot_data.day_of_week + 1}")
+            schedule = DoctorSchedule(doctor_id=doctor_id, **slot_data.model_dump())
+            schedule = await self.repo.add_schedule(schedule)
+            created_slots.append(schedule)
+
+        await self.audit_repo.create("update", "doctor_schedules", user_id=user_id, resource_id=str(doctor_id))
+        return [DoctorScheduleResponse.model_validate(s) for s in created_slots]
+

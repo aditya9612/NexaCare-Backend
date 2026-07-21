@@ -36,6 +36,8 @@ class RoomType(str, Enum):
     ICU = "ICU"
     EMERGENCY = "Emergency"
     DELUXE = "Deluxe"
+    PRIVATE = "Private"
+    SEMI_PRIVATE = "Semi-Private"
 
 
 class BedType(str, Enum):
@@ -43,6 +45,9 @@ class BedType(str, Enum):
     ICU = "ICU"
     VENTILATOR = "Ventilator"
     DELUXE = "Deluxe"
+    EMERGENCY = "Emergency"
+    PRIVATE = "Private"
+    SEMI_PRIVATE = "Semi-Private"
 
 
 # Bed Schemas

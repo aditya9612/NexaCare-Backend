@@ -259,11 +259,24 @@ class PharmacyInvoiceItemCreate(BaseSchema):
 class PharmacyInvoiceCreate(BaseSchema):
     patient_id: int | None = Field(None, gt=0)
     prescription_id: int | None = Field(None, gt=0)
+    payment_mode: str | None = Field("Cash", description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
     discount_amount: float = Field(0.0, ge=0)
     discount_percentage: float = Field(0.0, ge=0, le=100)
     tax_percentage: float = Field(0.0, ge=0, le=100)
     tax_amount: float = Field(0.0, ge=0)
     items: List[PharmacyInvoiceItemCreate] = Field(..., min_length=1)
+
+
+class PharmacyInvoiceUpdate(BaseSchema):
+    patient_id: Optional[int] = Field(None, gt=0)
+    prescription_id: Optional[int] = Field(None, gt=0)
+    payment_mode: Optional[str] = Field(None, description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
+    discount_amount: Optional[float] = Field(None, ge=0)
+    discount_percentage: Optional[float] = Field(None, ge=0, le=100)
+    tax_percentage: Optional[float] = Field(None, ge=0, le=100)
+    tax_amount: Optional[float] = Field(None, ge=0)
+    status: Optional[str] = None
+    items: Optional[List[PharmacyInvoiceItemCreate]] = None
 
 
 class PharmacyInvoiceItemResponse(BaseSchema):
@@ -280,6 +293,7 @@ class PharmacyInvoiceResponse(BaseSchema):
     invoice_number: str
     patient_id: int | None
     prescription_id: int | None
+    payment_mode: str | None = "Cash"
     subtotal: float
     discount_percentage: float | None = 0.0
     discount_amount: float
@@ -291,6 +305,7 @@ class PharmacyInvoiceResponse(BaseSchema):
     status: str
     items: List[PharmacyInvoiceItemResponse] = []
     created_at: datetime
+
 
 
 class SupplierCreate(BaseSchema):
@@ -388,6 +403,7 @@ class PurchaseCreate(BaseSchema):
     supplier_id: int
     notes: str | None = None
     items: List[PurchaseItemCreate] = Field(..., min_length=1)
+    status: str | None = None
 
 
 class PurchaseItemResponse(BaseSchema):
@@ -435,3 +451,82 @@ class SalesReport(BaseSchema):
     total_sales: float
     invoice_count: int
     top_medicines: List[dict]
+
+
+class PharmacyDashboardResponse(BaseSchema):
+    total_medicines: int
+    low_stock_alerts: int
+    expired_medicines_alerts: int
+    daily_sales: float
+    monthly_sales: float
+
+
+class DailyStockDeduction(BaseSchema):
+    date: date
+    deduction_quantity: int
+
+
+class MostSellingMedicine(BaseSchema):
+    medicine_id: int
+    name: str
+    generic_name: str | None = None
+    sku: str
+    total_sold_quantity: int
+
+
+class DateWiseMedicineItem(BaseSchema):
+    name: str
+    quantity: int
+
+
+class DateWiseMedicine(BaseSchema):
+    date: date
+    medicines: List[DateWiseMedicineItem]
+
+
+class PharmacyInventoryOverviewResponse(BaseSchema):
+    in_stock_medicines: int
+    low_stock_medicines: int
+    out_of_stock_medicines: int
+    expiring_medicines: int
+    daily_stock_deductions: List[DailyStockDeduction]
+    most_selling_medicines: List[MostSellingMedicine]
+    date_wise_medicines: List[DateWiseMedicine]
+
+
+class LowStockItemAlert(BaseSchema):
+    id: int
+    name: str
+    stock_quantity: int
+    reorder_level: int
+    unit: str = "Unit"
+    status_label: str = "Low Stock"
+
+
+class PharmacySalesTrendPoint(BaseSchema):
+    label: str
+    amount: float
+
+
+class PharmacyDashboardResponse(BaseSchema):
+    total_medicines: int
+    total_medicines_subtext: str = "Current catalog count"
+    low_stock_alerts: int
+    low_stock_subtext: str = "Needs reorder attention"
+    expired_alerts: int
+    expired_subtext: str = "Near expiry and expired"
+    today_sales: float
+    today_sales_subtext: str = "Paid invoices only"
+    monthly_sales: float
+    monthly_sales_subtext: str = "Current month revenue"
+    pending_purchases: int
+    pending_purchases_subtext: str = "Awaiting completion"
+    total_suppliers: int
+    total_suppliers_subtext: str = "Active + inactive partners"
+    prescriptions_count: int
+    prescriptions_subtext: str = "Today and backlog queue"
+
+    low_stock_items: List[LowStockItemAlert] = []
+    today_sales_trend: List[PharmacySalesTrendPoint] = []
+    monthly_sales_trend: List[PharmacySalesTrendPoint] = []
+

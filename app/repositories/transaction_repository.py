@@ -59,7 +59,10 @@ class TransactionRepository:
             )
 
         column = getattr(Payment, sort_by, Payment.created_at)
-        query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
+        if sort_order == "desc":
+            query = query.order_by(column.desc(), Payment.id.desc())
+        else:
+            query = query.order_by(column.asc(), Payment.id.asc())
 
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())

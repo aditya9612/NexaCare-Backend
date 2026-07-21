@@ -4,6 +4,7 @@ from jinja2 import Environment, FileSystemLoader
 from app.schemas.lab_dashboard_schema import LabDashboardResponse
 from app.utils.pdf_generator import html_to_pdf
 from app.utils.helpers import utc_now
+from fastapi.concurrency import run_in_threadpool
 
 env = Environment(loader=FileSystemLoader("app/templates"))
 
@@ -24,5 +25,5 @@ async def generate_lab_dashboard_pdf(
     context["generated_at"] = generated_at_str
     
     html = template.render(**context)
-    pdf_bytes = html_to_pdf(html)
+    pdf_bytes = await run_in_threadpool(html_to_pdf, html)
     return pdf_bytes

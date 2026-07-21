@@ -214,108 +214,129 @@ class BillingService:
 
         return self._to_response(billing)
 
+    async def _paginate_combined_billings(
+        self,
+        page: int,
+        size: int,
+        sort_by: str,
+        sort_order: str,
+        status: str | None,
+        patient_id: int | None,
+        q: str | None,
+    ):
+        from app.models.billing_model import Billing
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        from sqlalchemy import select, or_, func, union_all
+        from sqlalchemy.sql.expression import literal
+        from sqlalchemy.orm import selectinload
+
+        sort_field_b = None
+        sort_field_p = None
+        
+        if sort_by in ["created_at", "status", "total_amount"]:
+            sort_field_b = getattr(Billing, sort_by)
+            sort_field_p = getattr(PharmacyInvoice, sort_by)
+        elif sort_by == "bill_number":
+            sort_field_b = Billing.bill_number
+            sort_field_p = PharmacyInvoice.invoice_number
+        else:
+            sort_field_b = Billing.created_at
+            sort_field_p = PharmacyInvoice.created_at
+
+        b_query = select(
+            Billing.id.label("id"),
+            literal("billing").label("source"),
+            sort_field_b.label("sort_val"),
+            Billing.id.label("tie_breaker")
+        ).where(Billing.is_deleted == False)
+
+        p_query = select(
+            PharmacyInvoice.id.label("id"),
+            literal("pharmacy").label("source"),
+            sort_field_p.label("sort_val"),
+            PharmacyInvoice.id.label("tie_breaker")
+        ).where(PharmacyInvoice.is_deleted == False)
+
+        if status:
+            b_query = b_query.where(Billing.status == status)
+            p_query = p_query.where(PharmacyInvoice.status == status)
+        if patient_id:
+            b_query = b_query.where(Billing.patient_id == patient_id)
+            p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
+        if q:
+            pattern = f"%{q.lower()}%"
+            b_query = b_query.where(
+                or_(
+                    func.lower(Billing.bill_number).like(pattern),
+                    func.lower(Billing.notes).like(pattern),
+                )
+            )
+            p_query = p_query.where(
+                func.lower(PharmacyInvoice.invoice_number).like(pattern)
+            )
+
+        combined_query = union_all(b_query, p_query)
+
+        subq = combined_query.subquery()
+        count_query = select(func.count()).select_from(subq)
+        total = await self.db.scalar(count_query) or 0
+
+        skip = (page - 1) * size
+        
+        order_col = subq.c.sort_val.desc() if sort_order == "desc" else subq.c.sort_val.asc()
+        tie_col = subq.c.tie_breaker.desc() if sort_order == "desc" else subq.c.tie_breaker.asc()
+        
+        paginated_query = select(subq.c.id, subq.c.source).order_by(order_col, tie_col).offset(skip).limit(size)
+        
+        rows = await self.db.execute(paginated_query)
+        id_source_list = list(rows.all())
+        
+        billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
+        pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
+
+        billing_map = {}
+        if billing_ids:
+            b_full = await self.db.execute(
+                select(Billing).where(Billing.id.in_(billing_ids)).options(
+                    selectinload(Billing.items), selectinload(Billing.payments)
+                )
+            )
+            for b in b_full.scalars().unique().all():
+                billing_map[b.id] = self._to_response(b)
+
+        pharmacy_map = {}
+        if pharmacy_ids:
+            p_full = await self.db.execute(
+                select(PharmacyInvoice).where(PharmacyInvoice.id.in_(pharmacy_ids)).options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+            )
+            for p in p_full.scalars().unique().all():
+                pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
+
+        ordered_items = []
+        for r_id, r_source in id_source_list:
+            if r_source == "billing" and r_id in billing_map:
+                ordered_items.append(billing_map[r_id])
+            elif r_source == "pharmacy" and r_id in pharmacy_map:
+                ordered_items.append(pharmacy_map[r_id])
+
+        return build_paginated_result(ordered_items, total, page, size)
+
     async def list_billings(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
     ):
-        from app.models.billing_model import Billing
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        billing_query = select(Billing).where(Billing.is_deleted == False).options(
-            selectinload(Billing.items), selectinload(Billing.payments)
+        return await self._paginate_combined_billings(
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order,
+            status=status, patient_id=patient_id, q=None
         )
-        if status:
-            billing_query = billing_query.where(Billing.status == status)
-        if patient_id:
-            billing_query = billing_query.where(Billing.patient_id == patient_id)
-
-        billings_res = await self.db.execute(billing_query)
-        billings_list = list(billings_res.scalars().unique().all())
-
-        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-        invoice_query = select(PharmacyInvoice).where(PharmacyInvoice.is_deleted == False).options(
-            selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-        )
-        if status:
-            invoice_query = invoice_query.where(PharmacyInvoice.status == status)
-        if patient_id:
-            invoice_query = invoice_query.where(PharmacyInvoice.patient_id == patient_id)
-
-        invoices_res = await self.db.execute(invoice_query)
-        invoices_list = list(invoices_res.scalars().unique().all())
-
-        all_items = []
-        for b in billings_list:
-            all_items.append(self._to_response(b))
-
-        for inv in invoices_list:
-            all_items.append(self._pharmacy_invoice_to_billing_response(inv))
-
-        reverse = (sort_order == "desc")
-        def get_sort_key(item: BillingResponse):
-            val = getattr(item, sort_by, None)
-            if val is None:
-                if sort_by == "created_at":
-                    val = item.created_at
-                else:
-                    val = 0
-            return val
-
-        all_items.sort(key=get_sort_key, reverse=reverse)
-
-        skip = (page - 1) * size
-        total = len(all_items)
-        paginated = all_items[skip : skip + size]
-
-        return build_paginated_result(paginated, total, page, size)
 
     async def search(self, q: str, page: int = 1, size: int = 20, status: str | None = None):
-        from app.models.billing_model import Billing
-        from sqlalchemy import select, or_, func
-        from sqlalchemy.orm import selectinload
-
-        pattern = f"%{q.lower()}%"
-        billing_query = select(Billing).where(Billing.is_deleted == False).where(
-            or_(
-                func.lower(Billing.bill_number).like(pattern),
-                func.lower(Billing.notes).like(pattern),
-            )
-        ).options(
-            selectinload(Billing.items), selectinload(Billing.payments)
+        return await self._paginate_combined_billings(
+            page=page, size=size, sort_by="created_at", sort_order="desc",
+            status=status, patient_id=None, q=q
         )
-        if status:
-            billing_query = billing_query.where(Billing.status == status)
-
-        billings_res = await self.db.execute(billing_query)
-        billings_list = list(billings_res.scalars().unique().all())
-
-        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-        invoice_query = select(PharmacyInvoice).where(PharmacyInvoice.is_deleted == False).where(
-            func.lower(PharmacyInvoice.invoice_number).like(pattern)
-        ).options(
-            selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-        )
-        if status:
-            invoice_query = invoice_query.where(PharmacyInvoice.status == status)
-
-        invoices_res = await self.db.execute(invoice_query)
-        invoices_list = list(invoices_res.scalars().unique().all())
-
-        all_items = []
-        for b in billings_list:
-            all_items.append(self._to_response(b))
-
-        for inv in invoices_list:
-            all_items.append(self._pharmacy_invoice_to_billing_response(inv))
-
-        all_items.sort(key=lambda x: x.created_at, reverse=True)
-
-        skip = (page - 1) * size
-        total = len(all_items)
-        paginated = all_items[skip : skip + size]
-
-        return build_paginated_result(paginated, total, page, size)
 
     async def get_by_id(self, billing_id: int) -> BillingResponse:
         billing = await self.repo.get_by_id(billing_id)

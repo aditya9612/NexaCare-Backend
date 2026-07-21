@@ -1,4 +1,5 @@
 import os
+import aiofiles
 from uuid import uuid4
 from fastapi import UploadFile
 
@@ -516,9 +517,9 @@ class LabService:
             file_name = f"{uuid4()}{file_ext}"
             file_path = os.path.join(upload_dir, file_name)
 
-            content = await document.read()
-            with open(file_path, "wb") as f:
-                f.write(content)
+            async with aiofiles.open(file_path, "wb") as f:
+                while content := await document.read(1024 * 1024):
+                    await f.write(content)
 
             document_url = file_path
 

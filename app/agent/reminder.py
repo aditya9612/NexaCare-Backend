@@ -118,22 +118,18 @@ async def send_reminder_sms(
 ) -> bool:
     """Send SMS reminder — used as fallback when call is not answered."""
     try:
-        from twilio.rest import Client
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        auth_token  = os.getenv("TWILIO_AUTH_TOKEN")
-        from_number = os.getenv("TWILIO_PHONE_NUMBER")
+        from app.utils.sms_sender import send_sms
 
-        if not all([account_sid, auth_token, from_number, phone]):
-            logger.warning("[Reminder] SMS skipped: missing Twilio credentials")
+        if not phone:
+            logger.warning("[Reminder] SMS skipped: missing phone")
             return False
 
         template = SMS_REMINDER.get(lang, SMS_REMINDER["en"])
         body = template.format(doctor=doctor, time=time_str, appt_no=appt_no)
-
-        client = Client(account_sid, auth_token)
-        msg = client.messages.create(body=body, from_=from_number, to=phone)
-        logger.info(f"[Reminder] ✓ SMS sent to {phone} | SID={msg.sid}")
-        return True
+        ok = await send_sms(phone, body)
+        if ok:
+            logger.info("[Reminder] ✓ SMS sent to %s", phone)
+        return ok
 
     except Exception as e:
         logger.warning(f"[Reminder] SMS failed: {e}")
@@ -151,17 +147,14 @@ async def make_reminder_call(
     base_url: str,
 ) -> bool:
     """
-    Initiate outbound Twilio call with reminder TwiML.
-    Twilio will POST to /reminder-status if call is not answered.
+    Initiate outbound reminder call via TelephonyProvider (no direct Twilio SDK).
+    Provider POSTs to /reminder-status if call is not answered.
     """
     try:
-        from twilio.rest import Client
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        auth_token  = os.getenv("TWILIO_AUTH_TOKEN")
-        from_number = os.getenv("TWILIO_PHONE_NUMBER")
+        from app.telephony.factory import ProviderFactory
 
-        if not all([account_sid, auth_token, from_number, phone]):
-            logger.warning("[Reminder] Call skipped: missing Twilio credentials")
+        if not phone:
+            logger.warning("[Reminder] Call skipped: missing phone")
             return False
 
         params = urllib.parse.urlencode({
@@ -174,17 +167,18 @@ async def make_reminder_call(
         twiml_url  = f"{base_url}/agent/v1/voice/reminder-twiml?{params}"
         status_url = f"{base_url}/agent/v1/voice/reminder-status?{params}"
 
-        client = Client(account_sid, auth_token)
-        call = client.calls.create(
-            to=phone,
-            from_=from_number,
-            url=twiml_url,
-            status_callback=status_url,
-            status_callback_method="POST",
-            status_callback_event=["no-answer", "busy", "failed", "completed"],
-            timeout=30,
+        provider = ProviderFactory.get_default()
+        result = await provider.initiate_call(
+            phone,
+            webhook_url=twiml_url,
+            status_callback_url=status_url,
         )
-        logger.info(f"[Reminder] ✓ Call initiated to {phone} | SID={call.sid}")
+        logger.info(
+            "[Reminder] ✓ Call initiated to %s | SID=%s provider=%s",
+            phone,
+            result.provider_call_id,
+            provider.name,
+        )
         return True
 
     except Exception as e:

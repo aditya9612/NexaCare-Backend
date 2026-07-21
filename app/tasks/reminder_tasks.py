@@ -1,7 +1,7 @@
-import asyncio
 from datetime import date, timedelta
 
 from app.celery_app import celery_app
+from app.core.celery_async import run_celery_async
 from app.core.database import AsyncSessionLocal
 from app.core.logger import logger
 from app.services.reminder_orchestrator import ReminderOrchestrator
@@ -9,7 +9,7 @@ from app.services.reminder_orchestrator import ReminderOrchestrator
 
 @celery_app.task(name="app.tasks.reminder_tasks.schedule_appointment_voice_reminders")
 def schedule_appointment_voice_reminders():
-    asyncio.run(_schedule_voice_reminders())
+    run_celery_async(_schedule_voice_reminders())
 
 
 async def _schedule_voice_reminders() -> None:

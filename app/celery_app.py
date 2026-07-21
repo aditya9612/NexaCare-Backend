@@ -40,5 +40,9 @@ celery_app.conf.update(
             "task": "app.tasks.reminder_tasks.schedule_appointment_voice_reminders",
             "schedule": 3600.0,
         },
+        "process-reception-callback-tickets": {
+            "task": "app.tasks.voice_tasks.process_reception_callback_tickets",
+            "schedule": 600.0,
+        },
     },
 )

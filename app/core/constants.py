@@ -219,6 +219,42 @@ class VoiceResponseType:
     VOICE = "Voice"
 
 
+class TelephonyProviderType:
+    TWILIO = "twilio"
+    EXOTEL = "exotel"
+
+    ALL = {TWILIO, EXOTEL}
+
+
+class VoiceLanguage:
+    EN = "en"
+    HI = "hi"
+    MR = "mr"
+
+    ALL = {EN, HI, MR}
+    DTMF_MAP = {"1": EN, "2": HI, "3": MR}
+
+
+class VoiceGender:
+    FEMALE = "female"
+    MALE = "male"
+
+
+class TransferStatus:
+    NONE = "none"
+    INITIATED = "initiated"
+    CONNECTED = "connected"
+    BUSY = "busy"
+    QUEUED = "queued"
+    FAILED = "failed"
+
+
+class CallbackTicketStatus:
+    QUEUED = "queued"
+    CALLED_BACK = "called_back"
+    CLOSED = "closed"
+
+
 class WhatsAppMessageType:
     TEXT = "Text"
     IMAGE = "Image"

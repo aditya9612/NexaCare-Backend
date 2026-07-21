@@ -19,24 +19,49 @@ from app.schemas.voice_schema import (
     StartCallRequest,
     VoiceCallResponse,
 )
+from app.services.hospital_voice_config_service import HospitalVoiceConfigService
+from app.telephony.factory import ProviderFactory
 from app.utils.helpers import utc_now
 from app.utils.pagination import build_paginated_result
-from app.utils.twilio_client import twilio_client
 from app.utils.twiml_builder import gather, say, twiml_response
 
 
+def call_provider_hint(payload: dict) -> str:
+    if payload.get("CallFrom") or payload.get("DialCallStatus"):
+        return "exotel"
+    if payload.get("CallSid") and ("From" in payload or "CallStatus" in payload):
+        return "twilio"
+    return settings.DEFAULT_TELEPHONY_PROVIDER
+
+
 class VoiceService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, hospital_id: int | None = None):
         self.db = db
+        self.hospital_id = hospital_id
         self.repo = VoiceRepository(db)
         self.patient_repo = PatientRepository(db)
         self.appointment_repo = AppointmentRepository(db)
         self.voice_handler = VoiceCallHandler()
+        self.voice_config_service = HospitalVoiceConfigService(db)
 
-    def _twiml_url(self, path: str) -> str:
+    def _reminder_url(self, path: str, provider_name: str | None = None) -> str:
         base = settings.PUBLIC_BASE_URL.rstrip("/")
         prefix = settings.API_V1_PREFIX.rstrip("/")
+        root = "/exotel" if (provider_name or "").lower() == "exotel" else ""
+        # Twilio: /voice-reminder/twiml/...  Exotel: /voice-reminder/exotel/...
+        if root == "/exotel":
+            return f"{base}{prefix}/voice-reminder/exotel{path}"
         return f"{base}{prefix}/voice-reminder{path}"
+
+    def _twiml_url(self, path: str) -> str:
+        return self._reminder_url(path, "twilio")
+
+    async def _get_provider(self, hospital_id: int | None = None):
+        hid = hospital_id or self.hospital_id
+        config = None
+        if hid:
+            config = await self.voice_config_service.get_entity(hid)
+        return ProviderFactory.from_hospital_config(config), config
 
     async def schedule_call(self, data: ScheduleCallRequest) -> VoiceCallResponse:
         if not await self.patient_repo.get_by_id(data.patient_id):
@@ -46,14 +71,26 @@ class VoiceService:
             if not appt:
                 raise NotFoundException("Appointment not found")
 
+        hospital_id = getattr(data, "hospital_id", None) or self.hospital_id
+        max_retries = 3
+        provider_name = settings.DEFAULT_TELEPHONY_PROVIDER
+        if hospital_id:
+            cfg = await self.voice_config_service.get_entity(hospital_id)
+            if cfg:
+                max_retries = cfg.retry_count
+                provider_name = cfg.telephony_provider
+
         call = VoiceCall(
             patient_id=data.patient_id,
             appointment_id=data.appointment_id,
+            hospital_id=hospital_id,
             phone_number=data.phone_number,
             call_type=data.call_type,
             language=data.language,
             scheduled_time=data.scheduled_time,
             call_status=VoiceCallStatus.PENDING,
+            max_retries=max_retries,
+            provider=provider_name,
         )
         call = await self.repo.create_call(call)
 
@@ -68,8 +105,15 @@ class VoiceService:
 
             if data.scheduled_time <= utc_now() + timedelta(minutes=1):
                 execute_voice_call.delay(call.id)
-        except Exception:
-            pass
+        except Exception as exc:
+            from app.core.logger import logger
+
+            logger.error(
+                "Failed to enqueue execute_voice_call for call_id=%s: %s",
+                call.id,
+                exc,
+                exc_info=True,
+            )
 
         return VoiceCallResponse.model_validate(call)
 
@@ -88,25 +132,30 @@ class VoiceService:
             VoiceCallLog(call_id=call.id, event_type="calling", event_data="Initiating call")
         )
 
+        provider, cfg = await self._get_provider(call.hospital_id)
+        resolved = provider.name
         if call.call_type == VoiceCallType.APPOINTMENT_ASSISTANT:
             base = settings.PUBLIC_BASE_URL.rstrip("/")
-            prefix = settings.API_V1_PREFIX.rstrip("/")
-            twiml_url = f"{base}{prefix}/voice-assistant/twiml/start"
+            api = settings.API_V1_PREFIX.rstrip("/")
+            root = "exotel" if resolved == "exotel" else "twiml"
+            twiml_url = f"{base}{api}/voice-assistant/{root}/start"
         else:
-            twiml_url = self._twiml_url(f"/twiml/{call.id}")
-        status_url = self._twiml_url("/status-callback")
-        result = await twilio_client.initiate_call(
+            twiml_url = self._reminder_url(f"/twiml/{call.id}", resolved)
+        status_url = self._reminder_url("/status-callback", resolved)
+        result = await provider.initiate_call(
             call.phone_number,
-            twiml_url=twiml_url,
+            webhook_url=twiml_url,
             status_callback_url=status_url,
+            from_number=getattr(cfg, "from_number", None) if cfg else None,
         )
-        call.provider_call_id = result.get("sid")
+        call.provider_call_id = result.provider_call_id
+        call.provider = provider.name
         await self.repo.update_call(call)
         await self.repo.add_log(
             VoiceCallLog(
                 call_id=call.id,
                 event_type="initiated",
-                event_data=f"provider_sid={call.provider_call_id}",
+                event_data=f"provider={provider.name} sid={call.provider_call_id}",
             )
         )
         return call
@@ -124,7 +173,9 @@ class VoiceService:
                 )
         menu_data = await self.voice_handler.process_audio("")
         prompt = f"{greeting}{appt_text} {menu_data.get('menu', '')}"
-        gather_url = self._twiml_url(f"/twiml/{call.id}/gather")
+        gather_url = self._reminder_url(
+            f"/twiml/{call.id}/gather", call.provider or settings.DEFAULT_TELEPHONY_PROVIDER
+        )
         lang = "en-US" if call.language == "en" else call.language
         return twiml_response(gather(gather_url, prompt, num_digits=1, language=lang))
 
@@ -180,9 +231,12 @@ class VoiceService:
         return twiml_response(say(text, lang))
 
     async def handle_status_callback(self, payload: dict) -> None:
-        call_sid = payload.get("CallSid")
-        call_status = (payload.get("CallStatus") or "").lower()
-        duration = payload.get("CallDuration")
+        provider_name = payload.get("_provider") or call_provider_hint(payload)
+        provider = ProviderFactory.create(provider_name)
+        normalized = provider.normalize_webhook(payload)
+        call_sid = normalized.call_sid
+        call_status = normalized.call_status
+        duration = normalized.duration_seconds
 
         call = await self.repo.get_call_by_provider_sid(call_sid) if call_sid else None
         if not call:
@@ -192,22 +246,21 @@ class VoiceService:
             "completed": VoiceCallStatus.COMPLETED,
             "busy": VoiceCallStatus.BUSY,
             "no-answer": VoiceCallStatus.FAILED,
+            "no_answer": VoiceCallStatus.FAILED,
             "failed": VoiceCallStatus.FAILED,
             "canceled": VoiceCallStatus.CANCELLED,
+            "cancelled": VoiceCallStatus.CANCELLED,
         }
         if call_status in status_map:
             call.call_status = status_map[call_status]
         if duration is not None:
-            try:
-                call.duration_seconds = int(duration)
-            except (TypeError, ValueError):
-                pass
+            call.duration_seconds = duration
         await self.repo.update_call(call)
         await self.repo.add_log(
             VoiceCallLog(
                 call_id=call.id,
                 event_type="status_callback",
-                event_data=f"{call_status} duration={duration}",
+                event_data=f"provider={provider.name} {call_status} duration={duration}",
             )
         )
 
@@ -225,8 +278,15 @@ class VoiceService:
             from app.tasks.voice_tasks import execute_voice_call
 
             execute_voice_call.delay(call.id)
-        except Exception:
-            pass
+        except Exception as exc:
+            from app.core.logger import logger
+
+            logger.error(
+                "Failed to enqueue retry execute_voice_call for call_id=%s: %s",
+                call.id,
+                exc,
+                exc_info=True,
+            )
         return VoiceCallResponse.model_validate(call)
 
     async def get_call_history(

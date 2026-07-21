@@ -1,9 +1,12 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+import logging
 
 from app.core.security import decode_token
 from app.repositories.rbac_repository import RBACRepository
+
+_trace = logging.getLogger("nexacare.http")
 
 
 class RBACMiddleware(BaseHTTPMiddleware):
@@ -25,13 +28,18 @@ class RBACMiddleware(BaseHTTPMiddleware):
         "/api/v1/whatsapp/webhook",
         "/api/v1/voice-reminder/twiml",
         "/api/v1/voice-reminder/status-callback",
+        "/api/v1/voice-reminder/exotel",
         "/api/v1/voice-assistant/twiml",
+        "/api/v1/voice-assistant/exotel",
+        "/agent/v1/voice",
         "/api/v1/icu/telemetry",
         "/ws/",
     )
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+        if path.startswith("/agent/v1/voice"):
+            _trace.info("TRACE RBAC middleware PUBLIC pass-through path=%s", path)
         if any(path.startswith(p) for p in self.PUBLIC_PREFIXES) or path.startswith("/static"):
             return await call_next(request)
 
@@ -59,6 +67,10 @@ class RBACMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(status_code=401, content={"detail": "User not found"})
             permissions = await RBACRepository(db).get_user_permissions(user.role_id)
             if required_permission not in permissions:
+                _trace.info(
+                    "TRACE RBAC BEFORE HTTP 403 detail='Permission denied' path=%s",
+                    path,
+                )
                 return JSONResponse(status_code=403, content={"detail": "Permission denied"})
 
         return await call_next(request)

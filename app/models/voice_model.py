@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import VoiceCallStatus, VoiceCallType, VoiceResponseType
@@ -12,8 +12,9 @@ class VoiceCall(Base, TimestampMixin):
     __tablename__ = "voice_calls"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
     appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id"), nullable=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(ForeignKey("hospitals.id"), nullable=True, index=True)
     phone_number: Mapped[str] = mapped_column(String(20), index=True)
     call_type: Mapped[str] = mapped_column(String(50), default=VoiceCallType.REMINDER)
     language: Mapped[str] = mapped_column(String(10), default="en")
@@ -21,9 +22,17 @@ class VoiceCall(Base, TimestampMixin):
     call_status: Mapped[str] = mapped_column(String(50), default=VoiceCallStatus.PENDING, index=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    provider: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     provider_call_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    faq_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transferred_to_reception: Mapped[bool] = mapped_column(Boolean, default=False)
+    transfer_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    booking_success: Mapped[bool] = mapped_column(Boolean, default=False)
 
     logs: Mapped[list["VoiceCallLog"]] = relationship(back_populates="call", cascade="all, delete-orphan")
     responses: Mapped[list["VoiceResponse"]] = relationship(back_populates="call", cascade="all, delete-orphan")
@@ -74,3 +83,8 @@ class CallAnalytics(Base, TimestampMixin):
     avg_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     confirmation_rate: Mapped[float] = mapped_column(Float, default=0.0)
     language_breakdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transfer_count: Mapped[int] = mapped_column(Integer, default=0)
+    faq_success_count: Mapped[int] = mapped_column(Integer, default=0)
+    ai_fallback_count: Mapped[int] = mapped_column(Integer, default=0)
+    booking_success_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_total: Mapped[int] = mapped_column(Integer, default=0)

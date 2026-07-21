@@ -35,6 +35,7 @@ from app.api.v1.routes import (
     transaction_history_routes,
     clinical_record_router,
     lab_dashboard_routes,
+    hospital_voice_routes,
 )
 
 
@@ -66,6 +67,11 @@ api_router.include_router(
     voice_assistant_routes.router,
     prefix="/voice-assistant",
     tags=["Voice Appointment Assistant"],
+)
+api_router.include_router(
+    hospital_voice_routes.router,
+    prefix="/voice",
+    tags=["Hospital Voice AI"],
 )
 api_router.include_router(whatsapp_routes.router, prefix="/whatsapp", tags=["WhatsApp"])
 api_router.include_router(analytics_routes.router, prefix="/analytics", tags=["Analytics"])

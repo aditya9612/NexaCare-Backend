@@ -1,18 +1,17 @@
-import asyncio
-
 from app.celery_app import celery_app
+from app.core.celery_async import run_celery_async
 from app.core.database import AsyncSessionLocal
 from app.core.logger import logger
 
 
 @celery_app.task(name="app.tasks.analytics_tasks.generate_export", bind=True, max_retries=2)
 def generate_export(self, export_id: int):
-    asyncio.run(_generate_export(export_id))
+    run_celery_async(_generate_export(export_id))
 
 
 @celery_app.task(name="app.tasks.analytics_tasks.refresh_dashboard_cache")
 def refresh_dashboard_cache():
-    asyncio.run(_refresh_cache())
+    run_celery_async(_refresh_cache())
 
 
 async def _generate_export(export_id: int) -> None:

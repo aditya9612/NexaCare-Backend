@@ -1,17 +1,58 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker (not needed inside the image)
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Python
 __pycache__
 *.py[cod]
 *$py.class
+*.so
+.Python
+.venv
+venv
+env
+*.egg-info
+dist
+build
 .pytest_cache
 .mypy_cache
 .ruff_cache
-.git
-.gitignore
+htmlcov
+.coverage
+*.egg
+
+# Secrets & local env files
 .env
-.venv
-venv
-*.md
+.env.*
+!.env.example
+
+# IDE & OS
 .idea
 .vscode
+.cursor
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
+logs
+
+# Docs (not needed in the image)
+*.md
+
+# Tests (not needed in production image)
+app/tests
+pytest.ini
+
+# Local uploads (mounted as volume in docker-compose)
 app/uploads/*
 !app/uploads/.gitkeep
+
+# CI / GitHub
+.github

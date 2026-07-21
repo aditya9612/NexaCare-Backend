@@ -10,11 +10,13 @@ class VoiceIntent(str, Enum):
     CANCEL = "cancel"
     AVAILABILITY = "availability"
     HOSPITAL_INFO = "hospital_info"
+    RECEPTION = "reception"
     UNKNOWN = "unknown"
 
 
 class VoiceStep(str, Enum):
     GREET = "greet"
+    LANGUAGE_SELECT = "language_select"
     INTENT = "intent"
     BOOK_NAME = "book_name"
     BOOK_DOCTOR = "book_doctor"
@@ -30,16 +32,24 @@ class VoiceStep(str, Enum):
     CANCEL_MOBILE = "cancel_mobile"
     CANCEL_CONFIRM = "cancel_confirm"
     AVAILABILITY_QUERY = "availability_query"
+    FAQ_QUESTION = "faq_question"
     DONE = "done"
     EMERGENCY = "emergency"
+    TRANSFER = "transfer"
 
 
 class VoiceState(BaseModel):
     call_sid: str = ""
     from_number: str = ""
     language: str = "en"
+    language_locked: bool = False
+    language_source: str = ""
     step: VoiceStep = VoiceStep.GREET
     intent: VoiceIntent = VoiceIntent.UNKNOWN
+
+    hospital_id: Optional[int] = None
+    provider: str = "twilio"
+    voice_call_id: Optional[int] = None
 
     patient_name: Optional[str] = None
     doctor_or_department: Optional[str] = None
@@ -54,6 +64,11 @@ class VoiceState(BaseModel):
 
     pending_booking: bool = False
     booking_completed: bool = False
+    faq_hit: bool = False
+    ai_fallback: bool = False
+    last_confidence: Optional[float] = None
+    transfer_requested: bool = False
+    faq_answer: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = self.model_dump(mode="json")

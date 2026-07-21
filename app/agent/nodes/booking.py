@@ -68,20 +68,17 @@ def _send_sms_confirmation(
     appt_no: str,
 ) -> bool:
     """
-    Send an SMS booking confirmation to the caller's number.
-    Uses Twilio's Messages API — same credentials already in .env.
+    Send an SMS booking confirmation via shared sms_sender (no direct Twilio SDK).
     Returns True on success, False on failure (never raises — booking
     should not be rolled back because of an SMS failure).
     """
     try:
-        from twilio.rest import Client  # lazy import — only needed here
+        import asyncio
 
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        auth_token  = os.getenv("TWILIO_AUTH_TOKEN")
-        from_number = os.getenv("TWILIO_PHONE_NUMBER")
+        from app.utils.sms_sender import send_sms
 
-        if not all([account_sid, auth_token, from_number, to_number]):
-            logger.warning("SMS skipped: missing Twilio credentials or caller number")
+        if not to_number:
+            logger.warning("SMS skipped: missing caller number")
             return False
 
         template = SMS_TEMPLATES.get(lang, SMS_TEMPLATES["en"])
@@ -93,10 +90,23 @@ def _send_sms_confirmation(
             appt_no=appt_no,
         )
 
-        client = Client(account_sid, auth_token)
-        message = client.messages.create(body=body, from_=from_number, to=to_number)
-        logger.info(f"SMS sent to {to_number} | SID={message.sid}")
-        return True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Sync node inside async agent — schedule and wait briefly via new loop thread
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                ok = pool.submit(asyncio.run, send_sms(to_number, body)).result(timeout=30)
+        else:
+            ok = asyncio.run(send_sms(to_number, body))
+
+        if ok:
+            logger.info("SMS sent to %s", to_number)
+        return bool(ok)
 
     except Exception as e:
         logger.warning(f"SMS failed (non-critical): {e}")

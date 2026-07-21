@@ -25,14 +25,21 @@ class RetryCallRequest(BaseSchema):
 
 class VoiceCallResponse(BaseSchema):
     id: int
-    patient_id: int
+    patient_id: Optional[int] = None
     appointment_id: Optional[int] = None
+    hospital_id: Optional[int] = None
     phone_number: str
     call_type: str
     language: str
     scheduled_time: datetime
     call_status: str
     retry_count: int
+    provider: Optional[str] = None
+    intent: Optional[str] = None
+    faq_hit: bool = False
+    ai_fallback: bool = False
+    transferred_to_reception: bool = False
+    booking_success: bool = False
     created_at: datetime
 
 

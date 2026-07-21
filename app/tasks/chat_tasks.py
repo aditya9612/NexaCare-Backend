@@ -1,12 +1,11 @@
-import asyncio
-
 from app.celery_app import celery_app
+from app.core.celery_async import run_celery_async
 from app.core.logger import logger
 
 
 @celery_app.task(name="app.tasks.chat_tasks.persist_session_snapshot")
 def persist_session_snapshot(session_id: str):
-    asyncio.run(_persist_snapshot(session_id))
+    run_celery_async(_persist_snapshot(session_id))
 
 
 async def _persist_snapshot(session_id: str) -> None:

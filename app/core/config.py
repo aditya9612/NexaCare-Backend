@@ -27,8 +27,8 @@ class Settings(BaseSettings):
    
 
     
-    DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
-    DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
+    DATABASE_URL = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
+    DATABASE_URL_SYNC = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
 
     
     

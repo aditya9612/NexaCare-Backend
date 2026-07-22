@@ -23,3 +23,21 @@ async def _schedule_voice_reminders() -> None:
             await db.rollback()
             logger.error("Voice reminder scheduling failed: %s", exc)
             raise
+
+
+@celery_app.task(name="app.tasks.reminder_tasks.process_doctor_appointment_reminders")
+def process_doctor_appointment_reminders():
+    run_celery_async(_process_doctor_appointment_reminders())
+
+
+async def _process_doctor_appointment_reminders() -> None:
+    from app.services.notification_service import NotificationService
+    async with AsyncSessionLocal() as db:
+        try:
+            count = await NotificationService(db).process_doctor_appointment_reminders()
+            await db.commit()
+            logger.info("Processed %s doctor appointment reminders", count)
+        except Exception as exc:
+            await db.rollback()
+            logger.error("Doctor appointment reminder processing failed: %s", exc)
+            raise

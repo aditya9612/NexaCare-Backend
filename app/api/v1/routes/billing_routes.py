@@ -73,10 +73,11 @@ async def daily_collection_report(
 async def monthly_revenue_report(
     db: DbSession,
     current_user: CurrentUser,
-    target_date: date | None = Query(default=None),
+    month: int = Query(..., ge=1, le=12, description="Select month"),
+    year: int = Query(..., ge=1900, le=2100, description="Select year"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_period_report("monthly", target_date)
+    report = await BillingService(db).get_period_report("monthly", year=year, month=month)
     return APIResponse(message="Monthly revenue report", data=report)
 
 
@@ -84,10 +85,10 @@ async def monthly_revenue_report(
 async def yearly_revenue_report(
     db: DbSession,
     current_user: CurrentUser,
-    target_date: date | None = Query(default=None),
+    year: int | None = Query(default=None, ge=1900, le=2100, description="Select year"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_period_report("yearly", target_date)
+    report = await BillingService(db).get_yearly_report(year)
     return APIResponse(message="Yearly revenue report", data=report)
 
 

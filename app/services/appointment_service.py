@@ -1,9 +1,9 @@
-from datetime import date
+from datetime import date, datetime, time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus
-from app.core.exceptions import ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
@@ -29,6 +29,15 @@ class AppointmentService:
         self.patient_repo = PatientRepository(db)
         self.doctor_repo = DoctorRepository(db)
         self.audit_repo = AuditRepository(db)
+
+    def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> None:
+        today = date.today()
+        if appointment_date < today:
+            raise BadRequestException("Cannot book or reschedule an appointment for a past date")
+        if appointment_date == today:
+            now_time = datetime.now().time()
+            if appointment_time < now_time:
+                raise BadRequestException("Cannot book or reschedule an appointment for a past time slot today")
 
     async def _validate_entities(self, patient_id: int, doctor_id: int) -> None:
         if not await self.patient_repo.get_by_id(patient_id):
@@ -98,7 +107,33 @@ class AppointmentService:
             token_number=appointment.token_number,
     )     
 
+    async def _notify_confirmation_safely(self, appointment: Appointment, target_user_id: int):
+        try:
+            patient = await self.patient_repo.get_by_id(appointment.patient_id)
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+            email = patient.email if patient else None
+            phone = patient.phone if patient else None
+            user_target = (patient.user_id if patient and patient.user_id else None) or target_user_id
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_appointment_confirmation(
+                user_id=user_target,
+                appointment_number=appointment.appointment_number,
+                patient_name=patient_name,
+                doctor_name=doctor_name,
+                appointment_date=str(appointment.appointment_date),
+                appointment_time=str(appointment.appointment_time),
+                email=email,
+                phone=phone,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch appointment notification: %s", exc)
+
     async def create(self, data: AppointmentCreate, user_id: int) -> AppointmentResponse:
+        self._validate_future_datetime(data.appointment_date, data.appointment_time)
         await self._validate_entities(data.patient_id, data.doctor_id)
         await self._validate_doctor_schedule(data.doctor_id, data.appointment_date)
         await self._check_conflict(data.doctor_id, data.appointment_date, data.appointment_time)
@@ -112,6 +147,7 @@ class AppointmentService:
         )
         appointment = await self.repo.create(appointment)
         await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self._notify_confirmation_safely(appointment, user_id)
         return AppointmentResponse.model_validate(appointment)
 
     async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int) -> AppointmentResponse:
@@ -123,6 +159,9 @@ class AppointmentService:
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
         
+        if "appointment_date" in update_data or "appointment_time" in update_data:
+            self._validate_future_datetime(new_date, new_time)
+
         if "appointment_date" in update_data:
             await self._validate_doctor_schedule(appointment.doctor_id, new_date)
             
@@ -146,6 +185,7 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        self._validate_future_datetime(data.appointment_date, data.appointment_time)
         await self._validate_doctor_schedule(appointment.doctor_id, data.appointment_date)
         await self._check_conflict(
             appointment.doctor_id, data.appointment_date, data.appointment_time, exclude_id=appointment.id
@@ -177,6 +217,7 @@ class AppointmentService:
         appointment.appointment_status = AppointmentStatus.CONFIRMED
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("confirm", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self._notify_confirmation_safely(appointment, user_id)
         return AppointmentResponse.model_validate(appointment)
 
     async def get_calendar(self, start_date: date, end_date: date, doctor_id: int | None = None):

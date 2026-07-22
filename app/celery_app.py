@@ -15,6 +15,7 @@ celery_app = Celery(
         "app.tasks.analytics_tasks",
         "app.tasks.chat_tasks",
         "app.tasks.reminder_tasks",
+        "app.tasks.lab_tasks",
     ],
 )
 
@@ -43,6 +44,14 @@ celery_app.conf.update(
         "process-reception-callback-tickets": {
             "task": "app.tasks.voice_tasks.process_reception_callback_tickets",
             "schedule": 600.0,
+        },
+        "check-pending-lab-tests": {
+            "task": "app.tasks.lab_tasks.check_pending_lab_tests",
+            "schedule": 900.0,
+        },
+        "process-doctor-appointment-reminders": {
+            "task": "app.tasks.reminder_tasks.process_doctor_appointment_reminders",
+            "schedule": 300.0,
         },
     },
 )

@@ -141,6 +141,7 @@ class InventoryItemResponse(BaseSchema):
     warehouse_id: Optional[int]
     vendor_id: Optional[int]
     department_id: Optional[int]
+    description: Optional[str] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime

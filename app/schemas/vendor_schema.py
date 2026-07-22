@@ -32,7 +32,9 @@ class VendorCreate(BaseModel):
             raise ValueError("Vendor name cannot be empty or only spaces")
         if re.match(r"^[0-9\s]+$", stripped):
             raise ValueError("Vendor name must not be numeric-only")
-        if not re.match(r"^[a-zA-Z0-9\s\-\&\.\(\)]+$", stripped):
+        if not re.search(r"[a-zA-Z]", stripped):
+            raise ValueError("Vendor name must contain at least one letter")
+        if not re.match(r"^[a-zA-Z0-9\s\-\&\.\,\'\(\)]+$", stripped):
             raise ValueError("Vendor name contains invalid characters")
         return stripped
 
@@ -64,6 +66,8 @@ class VendorCreate(BaseModel):
                 raise ValueError("Contact person cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Contact person must not be numeric-only")
+            if not re.search(r"[a-zA-Z]", stripped):
+                raise ValueError("Contact person must contain at least one letter")
             if not re.match(r"^[a-zA-Z\s\.\'\-]+$", stripped):
                 raise ValueError("Contact person name contains invalid characters")
             return stripped
@@ -79,7 +83,7 @@ class VendorCreate(BaseModel):
                 raise ValueError("Address cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Address must not be numeric-only")
-            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\.\(\)]+$", stripped):
+            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\.\(\)\#\']+$", stripped):
                 raise ValueError("Address contains invalid characters")
             return stripped
         return value
@@ -94,6 +98,8 @@ class VendorCreate(BaseModel):
                 raise ValueError("Service type cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Service type must not be numeric-only")
+            if not re.search(r"[a-zA-Z]", stripped):
+                raise ValueError("Service type must contain at least one letter")
             if not re.match(r"^[a-zA-Z0-9\s\-\&\(\)]+$", stripped):
                 raise ValueError("Service type contains invalid characters")
             return stripped
@@ -133,7 +139,9 @@ class VendorUpdate(BaseModel):
                 raise ValueError("Vendor name cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Vendor name must not be numeric-only")
-            if not re.match(r"^[a-zA-Z0-9\s\-\&\.\(\)]+$", stripped):
+            if not re.search(r"[a-zA-Z]", stripped):
+                raise ValueError("Vendor name must contain at least one letter")
+            if not re.match(r"^[a-zA-Z0-9\s\-\&\.\,\'\(\)]+$", stripped):
                 raise ValueError("Vendor name contains invalid characters")
             return stripped
         return value
@@ -166,6 +174,8 @@ class VendorUpdate(BaseModel):
                 raise ValueError("Contact person cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Contact person must not be numeric-only")
+            if not re.search(r"[a-zA-Z]", stripped):
+                raise ValueError("Contact person must contain at least one letter")
             if not re.match(r"^[a-zA-Z\s\.\'\-]+$", stripped):
                 raise ValueError("Contact person name contains invalid characters")
             return stripped
@@ -181,7 +191,7 @@ class VendorUpdate(BaseModel):
                 raise ValueError("Address cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Address must not be numeric-only")
-            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\.\(\)]+$", stripped):
+            if not re.match(r"^[a-zA-Z0-9\s\,\-\/\.\(\)\#\']+$", stripped):
                 raise ValueError("Address contains invalid characters")
             return stripped
         return value
@@ -196,6 +206,8 @@ class VendorUpdate(BaseModel):
                 raise ValueError("Service type cannot be empty or only spaces")
             if re.match(r"^[0-9\s]+$", stripped):
                 raise ValueError("Service type must not be numeric-only")
+            if not re.search(r"[a-zA-Z]", stripped):
+                raise ValueError("Service type must contain at least one letter")
             if not re.match(r"^[a-zA-Z0-9\s\-\&\(\)]+$", stripped):
                 raise ValueError("Service type contains invalid characters")
             return stripped

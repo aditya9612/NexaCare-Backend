@@ -344,7 +344,48 @@ class BillingService:
     async def update(self, billing_id: int, data: BillingUpdate, user_id: int) -> BillingResponse:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+
+            dump = data.model_dump(exclude_unset=True)
+            if "status" in dump and dump["status"] is not None:
+                invoice.status = dump["status"]
+
+            if "discount_percent" in dump and dump["discount_percent"] is not None:
+                invoice.discount_percentage = float(dump["discount_percent"])
+            elif "discount_percentage" in dump and dump["discount_percentage"] is not None:
+                invoice.discount_percentage = float(dump["discount_percentage"])
+
+            if "gst_rate" in dump and dump["gst_rate"] is not None:
+                invoice.tax_percentage = float(dump["gst_rate"])
+            elif "tax_percentage" in dump and dump["tax_percentage"] is not None:
+                invoice.tax_percentage = float(dump["tax_percentage"])
+
+            subtotal = float(invoice.subtotal or 0.0)
+            discount_amount = round((subtotal * invoice.discount_percentage) / 100, 2)
+            tax_amount = round((subtotal - discount_amount) * invoice.tax_percentage / 100, 2)
+
+            invoice.discount_amount = discount_amount
+            invoice.tax_amount = tax_amount
+            invoice.gst_amount = tax_amount
+            invoice.total_amount = round(subtotal - discount_amount + tax_amount, 2)
+            if invoice.status == "paid":
+                invoice.paid_amount = invoice.total_amount
+
+            await self.db.flush()
+            await self.audit_repo.create("update", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return self._pharmacy_invoice_to_billing_response(invoice)
 
         non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount", "status"]
         for field in non_nullable_fields:
@@ -399,7 +440,17 @@ class BillingService:
     async def delete(self, billing_id: int, user_id: int) -> None:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(PharmacyInvoice.id == billing_id, PharmacyInvoice.is_deleted == False)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            from app.services.pharmacy_service import PharmacyService
+            await PharmacyService(self.db).delete_invoice(billing_id)
+            await self.audit_repo.create("delete", "pharmacy_invoice", user_id=user_id, resource_id=str(billing_id))
+            return
         await self.repo.soft_delete(billing)
         await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
 

@@ -52,6 +52,7 @@ from app.models.subscription_model import SubscriptionPlan, Subscription
 from app.models.ai_config_model import AIConfiguration
 from app.models.security_model import LoginHistory
 from app.models.clinical_record_model import ClinicalRecord
+from app.models.notification_model import Notification
 from app.models.hospital_voice_model import (
     HospitalFaq,
     HospitalPolicy,
@@ -61,6 +62,7 @@ from app.models.hospital_voice_model import (
 )
 
 __all__ = [
+    "Notification",
     "Hospital",
     "HospitalVoiceConfig",
     "HospitalFaq",

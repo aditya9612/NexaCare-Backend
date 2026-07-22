@@ -703,6 +703,7 @@ class LabService:
 
         department_id = None
         generated_by = None
+        doctor_id = None
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
@@ -715,7 +716,18 @@ class LabService:
                 raise BadRequestException("Lab technician department is not assigned")
 
             department_id = staff.department_id
-        generated_by = current_user.id
+            generated_by = current_user.id
+        elif role_name == "doctor":
+            from app.models.doctor_model import Doctor
+            doctor_res = await self.db.execute(
+                select(Doctor).where(Doctor.user_id == current_user.id, Doctor.is_deleted == False)
+            )
+            doctor = doctor_res.scalar_one_or_none()
+            if not doctor:
+                raise ForbiddenException("Doctor profile not found")
+            doctor_id = doctor.id
+        else:
+            generated_by = current_user.id
 
         items = await self.report_repo.list_all(
             skip=skip,
@@ -723,20 +735,22 @@ class LabService:
             status=status,
             department_id=department_id,
             generated_by=generated_by,
+            doctor_id=doctor_id,
         )
 
         total = await self.report_repo.count_all(
             status=status,
             department_id=department_id,
             generated_by=generated_by,
+            doctor_id=doctor_id,
         )
 
         return build_paginated_result(
             [LabReportResponse.model_validate(r) for r in items],
             total,
             page,
-        size,
-    )
+            size,
+        )
     
     async def get_report(self, report_id: int) -> LabReportResponse:
         report = await self.report_repo.get_by_id(report_id)
@@ -895,5 +909,37 @@ class LabService:
             details=data.remarks
         )
 
+        return LabReportResponse.model_validate(report)
+
+
+    async def update_doctor_remarks(
+        self,
+        report_id: int,
+        data,
+        user_id: int,
+    ) -> LabReportResponse:
+        from app.models.doctor_model import Doctor
+        from app.models.lab_model import LabReport
+        doctor_result = await self.db.execute(
+            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
+        )
+        doctor = doctor_result.scalar_one_or_none()
+        if not doctor:
+            raise ForbiddenException("Doctor profile not found")
+
+        report = await self.report_repo.get_by_id(report_id)
+        if not report:
+            raise NotFoundException("Lab report not found")
+
+        order = await self.order_repo.get_by_id(report.test_order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        if order.doctor_id != doctor.id:
+            raise ForbiddenException("You can only add remarks to reports assigned to you")
+
+        report.remarks = data.remarks
+        await self.report_repo.update(report)
+        await self.audit_repo.create("update", "lab_report_remarks", user_id=user_id, resource_id=str(report.id))
         return LabReportResponse.model_validate(report)
 

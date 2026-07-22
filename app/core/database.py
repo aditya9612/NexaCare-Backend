@@ -656,3 +656,44 @@ async def _seed_lab_technician_permissions(session: AsyncSession) -> None:
         if not rp.scalar_one_or_none():
             session.add(RolePermission(role_id=tech_role.id, permission_id=perm.id))
 
+
+async def _seed_doctor_lab_permissions(session: AsyncSession) -> None:
+    """Grant Doctor role permissions for viewing lab reports and adding remarks."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    result = await session.execute(select(Role).where(Role.name == UserRole.DOCTOR))
+    doctor_role = result.scalar_one_or_none()
+    if not doctor_role:
+        return
+
+    doctor_grants = [
+        ("lab", PermissionAction.READ),
+        ("lab", PermissionAction.REMARK),
+    ]
+
+    for resource, action in doctor_grants:
+        action_value = action.value if hasattr(action, "value") else action
+        perm_name = f"{resource}:{action_value}"
+        result = await session.execute(select(Permission).where(Permission.name == perm_name))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            perm = Permission(
+                name=perm_name,
+                resource=resource,
+                action=action_value,
+                description=f"{action_value.capitalize()} {resource.capitalize()}"
+            )
+            session.add(perm)
+            await session.flush()
+
+        rp = await session.execute(
+            select(RolePermission).where(
+                RolePermission.role_id == doctor_role.id,
+                RolePermission.permission_id == perm.id,
+            )
+        )
+        if not rp.scalar_one_or_none():
+            session.add(RolePermission(role_id=doctor_role.id, permission_id=perm.id))
+

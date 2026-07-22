@@ -32,6 +32,7 @@ class PermissionAction:
     EXPORT = "export"
     APPROVE = "approve"
     ASSIGN = "assign"
+    REMARK = "remark"
 
 
 class AppointmentStatus:

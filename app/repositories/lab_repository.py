@@ -293,6 +293,7 @@ class LabReportRepository:
        status: str | None = None,
        department_id: int | None = None,
        generated_by: int | None = None,
+       doctor_id: int | None = None,
     ) -> list[LabReport]:
         query = (
            select(LabReport)
@@ -302,7 +303,9 @@ class LabReportRepository:
         if status:
             query = query.where(LabReport.status == status)
 
-        if department_id and generated_by:
+        if doctor_id:
+            query = query.where(TestOrder.doctor_id == doctor_id)
+        elif department_id and generated_by:
             query = query.where(
                 or_(
                     TestOrder.department_id == department_id,
@@ -324,6 +327,7 @@ class LabReportRepository:
         status: str | None = None,
         department_id: int | None = None,
         generated_by: int | None = None,
+        doctor_id: int | None = None,
     ) -> int:
         query = (
             select(func.count())
@@ -334,7 +338,9 @@ class LabReportRepository:
         if status:
             query = query.where(LabReport.status == status)
 
-        if department_id and generated_by:
+        if doctor_id:
+            query = query.where(TestOrder.doctor_id == doctor_id)
+        elif department_id and generated_by:
             query = query.where(
                 or_(
                     TestOrder.department_id == department_id,

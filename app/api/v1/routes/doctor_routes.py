@@ -129,14 +129,50 @@ async def create_doctor(
 async def onboard_doctor(
     db: DbSession,
     current_user: CurrentUser,
-    data: DoctorOnboardCreate,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    specialization: str = Form(...),
+    experience: int = Form(...),
+    phone: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    license_number: str = Form(...),
+    qualification: Optional[str] = Form(None),
+    department_id: Optional[int] = Form(None),
+    consultation_fee: Optional[float] = Form(None),
+    availability_status: str = Form("available"),
+    bio: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    date_of_birth: Optional[str] = Form(None),
+    profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
     """
     Create a doctor login account (`users`) and clinical profile (`doctors`) in one step.
     The new doctor can log in immediately with the provided email and password.
     """
-    result = await DoctorService(db).onboard(data, current_user)
+    try:
+        data = DoctorOnboardCreate(
+            first_name=first_name,
+            last_name=last_name,
+            specialization=specialization,
+            qualification=qualification,
+            experience=experience,
+            phone=phone,
+            email=email,
+            password=password,
+            department_id=department_id,
+            consultation_fee=consultation_fee,
+            license_number=license_number,
+            availability_status=availability_status,
+            bio=bio,
+            gender=gender,
+            date_of_birth=date_of_birth,
+        )
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
+    result = await DoctorService(db).onboard(data, current_user, image_file=profile_image)
     return APIResponse(message="Doctor onboarded successfully", data=result)
 
 

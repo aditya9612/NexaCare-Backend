@@ -190,3 +190,7 @@ class CriticalAlert(BaseSchema):
     parameter_name: str
     result_value: str
     entered_at: datetime | None
+
+
+class DoctorRemarkUpdate(BaseSchema):
+    remarks: str | None = None

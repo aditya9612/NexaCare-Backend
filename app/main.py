@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     if (settings.APP_ENV or "").lower() not in ("production", "prod"):
         try:
             from pyngrok import ngrok, conf
-            ngrok_token = os.getenv("NGROK_AUTH_TOKEN")
+            ngrok_token = settings.NGROK_AUTH_TOKEN or os.getenv("NGROK_AUTH_TOKEN")
             if ngrok_token:
                 ngrok.kill()  # kill any existing tunnel first
                 conf.get_default().auth_token = ngrok_token

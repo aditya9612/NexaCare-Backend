@@ -3,9 +3,9 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.schemas.appointment_schema import AppointmentResponse
-
-
+from app.schemas.lab_schema import LabReportResponse
 from app.schemas.pharmacy_schema import PrescriptionResponse
+
 
 class DepartmentStat(BaseModel):
     department: str
@@ -21,23 +21,36 @@ class AdminDashboardResponse(BaseModel):
     department_statistics: list[DepartmentStat]
 
 
+class PendingLabReportItem(BaseModel):
+    id: int
+    patient_id: int
+    lab_test_id: int
+    appointment_id: int | None = None
+    status: str
+    priority: str | None = None
+    created_at: datetime | None = None
+
+
+class PendingLabReportsSummary(BaseModel):
+    count: int
+    recent: list[PendingLabReportItem]
+
+
 class PrescriptionSummary(BaseModel):
-    total_prescriptions: int
-    pending_prescriptions: int
-    dispensed_prescriptions: int
-    recent_prescriptions: list[PrescriptionResponse]
+    total_prescriptions: int = 0
+    pending_prescriptions: int = 0
+    dispensed_prescriptions: int = 0
+    recent_prescriptions: list[PrescriptionResponse] = []
 
-
-from app.schemas.lab_schema import LabReportResponse
 
 class DoctorDashboardResponse(BaseModel):
     today_patients: int
     upcoming_appointments: list[AppointmentResponse]
     completed_consultations: int
+    pending_lab_reports: PendingLabReportsSummary
     prescription_summary: PrescriptionSummary
-    upcoming_lab_reports: list[LabReportResponse]
+    upcoming_lab_reports: list[LabReportResponse] = []
     pending_lab_reports_count: int = 0
-    pending_lab_reports: list[LabReportResponse] = []
 
 
 

@@ -19,6 +19,7 @@ from app.repositories.lab_repository import (
     TestOrderRepository,
     TestResultRepository,
 )
+from app.services.notification_service import NotificationService
 from app.schemas.lab_schema import (
     CriticalAlert,
     LabReportApprove,
@@ -547,6 +548,12 @@ class LabService:
             resource_id=str(result.id),
         )
 
+        try:
+            await NotificationService(self.db).create_critical_value_alert(result, order)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to send critical value alert: {e}")
+
         return TestResultResponse.model_validate(result)
         
     async def list_results(
@@ -596,6 +603,14 @@ class LabService:
             user_id=user_id,
             resource_id=str(result.id),
         )
+
+        try:
+            order = await self.order_repo.get_by_id(result.test_order_id)
+            if order:
+                await NotificationService(self.db).create_critical_value_alert(result, order)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to send critical value alert on update: {e}")
 
         return TestResultResponse.model_validate(result)    
 

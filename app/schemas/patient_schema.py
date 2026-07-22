@@ -133,6 +133,7 @@ class PatientCreate(BaseSchema):
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str = "active"
+    preferred_language: str | None = None
 
     @field_validator("first_name")
     @classmethod
@@ -232,6 +233,7 @@ class PatientUpdate(BaseSchema):
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str | None = None
+    preferred_language: str | None = None
 
     @field_validator("first_name")
     @classmethod
@@ -323,6 +325,7 @@ class PatientResponse(BaseSchema):
     insurance_provider: str | None
     insurance_number: str | None
     status: str
+    preferred_language: str | None = None
     created_at: datetime
     updated_at: datetime
 

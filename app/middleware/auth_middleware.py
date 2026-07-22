@@ -23,7 +23,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/v1/whatsapp/webhook",
         "/api/v1/voice-reminder/twiml",
         "/api/v1/voice-reminder/status-callback",
+        "/api/v1/voice-reminder/exotel",
         "/api/v1/voice-assistant/twiml",
+        "/api/v1/voice-assistant/exotel",
+        "/agent/v1/voice",
     )
 
     async def dispatch(self, request: Request, call_next):

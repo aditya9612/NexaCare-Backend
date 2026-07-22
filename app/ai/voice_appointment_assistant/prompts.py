@@ -24,19 +24,36 @@ def greeting(language: str) -> str:
 def intent_menu(language: str) -> str:
     messages = {
         "en": (
-            "You can book, reschedule, or cancel an appointment, "
-            "check doctor availability, or ask about hospital timings. What would you like?"
+            "Press 1 to book an appointment, 2 to reschedule, 3 to cancel, "
+            "4 to talk to reception, or 5 for hospital information. "
+            "You can also ask about doctor availability."
         ),
         "hi": (
-            "आप अपॉइंटमेंट बुक, बदल या रद्द कर सकते हैं, "
-            "डॉक्टर की उपलब्धता पूछ सकते हैं, या अस्पताल का समय जान सकते हैं। आप क्या चाहेंगे?"
+            "अपॉइंटमेंट बुक के लिए 1, बदलने के लिए 2, रद्द के लिए 3, "
+            "रिसेप्शन के लिए 4, या अस्पताल जानकारी के लिए 5 दबाएँ।"
         ),
         "mr": (
-            "आप अपॉइंटमेंट बुक, बदल किंवा रद्द करू शकता, "
-            "डॉक्टर उपलब्धता विचारू शकता, किंवा रुग्णालयाची वेळ विचारू शकता. आपल्याला काय हवे आहे?"
+            "अपॉइंटमेंट बुक करण्यासाठी 1, बदलण्यासाठी 2, रद्द करण्यासाठी 3, "
+            "रिसेप्शनसाठी 4, किंवा रुग्णालय माहितीसाठी 5 दाबा."
         ),
     }
     return messages.get(language, messages["en"])
+
+
+def ask_faq_question(language: str) -> str:
+    return {
+        "en": "Please ask your question about hospital timings, location, contact, or policies.",
+        "hi": "कृपया अस्पताल के समय, स्थान, संपर्क या नीतियों के बारे में अपना प्रश्न पूछें।",
+        "mr": "कृपया रुग्णालयाची वेळ, स्थान, संपर्क किंवा धोरणांबद्दल तुमचा प्रश्न विचारा.",
+    }.get(language, "Please ask your hospital question.")
+
+
+def transferring_to_reception(language: str) -> str:
+    return {
+        "en": "Please wait while I connect you to reception.",
+        "hi": "कृपया प्रतीक्षा करें, मैं आपको रिसेप्शन से जोड़ रही हूँ।",
+        "mr": "कृपया थांबा, मी तुम्हाला रिसेप्शनशी जोडत आहे.",
+    }.get(language, "Please wait while I connect you to reception.")
 
 
 def ask_patient_name(language: str) -> str:

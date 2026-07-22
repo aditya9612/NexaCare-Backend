@@ -8,7 +8,6 @@ from app.ai.voice_appointment_assistant import prompts
 from app.ai.voice_appointment_assistant.emergency import emergency_message, is_emergency
 
 logger = logging.getLogger("nexacare.agent.assistant")
-from app.ai.voice_appointment_assistant.language import detect_language
 from app.ai.voice_appointment_assistant.schemas import (
     VoiceBookingPayload,
     VoiceIntent,
@@ -39,9 +38,23 @@ INTENT_KEYWORDS = {
         "mr": ["उपलब्ध", "डॉक्टर"],
     },
     VoiceIntent.HOSPITAL_INFO: {
-        "en": ["hours", "timing", "location", "address", "contact", "open"],
-        "hi": ["समय", "घंटे", "पता", "स्थान", "संपर्क", "खुला"],
-        "mr": ["वेळ", "पत्ता", "संपर्क", "उघडे"],
+        "en": ["hours", "timing", "location", "address", "contact", "open", "fee", "fees", "faq"],
+        "hi": ["समय", "घंटे", "पता", "स्थान", "संपर्क", "खुला", "शुल्क"],
+        "mr": ["वेळ", "पत्ता", "संपर्क", "उघडे", "शुल्क"],
+    },
+    VoiceIntent.RECEPTION: {
+        "en": [
+            "reception",
+            "receptionist",
+            "talk to someone",
+            "speak to someone",
+            "human",
+            "operator",
+            "transfer",
+            "agent",
+        ],
+        "hi": ["रिसेप्शन", "रिसेप्शनिस्ट", "व्यक्ति से बात", "ट्रांसफर"],
+        "mr": ["रिसेप्शन", "व्यक्तीशी बोला", "ट्रान्सफर"],
     },
 }
 
@@ -64,8 +77,16 @@ class VoiceAppointmentAssistant:
     ) -> VoiceTurnResult:
         text = (transcript or "").strip()
         logger.info(f"Processing turn - State: {state.step.name}, Transcript: {text}")
-        if text:
+        # Language is locked after LanguageResolver / DTMF — never auto-switch mid-call.
+        if text and not state.language_locked:
+            # Secondary AI fallback only when language is not yet locked (speech-only edge case).
+            from app.ai.voice_appointment_assistant.language import detect_language
+
             state.language = detect_language(text, state.language)
+            state.language_source = state.language_source or "ai_fallback"
+
+        if state.step == VoiceStep.LANGUAGE_SELECT:
+            return self._handle_language_select(state, text)
 
         if state.step == VoiceStep.EMERGENCY:
             return VoiceTurnResult(
@@ -80,6 +101,22 @@ class VoiceAppointmentAssistant:
                 prompt=emergency_message(state.language),
                 state=state,
                 hangup=True,
+            )
+
+        # Reception transfer: speech anytime; DTMF 4 on menu / greet steps only
+        wants_reception_speech = bool(text) and self._detect_intent(text) == VoiceIntent.RECEPTION
+        wants_reception_dtmf = (
+            text.strip() == "4"
+            and state.step in (VoiceStep.INTENT, VoiceStep.GREET, VoiceStep.LANGUAGE_SELECT)
+        )
+        if wants_reception_speech or wants_reception_dtmf:
+            state.intent = VoiceIntent.RECEPTION
+            state.step = VoiceStep.TRANSFER
+            state.transfer_requested = True
+            return VoiceTurnResult(
+                prompt=prompts.transferring_to_reception(state.language),
+                state=state,
+                hangup=False,
             )
 
         if text and any(w in text.lower() for w in SLOW_WORDS):
@@ -100,6 +137,15 @@ class VoiceAppointmentAssistant:
         if state.step == VoiceStep.INTENT:
             return self._handle_intent_choice(state, text)
 
+        if state.step == VoiceStep.FAQ_QUESTION:
+            state.faq_answer = text
+            state.step = VoiceStep.DONE
+            return VoiceTurnResult(
+                prompt=text,
+                state=state,
+                hangup=False,
+            )
+
         handlers = {
             VoiceStep.BOOK_NAME: self._book_name,
             VoiceStep.BOOK_DOCTOR: self._book_doctor,
@@ -116,6 +162,7 @@ class VoiceAppointmentAssistant:
             VoiceStep.CANCEL_CONFIRM: self._cancel_confirm,
             VoiceStep.AVAILABILITY_QUERY: self._availability_query,
             VoiceStep.DONE: self._done,
+            VoiceStep.TRANSFER: self._transfer_step,
         }
         handler = handlers.get(state.step)
         if handler:
@@ -124,10 +171,51 @@ class VoiceAppointmentAssistant:
         return VoiceTurnResult(prompt=prompts.intent_menu(state.language), state=state)
 
     def start_call(self, state: VoiceState) -> VoiceTurnResult:
+        if not state.language_locked:
+            state.step = VoiceStep.LANGUAGE_SELECT
+            from app.ai.voice_appointment_assistant.language import language_select_prompt
+
+            return VoiceTurnResult(
+                prompt=language_select_prompt(state.language),
+                state=state,
+                use_dtmf_menu=True,
+            )
         state.step = VoiceStep.INTENT
         greeting = prompts.greeting(state.language)
         menu = prompts.intent_menu(state.language)
-        return VoiceTurnResult(prompt=f"{greeting} {menu}", state=state)
+        return VoiceTurnResult(prompt=f"{greeting} {menu}", state=state, use_dtmf_menu=True)
+
+    def _handle_language_select(self, state: VoiceState, text: str) -> VoiceTurnResult:
+        from app.core.constants import VoiceLanguage
+
+        digit = text.strip()
+        if digit in VoiceLanguage.DTMF_MAP:
+            state.language = VoiceLanguage.DTMF_MAP[digit]
+            state.language_locked = True
+            state.language_source = "dtmf"
+            state.step = VoiceStep.INTENT
+            greeting = prompts.greeting(state.language)
+            menu = prompts.intent_menu(state.language)
+            return VoiceTurnResult(
+                prompt=f"{greeting} {menu}",
+                state=state,
+                use_dtmf_menu=True,
+            )
+        from app.ai.voice_appointment_assistant.language import language_select_prompt
+
+        return VoiceTurnResult(
+            prompt=language_select_prompt(state.language),
+            state=state,
+            use_dtmf_menu=True,
+        )
+
+    def _transfer_step(self, state: VoiceState, text: str) -> VoiceTurnResult:
+        state.transfer_requested = True
+        state.step = VoiceStep.TRANSFER
+        return VoiceTurnResult(
+            prompt=prompts.transferring_to_reception(state.language),
+            state=state,
+        )
 
     def _after_greet(self, state: VoiceState, text: str) -> VoiceTurnResult:
         intent = self._detect_intent(text)
@@ -144,7 +232,7 @@ class VoiceAppointmentAssistant:
         if text.strip() == "3":
             return self._start_intent_flow(state, VoiceIntent.CANCEL)
         if text.strip() == "4":
-            return self._start_intent_flow(state, VoiceIntent.AVAILABILITY)
+            return self._start_intent_flow(state, VoiceIntent.RECEPTION)
         if text.strip() == "5":
             return self._start_intent_flow(state, VoiceIntent.HOSPITAL_INFO)
 
@@ -172,11 +260,17 @@ class VoiceAppointmentAssistant:
             state.step = VoiceStep.AVAILABILITY_QUERY
             return VoiceTurnResult(prompt=prompts.ask_doctor(state.language), state=state)
         if intent == VoiceIntent.HOSPITAL_INFO:
-            state.step = VoiceStep.DONE
+            state.step = VoiceStep.FAQ_QUESTION
             return VoiceTurnResult(
-                prompt=prompts.hospital_info(state.language),
+                prompt=prompts.ask_faq_question(state.language),
                 state=state,
-                hangup=True,
+            )
+        if intent == VoiceIntent.RECEPTION:
+            state.step = VoiceStep.TRANSFER
+            state.transfer_requested = True
+            return VoiceTurnResult(
+                prompt=prompts.transferring_to_reception(state.language),
+                state=state,
             )
         state.step = VoiceStep.INTENT
         return VoiceTurnResult(prompt=prompts.intent_menu(state.language), state=state)

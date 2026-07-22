@@ -26,3 +26,4 @@ class InMemoryRateLimiter:
 
 
 chat_rate_limiter = InMemoryRateLimiter()
+voice_webhook_rate_limiter = InMemoryRateLimiter(limit_per_minute=120)

@@ -18,7 +18,9 @@ from app.agent import session_store
 from app.agent.nodes import language as lang_node
 from app.agent.nodes import greeting as greet_node
 from app.agent.nodes import booking as book_node
+from app.core.constants import TelephonyProviderType
 from app.core.dependencies import DbSession
+from app.telephony.webhook_auth import require_voice_webhook_auth
 
 logger = logging.getLogger("nexacare.agent.router")
 
@@ -29,6 +31,17 @@ router = APIRouter(tags=["AI Voice Agent"])
 
 def xml(twiml: str) -> Response:
     return Response(content=twiml, media_type="application/xml; charset=utf-8")
+
+
+async def _require_agent_webhook(request: Request) -> None:
+    """Agent webhooks are Twilio-oriented by default (experimental path)."""
+    logger.info(
+        "TRACE _require_agent_webhook ENTER path=%s method=%s",
+        request.url.path,
+        request.method,
+    )
+    await require_voice_webhook_auth(request, TelephonyProviderType.TWILIO)
+    logger.info("TRACE _require_agent_webhook EXIT path=%s (auth passed/skipped)", request.url.path)
 
 
 def _base_url() -> str:
@@ -77,6 +90,16 @@ async def incoming_call(
     From: str = Form(default=""),
     Caller: str = Form(default=""),
 ):
+    logger.info(
+        "TRACE incoming_call ROUTE ENTRY path=%s url=%s CallSid=%r From=%r Caller=%r",
+        request.url.path,
+        str(request.url),
+        CallSid,
+        From,
+        Caller,
+    )
+    await _require_agent_webhook(request)
+    logger.info("TRACE incoming_call AFTER auth CallSid=%r", CallSid)
     call_sid = CallSid or "unknown"
     from_number = From or Caller or ""
     _log_request("INCOMING", call_sid, From=from_number)
@@ -88,21 +111,29 @@ async def incoming_call(
         session_store.create_session(call_sid, from_number, base_url)
         twiml = lang_node.build_language_select_twiml(base_url)
 
+        logger.info(
+            "TRACE incoming_call BEFORE returning TwiML call_sid=%s twiml_len=%s",
+            call_sid,
+            len(twiml or ""),
+        )
         logger.info(f"  ↳ [{call_sid}] Returning language select TwiML")
         return xml(twiml)
 
     except Exception as e:
         logger.error(f"  ✗ [{call_sid}] /incoming crashed: {e}")
         logger.error(traceback.format_exc())
+        logger.info("TRACE incoming_call BEFORE returning error TwiML call_sid=%s", call_sid)
         return xml(_error_twiml())
 
 
 # ── Route 2: Language selection ────────────────────────────────────────────────
 @router.post("/lang")
 async def language_select(
+    request: Request,
     CallSid: str = Form(default=""),
     Digits: str = Form(default=""),
 ):
+    await _require_agent_webhook(request)
     call_sid = CallSid or "unknown"
     digit = Digits.strip()
     _log_request("LANG", call_sid, Digits=digit)
@@ -150,9 +181,11 @@ async def language_select(
 # ── Route 3: Service menu ──────────────────────────────────────────────────────
 @router.post("/menu")
 async def service_menu(
+    request: Request,
     CallSid: str = Form(default=""),
     Digits: str = Form(default=""),
 ):
+    await _require_agent_webhook(request)
     call_sid = CallSid or "unknown"
     digit = Digits.strip()
     _log_request("MENU", call_sid, Digits=digit)
@@ -207,12 +240,14 @@ async def service_menu(
 # ── Route 4: Conversational turns ─────────────────────────────────────────────
 @router.post("/turn")
 async def conversation_turn(
+    request: Request,
     db: DbSession,
     CallSid: str = Form(default=""),
     SpeechResult: str = Form(default=""),
     Digits: str = Form(default=""),
     Confidence: str = Form(default=""),
 ):
+    await _require_agent_webhook(request)
     call_sid = CallSid or "unknown"
     speech = SpeechResult.strip()
     digits = Digits.strip()
@@ -309,9 +344,11 @@ async def conversation_turn(
 # ── Route 5: Call status ───────────────────────────────────────────────────────
 @router.post("/status")
 async def call_status(
+    request: Request,
     CallSid: str = Form(default=""),
     CallStatus: str = Form(default=""),
 ):
+    await _require_agent_webhook(request)
     call_sid = CallSid or "unknown"
     logger.info(f"▶ STATUS | SID={call_sid} | Status={CallStatus}")
     if CallStatus in {"completed", "failed", "busy", "no-answer", "canceled"}:
@@ -362,6 +399,7 @@ async def reminder_twiml(
 # ── Route 8: Reminder call status callback ─────────────────────────────────────
 @router.post("/reminder-status")
 async def reminder_status(
+    request: Request,
     CallStatus: str = Form(default=""),
     doctor:     str = "",
     time:       str = "",
@@ -373,6 +411,7 @@ async def reminder_status(
     Twilio posts here when a reminder call ends.
     If patient did not answer, send SMS instead.
     """
+    await _require_agent_webhook(request)
     from app.agent.reminder import send_reminder_sms
     logger.info(
         f"▶ REMINDER-STATUS | status={CallStatus} | "

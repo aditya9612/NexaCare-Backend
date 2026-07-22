@@ -1,12 +1,22 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import List
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve .env relative to the project root (NexaCare-Backend/), not process cwd.
+# Relative env_file=".env" silently misses the file when uvicorn is started from a parent dir.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     APP_NAME: str = "NesaCare HMS"
     APP_ENV: str = "development"
@@ -16,8 +26,7 @@ class Settings(BaseSettings):
 
    
 
-    # DATABASE_URL: str = "mysql+aiomysql://root:root@localhost/NesaCare"
-    # DATABASE_URL_SYNC: str = "mysql+pymysql://root:root@localhost/NesaCare"
+    
     DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
     DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
 
@@ -56,14 +65,32 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("TWILIO_TEST_TO_NUMBER", "TWILIO_TO_NUMBER"),
     )
 
+    # Exotel (India-primary telephony). Per-hospital overrides live in HospitalVoiceConfig.
+    EXOTEL_SID: str = ""
+    EXOTEL_API_KEY: str = ""
+    EXOTEL_API_TOKEN: str = ""
+    EXOTEL_SUBDOMAIN: str = "api.exotel.com"
+    EXOTEL_PHONE_NUMBER: str = ""
+    EXOTEL_WEBHOOK_SECRET: str = ""
+    DEFAULT_TELEPHONY_PROVIDER: str = "twilio"
+    # When true, skip Twilio/Exotel signature checks (local tests only).
+    SKIP_VOICE_WEBHOOK_AUTH: bool = False
+
+    NGROK_AUTH_TOKEN: str = ""
+
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
     CHAT_SESSION_TTL_SECONDS: int = 3600
     ANALYTICS_CACHE_TTL_SECONDS: int = 300
+    LAB_PENDING_TEST_THRESHOLD_HOURS: int = 24
+    DOCTOR_APPOINTMENT_REMINDER_MINUTES: int = 30
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
+    VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
+    VOICE_FAQ_CACHE_TTL_SECONDS: int = 600
+    VOICE_AI_CONFIDENCE_THRESHOLD: float = 0.65
 
-    # Public URL for Twilio webhooks (use ngrok in local dev)
+    # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
 
     # Hospital info surfaced in FAQ / chatbot prompts
@@ -103,6 +130,8 @@ class Settings(BaseSettings):
 
     # ICU telemetry ingestion limits
     ICU_TELEMETRY_ECG_MAX_SAMPLES: int = 1000
+    ICU_TELEMETRY_HISTORY_DEFAULT_HOURS: int = 24
+    ICU_TELEMETRY_HISTORY_MAX_DAYS: int = 7
 
 
 @lru_cache

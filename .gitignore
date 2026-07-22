@@ -23,4 +23,7 @@ app/uploads/**/*
 alembic/versions/*.pyc
 .DS_Store
 Thumbs.db
-.env
+
+# Docker local overrides (keep Dockerfile & docker-compose.yml tracked)
+docker-compose.override.yml
+docker-compose.*.local.yml

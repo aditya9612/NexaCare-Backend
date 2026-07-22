@@ -571,9 +571,25 @@ class PharmacyService:
             await self.db.flush()
 
     async def download_invoice(self, invoice_id: int):
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import Response
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        from app.utils.pdf_generator import html_to_pdf
 
-        invoice = await self.invoice_repo.get_by_id(invoice_id)
+        stmt = (
+            select(PharmacyInvoice)
+            .where(
+                PharmacyInvoice.id == invoice_id,
+                PharmacyInvoice.is_deleted.is_(False),
+            )
+            .options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+        )
+        res = await self.db.execute(stmt)
+        invoice = res.scalar_one_or_none()
+
         if not invoice:
             raise NotFoundException("Pharmacy invoice not found")
 
@@ -582,24 +598,31 @@ class PharmacyService:
         if invoice.patient_id:
             patient = await self.patient_repo.get_by_id(invoice.patient_id)
             if patient:
-                patient_name = getattr(patient, "full_name", str(patient))
-                patient_phone = getattr(patient, "phone", "-") or "-"
+                patient_name = f"{patient.first_name} {patient.last_name}".strip()
+                patient_phone = patient.phone or "-"
 
         item_rows = ""
         for idx, item in enumerate(invoice.items, start=1):
-            med_name = item.medicine.name if item.medicine else f"Medicine #{item.medicine_id}"
+            med_name = item.medicine.name if (item.medicine and item.medicine.name) else f"Medicine #{item.medicine_id}"
+            unit_price = float(item.unit_price or 0.0)
+            line_total = float(item.line_total or 0.0)
             item_rows += f"""
             <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: center;">{idx}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">{med_name}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: center;">{item.quantity}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right;">₹{item.unit_price:.2f}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right;">₹{item.line_total:.2f}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{idx}</td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{med_name}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{item.quantity}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{unit_price:.2f}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{line_total:.2f}</td>
             </tr>
             """
 
         payment_mode_str = invoice.payment_mode or "Cash"
         created_str = invoice.created_at.strftime("%Y-%m-%d %H:%M") if invoice.created_at else "-"
+
+        subtotal = float(invoice.subtotal or 0.0)
+        discount_amount = float(invoice.discount_amount or 0.0)
+        tax_amount = float(invoice.tax_amount or 0.0)
+        total_amount = float(invoice.total_amount or 0.0)
 
         html_content = f"""<!DOCTYPE html>
 <html>
@@ -607,95 +630,92 @@ class PharmacyService:
     <meta charset="utf-8">
     <title>Pharmacy Invoice #{invoice.invoice_number}</title>
     <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; margin: 0; padding: 30px; color: #1e293b; }}
-        .invoice-card {{ max-width: 800px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); padding: 40px; border: 1px solid #e2e8f0; }}
-        .header {{ display: flex; justify-content: space-between; border-bottom: 2px solid #2563eb; padding-bottom: 20px; margin-bottom: 30px; }}
-        .logo-section h1 {{ color: #2563eb; margin: 0; font-size: 26px; }}
-        .logo-section p {{ color: #64748b; margin: 5px 0 0 0; font-size: 14px; }}
-        .invoice-details {{ text-align: right; }}
-        .invoice-details h2 {{ margin: 0; color: #0f172a; font-size: 20px; }}
-        .meta-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; background: #f1f5f9; padding: 20px; border-radius: 8px; }}
-        .table-container {{ margin-bottom: 30px; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th {{ background: #2563eb; color: #ffffff; padding: 12px; text-align: left; font-size: 14px; }}
-        .totals-section {{ width: 300px; margin-left: auto; font-size: 14px; }}
-        .totals-row {{ display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }}
-        .totals-row.grand-total {{ border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; font-weight: bold; font-size: 18px; color: #2563eb; margin-top: 10px; padding: 10px 0; }}
-        .badge {{ display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600; text-transform: uppercase; background: #dcfce7; color: #166534; }}
-        .badge-payment {{ background: #dbeafe; color: #1e40af; }}
-        .footer {{ text-align: center; margin-top: 40px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }}
+        body {{ font-family: Arial, sans-serif; margin: 20px; color: #333; }}
+        h1 {{ color: #2563eb; margin-bottom: 5px; }}
+        .header {{ width: 100%; border-bottom: 2px solid #2563eb; padding-bottom: 10px; margin-bottom: 20px; }}
+        .meta-table {{ width: 100%; margin-bottom: 20px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 10px; }}
+        .items-table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
+        .items-table th {{ background: #2563eb; color: #ffffff; padding: 8px; border: 1px solid #2563eb; text-align: left; }}
+        .totals-table {{ width: 300px; float: right; border-collapse: collapse; margin-top: 10px; }}
+        .totals-table td {{ padding: 6px; }}
+        .grand-total {{ font-weight: bold; font-size: 16px; color: #2563eb; border-top: 2px solid #333; border-bottom: 2px solid #333; }}
     </style>
 </head>
 <body>
-    <div class="invoice-card">
-        <div class="header">
-            <div class="logo-section">
-                <h1>NexaCare Pharmacy</h1>
-                <p>Advanced Healthcare & Pharmacy Billing</p>
-            </div>
-            <div class="invoice-details">
-                <h2>INVOICE</h2>
-                <p style="margin: 5px 0; font-weight: bold; color: #2563eb;">#{invoice.invoice_number}</p>
-                <p style="margin: 0; font-size: 13px; color: #64748b;">Date: {created_str}</p>
-            </div>
-        </div>
+    <div class="header">
+        <h1>NexaCare Pharmacy</h1>
+        <p style="margin:0;">Advanced Healthcare & Pharmacy Billing</p>
+        <h3 style="margin-top:10px;">INVOICE #{invoice.invoice_number}</h3>
+        <p style="margin:0;">Date: {created_str}</p>
+    </div>
 
-        <div class="meta-grid">
-            <div>
-                <strong style="color: #475569; display: block; margin-bottom: 6px;">Patient Information:</strong>
-                <p style="margin: 0; font-weight: 600;">{patient_name}</p>
-                <p style="margin: 4px 0 0 0; color: #64748b; font-size: 13px;">Phone: {patient_phone}</p>
-            </div>
-            <div>
-                <strong style="color: #475569; display: block; margin-bottom: 6px;">Billing Information:</strong>
-                <p style="margin: 0;">Status: <span class="badge">{invoice.status}</span></p>
-                <p style="margin: 6px 0 0 0;">Payment Mode: <span class="badge badge-payment">{payment_mode_str}</span></p>
-            </div>
-        </div>
+    <table class="meta-table">
+        <tr>
+            <td style="vertical-align: top;">
+                <strong>Patient Name:</strong> {patient_name}<br>
+                <strong>Phone:</strong> {patient_phone}
+            </td>
+            <td style="vertical-align: top; text-align: right;">
+                <strong>Status:</strong> {invoice.status}<br>
+                <strong>Payment Mode:</strong> {payment_mode_str}
+            </td>
+        </tr>
+    </table>
 
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="text-align: center; width: 50px;">#</th>
-                        <th>Medicine Item</th>
-                        <th style="text-align: center; width: 80px;">Qty</th>
-                        <th style="text-align: right; width: 120px;">Unit Price</th>
-                        <th style="text-align: right; width: 120px;">Total</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {item_rows}
-                </tbody>
-            </table>
-        </div>
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="text-align: center; width: 40px;">#</th>
+                <th>Medicine Name</th>
+                <th style="text-align: center; width: 60px;">Qty</th>
+                <th style="text-align: right; width: 100px;">Unit Price</th>
+                <th style="text-align: right; width: 100px;">Line Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {item_rows}
+        </tbody>
+    </table>
 
-        <div class="totals-section">
-            <div class="totals-row">
-                <span>Subtotal:</span>
-                <span>₹{invoice.subtotal:.2f}</span>
-            </div>
-            <div class="totals-row">
-                <span>Discount ({invoice.discount_percentage}%):</span>
-                <span>- ₹{invoice.discount_amount:.2f}</span>
-            </div>
-            <div class="totals-row">
-                <span>GST / Tax ({invoice.tax_percentage}%):</span>
-                <span>+ ₹{invoice.tax_amount:.2f}</span>
-            </div>
-            <div class="totals-row grand-total">
-                <span>Total Amount:</span>
-                <span>₹{invoice.total_amount:.2f}</span>
-            </div>
-        </div>
+    <table class="totals-table">
+        <tr>
+            <td>Subtotal:</td>
+            <td style="text-align: right;">{subtotal:.2f}</td>
+        </tr>
+        <tr>
+            <td>Discount ({invoice.discount_percentage or 0}%):</td>
+            <td style="text-align: right;">-{discount_amount:.2f}</td>
+        </tr>
+        <tr>
+            <td>GST / Tax ({invoice.tax_percentage or 0}%):</td>
+            <td style="text-align: right;">+{tax_amount:.2f}</td>
+        </tr>
+        <tr class="grand-total">
+            <td>Total Amount:</td>
+            <td style="text-align: right;">{total_amount:.2f}</td>
+        </tr>
+    </table>
 
-        <div class="footer">
-            <p>Thank you for choosing NexaCare Pharmacy! Wish you good health.</p>
-        </div>
+    <div style="clear: both; padding-top: 40px; text-align: center; color: #777;">
+        <p>Thank you for choosing NexaCare Pharmacy! Wish you good health.</p>
     </div>
 </body>
 </html>"""
-        return HTMLResponse(content=html_content)
+
+        try:
+            pdf_bytes = html_to_pdf(html_content)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f"attachment; filename=pharmacy_invoice_{invoice.invoice_number}.pdf"
+                },
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("PDF conversion failed, returning HTML fallback: %s", exc)
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(content=html_content)
 
 
     # --- Suppliers ---

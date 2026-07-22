@@ -12,8 +12,10 @@ from app.schemas.inventory_schema import (
     StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
+    StockTransactionUpdate,
     WarehouseCreate,
     WarehouseResponse,
+    WarehouseUpdate,
 )
 from app.services.inventory_service import InventoryService
 from app.utils.pagination import PaginatedResult
@@ -119,6 +121,40 @@ async def list_stock_transactions(
     return APIResponse(message="Stock transactions retrieved", data=result)
 
 
+@router.get("/stock-transactions/{transaction_id}", response_model=APIResponse[StockTransactionResponse])
+async def get_stock_transaction(
+    transaction_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "read")),
+):
+    transaction = await InventoryService(db).get_transaction(transaction_id)
+    return APIResponse(message="Stock transaction retrieved", data=transaction)
+
+
+@router.put("/stock-transactions/{transaction_id}", response_model=APIResponse[StockTransactionResponse])
+async def update_stock_transaction(
+    transaction_id: int,
+    data: StockTransactionUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "update")),
+):
+    transaction = await InventoryService(db).update_transaction(transaction_id, data, current_user.id)
+    return APIResponse(message="Stock transaction updated", data=transaction)
+
+
+@router.delete("/stock-transactions/{transaction_id}", response_model=APIResponse[MessageResponse])
+async def delete_stock_transaction(
+    transaction_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "delete")),
+):
+    await InventoryService(db).delete_stock_transaction(transaction_id, current_user.id)
+    return APIResponse(message="Stock transaction deleted", data=MessageResponse(message="Deleted successfully"))
+
+
 # --- Vendors Removed (moved to unified /vendors API) ---
 
 
@@ -144,6 +180,40 @@ async def list_warehouses(
 ):
     result = await InventoryService(db).list_warehouses(page=page, size=size)
     return APIResponse(message="Warehouses retrieved", data=result)
+
+
+@router.get("/warehouses/{warehouse_id}", response_model=APIResponse[WarehouseResponse])
+async def get_warehouse(
+    warehouse_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "read")),
+):
+    warehouse = await InventoryService(db).get_warehouse(warehouse_id)
+    return APIResponse(message="Warehouse retrieved", data=warehouse)
+
+
+@router.put("/warehouses/{warehouse_id}", response_model=APIResponse[WarehouseResponse])
+async def update_warehouse(
+    warehouse_id: int,
+    data: WarehouseUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "update")),
+):
+    warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, current_user.id)
+    return APIResponse(message="Warehouse updated", data=warehouse)
+
+
+@router.delete("/warehouses/{warehouse_id}", response_model=APIResponse[MessageResponse])
+async def delete_warehouse(
+    warehouse_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "delete")),
+):
+    await InventoryService(db).delete_warehouse(warehouse_id, current_user.id)
+    return APIResponse(message="Warehouse deleted", data=MessageResponse(message="Soft deleted"))
 
 
 # --- Reports & Alerts ---

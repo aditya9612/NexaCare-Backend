@@ -30,16 +30,33 @@ async def get_db():
 
 
 def run_migrations():
+    """Run Alembic in a subprocess to avoid async/sync engine conflicts on Windows."""
     import logging
-    from alembic.config import Config
-    from alembic import command
+    import subprocess
+    import sys
+    from pathlib import Path
+
     logger = logging.getLogger("nexacare.db")
+    project_root = Path(__file__).resolve().parents[2]
     try:
-        alembic_cfg = Config("alembic.ini")
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Alembic database migrations successfully upgraded to head.")
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Alembic auto-migration failed (exit %s): %s",
+                result.returncode,
+                (result.stderr or result.stdout or "").strip(),
+            )
+        else:
+            logger.info("Alembic database migrations successfully upgraded to head.")
     except Exception as e:
-        logger.warning(f"Alembic auto-migration failed: {e}")
+        logger.warning("Alembic auto-migration failed: %s", e)
 
 
 async def init_db():
@@ -65,6 +82,7 @@ async def init_db():
         role_model,
         user_model,
         voice_model,
+        hospital_voice_model,
         whatsapp_model,
         expense_model,
         vendor_model,

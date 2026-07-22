@@ -33,6 +33,7 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
     insurance_provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
     insurance_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)
+    preferred_language: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
 
     appointments = relationship("Appointment", back_populates="patient")
     documents = relationship("PatientDocument", back_populates="patient", cascade="all, delete-orphan")

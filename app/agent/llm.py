@@ -11,7 +11,6 @@ Uses google-genai SDK with gemini-2.5-flash for:
 
 import json
 import logging
-import os
 from enum import Enum
 from typing import Optional
 
@@ -19,6 +18,15 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+
+try:
+    from google import genai
+    from google.genai import types
+except ImportError as exc:
+    raise ImportError(
+        "google-genai package is required for the experimental voice agent LLM"
+    ) from exc
+
 load_dotenv()
 
 logger = logging.getLogger("nexacare.agent.llm")
@@ -27,25 +35,16 @@ logger = logging.getLogger("nexacare.agent.llm")
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 def _get_model() -> str:
-    """Get Gemini model name from settings or env."""
-    try:
-        from app.core.config import settings
-        return settings.GEMINI_MODEL or "gemini-2.5-flash"
-    except Exception:
-        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    """Get Gemini model name from settings."""
+    from app.core.config import settings
+    return settings.GEMINI_MODEL or "gemini-2.5-flash"
 
 
 def _get_client() -> genai.Client:
     """Create a Gemini client using GEMINI_API_KEY."""
-    try:
-        from app.core.config import settings
-        api_key = settings.GEMINI_API_KEY
-    except Exception:
-        api_key = None
+    from app.core.config import settings
 
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
-
+    api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
         raise ValueError(
             "GEMINI_API_KEY not set. Add it to .env or settings."
@@ -145,94 +144,20 @@ class SpecialtyDetectionResult(BaseModel):
 
 
 # ── 1. Name extraction ────────────────────────────────────────────────────────
-
-NAME_SYSTEM_PROMPT = """You are a medical receptionist assistant for NexaCare, an Indian hospital.
-The patient was asked "Please say your full name." and you received their speech transcript.
-
-The patient may have spoken in English, Hindi, or Marathi. The transcript may
-contain Devanagari script (Hindi/Marathi), Latin script (English or
-transliterated Hindi/Marathi), or a mix.
-
-Your job: extract ONLY the patient's actual name from the transcript. ABSOLUTELY NO EXTRA WORDS.
-
-Rules:
-- STRICTLY EXTRACT ONLY THE NAME. Do not include any contextual words, greetings, or filler phrases.
-- Remove ALL filler phrases in any language. Common examples:
-  English: "my name is", "I am", "this is", "myself", "call me", "hi my name is"
-  Hindi: "मेरा नाम है", "मेरा नाम", "मैं हूँ", "मैं", "जी मेरा नाम"
-  Marathi: "माझे नाव आहे", "माझे नाव", "मी आहे", "मी"
-  Transliterated: "mera naam hai", "mera naam", "majhe naav", "majhe naav aahe"
-- Handle salutations: if the name includes Mr./Mrs./Dr./Shri/Smt., keep them
-- Indian names can be single words (e.g., "Ravi"), two words (e.g., "Ravi Kumar"), or three
-- Names in Devanagari script should be kept in Devanagari
-- Names in Latin script should be properly Title Cased
-- If the transcript is too unclear, empty, or contains only filler words, set found to false
-- A single short word (2+ characters) CAN be a valid name
-- NEVER output full sentences as the name."""
+# Multi-stage pipeline lives in app.agent.name_extraction; this is the public facade.
 
 
 def extract_patient_name(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
-    Use Gemini to extract the patient's name from a speech transcript.
+    Extract the patient's name from a speech transcript via the multi-stage pipeline.
+
+    Stages: preprocess → regex rules → Gemini → postprocess → validate → fallback.
 
     Returns dict with keys: found, name, confidence, reason
     """
-    if not transcript or not transcript.strip():
-        return {"found": False, "name": "", "confidence": "low", "reason": "Empty transcript."}
+    from app.agent.name_extraction.pipeline import run
 
-    logger.info(
-        f"Name extraction attempt | transcript={transcript!r} | "
-        f"twilio_confidence={twilio_confidence}"
-    )
-
-    try:
-        client = _get_client()
-        model = _get_model()
-
-        response = client.models.generate_content(
-            model=model,
-            contents=f'Speech transcript: "{transcript.strip()}"',
-            config=types.GenerateContentConfig(
-                system_instruction=NAME_SYSTEM_PROMPT,
-                temperature=0.0,
-                max_output_tokens=150,
-                response_mime_type="application/json",
-                response_schema=NameExtractionResult,
-            ),
-        )
-
-        result = json.loads(response.text)
-
-        # Sanitise response
-        if not isinstance(result.get("found"), bool):
-            result["found"] = bool(result.get("name", "").strip())
-        if not result.get("name", "").strip():
-            result["found"] = False
-            result["name"] = ""
-
-        logger.info(
-            f"Name extraction: found={result['found']} name={result.get('name')!r} "
-            f"conf={result.get('confidence')} | {result.get('reason')}"
-        )
-        return result
-
-    except Exception as e:
-        logger.warning(f"Name extraction LLM failed: {e} — using fallback")
-        # Graceful fallback — basic prefix stripping across EN/HI/MR
-        raw = transcript.strip()
-        prefixes = [
-            "my name is ", "i am ", "this is ", "myself ", "name is ", "i'm ", "call me ",
-            "मेरा नाम है ", "मेरा नाम ", "मैं हूँ ", "माझे नाव आहे ", "माझे नाव ", "मी आहे ",
-        ]
-        clean = raw.lower()
-        for prefix in prefixes:
-            if clean.startswith(prefix.lower()):
-                raw = raw[len(prefix):]
-                break
-        name = raw.strip().title()
-        if len(name.replace(" ", "")) >= 2:
-            return {"found": True, "name": name, "confidence": "low", "reason": "Fallback prefix strip."}
-        return {"found": False, "name": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
+    return run(transcript, twilio_confidence=twilio_confidence)
 
 
 # ── 2. Problem extraction ─────────────────────────────────────────────────────

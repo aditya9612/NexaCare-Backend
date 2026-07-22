@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import BillingStatus
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
@@ -156,6 +156,13 @@ class BillingService:
             appointment = apt_result.scalar_one_or_none()
             if not appointment:
                 raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+            
+            if appointment.patient_id != data.patient_id:
+                raise BadRequestException("Appointment does not belong to the supplied patient")
+
+            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
+            if existing_billing:
+                raise ConflictException("Billing already exists for this patient and appointment.")
 
         due_date = data.due_date
         if due_date and due_date.tzinfo is not None:
@@ -167,8 +174,6 @@ class BillingService:
             bill_number=generate_bill_number(),
             discount_percent=data.discount_percent,
             discount_amount=data.discount_amount,
-            gst_rate=data.gst_rate,
-            tax_amount=data.tax_amount,
             due_date=due_date,
             notes=data.notes,
             insurance_id=data.insurance_id,
@@ -360,19 +365,58 @@ class BillingService:
     async def update(self, billing_id: int, data: BillingUpdate, user_id: int) -> BillingResponse:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+
+            dump = data.model_dump(exclude_unset=True)
+            if "status" in dump and dump["status"] is not None:
+                invoice.status = dump["status"]
+
+            if "discount_percent" in dump and dump["discount_percent"] is not None:
+                invoice.discount_percentage = float(dump["discount_percent"])
+            elif "discount_percentage" in dump and dump["discount_percentage"] is not None:
+                invoice.discount_percentage = float(dump["discount_percentage"])
+
+            if "gst_rate" in dump and dump["gst_rate"] is not None:
+                invoice.tax_percentage = float(dump["gst_rate"])
+            elif "tax_percentage" in dump and dump["tax_percentage"] is not None:
+                invoice.tax_percentage = float(dump["tax_percentage"])
+
+            subtotal = float(invoice.subtotal or 0.0)
+            discount_amount = round((subtotal * invoice.discount_percentage) / 100, 2)
+            tax_amount = round((subtotal - discount_amount) * invoice.tax_percentage / 100, 2)
+
+            invoice.discount_amount = discount_amount
+            invoice.tax_amount = tax_amount
+            invoice.gst_amount = tax_amount
+            invoice.total_amount = round(subtotal - discount_amount + tax_amount, 2)
+            if invoice.status == "paid":
+                invoice.paid_amount = invoice.total_amount
+
+            await self.db.flush()
+            await self.audit_repo.create("update", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return self._pharmacy_invoice_to_billing_response(invoice)
 
         non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount", "status"]
         for field in non_nullable_fields:
             if field in data.model_fields_set and getattr(data, field) is None:
                 raise BadRequestException(f"Field '{field}' cannot be null")
 
-        if data.insurance_id is not None:
-            insurance = await InsuranceRepository(self.db).get_by_id(data.insurance_id)
-            if not insurance:
-                raise NotFoundException(f"Insurance record with ID {data.insurance_id} not found")
-
+        # Ignore and do not validate insurance_id from data
         dump = data.model_dump(exclude_unset=True)
+        dump.pop("insurance_id", None)  # Ignore insurance_id payload
+
         if "due_date" in dump and dump["due_date"] is not None:
             dt = dump["due_date"]
             if dt.tzinfo is not None:
@@ -405,6 +449,10 @@ class BillingService:
 
         for key, value in dump.items():
             setattr(billing, key, value)
+
+        # Always set insurance_id to None during billing update
+        billing.insurance_id = None
+
         billing = await self._recalculate_billing(billing)
         billing = await self.repo.get_by_id(billing.id)
         await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))
@@ -413,7 +461,17 @@ class BillingService:
     async def delete(self, billing_id: int, user_id: int) -> None:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(PharmacyInvoice.id == billing_id, PharmacyInvoice.is_deleted == False)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            from app.services.pharmacy_service import PharmacyService
+            await PharmacyService(self.db).delete_invoice(billing_id)
+            await self.audit_repo.create("delete", "pharmacy_invoice", user_id=user_id, resource_id=str(billing_id))
+            return
         await self.repo.soft_delete(billing)
         await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
 

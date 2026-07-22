@@ -60,10 +60,24 @@ class PatientRepository:
         return result.scalar_one_or_none()
 
     async def get_by_phone(self, phone: str) -> Patient | None:
+        from app.utils.phone_utils import indian_mobile_last10
+
+        last10 = indian_mobile_last10(phone)
+        if not last10:
+            return None
+        # Exact match first
+        result = await self.db.execute(self._base_query().where(Patient.phone == phone))
+        hit = result.scalar_one_or_none()
+        if hit:
+            return hit
+        # Match any stored format ending with same 10 digits
         result = await self.db.execute(
-            self._base_query().where(Patient.phone == phone)
+            self._base_query().where(Patient.phone.is_not(None))
         )
-        return result.scalar_one_or_none()
+        for patient in result.scalars().all():
+            if indian_mobile_last10(patient.phone) == last10:
+                return patient
+        return None
 
     async def get_by_email(self, email: str) -> Patient | None:
         result = await self.db.execute(

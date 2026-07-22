@@ -655,4 +655,3 @@ async def _seed_lab_technician_permissions(session: AsyncSession) -> None:
         )
         if not rp.scalar_one_or_none():
             session.add(RolePermission(role_id=tech_role.id, permission_id=perm.id))
-

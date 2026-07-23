@@ -329,6 +329,8 @@ class PatientResponse(BaseSchema):
     insurance_number: str | None
     status: str
     preferred_language: str | None = None
+    guardian_patient_id: int | None = None
+    relationship_to_guardian: str | None = None
     created_at: datetime
     updated_at: datetime
 

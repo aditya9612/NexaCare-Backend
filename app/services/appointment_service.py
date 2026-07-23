@@ -27,14 +27,17 @@ class AppointmentService:
         self.db = db
         self.repo = AppointmentRepository(db)
         self.patient_repo = PatientRepository(db)
-        self.doctor_repo = DoctorRepository(db)
         self.audit_repo = AuditRepository(db)
+        from app.services.booking_validation_service import BookingValidationService
+        self.validation_service = BookingValidationService(db)
+        self.audit_repo = AuditRepository(db)
+        self.doctor_repo = DoctorRepository(db)
 
     def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> None:
         today = date.today()
         if appointment_date < today:
             raise BadRequestException("Cannot book or reschedule an appointment for a past date")
-        if appointment_date == today:
+        if appointment_date == today and appointment_time is not None:
             now_time = datetime.now().time()
             if appointment_time < now_time:
                 raise BadRequestException("Cannot book or reschedule an appointment for a past time slot today")
@@ -48,24 +51,7 @@ class AppointmentService:
         if doctor.availability_status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
 
-    async def _validate_doctor_schedule(self, doctor_id: int, appointment_date: date) -> None:
-        from app.models.doctor_model import DoctorSchedule
-        from sqlalchemy import select
-        day_of_week = appointment_date.weekday()
-        
-        schedule_res = await self.db.execute(
-            select(DoctorSchedule).where(
-                DoctorSchedule.doctor_id == doctor_id,
-                DoctorSchedule.day_of_week == day_of_week,
-                DoctorSchedule.is_active.is_(True)
-            )
-        )
-        if not schedule_res.scalars().all():
-            raise ConflictException("Doctor is not scheduled to work on this day")
 
-    async def _check_conflict(self, doctor_id: int, appointment_date: date, appointment_time, exclude_id=None):
-        if await self.repo.exists_conflict(doctor_id, appointment_date, appointment_time, exclude_id):
-            raise ConflictException("Doctor already has an appointment at this slot")
 
     async def list_appointments(
         self,
@@ -135,8 +121,7 @@ class AppointmentService:
     async def create(self, data: AppointmentCreate, user_id: int) -> AppointmentResponse:
         self._validate_future_datetime(data.appointment_date, data.appointment_time)
         await self._validate_entities(data.patient_id, data.doctor_id)
-        await self._validate_doctor_schedule(data.doctor_id, data.appointment_date)
-        await self._check_conflict(data.doctor_id, data.appointment_date, data.appointment_time)
+        rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
         appointment = Appointment(
@@ -162,11 +147,8 @@ class AppointmentService:
         if "appointment_date" in update_data or "appointment_time" in update_data:
             self._validate_future_datetime(new_date, new_time)
 
-        if "appointment_date" in update_data:
-            await self._validate_doctor_schedule(appointment.doctor_id, new_date)
-            
         if "appointment_date" in update_data or "appointment_time" in update_data:
-            await self._check_conflict(appointment.doctor_id, new_date, new_time, exclude_id=appointment_id)
+            rules = await self.validation_service.validate(appointment.doctor_id, new_date, new_time, exclude_id=appointment_id)
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
@@ -186,8 +168,7 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
         self._validate_future_datetime(data.appointment_date, data.appointment_time)
-        await self._validate_doctor_schedule(appointment.doctor_id, data.appointment_date)
-        await self._check_conflict(
+        rules = await self.validation_service.validate(
             appointment.doctor_id, data.appointment_date, data.appointment_time, exclude_id=appointment.id
         )
         appointment.appointment_date = data.appointment_date

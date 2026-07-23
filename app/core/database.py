@@ -65,6 +65,7 @@ async def init_db():
     from app.models import (  # noqa: F401
         analytics_model,
         appointment_model,
+        appointment_setting,
         audit_log_model,
         bed_allocation_model,
         icu_telemetry_model,

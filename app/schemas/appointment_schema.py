@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 
@@ -26,6 +26,13 @@ class AppointmentUpdate(BaseSchema):
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
+
+    @field_validator("appointment_time")
+    @classmethod
+    def validate_time_not_null(cls, v):
+        if v is None:
+            raise ValueError("appointment_time cannot be null. Omit the field if you do not want to update the appointment time.")
+        return v
 
 
 class AppointmentResponse(BaseSchema):

@@ -44,6 +44,16 @@ class PublicService:
     async def get_doctor_available_slots(self, doctor_id: int, target_date: date) -> List[str]:
         day_of_week = target_date.weekday()
         
+        doctor = await self.doctor_repo.get_by_id(doctor_id)
+        if not doctor:
+            return []
+            
+        from app.services.settings_service import SettingsService
+        from app.services.booking_rules_resolver import BookingRulesResolver
+        
+        hospital_id = await self.doctor_repo.get_doctor_hospital_id(doctor_id)
+        settings = await SettingsService(self.db).get_appointment_settings(hospital_id)
+        
         result = await self.db.execute(
             select(DoctorSchedule).where(
                 DoctorSchedule.doctor_id == doctor_id,
@@ -56,24 +66,48 @@ class PublicService:
         slots_time = []
         if not schedules:
             return []
-        else:
-            for sched in schedules:
-                curr = datetime.combine(target_date, sched.start_time)
-                end = datetime.combine(target_date, sched.end_time)
-                duration = sched.slot_duration_minutes or 30
-                while curr < end:
-                    slots_time.append(curr.time())
-                    curr += timedelta(minutes=duration)
+            
+        # Optional: check if there's any active schedule to pass to resolver. 
+        # But we must check weekend rules.
+        rules = BookingRulesResolver.resolve(settings, target_date, schedules[0])
+        
+        if not rules.weekend_booking_enabled and day_of_week in (5, 6):
+            return []
+            
+        for sched in schedules:
+            sched_rules = BookingRulesResolver.resolve(settings, target_date, sched)
+            
+            curr = datetime.combine(target_date, sched_rules.working_start_time)
+            end = datetime.combine(target_date, sched_rules.working_end_time)
+            duration = sched_rules.slot_duration_minutes
+            
+            while curr < end:
+                slot_time = curr.time()
+                
+                # Check lunch break intersection
+                in_lunch = False
+                if sched_rules.lunch_break_enabled and sched_rules.lunch_start_time and sched_rules.lunch_end_time:
+                    slot_end = (curr + timedelta(minutes=duration)).time()
+                    # If the slot overlaps with lunch break (exclusive bounds for the slot, inclusive for lunch start)
+                    if not (slot_end <= sched_rules.lunch_start_time or slot_time >= sched_rules.lunch_end_time):
+                        in_lunch = True
+                
+                if not in_lunch:
+                    slots_time.append(slot_time)
+                    
+                curr += timedelta(minutes=duration + sched_rules.buffer_between_slots_minutes)
         
         # Query active appointments
-        result = await self.db.execute(
-            select(Appointment.appointment_time).where(
-                Appointment.doctor_id == doctor_id,
-                Appointment.appointment_date == target_date,
-                Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE))
+        booked_times = set()
+        if not rules.allow_overlapping:
+            result = await self.db.execute(
+                select(Appointment.appointment_time).where(
+                    Appointment.doctor_id == doctor_id,
+                    Appointment.appointment_date == target_date,
+                    Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE))
+                )
             )
-        )
-        booked_times = {row[0] for row in result.all()}
+            booked_times = {row[0] for row in result.all()}
         
         available = []
         for slot in slots_time:
@@ -246,21 +280,10 @@ class PublicService:
         if doctor.availability_status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
             
-        # Verify doctor has an active schedule on the requested day of the week
-        day_of_week = data.date.weekday()
-        schedule_res = await self.db.execute(
-            select(DoctorSchedule).where(
-                DoctorSchedule.doctor_id == data.doctor_id,
-                DoctorSchedule.day_of_week == day_of_week,
-                DoctorSchedule.is_active.is_(True)
-            )
-        )
-        if not schedule_res.scalars().all():
-            raise ConflictException("Doctor is not scheduled to work on this day")
-
-        conflict = await self.repo.exists_conflict(data.doctor_id, data.date, data.time_slot)
-        if conflict:
-            raise ConflictException("Doctor already has an appointment at this slot")
+        # 3. Apply Dynamic Appointment Settings and Conflict Rules
+        from app.services.booking_validation_service import BookingValidationService
+        validation_service = BookingValidationService(self.db)
+        rules = await validation_service.validate(data.doctor_id, data.date, data.time_slot)
             
         # 3. Create appointment
         token = await self.repo.get_next_token(data.doctor_id, data.date)

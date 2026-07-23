@@ -76,7 +76,6 @@ class Settings(BaseSettings):
     # When true, skip Twilio/Exotel signature checks (local tests only).
     SKIP_VOICE_WEBHOOK_AUTH: bool = False
 
-    NGROK_AUTH_TOKEN: str = ""
 
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""

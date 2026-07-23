@@ -451,16 +451,6 @@ async def sales_report(
     return APIResponse(message="Sales report", data=report)
 
 
-@router.get("/dashboard/summary", response_model=APIResponse[PharmacyDashboardResponse])
-async def get_dashboard_summary(
-    db: DbSession,
-    current_user: CurrentUser,
-    _: User = Depends(require_permission("pharmacy", "read")),
-):
-    summary = await PharmacyService(db).get_dashboard_summary()
-    return APIResponse(message="Pharmacy dashboard summary retrieved", data=summary)
-
-
 @router.get("/inventory/overview", response_model=APIResponse[PharmacyInventoryOverviewResponse])
 async def get_inventory_overview(
     db: DbSession,

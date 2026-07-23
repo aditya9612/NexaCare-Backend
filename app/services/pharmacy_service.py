@@ -942,10 +942,40 @@ class PharmacyService:
         data = await self.invoice_repo.get_sales_report(start, now)
         return SalesReport(period=period, top_medicines=[], **data)
 
-    async def get_dashboard_summary(self) -> PharmacyDashboardResponse:
-        counts = await self.medicine_repo.get_dashboard_counts()
-        sales = await self.invoice_repo.get_dashboard_sales()
-        return PharmacyDashboardResponse(**counts, **sales)
+    async def get_dashboard_summary(
+        self,
+        time_filter: str = "7_days",
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> PharmacyDashboardResponse:
+        start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
+
+        total_medicines = await self.dashboard_repo.get_total_medicines()
+        low_stock_alerts = await self.dashboard_repo.get_low_stock_count()
+        expired_alerts = await self.dashboard_repo.get_expired_alerts_count()
+        today_sales = await self.dashboard_repo.get_today_sales(start_dt, end_dt)
+        monthly_sales = await self.dashboard_repo.get_monthly_sales(start_dt, end_dt)
+        pending_purchases = await self.dashboard_repo.get_pending_purchases_count(start_dt, end_dt)
+        total_suppliers = await self.dashboard_repo.get_total_suppliers_count()
+        prescriptions_count = await self.dashboard_repo.get_prescriptions_count(start_dt, end_dt)
+
+        low_stock_items = await self.dashboard_repo.get_low_stock_items()
+        today_sales_trend = await self.dashboard_repo.get_today_sales_trend(start_dt, end_dt)
+        monthly_sales_trend = await self.dashboard_repo.get_monthly_sales_trend(start_dt, end_dt)
+
+        return PharmacyDashboardResponse(
+            total_medicines=total_medicines,
+            low_stock_alerts=low_stock_alerts,
+            expired_alerts=expired_alerts,
+            today_sales=today_sales,
+            monthly_sales=monthly_sales,
+            pending_purchases=pending_purchases,
+            total_suppliers=total_suppliers,
+            prescriptions_count=prescriptions_count,
+            low_stock_items=low_stock_items,
+            today_sales_trend=today_sales_trend,
+            monthly_sales_trend=monthly_sales_trend,
+        )
 
     async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:
         counts = await self.medicine_repo.get_inventory_counts()

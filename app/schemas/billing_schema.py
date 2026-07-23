@@ -45,7 +45,6 @@ class BillingUpdate(BaseSchema):
     tax_amount: float | None = Field(None, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
-    insurance_id: int | None = None
     status: str | None = None
     items: List[BillItemCreate] | None = None
 

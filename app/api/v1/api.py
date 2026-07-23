@@ -38,7 +38,7 @@ from app.api.v1.routes import (
     hospital_voice_routes,
     notification_routes,
 )
-
+from app.api import settings
 
 api_router = APIRouter()
 
@@ -87,4 +87,4 @@ api_router.include_router(transaction_routes.router, prefix="/transactions", tag
 api_router.include_router(transaction_history_routes.router, prefix="/transaction-history", tags=["Transaction History"])
 api_router.include_router(clinical_record_router.router, prefix="/clinical-records", tags=["Clinical Records"])
 api_router.include_router(notification_routes.router, prefix="/notifications", tags=["Notifications"])
-
+api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
+    # Feature flag to enable/disable the Settings module gracefully.
+    ENABLE_SETTINGS: bool = True
+
    
 
     

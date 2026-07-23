@@ -150,7 +150,8 @@ class TransactionHistoryService:
         reference_no: str | None = None,
         q: str | None = None,
     ):
-        await self._sync_pharmacy_transactions()
+        # TODO: Move pharmacy synchronization to a dedicated background task or specific trigger workflow
+        # await self._sync_pharmacy_transactions()
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip,
@@ -189,7 +190,8 @@ class TransactionHistoryService:
         await self.audit_repo.create("delete", "transaction_history", user_id=user_id, resource_id=str(tx_id))
 
     async def get_dashboard_summary(self) -> DashboardSummaryResponse:
-        await self._sync_pharmacy_transactions()
+        # TODO: Move pharmacy synchronization to a dedicated background task or specific trigger workflow
+        # await self._sync_pharmacy_transactions()
         stats = await self.repo.get_aggregated_stats()
 
         totals = {

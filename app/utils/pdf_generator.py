@@ -14,6 +14,7 @@ def _ensure_output_dir(subdir: str) -> Path:
     return path
 
 
+from fastapi.concurrency import run_in_threadpool
 from io import BytesIO
 from xhtml2pdf import pisa
 
@@ -38,7 +39,7 @@ async def generate_invoice_html(bill_number: str, data: dict) -> str:
 async def generate_invoice_pdf(bill_number: str, data: dict) -> tuple[str, bytes]:
     template = env.get_template("invoice_template.html")
     html = template.render(invoice_number=bill_number, **data)
-    pdf_bytes = html_to_pdf(html)
+    pdf_bytes = await run_in_threadpool(html_to_pdf, html)
     output_dir = _ensure_output_dir("invoices")
     file_path = output_dir / f"{bill_number}.pdf"
     file_path.write_bytes(pdf_bytes)
@@ -103,7 +104,7 @@ async def generate_lab_report_html(report_number: str, data: dict) -> str:
 
     # Try to generate a real PDF, fall back to HTML if it fails
     try:
-        pdf_bytes = html_to_pdf(html)
+        pdf_bytes = await run_in_threadpool(html_to_pdf, html)
         file_path = output_dir / f"{report_number}.pdf"
         file_path.write_bytes(pdf_bytes)
         logger.info("Report PDF generated: %s", file_path)

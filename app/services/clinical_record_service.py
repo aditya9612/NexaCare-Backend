@@ -76,7 +76,35 @@ class ClinicalRecordService:
                 await self.appointment_repo.update(appointment)
 
         await self.audit_repo.create("create", "clinical_records", user_id=user_id, resource_id=str(record.id))
-        return self._to_response_schema(record)
+        resp = self._to_response_schema(record)
+
+        # Trigger doctor instruction notification
+        try:
+            patient_name = "Patient"
+            if record.patient:
+                patient_name = f"{record.patient.first_name} {record.patient.last_name}".strip()
+            else:
+                patient = await self.patient_repo.get_by_id(data.patient_id)
+                if patient:
+                    patient_name = f"{patient.first_name} {patient.last_name}".strip()
+
+            doctor_name = "Doctor"
+            if record.doctor:
+                doctor_name = f"{record.doctor.first_name} {record.doctor.last_name}".strip()
+            else:
+                doctor = await self.doctor_repo.get_by_id(data.doctor_id)
+                if doctor:
+                    doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_doctor_instruction(
+                patient_id=data.patient_id,
+                message=f"New clinical record added by Dr. {doctor_name} for Patient {patient_name}."
+            )
+        except Exception:
+            pass
+
+        return resp
 
     async def get_record(self, record_id: int) -> ClinicalRecordResponse:
         record = await self.record_repo.get_by_id(record_id)
@@ -118,7 +146,35 @@ class ClinicalRecordService:
 
         record = await self.record_repo.update(record)
         await self.audit_repo.create("update", "clinical_records", user_id=user_id, resource_id=str(record.id))
-        return self._to_response_schema(record)
+        resp = self._to_response_schema(record)
+
+        # Trigger doctor instruction notification
+        try:
+            patient_name = "Patient"
+            if record.patient:
+                patient_name = f"{record.patient.first_name} {record.patient.last_name}".strip()
+            else:
+                patient = await self.patient_repo.get_by_id(record.patient_id)
+                if patient:
+                    patient_name = f"{patient.first_name} {patient.last_name}".strip()
+
+            doctor_name = "Doctor"
+            if record.doctor:
+                doctor_name = f"{record.doctor.first_name} {record.doctor.last_name}".strip()
+            else:
+                doctor = await self.doctor_repo.get_by_id(record.doctor_id)
+                if doctor:
+                    doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_doctor_instruction(
+                patient_id=record.patient_id,
+                message=f"Clinical record updated by Dr. {doctor_name} for Patient {patient_name}."
+            )
+        except Exception:
+            pass
+
+        return resp
 
     async def delete_record(self, record_id: int, user_id: int) -> None:
         record = await self.record_repo.get_by_id(record_id)

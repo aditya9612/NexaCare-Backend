@@ -45,6 +45,38 @@ class AppointmentResponse(BaseSchema):
     reminder_sent: bool
     created_at: datetime
     updated_at: datetime | None = None
+    
+    # Receptionist Queue fields
+    check_in_time: datetime | None = None
+    check_out_time: datetime | None = None
+    queue_token: str | None = None
+    queue_status: str | None = None
+
+
+class AppointmentCheckInResponse(BaseSchema):
+    id: int
+    appointment_number: str
+    check_in_time: datetime
+    appointment_status: str
+
+
+class AppointmentCheckOutResponse(BaseSchema):
+    id: int
+    appointment_number: str
+    check_out_time: datetime
+    appointment_status: str
+
+
+class QueueTokenResponse(BaseSchema):
+    appointment_id: int
+    queue_token: str
+    queue_status: str
+
+
+class QueueStatusResponse(BaseSchema):
+    appointment_id: int
+    queue_token: str | None = None
+    queue_status: str
 
 
 class TokenResponse(BaseSchema):

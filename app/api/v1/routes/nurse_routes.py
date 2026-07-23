@@ -31,11 +31,13 @@ from app.schemas.nurse_schema import (
     NursePrescriptionResponse,
     NurseMedicationLogCreate,
     NurseMedicationLogResponse,
+    NurseDashboardResponse,
 )
 from app.services.nurse_service import NurseService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
+singular_router = APIRouter()
 
 
 @router.post("", response_model=APIResponse[NurseResponse], status_code=201)
@@ -83,6 +85,17 @@ async def search_nurses(
 ):
     result = await NurseService(db).search(q, page=page, size=size)
     return APIResponse(message="Search results", data=result)
+
+
+@router.get("/dashboard", response_model=APIResponse[NurseDashboardResponse])
+@singular_router.get("/dashboard", response_model=APIResponse[NurseDashboardResponse], include_in_schema=False)
+async def get_nurse_dashboard(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurse", "read")),
+):
+    result = await NurseService(db).get_dashboard_overview(current_user)
+    return APIResponse(message="Nurse dashboard summary retrieved", data=result)
 
 
 @router.get("/{nurse_id}", response_model=APIResponse[NurseResponse])

@@ -9,6 +9,7 @@ After a successful booking, an SMS confirmation is sent to the caller.
 """
 
 import os
+import re
 import logging
 from datetime import date, timedelta, datetime
 from xml.sax.saxutils import escape
@@ -58,6 +59,10 @@ SMS_TEMPLATES = {
 }
 
 
+def _plain_doctor_name(name: str) -> str:
+    return re.sub(r"^Dr\.?\s*", "", (name or "").strip(), flags=re.IGNORECASE)
+
+
 def _send_sms_confirmation(
     to_number: str,
     lang: str,
@@ -84,7 +89,7 @@ def _send_sms_confirmation(
         template = SMS_TEMPLATES.get(lang, SMS_TEMPLATES["en"])
         body = template.format(
             name=name,
-            doctor=doctor,
+            doctor=_plain_doctor_name(doctor),
             date=appt_date,
             time=appt_time,
             appt_no=appt_no,
@@ -479,7 +484,7 @@ async def fetch_doctors_for_specialty(specialty: str, db: AsyncSession) -> list[
     return [
         {
             "id": d.id,
-            "name": f"Dr. {d.first_name} {d.last_name}",
+            "name": f"{d.first_name} {d.last_name}".strip(),
             "specialization": d.specialization,
             "consultation_fee": d.consultation_fee,
             "department_id": d.department_id,

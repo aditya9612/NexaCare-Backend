@@ -30,6 +30,7 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
     allergies: Mapped[str | None] = mapped_column(Text, nullable=True)
     medical_history: Mapped[str | None] = mapped_column(Text, nullable=True)
     chronic_disease: Mapped[str | None] = mapped_column(Text, nullable=True)
+    diagnosis: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     insurance_provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
     insurance_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)

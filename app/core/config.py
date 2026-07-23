@@ -76,7 +76,6 @@ class Settings(BaseSettings):
     # When true, skip Twilio/Exotel signature checks (local tests only).
     SKIP_VOICE_WEBHOOK_AUTH: bool = False
 
-    NGROK_AUTH_TOKEN: str = ""
 
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
@@ -85,6 +84,7 @@ class Settings(BaseSettings):
     ANALYTICS_CACHE_TTL_SECONDS: int = 300
     LAB_PENDING_TEST_THRESHOLD_HOURS: int = 24
     DOCTOR_APPOINTMENT_REMINDER_MINUTES: int = 30
+    MEDICATION_REMINDER_MINUTES: int = 15
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600

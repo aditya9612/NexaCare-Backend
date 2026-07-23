@@ -23,8 +23,8 @@ LANGUAGE_MAP = {
 LANGUAGE_PROMPT = (
     "Welcome to NexaCare. "
     "For English, press 1. "
-    "Hindi ke liye, 2 dabaiye. "
-    "Marathi sathi, 3 daba."
+    "हिंदी के लिए, दो दबाइए। "
+    "मराठीसाठी, तीन दाबा."
 )
 
 

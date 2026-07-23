@@ -226,3 +226,13 @@ class PatientRepository:
             select(PatientDocument).where(PatientDocument.patient_id == patient_id)
         )
         return list(result.scalars().all())
+
+    async def get_document(self, document_id: int) -> PatientDocument | None:
+        result = await self.db.execute(
+            select(PatientDocument).where(PatientDocument.id == document_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def delete_document(self, document: PatientDocument) -> None:
+        await self.db.delete(document)
+        await self.db.flush()

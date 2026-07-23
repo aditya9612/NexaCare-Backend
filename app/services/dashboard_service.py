@@ -392,6 +392,51 @@ class DashboardService:
         except Exception:
             total_patient_footfall = 0
 
+        # Today's Queue stats
+        try:
+            queue_waiting = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.queue_status == "WAITING"
+                )
+            ) or 0
+        except Exception:
+            queue_waiting = 0
+
+        try:
+            queue_current_apt = await self.db.scalar(
+                select(Appointment.queue_token)
+                .where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.queue_status.in_(["CALLED", "IN_PROGRESS"])
+                )
+                .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
+                .limit(1)
+            )
+            queue_current = queue_current_apt or "None"
+        except Exception:
+            queue_current = "None"
+
+        try:
+            queue_completed = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.queue_status == "COMPLETED"
+                )
+            ) or 0
+        except Exception:
+            queue_completed = 0
+
+        try:
+            queue_skipped = await self.db.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.appointment_date == t_date,
+                    Appointment.queue_status == "SKIPPED"
+                )
+            ) or 0
+        except Exception:
+            queue_skipped = 0
+
         return ReceptionDashboardResponse(
             total_registered_patients=total_registered_patients,
             today_scheduled_appointments=today_scheduled_appointments,
@@ -404,5 +449,9 @@ class DashboardService:
             pending_billing=pending_billing,
             rescheduled_appointments=rescheduled_appointments,
             total_patient_footfall=total_patient_footfall,
+            queue_waiting=queue_waiting,
+            queue_current=queue_current,
+            queue_completed=queue_completed,
+            queue_skipped=queue_skipped,
         )
 

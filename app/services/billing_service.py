@@ -123,6 +123,15 @@ class BillingService:
                 item.line_total = line_total
                 total_gst += gst_amt
             billing.gst_amount = round(total_gst, 2)
+            
+            # Recalculate the effective gst_rate for the bill
+            taxable = max(billing.subtotal - billing.discount_amount, 0.0)
+            if len(billing.items) == 1:
+                billing.gst_rate = billing.items[0].gst_rate
+            elif taxable > 0:
+                billing.gst_rate = round((billing.gst_amount / taxable) * 100, 2)
+            else:
+                billing.gst_rate = 0.0
         else:
             billing.gst_amount = totals["gst_amount"]
 

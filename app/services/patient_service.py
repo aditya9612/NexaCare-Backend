@@ -202,3 +202,23 @@ class PatientService:
         await self.get_by_id(patient_id)
         docs = await self.repo.list_documents(patient_id)
         return [PatientDocumentResponse.model_validate(d) for d in docs]
+
+    async def get_document(self, patient_id: int, document_id: int) -> PatientDocument:
+        await self.get_by_id(patient_id)
+        doc = await self.repo.get_document(document_id)
+        if not doc:
+            raise NotFoundException("Document not found")
+        if doc.patient_id != patient_id:
+            raise BadRequestException("Document does not belong to this patient")
+        return doc
+
+    async def delete_document(self, patient_id: int, document_id: int, user_id: int) -> None:
+        doc = await self.get_document(patient_id, document_id)
+        import os
+        if os.path.exists(doc.file_path):
+            try:
+                os.remove(doc.file_path)
+            except Exception:
+                pass
+        await self.repo.delete_document(doc)
+        await self.audit_repo.create("delete", "patient_documents", user_id=user_id, resource_id=str(document_id))

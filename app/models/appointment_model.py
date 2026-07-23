@@ -1,6 +1,6 @@
-from datetime import date, time
+from datetime import date, time, datetime
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text, Time
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text, Time, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -27,6 +27,11 @@ class Appointment(Base, TimestampMixin):
     token_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     consultation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    check_in_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    check_out_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    queue_token: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    queue_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
 
     patient = relationship("Patient", back_populates="appointments")
     doctor = relationship("Doctor", back_populates="appointments")

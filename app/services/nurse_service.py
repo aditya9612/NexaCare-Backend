@@ -454,6 +454,63 @@ class NurseService:
         await self.audit_repo.create(
             "create", "nurses", user_id=user_id, resource_id=str(vital.id)
         )
+
+        # Check vital thresholds and trigger critical alert if breached
+        from app.core.constants import VITAL_THRESHOLDS, VitalType
+        breaches = []
+        
+        # Parse BP systolic/diastolic
+        systolic, diastolic = None, None
+        if "/" in data.blood_pressure:
+            parts = data.blood_pressure.split("/")
+            if len(parts) == 2:
+                try:
+                    systolic = float(parts[0].strip())
+                    diastolic = float(parts[1].strip())
+                except ValueError:
+                    pass
+
+        # Check Temperature
+        temp_rules = VITAL_THRESHOLDS.get(VitalType.TEMPERATURE)
+        if temp_rules:
+            val = data.temperature
+            if val < temp_rules.get("min") or val > temp_rules.get("max"):
+                breaches.append(f"Temperature abnormal: {val}°C (Normal: {temp_rules.get('min')}-{temp_rules.get('max')})")
+
+        # Check Pulse Rate (HEART_RATE)
+        pulse_rules = VITAL_THRESHOLDS.get(VitalType.HEART_RATE)
+        if pulse_rules:
+            val = data.pulse_rate
+            if val < pulse_rules.get("min") or val > pulse_rules.get("max"):
+                breaches.append(f"Pulse rate abnormal: {val} bpm (Normal: {pulse_rules.get('min')}-{pulse_rules.get('max')})")
+
+        # Check SPO2
+        spo2_rules = VITAL_THRESHOLDS.get(VitalType.SPO2)
+        if spo2_rules:
+            val = data.oxygen_saturation
+            if val < spo2_rules.get("min"):
+                breaches.append(f"Oxygen saturation abnormal: {val}% (Normal: >= {spo2_rules.get('min')})")
+
+        # Check BP Systolic
+        if systolic is not None:
+            sys_rules = VITAL_THRESHOLDS.get(VitalType.SYSTOLIC_BP)
+            if sys_rules and (systolic < sys_rules.get("min") or systolic > sys_rules.get("max")):
+                breaches.append(f"Systolic BP abnormal: {systolic} mmHg (Normal: {sys_rules.get('min')}-{sys_rules.get('max')})")
+
+        # Check BP Diastolic
+        if diastolic is not None:
+            dia_rules = VITAL_THRESHOLDS.get(VitalType.DIASTOLIC_BP)
+            if dia_rules and (diastolic < dia_rules.get("min") or diastolic > dia_rules.get("max")):
+                breaches.append(f"Diastolic BP abnormal: {diastolic} mmHg (Normal: {dia_rules.get('min')}-{dia_rules.get('max')})")
+
+        if breaches:
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).create_critical_patient_alert(
+                patient_id=patient_id,
+                message=f"Abnormal vitals recorded: {', '.join(breaches)}",
+                reference_id=patient_id,
+            )
+
         return PatientVitalResponse.model_validate(vital)
 
     def _nurse_lab_test_status(self, order_status: str) -> str:
@@ -928,3 +985,171 @@ class NurseService:
                     "notes": slot_log["notes"] if slot_log else "",
                 })
         return schedules
+
+    async def get_dashboard_overview(self, current_user: "User") -> "NurseDashboardResponse":
+        from datetime import timezone, timedelta, time, datetime
+        from sqlalchemy import select, func, or_, cast, Date
+        from app.models.nurse_model import Nurse, NursePatientAssignment
+        from app.models.notification_model import Notification
+        from app.models.bed_allocation_model import Bed
+        from app.models.patient_model import Patient
+        from app.models.audit_log_model import AuditLog
+        from app.schemas.nurse_schema import (
+            NurseDashboardResponse,
+            UpcomingMedicationResponse,
+            CriticalAlertResponse,
+            RecentActivityResponse
+        )
+        from app.models.user_model import User
+
+        # Get nurse matching logged-in user_id
+        res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+        nurse = res.scalar_one_or_none()
+
+        # Fetch active & occupied beds (non-nurse specific)
+        occupied_beds = (await self.db.scalar(
+            select(func.count(Bed.id)).where(func.lower(Bed.status) == "occupied")
+        )) or 0
+        available_beds = (await self.db.scalar(
+            select(func.count(Bed.id)).where(func.lower(Bed.status) == "available")
+        )) or 0
+
+        if not nurse:
+            return NurseDashboardResponse(
+                assigned_patients=0,
+                today_patients=0,
+                pending_medications=0,
+                critical_patients=0,
+                doctor_instructions=0,
+                occupied_beds=occupied_beds,
+                available_beds=available_beds,
+                upcoming_medications=[],
+                critical_alerts=[],
+                recent_activities=[]
+            )
+
+        # Timezones
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        today_start = datetime.combine(now_ist.date(), time.min)
+        tomorrow_start = today_start + timedelta(days=1)
+
+        # 1. Assigned Patients (Active status)
+        assigned_patients = await self.assignment_repo.list_patients_by_nurse(nurse.id, status="Active")
+        assigned_pids = {p.id for p in assigned_patients}
+        assigned_patients_count = len(assigned_pids)
+
+        # 2. Today's Patients (admitted today or assigned today)
+        today_patients_count = (await self.db.scalar(
+            select(func.count(NursePatientAssignment.id)).where(
+                NursePatientAssignment.nurse_id == nurse.id,
+                NursePatientAssignment.status == "Active",
+                NursePatientAssignment.created_at >= today_start,
+                NursePatientAssignment.created_at < tomorrow_start
+            )
+        )) or 0
+        if today_patients_count == 0:
+            today_patients_count = assigned_patients_count
+
+        # 3. Pending & Upcoming Medications
+        schedules = await self.list_medication_schedules()
+        pending_meds_count = 0
+        upcoming_medications_list = []
+        for s in schedules:
+            try:
+                pid = int(s["patient_id"].replace("P-100", ""))
+            except ValueError:
+                continue
+            if pid in assigned_pids:
+                if s["status"] == "Due":
+                    pending_meds_count += 1
+                    upcoming_medications_list.append(
+                        UpcomingMedicationResponse(
+                            patient_id=pid,
+                            patient_name=s["patientName"],
+                            medicine_name=s["medicine_name"],
+                            scheduled_time=s["scheduledTime"]
+                        )
+                    )
+        upcoming_medications = upcoming_medications_list[:10]
+
+        # 4. Critical Patients (Unique patients with active critical alert notifications)
+        critical_patients_count = (await self.db.scalar(
+            select(func.count(func.distinct(Notification.reference_id)))
+            .join(NursePatientAssignment, NursePatientAssignment.patient_id == Notification.reference_id)
+            .where(
+                NursePatientAssignment.nurse_id == nurse.id,
+                NursePatientAssignment.status == "Active",
+                Notification.user_id == current_user.id,
+                Notification.notification_type == "CRITICAL_ALERT",
+                Notification.is_read.is_(False),
+                Notification.is_deleted.is_(False)
+            )
+        )) or 0
+
+        # 5. Doctor Instructions (Active notifications)
+        doctor_instructions_count = (await self.db.scalar(
+            select(func.count(Notification.id))
+            .where(
+                Notification.user_id == current_user.id,
+                Notification.notification_type == "DOCTOR_INSTRUCTION",
+                Notification.is_read.is_(False),
+                Notification.is_deleted.is_(False)
+            )
+        )) or 0
+
+        # 6. Critical Alerts List (Latest 10)
+        critical_alerts_query = (
+            select(Notification, Patient)
+            .join(Patient, Patient.id == Notification.reference_id)
+            .where(
+                Notification.user_id == current_user.id,
+                Notification.notification_type == "CRITICAL_ALERT",
+                Notification.is_deleted.is_(False)
+            )
+            .order_by(Notification.created_at.desc())
+            .limit(10)
+        )
+        critical_alerts_res = await self.db.execute(critical_alerts_query)
+        critical_alerts = [
+            CriticalAlertResponse(
+                patient_id=pat.id,
+                patient_name=f"{pat.first_name} {pat.last_name}",
+                alert_type=notif.title or "Critical Patient Alert",
+                priority=notif.priority or "HIGH",
+                created_at=notif.created_at
+            )
+            for notif, pat in critical_alerts_res.all()
+        ]
+
+        # 7. Recent Activities (Latest 10)
+        activities_query = (
+            select(AuditLog)
+            .where(AuditLog.user_id == current_user.id)
+            .order_by(AuditLog.created_at.desc())
+            .limit(10)
+        )
+        activities_res = await self.db.execute(activities_query)
+        recent_activities = [
+            RecentActivityResponse(
+                id=log.id,
+                action=log.action,
+                resource=log.resource,
+                details=log.details,
+                created_at=log.created_at
+            )
+            for log in activities_res.scalars().all()
+        ]
+
+        return NurseDashboardResponse(
+            assigned_patients=assigned_patients_count,
+            today_patients=today_patients_count,
+            pending_medications=pending_meds_count,
+            critical_patients=critical_patients_count,
+            doctor_instructions=doctor_instructions_count,
+            occupied_beds=occupied_beds,
+            available_beds=available_beds,
+            upcoming_medications=upcoming_medications,
+            critical_alerts=critical_alerts,
+            recent_activities=recent_activities
+        )

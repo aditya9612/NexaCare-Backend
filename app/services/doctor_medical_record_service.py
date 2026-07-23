@@ -119,6 +119,19 @@ class DoctorMedicalRecordService:
 
         response_data = MedicalRecordResponse.model_validate(record)
         response_data.symptoms = diagnosis_record.symptoms
+
+        # Trigger doctor instruction notification
+        try:
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+            patient_name = db_full_name
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.repo.db).notify_doctor_instruction(
+                patient_id=patient_id,
+                message=f"New medical report uploaded by Dr. {doctor_name} for Patient {patient_name}: {record.report_title}."
+            )
+        except Exception:
+            pass
+
         return response_data
 
     async def list_reports(self, page: int = 1, size: int = 20, user_id: int | None = None):
@@ -204,6 +217,28 @@ class DoctorMedicalRecordService:
         diagnosis_record = await self.repo.get_diagnosis(record.patient_id)
         if diagnosis_record:
             response_data.symptoms = diagnosis_record.symptoms
+
+        # Trigger doctor instruction notification
+        try:
+            doctor_name = "Doctor"
+            if record.doctor:
+                doctor_name = f"{record.doctor.first_name} {record.doctor.last_name}".strip()
+            else:
+                from app.repositories.doctor_repository import DoctorRepository
+                doctor_repo = DoctorRepository(self.repo.db)
+                doctor = await doctor_repo.get_by_id(record.doctor_id)
+                if doctor:
+                    doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+
+            patient_name = record.patient_name
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.repo.db).notify_doctor_instruction(
+                patient_id=record.patient_id,
+                message=f"Medical report updated by Dr. {doctor_name} for Patient {patient_name}: {record.report_title}."
+            )
+        except Exception:
+            pass
+
         return response_data
 
     async def delete_report(self, record_id: int, user_id: int) -> None:
@@ -276,6 +311,25 @@ class DoctorMedicalRecordService:
             diagnosis.doctor_id = doctor_id
             diagnosis = await self.repo.update_diagnosis(diagnosis)
 
+        # Trigger doctor instruction notification
+        try:
+            doctor_name = "Doctor"
+            if doctor_id:
+                from app.repositories.doctor_repository import DoctorRepository
+                doctor_repo = DoctorRepository(self.repo.db)
+                doctor = await doctor_repo.get_by_id(doctor_id)
+                if doctor:
+                    doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+            
+            patient_name = f"{patient.first_name} {patient.last_name}".strip()
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.repo.db).notify_doctor_instruction(
+                patient_id=patient_id,
+                message=f"Diagnosis updated by Dr. {doctor_name} for Patient {patient_name}."
+            )
+        except Exception:
+            pass
+
         return DiagnosisResponse.model_validate(diagnosis)
 
     async def list_treatment_notes(
@@ -325,4 +379,24 @@ class DoctorMedicalRecordService:
         )
 
         note = await self.repo.add_treatment_note(note)
+
+        # Trigger doctor instruction notification
+        try:
+            doctor_name = "Doctor"
+            if doctor_id:
+                from app.repositories.doctor_repository import DoctorRepository
+                doctor_repo = DoctorRepository(self.repo.db)
+                doctor = await doctor_repo.get_by_id(doctor_id)
+                if doctor:
+                    doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+            
+            patient_name = f"{patient.first_name} {patient.last_name}".strip()
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.repo.db).notify_doctor_instruction(
+                patient_id=patient_id,
+                message=f"New treatment note added by Dr. {doctor_name} for Patient {patient_name}."
+            )
+        except Exception:
+            pass
+
         return TreatmentNoteResponse.model_validate(note)

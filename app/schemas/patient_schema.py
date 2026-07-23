@@ -130,6 +130,7 @@ class PatientCreate(BaseSchema):
     allergies: str | None = None
     medical_history: str | None = None
     chronic_disease: str | None = None
+    diagnosis: str
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str = "active"
@@ -230,6 +231,7 @@ class PatientUpdate(BaseSchema):
     allergies: str | None = None
     medical_history: str | None = None
     chronic_disease: str | None = None
+    diagnosis: str
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str | None = None
@@ -322,6 +324,7 @@ class PatientResponse(BaseSchema):
     allergies: str | None
     medical_history: str | None
     chronic_disease: str | None
+    diagnosis: str
     insurance_provider: str | None
     insurance_number: str | None
     status: str

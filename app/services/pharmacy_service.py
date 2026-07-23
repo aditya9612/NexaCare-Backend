@@ -321,11 +321,25 @@ class PharmacyService:
         page: int = 1,
         size: int = 20,
         status: str | None = None,
-        doctor_id: int | None = None
+        doctor_id: int | None = None,
+        patient_id: int | None = None,
+        appointment_id: int | None = None
     ):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status, doctor_id=doctor_id)
-        total = await self.prescription_repo.count_all(status=status, doctor_id=doctor_id)
+        items = await self.prescription_repo.list_all(
+            skip=skip,
+            limit=size,
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id
+        )
+        total = await self.prescription_repo.count_all(
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id
+        )
 
         return build_paginated_result(
             [self._prescription_response(p) for p in items],

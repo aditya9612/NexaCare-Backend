@@ -34,13 +34,21 @@ class AppointmentService:
         self.doctor_repo = DoctorRepository(db)
 
     def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> None:
-        today = date.today()
-        if appointment_date < today:
+        from datetime import timezone, timedelta
+
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        today_ist = now_ist.date()
+
+        if appointment_date < today_ist:
             raise BadRequestException("Cannot book or reschedule an appointment for a past date")
-        if appointment_date == today and appointment_time is not None:
-            now_time = datetime.now().time()
-            if appointment_time < now_time:
-                raise BadRequestException("Cannot book or reschedule an appointment for a past time slot today")
+
+        if appointment_date == today_ist and appointment_time is not None:
+            now_time_ist = now_ist.time()
+            if appointment_time < now_time_ist:
+                raise BadRequestException(
+                    "Cannot book or reschedule an appointment for a past time slot today"
+                )
 
     async def _validate_entities(self, patient_id: int, doctor_id: int) -> None:
         if not await self.patient_repo.get_by_id(patient_id):
@@ -212,3 +220,150 @@ class AppointmentService:
     async def get_upcoming(self, limit: int = 20):
         appointments = await self.repo.get_upcoming(limit)
         return [AppointmentResponse.model_validate(a) for a in appointments]
+
+    async def check_in(self, appointment_id: int, user_id: int) -> Appointment:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in"):
+            raise BadRequestException("Appointment already checked in")
+        appointment.appointment_status = "Checked-In"
+        appointment.check_in_time = datetime.now()
+        await self.db.flush()
+        await self._create_queue_notification(appointment, f"Patient checked in for appointment {appointment.appointment_number}")
+        return appointment
+
+    async def check_out(self, appointment_id: int, user_id: int) -> Appointment:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        if appointment.appointment_status != "Checked-In":
+            raise BadRequestException("Appointment must be checked in first")
+        appointment.appointment_status = "Checked-Out"
+        appointment.check_out_time = datetime.now()
+        await self.db.flush()
+        await self._create_queue_notification(appointment, f"Patient checked out for appointment {appointment.appointment_number}")
+        return appointment
+
+    async def generate_queue_token(self, appointment_id: int, user_id: int) -> Appointment:
+        from sqlalchemy import select
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        if appointment.queue_token:
+            raise BadRequestException("Token already generated for this appointment")
+        
+        # Calculate next token for today
+        today = date.today()
+        result = await self.db.execute(
+            select(Appointment.queue_token)
+            .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
+        )
+        tokens = result.scalars().all()
+        max_num = 0
+        for t in tokens:
+            if t.startswith("T-"):
+                try:
+                    num = int(t[2:])
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    pass
+        next_token = f"T-{max_num + 1}"
+        
+        appointment.queue_token = next_token
+        appointment.queue_status = "WAITING"
+        await self.db.flush()
+        await self._create_queue_notification(appointment, f"Queue token {next_token} has been generated.")
+        return appointment
+
+    async def get_today_queue(self) -> list[Appointment]:
+        from sqlalchemy import select
+        today = date.today()
+        result = await self.db.execute(
+            select(Appointment)
+            .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
+            .order_by(Appointment.id.asc())
+        )
+        return list(result.scalars().all())
+
+    async def get_current_queue(self) -> Appointment | None:
+        from sqlalchemy import select
+        today = date.today()
+        result = await self.db.execute(
+            select(Appointment)
+            .where(
+                Appointment.appointment_date == today,
+                Appointment.queue_status.in_(["CALLED", "IN_PROGRESS"])
+            )
+            .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def call_next_token(self, appointment_id: int, user_id: int) -> Appointment:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        appointment.queue_status = "CALLED"
+        await self.db.flush()
+        await self._create_queue_notification(appointment, f"Doctor is calling patient (Token {appointment.queue_token})")
+        return appointment
+
+    async def complete_token(self, appointment_id: int, user_id: int) -> Appointment:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        appointment.queue_status = "COMPLETED"
+        await self.db.flush()
+        return appointment
+
+    async def skip_token(self, appointment_id: int, user_id: int) -> Appointment:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        appointment.queue_status = "SKIPPED"
+        await self.db.flush()
+        return appointment
+
+    async def _create_queue_notification(self, appointment: Appointment, message: str) -> None:
+        from app.models.notification_model import Notification
+        from app.models.doctor_model import Doctor
+        from app.models.patient_model import Patient
+        from sqlalchemy import select
+        
+        # Find doctor user_id
+        doc_user_id = await self.db.scalar(
+            select(Doctor.user_id).where(Doctor.id == appointment.doctor_id)
+        )
+        # Find patient user_id
+        pat_user_id = await self.db.scalar(
+            select(Patient.user_id).where(Patient.id == appointment.patient_id)
+        )
+        
+        if doc_user_id:
+            doc_notif = Notification(
+                user_id=doc_user_id,
+                title="Appointment Queue Alert",
+                message=message,
+                notification_type="QUEUE_ALERT",
+                reference_type="APPOINTMENT",
+                reference_id=appointment.id,
+                priority="NORMAL",
+                is_read=False
+            )
+            self.db.add(doc_notif)
+            
+        if pat_user_id:
+            pat_notif = Notification(
+                user_id=pat_user_id,
+                title="Appointment Queue Alert",
+                message=message,
+                notification_type="QUEUE_ALERT",
+                reference_type="APPOINTMENT",
+                reference_id=appointment.id,
+                priority="NORMAL",
+                is_read=False
+            )
+            self.db.add(pat_notif)
+        await self.db.flush()

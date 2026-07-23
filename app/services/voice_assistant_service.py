@@ -566,10 +566,18 @@ class VoiceAssistantService:
             state.pending_booking = True
 
     async def _book_appointment(self, state: VoiceState, payload: VoiceBookingPayload) -> None:
-        patient = await self._find_patient(state.mobile_number)
-        if not patient:
+        from app.services.voice_patient_resolver import VoicePatientResolver
+
+        phone = state.mobile_number or state.from_number
+        spoken_name = payload.patient_name or state.patient_name
+        if not phone and not spoken_name:
             state.pending_booking = True
             return
+
+        attendee, holder = await VoicePatientResolver(self.db).resolve_for_booking(
+            phone=phone,
+            spoken_name=spoken_name,
+        )
 
         doctors = await self.doctor_repo.list_available()
         doctor = self.assistant.match_doctor(doctors, state.doctor_or_department or "")
@@ -584,23 +592,28 @@ class VoiceAssistantService:
             return
 
         data = AppointmentCreate(
-            patient_id=patient.id,
+            patient_id=attendee.id,
             doctor_id=doctor.id,
             appointment_date=appt_date,
             appointment_time=appt_time,
             symptoms=state.symptoms,
             consultation_type="in_person",
+            notes=(
+                f"Booked via voice assistant. "
+                f"Spoken name: {spoken_name or attendee.first_name}. "
+                f"Booked by patient_id={holder.id}."
+            ),
         )
-        await AppointmentService(self.db).create(data, user_id=patient.user_id or 0)
-        state.patient_id = patient.id
+        await AppointmentService(self.db).create(data, user_id=holder.user_id or 0)
+        state.patient_id = attendee.id
         state.doctor_id = doctor.id
         state.booking_completed = True
         await self.language_resolver.promote_temp_language_to_patient(
             state.mobile_number or state.from_number or "",
-            patient.id,
+            holder.id,
         )
-        if patient.preferred_language is None and state.language_locked:
-            patient.preferred_language = state.language
+        if holder.preferred_language is None and state.language_locked:
+            holder.preferred_language = state.language
 
     async def _reschedule_appointment(self, state: VoiceState) -> None:
         appt = await self._find_upcoming_appointment(state.mobile_number)

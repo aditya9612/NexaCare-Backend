@@ -123,6 +123,15 @@ class BillingService:
                 item.line_total = line_total
                 total_gst += gst_amt
             billing.gst_amount = round(total_gst, 2)
+            
+            # Recalculate the effective gst_rate for the bill
+            taxable = max(billing.subtotal - billing.discount_amount, 0.0)
+            if len(billing.items) == 1:
+                billing.gst_rate = billing.items[0].gst_rate
+            elif taxable > 0:
+                billing.gst_rate = round((billing.gst_amount / taxable) * 100, 2)
+            else:
+                billing.gst_rate = 0.0
         else:
             billing.gst_amount = totals["gst_amount"]
 
@@ -651,19 +660,73 @@ class BillingService:
 
         return DailyCollectionSummary(date=str(target), **data)
 
-    async def get_period_report(self, period: str, target_date: date | None = None) -> RevenueReport:
-        if target_date:
+    async def get_yearly_report(self, year: int | None = None) -> RevenueReport:
+        target_year = year or utc_now().year
+        start = datetime.combine(date(target_year, 1, 1), datetime.min.time())
+        end = datetime.combine(date(target_year, 12, 31), datetime.max.time())
+        label = str(target_year)
+
+        data = await self.repo.get_period_report(start, end)
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id)
+        ).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end
+        )
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+
+        pharm_billed = float(row[0] if row else 0.0)
+        pharm_collected = float(row[1] if row else 0.0)
+        pharm_bill_count = int(row[2] if row else 0)
+
+        pharm_pending = max(0.0, pharm_billed - pharm_collected)
+
+        pharm_pay_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end,
+            PharmacyInvoice.paid_amount > 0.0
+        )
+        pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
+
+        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
+        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["bill_count"] = data["bill_count"] + pharm_bill_count
+        data["payment_count"] = data["payment_count"] + pharm_payment_count
+
+        return RevenueReport(period=label, **data)
+
+    async def get_period_report(
+        self,
+        period: str,
+        target_date: date | None = None,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> RevenueReport:
+        if period == "monthly":
+            import calendar
+            now = utc_now()
+            y = year or (target_date.year if target_date else now.year)
+            m = month or (target_date.month if target_date else now.month)
+            last_day = calendar.monthrange(y, m)[1]
+            start = datetime.combine(date(y, m, 1), datetime.min.time())
+            end = datetime.combine(date(y, m, last_day), datetime.max.time())
+            label = start.strftime("%Y-%m")
+        elif target_date:
             y, m = target_date.year, target_date.month
             if period == "daily":
                 start = datetime.combine(target_date, datetime.min.time())
                 end = datetime.combine(target_date, datetime.max.time())
                 label = str(target_date)
-            elif period == "monthly":
-                import calendar
-                last_day = calendar.monthrange(y, m)[1]
-                start = datetime.combine(date(y, m, 1), datetime.min.time())
-                end = datetime.combine(date(y, m, last_day), datetime.max.time())
-                label = start.strftime("%Y-%m")
             else: # yearly
                 start = datetime.combine(date(y, 1, 1), datetime.min.time())
                 end = datetime.combine(date(y, 12, 31), datetime.max.time())
@@ -674,14 +737,11 @@ class BillingService:
                 start = datetime.combine(now.date(), datetime.min.time())
                 end = now
                 label = str(now.date())
-            elif period == "monthly":
-                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                end = now
-                label = start.strftime("%Y-%m")
             else:
-                start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-                end = now
-                label = str(now.year)
+                y = year or now.year
+                start = datetime.combine(date(y, 1, 1), datetime.min.time())
+                end = datetime.combine(date(y, 12, 31), datetime.max.time())
+                label = str(y)
         data = await self.repo.get_period_report(start, end)
 
         from app.models.pharmacy_model import PharmacyInvoice

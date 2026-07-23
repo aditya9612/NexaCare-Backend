@@ -476,3 +476,213 @@ class NotificationService:
                     created_count += 1
 
         return created_count
+
+    async def create_critical_patient_alert(
+        self,
+        patient_id: int,
+        message: str,
+        reference_type: str = "PATIENT",
+        reference_id: int | None = None,
+    ) -> list[Notification]:
+        if not self.db:
+            return []
+
+        from app.models.nurse_model import NursePatientAssignment, Nurse
+        from app.models.user_model import User
+        from sqlalchemy import select
+
+        query = (
+            select(User)
+            .join(Nurse, Nurse.user_id == User.id)
+            .join(NursePatientAssignment, NursePatientAssignment.nurse_id == Nurse.id)
+            .where(
+                NursePatientAssignment.patient_id == patient_id,
+                NursePatientAssignment.status == "Active",
+                User.is_active.is_(True)
+            )
+        )
+        result = await self.db.execute(query)
+        nurses = result.scalars().all()
+
+        notifications = []
+        for nurse_user in nurses:
+            notif = await self.dispatch_notification(
+                user_id=nurse_user.id,
+                title="Critical Patient Alert",
+                message=message,
+                notification_type="CRITICAL_PATIENT_ALERT",
+                reference_type=reference_type,
+                reference_id=reference_id or patient_id,
+                priority="HIGH",
+                email=nurse_user.email,
+                phone=nurse_user.phone,
+            )
+            if notif:
+                notifications.append(notif)
+        return notifications
+
+    async def process_medication_reminders(self) -> int:
+        if not self.db:
+            return 0
+
+        reminder_minutes = getattr(settings, "MEDICATION_REMINDER_MINUTES", 15)
+        
+        from datetime import timezone, timedelta, time
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        today_ist = now_ist.date()
+        now_naive = now_ist.replace(tzinfo=None)
+
+        from app.models.nurse_model import NursePrescription, NurseMedicationLog, Nurse, NursePatientAssignment
+        from app.models.patient_model import Patient
+        from app.models.user_model import User
+        import json
+
+        stmt = (
+            select(NursePrescription)
+            .options(selectinload(NursePrescription.patient))
+            .where(
+                NursePrescription.status == "active",
+                NursePrescription.start_date <= today_ist,
+                NursePrescription.end_date >= today_ist,
+            )
+        )
+        res = await self.db.execute(stmt)
+        prescriptions = res.scalars().all()
+
+        if not prescriptions:
+            return 0
+
+        created_count = 0
+        for presc in prescriptions:
+            patient_name = f"{presc.patient.first_name} {presc.patient.last_name}".strip() if presc.patient else "Patient"
+
+            time_of_day = json.loads(presc.time_of_day) if presc.time_of_day else ["Morning"]
+            times = json.loads(presc.times) if presc.times else {}
+
+            for slot in time_of_day:
+                slot_time_str = times.get(slot, "08:00 AM")
+                try:
+                    t = datetime.strptime(slot_time_str, "%I:%M %p").time()
+                except ValueError:
+                    try:
+                        t = datetime.strptime(slot_time_str, "%H:%M").time()
+                    except ValueError:
+                        continue
+
+                scheduled_dt = datetime.combine(today_ist, t)
+                time_diff_minutes = (scheduled_dt - now_naive).total_seconds() / 60.0
+
+                if -5 <= time_diff_minutes <= reminder_minutes:
+                    today_start = datetime.combine(today_ist, time.min)
+                    today_end = datetime.combine(today_ist, time.max)
+
+                    log_stmt = select(NurseMedicationLog).where(
+                        NurseMedicationLog.prescription_id == presc.id,
+                        NurseMedicationLog.time_of_day_slot == slot,
+                        NurseMedicationLog.timestamp.between(today_start, today_end),
+                        NurseMedicationLog.status.in_(["Administered", "Missed"])
+                    )
+                    log_res = await self.db.execute(log_stmt)
+                    if log_res.scalars().all():
+                        continue
+
+                    nurse_stmt = (
+                        select(User)
+                        .join(Nurse, Nurse.user_id == User.id)
+                        .join(NursePatientAssignment, NursePatientAssignment.nurse_id == Nurse.id)
+                        .where(
+                            NursePatientAssignment.patient_id == presc.patient_id,
+                            NursePatientAssignment.status == "Active",
+                            User.is_active.is_(True)
+                        )
+                    )
+                    nurse_res = await self.db.execute(nurse_stmt)
+                    assigned_nurses = nurse_res.scalars().all()
+
+                    for nurse_user in assigned_nurses:
+                        title = "Medication Reminder"
+                        message = f"Medication reminder: Please administer {presc.medicine_name} ({presc.dosage}) to patient {patient_name} scheduled for {slot} ({slot_time_str})."
+
+                        from sqlalchemy import func
+                        dup_stmt = select(func.count(Notification.id)).where(
+                            Notification.user_id == nurse_user.id,
+                            Notification.notification_type == "MEDICATION_REMINDER",
+                            Notification.reference_type == "MEDICATION",
+                            Notification.reference_id == presc.id,
+                            Notification.message == message,
+                            Notification.created_at >= today_start
+                        )
+                        dup_res = await self.db.execute(dup_stmt)
+                        if (dup_res.scalar() or 0) > 0:
+                            continue
+
+                        notif = await self.dispatch_notification(
+                            user_id=nurse_user.id,
+                            title=title,
+                            message=message,
+                            notification_type="MEDICATION_REMINDER",
+                            reference_type="MEDICATION",
+                            reference_id=presc.id,
+                            priority="NORMAL",
+                            email=nurse_user.email,
+                            phone=nurse_user.phone
+                        )
+                        if notif:
+                            created_count += 1
+
+        return created_count
+
+    async def notify_doctor_instruction(
+        self,
+        patient_id: int,
+        message: str,
+        reference_id: int | None = None,
+    ) -> list[Notification]:
+        if not self.db:
+            return []
+
+        from app.models.nurse_model import NursePatientAssignment, Nurse
+        from app.models.user_model import User
+        from sqlalchemy import select
+
+        query = (
+            select(User)
+            .join(Nurse, Nurse.user_id == User.id)
+            .join(NursePatientAssignment, NursePatientAssignment.nurse_id == Nurse.id)
+            .where(
+                NursePatientAssignment.patient_id == patient_id,
+                NursePatientAssignment.status == "Active",
+                User.is_active.is_(True)
+            )
+        )
+        result = await self.db.execute(query)
+        nurses = result.scalars().all()
+
+        notifications = []
+        for nurse_user in nurses:
+            from sqlalchemy import func
+            dup_stmt = select(func.count(Notification.id)).where(
+                Notification.user_id == nurse_user.id,
+                Notification.notification_type == "DOCTOR_INSTRUCTION",
+                Notification.message == message,
+                Notification.is_deleted.is_(False)
+            )
+            dup_res = await self.db.execute(dup_stmt)
+            if (dup_res.scalar() or 0) > 0:
+                continue
+
+            notif = await self.dispatch_notification(
+                user_id=nurse_user.id,
+                title="Doctor's Instruction",
+                message=message,
+                notification_type="DOCTOR_INSTRUCTION",
+                reference_type="PATIENT",
+                reference_id=reference_id or patient_id,
+                priority="NORMAL",
+                email=nurse_user.email,
+                phone=nurse_user.phone,
+            )
+            if notif:
+                notifications.append(notif)
+        return notifications

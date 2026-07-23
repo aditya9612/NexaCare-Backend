@@ -444,3 +444,39 @@ class NurseMedicationLogResponse(BaseSchema):
     notes: str | None = None
     timestamp: datetime
     created_at: datetime
+
+
+class UpcomingMedicationResponse(BaseSchema):
+    patient_id: int
+    patient_name: str
+    medicine_name: str
+    scheduled_time: str
+
+
+class CriticalAlertResponse(BaseSchema):
+    patient_id: int
+    patient_name: str
+    alert_type: str
+    priority: str
+    created_at: datetime
+
+
+class RecentActivityResponse(BaseSchema):
+    id: int
+    action: str
+    resource: str
+    details: str | None = None
+    created_at: datetime
+
+
+class NurseDashboardResponse(BaseSchema):
+    assigned_patients: int
+    today_patients: int
+    pending_medications: int
+    critical_patients: int
+    doctor_instructions: int
+    occupied_beds: int
+    available_beds: int
+    upcoming_medications: list[UpcomingMedicationResponse] = []
+    critical_alerts: list[CriticalAlertResponse] = []
+    recent_activities: list[RecentActivityResponse] = []

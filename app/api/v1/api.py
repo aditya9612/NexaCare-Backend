@@ -50,6 +50,7 @@ api_router.include_router(doctor_routes.router, prefix="/doctors", tags=["Doctor
 api_router.include_router(appointment_routes.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(dashboard_routes.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"])
+api_router.include_router(nurse_routes.singular_router, prefix="/nurse", tags=["Nurses"])
 api_router.include_router(staff_routes.router, prefix="/staff", tags=["Staff"])
 api_router.include_router(pharmacy_routes.router, prefix="/pharmacy", tags=["Pharmacy"])
 api_router.include_router(lab_routes.router, prefix="/lab", tags=["Lab"])

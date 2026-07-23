@@ -71,4 +71,10 @@ class ReceptionDashboardResponse(BaseModel):
     pending_billing: int
     rescheduled_appointments: int
     total_patient_footfall: int
+    
+    # Receptionist Queue statistics
+    queue_waiting: int = 0
+    queue_current: str = "None"
+    queue_completed: int = 0
+    queue_skipped: int = 0
 

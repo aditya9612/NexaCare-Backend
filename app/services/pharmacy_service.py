@@ -47,7 +47,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionUpdate,
     PurchaseCreate,
     PurchaseItemResponse,
-    PrescriptionStatusUpdate
+    PrescriptionStatusUpdate,
     PurchaseResponse,
     SalesReport,
     SupplierCreate,

@@ -875,40 +875,88 @@ class PharmacyService:
         if not purchase:
             raise NotFoundException("Purchase not found")
 
-        purchase.supplier_id = data.supplier_id
-        purchase.notes = data.notes
-        if data.status:
-            allowed_statuses = {PurchaseStatus.ORDERED, PurchaseStatus.RECEIVED, PurchaseStatus.CANCELLED}
-            if data.status not in allowed_statuses:
-                raise BadRequestException(
-                    f"Invalid purchase status. Must be one of: {', '.join(allowed_statuses)}"
+        # 1. Validate medicine IDs if data.items is provided
+        if data.items is not None:
+            for item_data in data.items:
+                medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+                if not medicine:
+                    raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
+
+        try:
+            async with self.db.begin_nested():
+                # 2. Determine old and new status and active flags
+                old_status = (purchase.status or "Pending").strip().lower()
+                old_active = old_status != "cancelled"
+
+                new_status_str = data.status if data.status else purchase.status
+                new_status_clean = (new_status_str or "Pending").strip().lower()
+                new_active = new_status_clean != "cancelled"
+
+                # 3. Revert stock of old items if previously active
+                if old_active:
+                    for old_item in purchase.items:
+                        await self.medicine_repo.update_stock(old_item.medicine_id, -old_item.quantity)
+
+                # 4. Clear and recreate purchase items if data.items is provided
+                if data.items is not None:
+                    purchase.items.clear()
+                    total = 0.0
+                    for item_data in data.items:
+                        line_total = round(item_data.quantity * item_data.unit_price, 2)
+                        total += line_total
+                        new_item = PurchaseItem(
+                            medicine_id=item_data.medicine_id,
+                            quantity=item_data.quantity,
+                            unit_price=item_data.unit_price,
+                            expiry_date=item_data.expiry_date,
+                            line_total=line_total,
+                        )
+                        purchase.items.append(new_item)
+                    purchase.total_amount = total
+
+                # 5. Apply stock of final items if newly active
+                if new_active:
+                    for item in purchase.items:
+                        await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+
+                # 6. Update other purchase fields, totals, and validate status
+                purchase.supplier_id = data.supplier_id
+                purchase.notes = data.notes
+
+                if data.status:
+                    allowed_statuses = {PurchaseStatus.ORDERED, PurchaseStatus.RECEIVED, PurchaseStatus.CANCELLED}
+                    if data.status not in allowed_statuses:
+                        raise BadRequestException(
+                            f"Invalid purchase status. Must be one of: {', '.join(allowed_statuses)}"
+                        )
+                    purchase.status = data.status
+
+                purchase = await self.purchase_repo.update(purchase)
+
+                await self.audit_repo.create(
+                    "update",
+                    "pharmacy_purchase",
+                    user_id=user_id,
+                    resource_id=str(purchase.id),
                 )
-            purchase.status = data.status
 
-        purchase = await self.purchase_repo.update(purchase)
-
-        await self.audit_repo.create(
-            "update",
-            "pharmacy_purchase",
-            user_id=user_id,
-            resource_id=str(purchase.id),
-        )
-
-        # Update transaction history
-        from app.models.transaction_history_model import TransactionHistory
-        from sqlalchemy import select
-        tx_result = await self.db.execute(
-            select(TransactionHistory).where(
-                TransactionHistory.source_module == "pharmacy_purchases",
-                TransactionHistory.source_id == purchase.id,
-                TransactionHistory.is_deleted == False
-            )
-        )
-        tx_records = tx_result.scalars().all()
-        for tx in tx_records:
-            tx.amount = purchase.total_amount
-            tx.description = f"Pharmacy Purchase: {purchase.purchase_number}"
-            await self.db.flush()
+                # 7. Update transaction history record if it exists
+                from app.models.transaction_history_model import TransactionHistory
+                from sqlalchemy import select
+                tx_result = await self.db.execute(
+                    select(TransactionHistory).where(
+                        TransactionHistory.source_module == "pharmacy_purchases",
+                        TransactionHistory.source_id == purchase.id,
+                        TransactionHistory.is_deleted == False
+                    )
+                )
+                tx_records = tx_result.scalars().all()
+                for tx in tx_records:
+                    tx.amount = purchase.total_amount
+                    tx.description = f"Pharmacy Purchase: {purchase.purchase_number}"
+                    await self.db.flush()
+        except Exception as e:
+            raise e
 
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         return self._purchase_response(purchase)

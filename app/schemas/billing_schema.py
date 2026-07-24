@@ -33,7 +33,6 @@ class BillingCreate(BaseSchema):
     discount_amount: float = Field(0.0, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
-    insurance_id: int | None = None
     appointment_id: Optional[int] = None
     items: List[BillItemCreate] = Field(..., min_length=1)
 
@@ -45,7 +44,6 @@ class BillingUpdate(BaseSchema):
     tax_amount: float | None = Field(None, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
-    insurance_id: int | None = None
     status: str | None = None
     items: List[BillItemCreate] | None = None
 
@@ -66,7 +64,6 @@ class BillingResponse(BaseSchema):
     status: str
     due_date: datetime | None
     notes: str | None
-    insurance_id: int | None
     invoice_path: str | None
     appointment_id: Optional[int] = None
     items: List[BillItemResponse] = []
@@ -75,10 +72,43 @@ class BillingResponse(BaseSchema):
     source: Optional[str] = "billing"
 
 
+from pydantic import model_validator
+
 class PaymentCreate(BaseSchema):
     amount: float = Field(..., gt=0)
     payment_method: str
     transaction_ref: str | None = None
+
+    @model_validator(mode="after")
+    def validate_payment_details(self) -> 'PaymentCreate':
+        # Normalize payment method
+        method = self.payment_method.strip().lower()
+        if method == "cheques":
+            method = "cheque"
+        self.payment_method = method
+
+        # Trim transaction reference if provided
+        if self.transaction_ref is not None:
+            self.transaction_ref = self.transaction_ref.strip()
+            if not self.transaction_ref:
+                self.transaction_ref = None
+
+        # Validate allowed payment methods
+        allowed_methods = {"cash", "upi", "cheque", "card", "bank_transfer", "insurance"}
+        if method not in allowed_methods:
+            raise ValueError(
+                f"Invalid payment method '{self.payment_method}'. Supported methods are: cash, upi, cheque, card, bank_transfer, insurance"
+            )
+
+        # Enforce validation rules only for cash, upi, and cheque
+        if method == "cash":
+            if self.transaction_ref:
+                raise ValueError("Transaction reference should not be provided for cash payments")
+        elif method in ("upi", "cheque"):
+            if not self.transaction_ref:
+                raise ValueError(f"Transaction reference is required for {method} payments")
+
+        return self
 
 
 class PaymentResponse(BaseSchema):

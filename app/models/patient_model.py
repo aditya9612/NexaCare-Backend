@@ -30,16 +30,35 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
     allergies: Mapped[str | None] = mapped_column(Text, nullable=True)
     medical_history: Mapped[str | None] = mapped_column(Text, nullable=True)
     chronic_disease: Mapped[str | None] = mapped_column(Text, nullable=True)
-    diagnosis: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    diagnosis: Mapped[str] = mapped_column(Text, default="", nullable=False)
     insurance_provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
     insurance_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)
     preferred_language: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    # Phone-account holder for family patients created via voice/public booking.
+    # Null = this patient is an account holder (owns a phone number).
+    guardian_patient_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    relationship_to_guardian: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     appointments = relationship("Appointment", back_populates="patient")
     documents = relationship("PatientDocument", back_populates="patient", cascade="all, delete-orphan")
     family_members = relationship("FamilyMember", back_populates="patient", cascade="all, delete-orphan")
     clinical_records = relationship("ClinicalRecord", back_populates="patient")
+    guardian = relationship(
+        "Patient",
+        remote_side="Patient.id",
+        foreign_keys=[guardian_patient_id],
+        back_populates="dependents",
+    )
+    dependents = relationship(
+        "Patient",
+        foreign_keys=[guardian_patient_id],
+        back_populates="guardian",
+    )
 
 
 class PatientDocument(Base, TimestampMixin):

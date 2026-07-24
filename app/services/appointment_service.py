@@ -16,7 +16,8 @@ from app.schemas.appointment_schema import (
     CancelRequest,
     ConfirmRequest,
     RescheduleRequest,
-    TokenResponse,
+    TokenResponse,    
+    ConfirmedVisitResponse,
 )
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
@@ -367,3 +368,48 @@ class AppointmentService:
             )
             self.db.add(pat_notif)
         await self.db.flush()
+
+    async def get_confirmed_visit_list(
+            self,
+            page: int = 1,
+            limit: int = 20,
+            search: str | None = None,
+            doctor_id: int | None = None,
+            department_id: int | None = None,
+            appointment_date: date | None = None,
+        ):
+            skip = (page - 1) * limit
+            items = await self.repo.get_confirmed_appointments(
+                skip=skip, limit=limit, search=search, doctor_id=doctor_id,
+                department_id=department_id, appointment_date=appointment_date,
+            )
+            total = await self.repo.count_confirmed_appointments(
+                search=search, doctor_id=doctor_id,
+                department_id=department_id, appointment_date=appointment_date,
+            )
+            
+            responses = []
+            for appt in items:
+                p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else ""
+                doc_name = f"Dr. {appt.doctor.first_name} {appt.doctor.last_name}" if appt.doctor else ""
+                dept_name = appt.department.department_name if appt.department else None
+                
+                responses.append(
+                    ConfirmedVisitResponse(
+                        appointment_id=appt.id,
+                        appointment_number=appt.appointment_number,
+                        patient_id=appt.patient_id,
+                        patient_name=p_name,
+                        doctor_id=appt.doctor_id,
+                        doctor_name=doc_name,
+                        department_name=dept_name,
+                        appointment_date=appt.appointment_date,
+                        appointment_time=appt.appointment_time,
+                        status=appt.appointment_status,
+                        check_in_time=appt.check_in_time,
+                        queue_token=appt.queue_token,
+                        queue_status=appt.queue_status
+                    )
+                )
+                
+            return build_paginated_result(responses, total, page, limit)

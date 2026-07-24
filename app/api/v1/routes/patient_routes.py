@@ -232,6 +232,35 @@ async def download_document(
     )
 
 
+@router.get("/{patient_id}/documents/{document_id}/view")
+async def view_document(
+    patient_id: int,
+    document_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    import os
+    import mimetypes
+    from fastapi.responses import FileResponse
+    from app.core.exceptions import NotFoundException
+    
+    doc = await PatientService(db).get_document(patient_id, document_id)
+    if not os.path.exists(doc.file_path):
+        raise NotFoundException("Document file not found on disk")
+        
+    mime_type, _ = mimetypes.guess_type(doc.file_path)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+        
+    return FileResponse(
+        path=doc.file_path,
+        media_type=mime_type,
+        content_disposition_type="inline"
+    )
+
+
+
 @router.delete("/{patient_id}/documents/{document_id}", response_model=APIResponse[MessageResponse])
 async def delete_document(
     patient_id: int,

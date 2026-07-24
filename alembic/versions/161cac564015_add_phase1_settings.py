@@ -1,7 +1,7 @@
 """add_phase1_settings
 
 Revision ID: 161cac564015
-Revises: 5e045bdb36b2
+Revises: c3d4e5f6a7b8
 Create Date: 2026-07-22 13:03:31.650894
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 revision: str = '161cac564015'
-down_revision: Union[str, None] = '5e045bdb36b2'
+down_revision: Union[str, None] = 'c3d4e5f6a7b8'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

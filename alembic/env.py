@@ -21,6 +21,7 @@ import app.models.lab_model  # noqa: F401
 import app.models.nurse_model  # noqa: F401
 import app.models.audit_log_model  # noqa: F401
 import app.models.bed_allocation_model  # noqa: F401
+import app.models.appointment_setting  # noqa: F401
 import app.models.hospital_model  # noqa: F401
 import app.models.subscription_model  # noqa: F401
 import app.models.ai_config_model  # noqa: F401

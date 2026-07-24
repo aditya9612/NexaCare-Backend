@@ -9,6 +9,10 @@ from app.schemas.settings_schema import (
     UserPreferenceResponse,
     UserPreferenceUpdate,
 )
+from app.schemas.appointment_setting_schema import (
+    AppointmentSettingsResponse,
+    AppointmentSettingsUpdate,
+)
 
 from app.core.exceptions import ForbiddenException
 from app.core.constants import UserRole
@@ -131,4 +135,46 @@ async def update_user_preferences(user_id: int, payload: UserPreferenceUpdate, d
     return await service.update_user_preferences(
         user_id, 
         payload.model_dump(exclude_unset=True)
+    )
+
+# ---------------------------------------------------------
+# APPOINTMENT SETTINGS
+# ---------------------------------------------------------
+@router.get(
+    "/appointments/{hospital_id}",
+    response_model=AppointmentSettingsResponse,
+    summary="Get Appointment Settings",
+    description="Retrieve appointment configuration for a specific hospital.",
+    dependencies=[Depends(require_permission("appointment_settings", "read"))]
+)
+async def get_appointment_settings(hospital_id: int, db: DbSession, current_user: CurrentUser):
+    _check_hospital_access(hospital_id, current_user)
+    service = SettingsService(db)
+    return await service.get_appointment_settings(hospital_id)
+
+
+from fastapi import HTTPException
+from app.core.constants import OperationMode
+
+@router.put(
+    "/appointments/{hospital_id}",
+    response_model=AppointmentSettingsResponse,
+    summary="Update Appointment Settings",
+    description="Update appointment configuration for a specific hospital.",
+    dependencies=[Depends(require_permission("appointment_settings", "update"))]
+)
+async def update_appointment_settings(hospital_id: int, payload: AppointmentSettingsUpdate, db: DbSession, current_user: CurrentUser):
+    _check_hospital_access(hospital_id, current_user)
+    
+    if payload.operation_mode in (OperationMode.SHIFT_BASED, OperationMode.CUSTOM):
+        raise HTTPException(
+            status_code=501, 
+            detail=f"{payload.operation_mode.value.upper()} mode is reserved for a future release."
+        )
+
+    service = SettingsService(db)
+    return await service.update_appointment_settings(
+        hospital_id, 
+        payload.model_dump(exclude_unset=True),
+        updated_by_user_id=current_user.id
     )

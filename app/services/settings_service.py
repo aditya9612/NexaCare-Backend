@@ -9,10 +9,12 @@ from app.core.config import settings
 from app.models.hospital_setting import HospitalSetting
 from app.models.notification_setting import NotificationSetting
 from app.models.user_preference import UserPreference
+from app.models.appointment_setting import AppointmentSetting
 from app.repositories.settings_repository import (
     HospitalSettingRepository,
     NotificationSettingRepository,
     UserPreferenceRepository,
+    AppointmentSettingsRepository,
 )
 from app.utils.redis_service import cache_delete, cache_get, cache_set
 
@@ -25,6 +27,7 @@ class SettingsService:
         self.hospital_repo = HospitalSettingRepository(db)
         self.notification_repo = NotificationSettingRepository(db)
         self.user_repo = UserPreferenceRepository(db)
+        self.appointment_repo = AppointmentSettingsRepository(db)
 
     def _serialize(self, record) -> dict:
         """Helper to serialize SQLAlchemy models for Redis caching and API returns."""
@@ -269,4 +272,36 @@ class SettingsService:
             hospital_id=None,
             cache_key=f"settings:user:{user_id}",
             get_method=self.get_user_preferences
+        )
+
+    def _default_appointment_setting(self, hospital_id: int) -> AppointmentSetting:
+        return AppointmentSetting(
+            hospital_id=hospital_id
+            # Default values are handled by SQLAlchemy models (e.g. 30 mins, 09:00, etc)
+        )
+
+    async def get_appointment_settings(self, hospital_id: int) -> dict:
+        if not settings.ENABLE_SETTINGS:
+            return self._serialize(self._default_appointment_setting(hospital_id))
+
+        return await self._get_with_fallback(
+            cache_key=f"appointment_settings:{hospital_id}",
+            repo=self.appointment_repo,
+            entity_id=hospital_id,
+            fallback_method=self._default_appointment_setting
+        )
+
+    async def update_appointment_settings(self, hospital_id: int, update_data: dict, updated_by_user_id: int) -> dict:
+        if not settings.ENABLE_SETTINGS:
+            return self._serialize(self._default_appointment_setting(hospital_id))
+
+        return await self._update_with_audit(
+            repo=self.appointment_repo,
+            entity_id=hospital_id,
+            update_data=update_data,
+            category="Appointment Settings",
+            user_id=updated_by_user_id,
+            hospital_id=hospital_id,
+            cache_key=f"appointment_settings:{hospital_id}",
+            get_method=self.get_appointment_settings
         )

@@ -42,6 +42,9 @@ from app.schemas.nurse_schema import (
     NurseTaskResponse,
     NurseTaskStatusUpdate,
     NursePatientLabTestResponse,
+    NurseTaskCreate,
+    NursePatientAssignmentCreate,
+    NursePatientAssignmentResponse,
 )
 from app.utils.helpers import generate_nurse_code, utc_now
 from app.utils.pagination import build_paginated_result
@@ -1153,3 +1156,60 @@ class NurseService:
             critical_alerts=critical_alerts,
             recent_activities=recent_activities
         )
+
+    async def assign_patient(
+        self, nurse_id: int, data: NursePatientAssignmentCreate, user_id: int
+    ) -> NursePatientAssignmentResponse:
+        from app.models.patient_model import Patient
+        from app.models.nurse_model import NursePatientAssignment
+
+        await self._get_nurse_or_raise(nurse_id)
+        
+        patient = await self.db.get(Patient, data.patient_id)
+        if not patient or patient.is_deleted:
+            raise NotFoundException("Patient not found")
+
+        # Check if already assigned actively
+        existing = await self.assignment_repo.get_active_assignment(nurse_id, data.patient_id)
+        if existing:
+            raise BadRequestException("Patient is already actively assigned to this nurse")
+
+        assignment = NursePatientAssignment(
+            nurse_id=nurse_id,
+            patient_id=data.patient_id,
+            patient_status=data.patient_status,
+            notes=data.notes,
+            status="Active"
+        )
+        assignment = await self.assignment_repo.create(assignment)
+        await self.audit_repo.create(
+            "create", "nurses", user_id=user_id, resource_id=str(assignment.id)
+        )
+        return NursePatientAssignmentResponse.model_validate(assignment)
+
+    async def create_task(
+        self, nurse_id: int, data: NurseTaskCreate, user_id: int
+    ) -> NurseTaskResponse:
+        from app.models.patient_model import Patient
+        from app.models.nurse_model import NurseTask
+
+        await self._get_nurse_or_raise(nurse_id)
+        
+        patient = await self.db.get(Patient, data.patient_id)
+        if not patient or patient.is_deleted:
+            raise NotFoundException("Patient not found")
+
+        task = NurseTask(
+            nurse_id=nurse_id,
+            patient_id=data.patient_id,
+            title=data.title,
+            description=data.description,
+            due_date=data.due_date,
+            priority=data.priority,
+            status="Pending"
+        )
+        task = await self.task_repo.create(task)
+        await self.audit_repo.create(
+            "create", "nurses", user_id=user_id, resource_id=str(task.id)
+        )
+        return NurseTaskResponse.model_validate(task)

@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -32,6 +32,9 @@ from app.schemas.nurse_schema import (
     NurseMedicationLogCreate,
     NurseMedicationLogResponse,
     NurseDashboardResponse,
+    NurseTaskCreate,
+    NursePatientAssignmentCreate,
+    NursePatientAssignmentResponse,
 )
 from app.services.nurse_service import NurseService
 from app.utils.pagination import PaginatedResult
@@ -76,14 +79,14 @@ async def list_nurses(
 
 @router.get("/search", response_model=APIResponse[PaginatedResult[NurseResponse]])
 async def search_nurses(
-    q: str,
     db: DbSession,
     current_user: CurrentUser,
+    search_query: str = Query(..., description="Search by nurse code, license, shift or department name"),
     page: int = 1,
     size: int = 20,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).search(q, page=page, size=size)
+    result = await NurseService(db).search(search_query, page=page, size=size)
     return APIResponse(message="Search results", data=result)
 
 
@@ -96,6 +99,16 @@ async def get_nurse_dashboard(
 ):
     result = await NurseService(db).get_dashboard_overview(current_user)
     return APIResponse(message="Nurse dashboard summary retrieved", data=result)
+
+
+@router.get("/medication-schedules", response_model=APIResponse[list])
+async def list_medication_schedules(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    schedules = await NurseService(db).list_medication_schedules()
+    return APIResponse(message="Medication schedules retrieved successfully", data=schedules)
 
 
 @router.get("/{nurse_id}", response_model=APIResponse[NurseResponse])
@@ -160,6 +173,42 @@ async def list_nurse_daily_tasks(
         sort_order=sort_order,
     )
     return APIResponse(message="Daily nursing tasks retrieved", data=result)
+
+
+@router.post(
+    "/{nurse_id}/tasks",
+    response_model=APIResponse[NurseTaskResponse],
+    status_code=201,
+)
+async def create_nurse_task(
+    nurse_id: int,
+    data: NurseTaskCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    task = await NurseService(db).create_task(
+        nurse_id=nurse_id, data=data, user_id=current_user.id
+    )
+    return APIResponse(message="Nurse task created successfully", data=task)
+
+
+@router.post(
+    "/{nurse_id}/assignments",
+    response_model=APIResponse[NursePatientAssignmentResponse],
+    status_code=201,
+)
+async def assign_patient_to_nurse(
+    nurse_id: int,
+    data: NursePatientAssignmentCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    assignment = await NurseService(db).assign_patient(
+        nurse_id=nurse_id, data=data, user_id=current_user.id
+    )
+    return APIResponse(message="Patient assigned to nurse successfully", data=assignment)
 
 
 @router.put(
@@ -570,11 +619,4 @@ async def delete_medication_log(
     return APIResponse(message="Medication log deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
-@router.get("/medication-schedules", response_model=APIResponse[list])
-async def list_medication_schedules(
-    db: DbSession,
-    current_user: CurrentUser,
-    _: User = Depends(require_permission("nurses", "read")),
-):
-    schedules = await NurseService(db).list_medication_schedules()
-    return APIResponse(message="Medication schedules retrieved successfully", data=schedules)
+

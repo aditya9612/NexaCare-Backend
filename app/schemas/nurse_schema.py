@@ -480,3 +480,28 @@ class NurseDashboardResponse(BaseSchema):
     upcoming_medications: list[UpcomingMedicationResponse] = []
     critical_alerts: list[CriticalAlertResponse] = []
     recent_activities: list[RecentActivityResponse] = []
+
+
+class NurseTaskCreate(BaseSchema):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    patient_id: int
+    due_date: date
+    priority: Literal["Low", "Medium", "High"] = "Medium"
+
+
+class NursePatientAssignmentCreate(BaseSchema):
+    patient_id: int
+    patient_status: str = "Stable"
+    notes: str | None = None
+
+
+class NursePatientAssignmentResponse(BaseSchema):
+    id: int
+    nurse_id: int
+    patient_id: int
+    status: str
+    patient_status: str
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime

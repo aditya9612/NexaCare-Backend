@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import BillingStatus
+from app.core.constants import AppointmentStatus, BillingStatus
 from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
 from app.repositories.audit_repository import AuditRepository
@@ -167,6 +167,16 @@ class BillingService:
             
             if appointment.patient_id != data.patient_id:
                 raise BadRequestException("Appointment does not belong to the supplied patient")
+
+            if appointment.appointment_status == AppointmentStatus.CANCELLED:
+                raise BadRequestException(
+                    "Billing cannot be created for a cancelled appointment."
+                )
+
+            if appointment.appointment_status != AppointmentStatus.COMPLETED:
+                raise BadRequestException(
+                    "Billing can only be created for completed appointments."
+                )
 
             existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
             if existing_billing:

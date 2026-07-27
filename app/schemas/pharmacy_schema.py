@@ -250,6 +250,11 @@ class PrescriptionUpdate(BaseSchema):
     items: Optional[List[PrescriptionItemCreate]] = None
 
 
+class PrescriptionStatusUpdate(BaseSchema):
+    status: str = Field(..., min_length=1, description="New status of the prescription")
+
+
+
 class PharmacyInvoiceItemCreate(BaseSchema):
     medicine_id: int = Field(..., gt=0)
     quantity: int = Field(1, ge=1)
@@ -495,17 +500,27 @@ class PharmacyInventoryOverviewResponse(BaseSchema):
 
 
 class LowStockItemAlert(BaseSchema):
-    id: int
-    name: str
-    stock_quantity: int
-    reorder_level: int
+    medicine_id: int | None = None
+    medicine_name: str | None = None
+    current_stock: int | None = None
+    minimum_stock: int | None = None
+    
+    # Backward compatibility fields
+    id: int | None = None
+    name: str | None = None
+    stock_quantity: int | None = None
+    reorder_level: int | None = None
     unit: str = "Unit"
     status_label: str = "Low Stock"
 
 
 class PharmacySalesTrendPoint(BaseSchema):
-    label: str
     amount: float
+    
+    # Support both label and specific trend keys
+    label: str | None = None
+    hour: str | None = None
+    date: str | None = None
 
 
 class PharmacyDashboardResponse(BaseSchema):
@@ -523,7 +538,8 @@ class PharmacyDashboardResponse(BaseSchema):
     pending_purchases_subtext: str = "Awaiting completion"
     total_suppliers: int
     total_suppliers_subtext: str = "Active + inactive partners"
-    prescriptions_count: int
+    prescriptions: int | None = None
+    prescriptions_count: int | None = None
     prescriptions_subtext: str = "Today and backlog queue"
 
     low_stock_items: List[LowStockItemAlert] = []

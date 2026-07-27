@@ -24,11 +24,14 @@ class Settings(BaseSettings):
     SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
+    # Feature flag to enable/disable the Settings module gracefully.
+    ENABLE_SETTINGS: bool = True
+
    
 
     
-    DATABASE_URL = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
-    DATABASE_URL_SYNC = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
+    DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
+    DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
 
     
     
@@ -84,6 +87,7 @@ class Settings(BaseSettings):
     ANALYTICS_CACHE_TTL_SECONDS: int = 300
     LAB_PENDING_TEST_THRESHOLD_HOURS: int = 24
     DOCTOR_APPOINTMENT_REMINDER_MINUTES: int = 30
+    MEDICATION_REMINDER_MINUTES: int = 15
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600

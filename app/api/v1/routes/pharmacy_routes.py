@@ -20,6 +20,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionCreate,
     PrescriptionResponse,
     PrescriptionUpdate,
+    PrescriptionStatusUpdate,
     PurchaseCreate,
     PurchaseResponse,
     SalesReport,
@@ -153,13 +154,20 @@ async def list_prescriptions(
     page: int = 1,
     size: int = 20,
     status: str | None = None,
+    patient_id: int | None = Query(None),
+    appointment_id: int | None = Query(None),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     from app.repositories.doctor_repository import DoctorRepository
     doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
     
     result = await PharmacyService(db).list_prescriptions(
-        page=page, size=size, status=status, doctor_id=doctor.id if doctor else None
+        page=page,
+        size=size,
+        status=status,
+        doctor_id=doctor.id if doctor else None,
+        patient_id=patient_id,
+        appointment_id=appointment_id,
     )
     return APIResponse(message="Prescriptions retrieved", data=result)
 
@@ -204,6 +212,23 @@ async def update_prescription(
         current_user=current_user
     )
     return APIResponse(message="Prescription updated", data=prescription)
+
+
+@router.patch("/prescriptions/{prescription_id}/status", response_model=APIResponse[PrescriptionResponse])
+async def update_prescription_status(
+    prescription_id: int,
+    data: PrescriptionStatusUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    prescription = await PharmacyService(db).update_prescription_status(
+        prescription_id=prescription_id,
+        data=data,
+        user_id=current_user.id
+    )
+    return APIResponse(message="Prescription status updated", data=prescription)
+
 
 
 @router.delete("/prescriptions/{prescription_id}", response_model=APIResponse[MessageResponse])

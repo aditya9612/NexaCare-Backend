@@ -294,13 +294,99 @@ class ExpenseService:
 
     async def get_expense(self, expense_id: int) -> ExpenseResponse:
         expense = await self.expense_repo.get_by_id(expense_id)
-        if not expense:
-            raise NotFoundException(f"Expense with ID {expense_id} not found")
-        return ExpenseResponse.model_validate(expense)
+        if expense:
+            resp = ExpenseResponse.model_validate(expense)
+            resp.source = "expense"
+            return resp
+
+        # Check in pharmacy purchases
+        from app.models.pharmacy_model import Purchase
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import select
+        
+        stmt = select(Purchase).where(Purchase.id == expense_id).options(selectinload(Purchase.supplier))
+        res = await self.db.execute(stmt)
+        p = res.scalar_one_or_none()
+        if p:
+            # Resolve pharmacy category
+            from app.models.expense_model import ExpenseCategory
+            from sqlalchemy import func
+            cat_stmt = select(ExpenseCategory.id, ExpenseCategory.name).where(
+                func.lower(ExpenseCategory.name) == "pharmacy"
+            )
+            cat_res = await self.db.execute(cat_stmt)
+            cat_row = cat_res.first()
+            if cat_row:
+                pharm_cat_id = cat_row[0]
+                pharm_cat_name = cat_row[1]
+            else:
+                pharm_cat_id = 999
+                pharm_cat_name = "Pharmacy"
+
+            from app.schemas.expense_schema import ExpenseCategoryResponse
+            from app.schemas.vendor_schema import VendorResponse
+            from app.utils.helpers import utc_now
+            
+            vendor_data = None
+            if p.supplier:
+                vendor_data = VendorResponse(
+                    id=p.supplier.id,
+                    name=p.supplier.name,
+                    vendor_type="supplier",
+                    contact_person=p.supplier.contact_person,
+                    phone=p.supplier.phone,
+                    email=p.supplier.email,
+                    address=p.supplier.address,
+                    is_active=p.supplier.is_active,
+                    created_at=p.supplier.created_at,
+                    updated_at=p.supplier.updated_at
+                )
+
+            cat_data = ExpenseCategoryResponse(
+                id=pharm_cat_id,
+                name=pharm_cat_name,
+                description="Pharmacy Inventory and Supplies Purchases",
+                is_active=True,
+                created_at=p.created_at or utc_now(),
+                updated_at=p.created_at or utc_now()
+            )
+
+            status_val = p.status.capitalize()
+            if status_val == "Received":
+                status_val = "Paid"
+
+            desc_val = f"Pharmacy Purchase {p.purchase_number}"
+            if p.notes:
+                desc_val += f". Notes: {p.notes}"
+
+            return ExpenseResponse(
+                id=p.id,
+                category_id=pharm_cat_id,
+                vendor_id=p.supplier_id,
+                amount=p.total_amount,
+                description=desc_val,
+                expense_date=p.ordered_at.date(),
+                status=status_val,
+                category=cat_data,
+                vendor=vendor_data,
+                created_at=p.created_at or utc_now(),
+                updated_at=p.created_at or utc_now(),
+                source="pharmacy"
+            )
+
+        raise NotFoundException(f"Expense with ID {expense_id} not found")
 
     async def update_expense(self, expense_id: int, data: ExpenseUpdate, user_id: int) -> ExpenseResponse:
         expense = await self.expense_repo.get_by_id(expense_id)
         if not expense:
+            # Check if it is a pharmacy purchase to raise a helpful message
+            from app.models.pharmacy_model import Purchase
+            from sqlalchemy import select
+            stmt = select(Purchase).where(Purchase.id == expense_id)
+            res = await self.db.execute(stmt)
+            p = res.scalar_one_or_none()
+            if p:
+                raise BadRequestException("Cannot update pharmacy purchase details from the expenses module. Please manage it under the Pharmacy module.")
             raise NotFoundException(f"Expense with ID {expense_id} not found")
 
         if data.category_id is not None:
@@ -358,15 +444,31 @@ class ExpenseService:
                 user_id=user_id
             )
 
-        return ExpenseResponse.model_validate(expense)
+        resp = ExpenseResponse.model_validate(expense)
+        resp.source = "expense"
+        return resp
 
     async def delete_expense(self, expense_id: int, user_id: int) -> None:
         expense = await self.expense_repo.get_by_id(expense_id)
-        if not expense:
-            raise NotFoundException(f"Expense with ID {expense_id} not found")
+        if expense:
+            await self.expense_repo.soft_delete(expense)
+            await self.audit_repo.create("delete", "expense", user_id=user_id, resource_id=str(expense.id))
+            return
 
-        await self.expense_repo.soft_delete(expense)
-        await self.audit_repo.create("delete", "expense", user_id=user_id, resource_id=str(expense.id))
+        # Check in pharmacy purchases
+        from app.models.pharmacy_model import Purchase
+        from sqlalchemy import select
+        stmt = select(Purchase).where(Purchase.id == expense_id)
+        res = await self.db.execute(stmt)
+        p = res.scalar_one_or_none()
+        if p:
+            # We hard delete the purchase since there is no soft delete column on purchases
+            await self.db.delete(p)
+            await self.db.flush()
+            await self.audit_repo.create("delete", "pharmacy_purchase", user_id=user_id, resource_id=str(p.id))
+            return
+
+        raise NotFoundException(f"Expense with ID {expense_id} not found")
 
     async def get_expense_summary(self, start_date: date | None = None, end_date: date | None = None) -> ExpenseSummaryResponse:
         summary = await self.expense_repo.get_summary(start_date, end_date)

@@ -24,6 +24,14 @@ class UserRole:
     }
 
 
+from enum import Enum
+
+class OperationMode(str, Enum):
+    FIXED_HOURS = "fixed_hours"
+    TWENTY_FOUR_SEVEN = "twenty_four_seven"
+    SHIFT_BASED = "shift_based"
+    CUSTOM = "custom"
+
 class PermissionAction:
     CREATE = "create"
     READ = "read"
@@ -74,6 +82,7 @@ class PaymentMethod:
     UPI = "upi"
     BANK_TRANSFER = "bank_transfer"
     INSURANCE = "insurance"
+    CHEQUE = "cheque"
 
 
 class PharmacyStatus:

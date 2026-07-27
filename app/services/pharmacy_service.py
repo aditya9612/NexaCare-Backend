@@ -47,6 +47,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionUpdate,
     PurchaseCreate,
     PurchaseItemResponse,
+    PrescriptionStatusUpdate,
     PurchaseResponse,
     SalesReport,
     SupplierCreate,
@@ -321,11 +322,25 @@ class PharmacyService:
         page: int = 1,
         size: int = 20,
         status: str | None = None,
-        doctor_id: int | None = None
+        doctor_id: int | None = None,
+        patient_id: int | None = None,
+        appointment_id: int | None = None
     ):
         skip = (page - 1) * size
-        items = await self.prescription_repo.list_all(skip=skip, limit=size, status=status, doctor_id=doctor_id)
-        total = await self.prescription_repo.count_all(status=status, doctor_id=doctor_id)
+        items = await self.prescription_repo.list_all(
+            skip=skip,
+            limit=size,
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id
+        )
+        total = await self.prescription_repo.count_all(
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id
+        )
 
         return build_paginated_result(
             [self._prescription_response(p) for p in items],
@@ -378,6 +393,34 @@ class PharmacyService:
         prescription = await self.prescription_repo.get_by_id(prescription.id)
         await self.audit_repo.create("update", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
         return self._prescription_response(prescription)
+    
+    async def update_prescription_status(  
+        self,
+        prescription_id: int,
+        data: PrescriptionStatusUpdate,
+        user_id: int
+    ) -> PrescriptionResponse:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        prescription.status = data.status
+        if data.status.lower() in ("completed", "dispensed"):
+            prescription.dispensed_at = utc_now()
+        else:
+            prescription.dispensed_at = None
+
+        prescription = await self.prescription_repo.update(prescription)
+        prescription = await self.prescription_repo.get_by_id(prescription.id)
+        
+        await self.audit_repo.create(
+            "update_status",
+            "pharmacy_prescription",
+            user_id=user_id,
+            resource_id=str(prescription.id)
+        )
+        return self._prescription_response(prescription)
+
 
     async def delete_prescription(self, prescription_id: int, doctor_id: int, user_id: int) -> None:
         prescription = await self.prescription_repo.get_by_id(prescription_id)
@@ -945,23 +988,180 @@ class PharmacyService:
     async def get_dashboard_summary(
         self,
         time_filter: str = "7_days",
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> PharmacyDashboardResponse:
-        start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
+        return await self.get_dashboard_overview()
 
-        total_medicines = await self.dashboard_repo.get_total_medicines()
-        low_stock_alerts = await self.dashboard_repo.get_low_stock_count()
-        expired_alerts = await self.dashboard_repo.get_expired_alerts_count()
-        today_sales = await self.dashboard_repo.get_today_sales(start_dt, end_dt)
-        monthly_sales = await self.dashboard_repo.get_monthly_sales(start_dt, end_dt)
-        pending_purchases = await self.dashboard_repo.get_pending_purchases_count(start_dt, end_dt)
-        total_suppliers = await self.dashboard_repo.get_total_suppliers_count()
-        prescriptions_count = await self.dashboard_repo.get_prescriptions_count(start_dt, end_dt)
+    async def get_dashboard_overview(self) -> PharmacyDashboardResponse:
+        from datetime import timezone, timedelta, time, date as dt_date
+        from sqlalchemy import select, func, or_, cast, Date
+        
+        # Indian Standard Time (UTC+5:30) or local date.today()
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        today_ist = now_ist.date()
 
-        low_stock_items = await self.dashboard_repo.get_low_stock_items()
-        today_sales_trend = await self.dashboard_repo.get_today_sales_trend(start_dt, end_dt)
-        monthly_sales_trend = await self.dashboard_repo.get_monthly_sales_trend(start_dt, end_dt)
+        # 1. Total Medicines (active, i.e., is_deleted=False and is_active=True)
+        total_medicines = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True)
+            )
+        )) or 0
+
+        # 2. Low Stock Alerts (Medicine.stock_quantity <= Medicine.reorder_level)
+        low_stock_alerts = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.stock_quantity <= Medicine.reorder_level
+            )
+        )) or 0
+
+        # 3. Expired Alerts (Medicine.expiry_date < today)
+        expired_alerts = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.expiry_date.isnot(None),
+                Medicine.expiry_date < today_ist
+            )
+        )) or 0
+
+        # 4. Today Sales (Invoice/billing amount created today)
+        today_start = datetime.combine(today_ist, time.min)
+        tomorrow_start = today_start + timedelta(days=1)
+        today_sales = (await self.db.scalar(
+            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= today_start,
+                PharmacyInvoice.created_at < tomorrow_start
+            )
+        )) or 0.0
+
+        # 5. Monthly Sales (Invoice/billing amount for current month)
+        month_start = datetime.combine(today_ist.replace(day=1), time.min)
+        if month_start.month == 12:
+            next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            next_month_start = month_start.replace(month=month_start.month + 1)
+        monthly_sales = (await self.db.scalar(
+            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= month_start,
+                PharmacyInvoice.created_at < next_month_start
+            )
+        )) or 0.0
+
+        # 6. Pending Purchases (Count status: Pending, Ordered)
+        pending_purchases = (await self.db.scalar(
+            select(func.count(Purchase.id)).where(
+                Purchase.status.in_(["Pending", "Ordered"])
+            )
+        )) or 0
+
+        # 7. Total Suppliers (Count active suppliers)
+        total_suppliers = (await self.db.scalar(
+            select(func.count(Supplier.id)).where(
+                Supplier.is_deleted.is_(False),
+                Supplier.is_active.is_(True)
+            )
+        )) or 0
+
+        # 8. Prescriptions (Count active prescriptions pending to be dispensed)
+        prescriptions = (await self.db.scalar(
+            select(func.count(Prescription.id)).where(
+                Prescription.is_deleted.is_(False),
+                Prescription.status == "pending"
+            )
+        )) or 0
+
+        # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
+        low_stock_query = (
+            select(Medicine)
+            .where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.stock_quantity <= Medicine.reorder_level
+            )
+            .order_by(Medicine.stock_quantity.asc())
+            .limit(10)
+        )
+        low_stock_res = await self.db.execute(low_stock_query)
+        low_stock_items = [
+            {
+                "medicine_id": m.id,
+                "medicine_name": m.name,
+                "current_stock": m.stock_quantity,
+                "minimum_stock": m.reorder_level,
+                # Backward compatibility fields
+                "id": m.id,
+                "name": m.name,
+                "stock_quantity": m.stock_quantity,
+                "reorder_level": m.reorder_level,
+                "unit": m.unit or "Unit",
+                "status_label": f"{m.stock_quantity} Left" if m.stock_quantity > 0 else "Out of Stock"
+            }
+            for m in low_stock_res.scalars().all()
+        ]
+
+        # 10. Today Sales Trend (Hourly sales for today - DIALECT AGNOSTIC EXTRACT)
+        today_trend_query = (
+            select(
+                func.extract('hour', PharmacyInvoice.created_at).label("hr"),
+                func.sum(PharmacyInvoice.total_amount).label("amt")
+            )
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= today_start,
+                PharmacyInvoice.created_at < tomorrow_start
+            )
+            .group_by(func.extract('hour', PharmacyInvoice.created_at))
+            .order_by(func.extract('hour', PharmacyInvoice.created_at).asc())
+        )
+        today_trend_res = await self.db.execute(today_trend_query)
+        today_sales_trend = []
+        for row in today_trend_res.all():
+            hr_val = 0
+            if row.hr is not None:
+                try:
+                    hr_val = int(row.hr)
+                except (ValueError, TypeError):
+                    pass
+            today_sales_trend.append({
+                "hour": f"{hr_val:02d}",
+                "amount": float(row.amt or 0.0),
+                "label": f"{hr_val:02d}:00"
+            })
+
+        # 11. Monthly Sales Trend (Daily sales for current month - DIALECT AGNOSTIC CAST)
+        monthly_trend_query = (
+            select(
+                cast(PharmacyInvoice.created_at, Date).label("dt"),
+                func.sum(PharmacyInvoice.total_amount).label("amt")
+            )
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= month_start,
+                PharmacyInvoice.created_at < next_month_start
+            )
+            .group_by(cast(PharmacyInvoice.created_at, Date))
+            .order_by(cast(PharmacyInvoice.created_at, Date).asc())
+        )
+        monthly_trend_res = await self.db.execute(monthly_trend_query)
+        monthly_sales_trend = []
+        for row in monthly_trend_res.all():
+            dt_str = str(row.dt) if row.dt is not None else ""
+            monthly_sales_trend.append({
+                "date": dt_str,
+                "amount": float(row.amt or 0.0),
+                "label": dt_str
+            })
 
         return PharmacyDashboardResponse(
             total_medicines=total_medicines,
@@ -971,10 +1171,13 @@ class PharmacyService:
             monthly_sales=monthly_sales,
             pending_purchases=pending_purchases,
             total_suppliers=total_suppliers,
-            prescriptions_count=prescriptions_count,
+            prescriptions=prescriptions,
+            prescriptions_count=prescriptions,
+            expired_medicines_alerts=expired_alerts,
+            daily_sales=today_sales,
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
-            monthly_sales_trend=monthly_sales_trend,
+            monthly_sales_trend=monthly_sales_trend
         )
 
     async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:

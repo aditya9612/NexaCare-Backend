@@ -13,6 +13,21 @@ class DoctorRepository:
     def _base_query(self):
         return select(Doctor).outerjoin(Doctor.department).where(Doctor.is_deleted.is_(False))
 
+    async def get_doctor_hospital_id(self, doctor_id: int) -> int:
+        from app.models.user_model import User
+        from app.core.exceptions import NotFoundException
+        
+        result = await self.db.execute(
+            select(User.hospital_id)
+            .select_from(Doctor)
+            .join(User, Doctor.user_id == User.id)
+            .where(Doctor.id == doctor_id, Doctor.is_deleted.is_(False))
+        )
+        hospital_id = result.scalar_one_or_none()
+        if not hospital_id:
+            raise NotFoundException("Doctor is not associated with any hospital")
+        return hospital_id
+
     async def list_all(
         self,
         skip: int = 0,

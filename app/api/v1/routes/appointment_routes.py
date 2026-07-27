@@ -3,8 +3,9 @@ from typing import List
 
 from fastapi import APIRouter, Depends
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles
 from app.models.user_model import User
+from app.core.constants import UserRole
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentResponse,
@@ -13,6 +14,11 @@ from app.schemas.appointment_schema import (
     ConfirmRequest,
     RescheduleRequest,
     TokenResponse,
+    AppointmentCheckInResponse,
+    AppointmentCheckOutResponse,
+    QueueTokenResponse,
+    QueueStatusResponse,
+    ConfirmedVisitListResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -86,6 +92,36 @@ async def upcoming_appointments(
     return APIResponse(message="Upcoming appointments", data=appointments)
 
 
+@router.get("/confirmed-visits", response_model=APIResponse[ConfirmedVisitListResponse])
+async def confirmed_visits(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    limit: int = 20,
+    search: str | None = None,
+    doctor_id: int | None = None,
+    department_id: int | None = None,
+    appointment_date: date | None = None,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN)),
+):
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 20
+    elif limit > 100:
+        limit = 100
+        
+    result = await AppointmentService(db).get_confirmed_visit_list(
+        page=page,
+        limit=limit,
+        search=search,
+        doctor_id=doctor_id,
+        department_id=department_id,
+        appointment_date=appointment_date,
+    )
+    return APIResponse(message="Confirmed visits retrieved", data=result)
+
+
 @router.post("/reschedule", response_model=APIResponse[AppointmentResponse])
 async def reschedule_appointment(
     data: RescheduleRequest,
@@ -117,6 +153,142 @@ async def confirm_appointment(
 ):
     appointment = await AppointmentService(db).confirm(data, current_user.id)
     return APIResponse(message="Appointment confirmed", data=appointment)
+
+@router.patch("/{appointment_id}/check-in", response_model=APIResponse[AppointmentCheckInResponse])
+async def check_in_appointment(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).check_in(appointment_id, current_user.id)
+    return APIResponse(
+        message="Patient checked in successfully",
+        data=AppointmentCheckInResponse(
+            id=appointment.id,
+            appointment_number=appointment.appointment_number,
+            check_in_time=appointment.check_in_time,
+            appointment_status=appointment.appointment_status
+        )
+    )
+
+
+@router.patch("/{appointment_id}/check-out", response_model=APIResponse[AppointmentCheckOutResponse])
+async def check_out_appointment(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).check_out(appointment_id, current_user.id)
+    return APIResponse(
+        message="Patient checked out successfully",
+        data=AppointmentCheckOutResponse(
+            id=appointment.id,
+            appointment_number=appointment.appointment_number,
+            check_out_time=appointment.check_out_time,
+            appointment_status=appointment.appointment_status
+        )
+    )
+
+
+@router.post("/{appointment_id}/generate-token", response_model=APIResponse[QueueTokenResponse])
+async def generate_queue_token(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).generate_queue_token(appointment_id, current_user.id)
+    return APIResponse(
+        message="Queue token generated successfully",
+        data=QueueTokenResponse(
+            appointment_id=appointment.id,
+            queue_token=appointment.queue_token,
+            queue_status=appointment.queue_status
+        )
+    )
+
+
+@router.get("/queue", response_model=APIResponse[List[AppointmentResponse]])
+async def get_today_queue(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointments = await AppointmentService(db).get_today_queue()
+    return APIResponse(
+        message="Today's queue retrieved successfully",
+        data=[AppointmentResponse.model_validate(a) for a in appointments]
+    )
+
+
+@router.get("/queue/current", response_model=APIResponse[AppointmentResponse | None])
+async def get_current_queue(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).get_current_queue()
+    return APIResponse(
+        message="Current queue item retrieved successfully",
+        data=AppointmentResponse.model_validate(appointment) if appointment else None
+    )
+
+
+@router.patch("/queue/{appointment_id}/call", response_model=APIResponse[QueueStatusResponse])
+async def call_next_token(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).call_next_token(appointment_id, current_user.id)
+    return APIResponse(
+        message="Next token called successfully",
+        data=QueueStatusResponse(
+            appointment_id=appointment.id,
+            queue_token=appointment.queue_token,
+            queue_status=appointment.queue_status
+        )
+    )
+
+
+@router.patch("/queue/{appointment_id}/complete", response_model=APIResponse[QueueStatusResponse])
+async def complete_token(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).complete_token(appointment_id, current_user.id)
+    return APIResponse(
+        message="Token completed successfully",
+        data=QueueStatusResponse(
+            appointment_id=appointment.id,
+            queue_token=appointment.queue_token,
+            queue_status=appointment.queue_status
+        )
+    )
+
+
+@router.patch("/queue/{appointment_id}/skip", response_model=APIResponse[QueueStatusResponse])
+async def skip_token(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+):
+    appointment = await AppointmentService(db).skip_token(appointment_id, current_user.id)
+    return APIResponse(
+        message="Token skipped successfully",
+        data=QueueStatusResponse(
+            appointment_id=appointment.id,
+            queue_token=appointment.queue_token,
+            queue_status=appointment.queue_status
+        )
+    )
+
 
 @router.get("/{appointment_id}/token", response_model=APIResponse[TokenResponse])
 async def get_appointment_token(

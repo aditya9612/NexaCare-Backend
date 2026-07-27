@@ -185,3 +185,81 @@ class AppointmentRepository:
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_confirmed_appointments(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        search: str | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        appointment_date: date | None = None,
+    ) -> list[Appointment]:
+        from app.models.patient_model import Patient
+        from sqlalchemy.orm import joinedload
+        
+        query = select(Appointment).where(
+            Appointment.appointment_status == AppointmentStatus.CONFIRMED
+        )
+        
+        if search:
+            search_pattern = f"%{search.lower()}%"
+            query = query.join(Patient, Appointment.patient_id == Patient.id).where(
+                or_(
+                    func.lower(Patient.first_name).like(search_pattern),
+                    func.lower(Patient.last_name).like(search_pattern),
+                    func.lower(Appointment.appointment_number).like(search_pattern),
+                )
+            )
+            
+        if doctor_id:
+            query = query.where(Appointment.doctor_id == doctor_id)
+        if department_id:
+            query = query.where(Appointment.department_id == department_id)
+        if appointment_date:
+            query = query.where(Appointment.appointment_date == appointment_date)
+            
+        query = query.options(
+            joinedload(Appointment.patient),
+            joinedload(Appointment.doctor),
+            joinedload(Appointment.department)
+        ).order_by(
+            Appointment.appointment_date.asc(),
+            Appointment.appointment_time.asc()
+        )
+        
+        result = await self.db.execute(query.offset(skip).limit(limit))
+        return list(result.scalars().all())
+
+    async def count_confirmed_appointments(
+        self,
+        search: str | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        appointment_date: date | None = None,
+    ) -> int:
+        from app.models.patient_model import Patient
+        
+        query = select(func.count()).select_from(Appointment).where(
+            Appointment.appointment_status == AppointmentStatus.CONFIRMED
+        )
+        
+        if search:
+            search_pattern = f"%{search.lower()}%"
+            query = query.join(Patient, Appointment.patient_id == Patient.id).where(
+                or_(
+                    func.lower(Patient.first_name).like(search_pattern),
+                    func.lower(Patient.last_name).like(search_pattern),
+                    func.lower(Appointment.appointment_number).like(search_pattern),
+                )
+            )
+            
+        if doctor_id:
+            query = query.where(Appointment.doctor_id == doctor_id)
+        if department_id:
+            query = query.where(Appointment.department_id == department_id)
+        if appointment_date:
+            query = query.where(Appointment.appointment_date == appointment_date)
+            
+        return await self.db.scalar(query) or 0
+

@@ -65,19 +65,33 @@ class PatientRepository:
         last10 = indian_mobile_last10(phone)
         if not last10:
             return None
-        # Exact match first
-        result = await self.db.execute(self._base_query().where(Patient.phone == phone))
-        hit = result.scalar_one_or_none()
+        # Exact match first — prefer account holders (no guardian)
+        result = await self.db.execute(
+            self._base_query()
+            .where(Patient.phone == phone)
+            .order_by(Patient.guardian_patient_id.is_(None).desc(), Patient.id.asc())
+        )
+        hit = result.scalars().first()
         if hit:
             return hit
         # Match any stored format ending with same 10 digits
         result = await self.db.execute(
-            self._base_query().where(Patient.phone.is_not(None))
+            self._base_query()
+            .where(Patient.phone.is_not(None))
+            .order_by(Patient.guardian_patient_id.is_(None).desc(), Patient.id.asc())
         )
         for patient in result.scalars().all():
             if indian_mobile_last10(patient.phone) == last10:
                 return patient
         return None
+
+    async def list_dependents(self, guardian_patient_id: int) -> list[Patient]:
+        result = await self.db.execute(
+            self._base_query()
+            .where(Patient.guardian_patient_id == guardian_patient_id)
+            .order_by(Patient.id.asc())
+        )
+        return list(result.scalars().all())
 
     async def get_by_email(self, email: str) -> Patient | None:
         result = await self.db.execute(
@@ -226,3 +240,13 @@ class PatientRepository:
             select(PatientDocument).where(PatientDocument.patient_id == patient_id)
         )
         return list(result.scalars().all())
+
+    async def get_document(self, document_id: int) -> PatientDocument | None:
+        result = await self.db.execute(
+            select(PatientDocument).where(PatientDocument.id == document_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def delete_document(self, document: PatientDocument) -> None:
+        await self.db.delete(document)
+        await self.db.flush()

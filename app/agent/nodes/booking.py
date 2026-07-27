@@ -633,8 +633,7 @@ def process_select_slot(state: BookingCallState, digit: str) -> dict:
 
 async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     from app.models.appointment_model import Appointment
-    from app.models.patient_model import Patient
-    from app.repositories.patient_repository import PatientRepository
+    from app.services.voice_patient_resolver import VoicePatientResolver
     import random
     import string
 
@@ -647,47 +646,31 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     caller_number = state.get("from_number", "")
 
     try:
-        # ── Resolve or create patient record from caller's phone number ──
-        patient_repo = PatientRepository(db)
-        patient = await patient_repo.get_by_phone(caller_number) if caller_number else None
-
-        if not patient:
-            name_parts = patient_name.strip().split(maxsplit=1)
-            first_name = name_parts[0] if name_parts else "Patient"
-            last_name  = name_parts[1] if len(name_parts) > 1 else ""
-
-            patient_code = "PT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-            patient = Patient(
-                patient_code=patient_code,
-                first_name=first_name,
-                last_name=last_name,
-                phone=caller_number,
-                status="active",
-            )
-            patient = await patient_repo.create(patient)
-            logger.info(
-                f"[{state['call_sid']}] ✓ New patient created: "
-                f"id={patient.id} | {first_name} {last_name} | {caller_number}"
-            )
-        else:
-            logger.info(
-                f"[{state['call_sid']}] ✓ Existing patient matched: "
-                f"id={patient.id} | phone={caller_number}"
-            )
+        attendee, holder = await VoicePatientResolver(db).resolve_for_booking(
+            phone=caller_number,
+            spoken_name=patient_name,
+        )
+        logger.info(
+            f"[{state['call_sid']}] ✓ Resolved patients: "
+            f"attendee={attendee.id} holder={holder.id} spoken={patient_name!r}"
+        )
 
         appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
         appt = Appointment(
             appointment_number=appt_no,
-            patient_id=patient.id,
+            patient_id=attendee.id,
             doctor_id=doctor_id,
             department_id=None,
             appointment_date=slot["date"],
             appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
             appointment_status="scheduled",
             symptoms=state.get("problem_description"),
-            notes=f"Booked via AI Voice Agent. Patient: {patient_name} | Phone: {caller_number} | Lang: {lang}",
+            notes=(
+                f"Booked via AI Voice Agent. "
+                f"Patient: {patient_name} | Phone: {caller_number} | Lang: {lang} | "
+                f"Booked by patient_id={holder.id}"
+            ),
             consultation_type="in_person",
             reminder_sent=False,
             token_number=random.randint(1, 99),

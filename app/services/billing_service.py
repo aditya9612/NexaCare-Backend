@@ -83,7 +83,6 @@ class BillingService:
             status=invoice.status,
             due_date=invoice.created_at,
             notes=f"Pharmacy Invoice (Prescription ID: {invoice.prescription_id})",
-            insurance_id=None,
             invoice_path=None,
             appointment_id=None,
             items=bill_items,
@@ -123,6 +122,15 @@ class BillingService:
                 item.line_total = line_total
                 total_gst += gst_amt
             billing.gst_amount = round(total_gst, 2)
+            
+            # Recalculate the effective gst_rate for the bill
+            taxable = max(billing.subtotal - billing.discount_amount, 0.0)
+            if len(billing.items) == 1:
+                billing.gst_rate = billing.items[0].gst_rate
+            elif taxable > 0:
+                billing.gst_rate = round((billing.gst_amount / taxable) * 100, 2)
+            else:
+                billing.gst_rate = 0.0
         else:
             billing.gst_amount = totals["gst_amount"]
 
@@ -176,7 +184,7 @@ class BillingService:
             discount_amount=data.discount_amount,
             due_date=due_date,
             notes=data.notes,
-            insurance_id=data.insurance_id,
+            insurance_id=None,
             appointment_id=data.appointment_id,
             created_by=user_id,
         )
@@ -483,6 +491,17 @@ class BillingService:
             raise BadRequestException("Cannot collect payment on cancelled bill")
         if data.amount > billing.balance_amount:
             raise BadRequestException("Payment amount exceeds balance due")
+
+        # Defensive normalization
+        method = data.payment_method.strip().lower()
+        if method == "cheques":
+            method = "cheque"
+        data.payment_method = method
+
+        if data.transaction_ref is not None:
+            data.transaction_ref = data.transaction_ref.strip()
+            if not data.transaction_ref:
+                data.transaction_ref = None
 
         payment = Payment(
             billing_id=billing_id,

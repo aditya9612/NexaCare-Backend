@@ -49,19 +49,19 @@ async def lifespan(app: FastAPI):
                 logging.getLogger("nexacare").info(
                     f"ngrok tunnel: {public_url} -> 127.0.0.1:8000"
                 )
-                print(f"\n🌐 ngrok URL: {public_url}/agent/v1/voice/incoming")
+                print(f"\nngrok URL: {public_url}/agent/v1/voice/incoming")
                 print("   (forwarding to 127.0.0.1:8000 — this uvicorn process)\n")
             else:
-                print("⚠️  NGROK_AUTH_TOKEN not set — skipping ngrok tunnel")
+                print("NGROK_AUTH_TOKEN not set — skipping ngrok tunnel")
         except Exception as e:
-            print(f"⚠️  ngrok failed to start: {e}")
+            print(f"ngrok failed to start: {e}")
 
     # NOTE: Appointment reminders now run via Celery Beat, not in-process.
     # Start separately with:
     #   celery -A app.celery_app worker --loglevel=info
     #   celery -A app.celery_app beat --loglevel=info
 
-    print("\n✅ NexaCare API ready")
+    print("\nNexaCare API ready")
     print("   Docs:    http://localhost:8000/docs")
     print("   Health:  http://localhost:8000/health")
     print("   (Use localhost — browsers cannot open http://0.0.0.0:8000)\n")

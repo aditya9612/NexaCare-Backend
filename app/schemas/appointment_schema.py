@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 
@@ -27,6 +27,13 @@ class AppointmentUpdate(BaseSchema):
     notes: str | None = None
     consultation_type: str | None = None
 
+    @field_validator("appointment_time")
+    @classmethod
+    def validate_time_not_null(cls, v):
+        if v is None:
+            raise ValueError("appointment_time cannot be null. Omit the field if you do not want to update the appointment time.")
+        return v
+
 
 class AppointmentResponse(BaseSchema):
     id: int
@@ -45,6 +52,38 @@ class AppointmentResponse(BaseSchema):
     reminder_sent: bool
     created_at: datetime
     updated_at: datetime | None = None
+    
+    # Receptionist Queue fields
+    check_in_time: datetime | None = None
+    check_out_time: datetime | None = None
+    queue_token: str | None = None
+    queue_status: str | None = None
+
+
+class AppointmentCheckInResponse(BaseSchema):
+    id: int
+    appointment_number: str
+    check_in_time: datetime
+    appointment_status: str
+
+
+class AppointmentCheckOutResponse(BaseSchema):
+    id: int
+    appointment_number: str
+    check_out_time: datetime
+    appointment_status: str
+
+
+class QueueTokenResponse(BaseSchema):
+    appointment_id: int
+    queue_token: str
+    queue_status: str
+
+
+class QueueStatusResponse(BaseSchema):
+    appointment_id: int
+    queue_token: str | None = None
+    queue_status: str
 
 
 class TokenResponse(BaseSchema):
@@ -85,3 +124,22 @@ class AppointmentFilterQuery(BaseSchema):
 
 
 AppointmentListResponse = PaginatedResponse[AppointmentResponse]
+
+class ConfirmedVisitResponse(BaseSchema):
+    appointment_id: int
+    appointment_number: str
+    patient_id: int
+    patient_name: str
+    doctor_id: int
+    doctor_name: str
+    department_name: str | None = None
+    appointment_date: date
+    appointment_time: time
+    status: str
+    check_in_time: datetime | None = None
+    queue_token: str | None = None
+    queue_status: str | None = None
+
+
+ConfirmedVisitListResponse = PaginatedResponse[ConfirmedVisitResponse]  
+

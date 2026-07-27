@@ -38,7 +38,7 @@ from app.api.v1.routes import (
     hospital_voice_routes,
     notification_routes,
 )
-
+from app.api import settings
 
 api_router = APIRouter()
 
@@ -50,6 +50,7 @@ api_router.include_router(doctor_routes.router, prefix="/doctors", tags=["Doctor
 api_router.include_router(appointment_routes.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(dashboard_routes.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"])
+api_router.include_router(nurse_routes.singular_router, prefix="/nurse", tags=["Nurses"])
 api_router.include_router(staff_routes.router, prefix="/staff", tags=["Staff"])
 api_router.include_router(pharmacy_routes.router, prefix="/pharmacy", tags=["Pharmacy"])
 api_router.include_router(lab_routes.router, prefix="/lab", tags=["Lab"])
@@ -86,4 +87,4 @@ api_router.include_router(transaction_routes.router, prefix="/transactions", tag
 api_router.include_router(transaction_history_routes.router, prefix="/transaction-history", tags=["Transaction History"])
 api_router.include_router(clinical_record_router.router, prefix="/clinical-records", tags=["Clinical Records"])
 api_router.include_router(notification_routes.router, prefix="/notifications", tags=["Notifications"])
-
+api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])

@@ -53,5 +53,9 @@ celery_app.conf.update(
             "task": "app.tasks.reminder_tasks.process_doctor_appointment_reminders",
             "schedule": 300.0,
         },
+        "process-medication-reminders": {
+            "task": "app.tasks.reminder_tasks.process_medication_reminders",
+            "schedule": 60.0,
+        },
     },
 )

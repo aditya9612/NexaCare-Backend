@@ -86,14 +86,14 @@ class SampleCreate(BaseSchema):
     sample_type: str
     collection_date: datetime | None = None
     status: str = "pending"
-    volume: float | None = None
+    volume: str | None = None
     notes: str | None = None
 
 class SampleUpdate(BaseSchema):
     sample_type: str | None = None
     collection_date: datetime | None = None
     status: str | None = None
-    volume: float | None = None
+    volume: str | None = None
     notes: str | None = None
 
 class SampleResponse(BaseSchema):
@@ -105,7 +105,7 @@ class SampleResponse(BaseSchema):
     collection_date: datetime | None
     collected_by: int | None
     status: str
-    volume: float | None
+    volume: str | None
     notes: str | None
     created_at: datetime
 

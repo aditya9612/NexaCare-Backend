@@ -395,6 +395,14 @@ class IcuTelemetryService:
             alert = await self.alert_repo.create(alert)
             created.append(alert)
 
+            if severity == TelemetryAlertSeverity.CRITICAL and patient_id is not None:
+                from app.services.notification_service import NotificationService
+                await NotificationService(self.db).create_critical_patient_alert(
+                    patient_id=patient_id,
+                    message=f"ICU telemetry breach: {message}",
+                    reference_id=patient_id,
+                )
+
         return created
 
     def _check_vital_breach(

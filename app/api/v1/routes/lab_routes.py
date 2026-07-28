@@ -372,6 +372,20 @@ async def reject_lab_report(
     return APIResponse(message="Lab report rejected successfully.", data=report)
 
 
+@router.delete("/reports/{report_id}", response_model=APIResponse[MessageResponse])
+async def delete_lab_report(
+    report_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "delete")),
+):
+    await LabService(db).delete_report(report_id, current_user.id)
+    return APIResponse(
+        message="Lab report deleted successfully.",
+        data=MessageResponse(message="Deleted successfully"),
+    )
+
+
 @router.get("/reports/{report_id}/download")
 async def download_lab_report(
     report_id: int,

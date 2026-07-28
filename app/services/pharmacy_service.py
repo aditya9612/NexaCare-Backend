@@ -853,8 +853,6 @@ class PharmacyService:
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
-        for item in purchase_items:
-            await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
         
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
@@ -973,6 +971,46 @@ class PharmacyService:
             tx.is_deleted = True
             tx.deleted_at = utc_now()
             await self.db.flush()
+
+    async def receive_purchase_order(
+        self,
+        purchase_order_id: int,
+        current_user,
+    ) -> PurchaseResponse:
+        purchase = await self.purchase_repo.get_by_id(purchase_order_id)
+
+        if not purchase:
+            raise NotFoundException("Purchase not found")
+
+        if getattr(purchase, "is_deleted", False):
+            raise NotFoundException("Purchase not found")
+
+        current_status = purchase.status.lower() if purchase.status else ""
+        if current_status == "received":
+            raise BadRequestException("Purchase Order already received")
+
+        allowed_statuses = {"ordered", "pending", "partially_received"}
+        if current_status not in allowed_statuses:
+            raise BadRequestException("Invalid Purchase Order status")
+
+        purchase.status = "received"
+        purchase.received_at = utc_now()
+        purchase.received_by = current_user.id
+
+        for item in purchase.items:
+            await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+
+        await self.purchase_repo.update(purchase)
+
+        await self.audit_repo.create(
+            "receive",
+            "pharmacy_purchase",
+            user_id=current_user.id,
+            resource_id=str(purchase.id),
+        )
+
+        await self.db.flush()
+        return self._purchase_response(purchase)
 
     async def get_sales_report(self, period: str = "monthly") -> SalesReport:
         now = utc_now()

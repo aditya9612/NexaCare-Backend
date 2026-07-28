@@ -41,12 +41,21 @@ class AppointmentService:
         now_ist = datetime.now(ist_tz)
         today_ist = now_ist.date()
 
+        if appointment_time is not None:
+            if appointment_time.tzinfo is not None:
+                import datetime as dt_module
+                appt_dt = dt_module.datetime.combine(appointment_date, appointment_time)
+                appt_dt_ist = appt_dt.astimezone(ist_tz)
+                appointment_date = appt_dt_ist.date()
+                appointment_time = appt_dt_ist.time()
+
         if appointment_date < today_ist:
             raise BadRequestException("Cannot book or reschedule an appointment for a past date")
 
         if appointment_date == today_ist and appointment_time is not None:
-            now_time_ist = now_ist.time()
-            if appointment_time < now_time_ist:
+            appointment_time_naive = appointment_time.replace(tzinfo=None)
+            now_time_ist_naive = now_ist.time().replace(tzinfo=None)
+            if appointment_time_naive < now_time_ist_naive:
                 raise BadRequestException(
                     "Cannot book or reschedule an appointment for a past time slot today"
                 )

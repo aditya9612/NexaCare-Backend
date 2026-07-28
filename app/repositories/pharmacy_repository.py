@@ -566,6 +566,9 @@ class PurchaseRepository:
     async def get_by_id(self, purchase_id: int) -> Purchase | None:
         result = await self.db.execute(self._base_query().where(Purchase.id == purchase_id))
         return result.scalar_one_or_none()
+
+    async def get_purchase_order_by_id(self, purchase_id: int) -> Purchase | None:
+        return await self.get_by_id(purchase_id)
     
     async def create(self, purchase: Purchase, items: list[PurchaseItem]) -> Purchase:
         self.db.add(purchase)
@@ -581,6 +584,9 @@ class PurchaseRepository:
         await self.db.flush()
         await self.db.refresh(purchase)
         return purchase
+
+    async def update_purchase_order(self, purchase: Purchase) -> Purchase:
+        return await self.update(purchase)
 
     async def soft_delete(self, purchase: Purchase) -> None:
         purchase.is_deleted = True

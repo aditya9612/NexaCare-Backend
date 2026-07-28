@@ -193,6 +193,7 @@ async def list_available_doctors(
     "/medical-records",
     response_model=APIResponse[MedicalRecordResponse],
     status_code=201,
+    summary="Create Medical Record",
 )
 async def upload_report(
     db: DbSession,

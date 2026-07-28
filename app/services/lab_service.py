@@ -898,3 +898,11 @@ class LabService:
 
         return LabReportResponse.model_validate(report)
 
+    async def delete_report(self, report_id: int, user_id: int) -> None:
+        report = await self.report_repo.get_by_id(report_id)
+        if not report:
+            raise NotFoundException("Lab report not found")
+
+        await self.report_repo.delete(report)
+        await self.audit_repo.create("delete", "lab_report", user_id=user_id, resource_id=str(report_id))
+

@@ -430,6 +430,8 @@ class PurchaseResponse(BaseSchema):
     ordered_at: datetime
     received_at: datetime | None
     notes: str | None
+    created_by: int | None = None
+    received_by: int | None = None
     items: List[PurchaseItemResponse] = []
     created_at: datetime
 

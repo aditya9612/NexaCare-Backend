@@ -104,7 +104,7 @@ class BillingService:
             subtotal=subtotal,
             discount_percent=billing.discount_percent,
             discount_amount=billing.discount_amount,
-            gst_rate=billing.gst_rate,
+            gst_rate=billing.gst_rate if billing.gst_rate is not None else 18.0,
             tax_amount=billing.tax_amount,
         )
         billing.subtotal = totals["subtotal"]
@@ -124,11 +124,10 @@ class BillingService:
             billing.gst_amount = round(total_gst, 2)
             
             # Recalculate the effective gst_rate for the bill
-            taxable = max(billing.subtotal - billing.discount_amount, 0.0)
             if len(billing.items) == 1:
                 billing.gst_rate = billing.items[0].gst_rate
-            elif taxable > 0:
-                billing.gst_rate = round((billing.gst_amount / taxable) * 100, 2)
+            elif billing.subtotal > 0:
+                billing.gst_rate = round((billing.gst_amount / billing.subtotal) * 100, 2)
             else:
                 billing.gst_rate = 0.0
         else:

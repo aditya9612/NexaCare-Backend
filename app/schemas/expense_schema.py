@@ -152,8 +152,8 @@ class VendorPaymentCreate(BaseModel):
     @classmethod
     def validate_payment_method(cls, value: str) -> str:
         stripped = value.strip()
-        if stripped.lower() not in {"cash", "upi", "cheques"}:
-            raise ValueError("payment_method must be one of: cash, upi, cheques")
+        if stripped.lower() not in {"cash", "upi", "card", "cheque"}:
+            raise ValueError("payment_method must be one of: cash, upi, card, cheque")
         return stripped
 
 
@@ -168,8 +168,8 @@ class VendorPaymentUpdate(BaseModel):
     def validate_payment_method(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             stripped = value.strip()
-            if stripped.lower() not in {"cash", "upi", "cheques"}:
-                raise ValueError("payment_method must be one of: cash, upi, cheques")
+            if stripped.lower() not in {"cash", "upi", "card", "cheque"}:
+                raise ValueError("payment_method must be one of: cash, upi, card, cheque")
             return stripped
         return value
 

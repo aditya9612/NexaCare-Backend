@@ -124,3 +124,22 @@ class AppointmentFilterQuery(BaseSchema):
 
 
 AppointmentListResponse = PaginatedResponse[AppointmentResponse]
+
+class ConfirmedVisitResponse(BaseSchema):
+    appointment_id: int
+    appointment_number: str
+    patient_id: int
+    patient_name: str
+    doctor_id: int
+    doctor_name: str
+    department_name: str | None = None
+    appointment_date: date
+    appointment_time: time
+    status: str
+    check_in_time: datetime | None = None
+    queue_token: str | None = None
+    queue_status: str | None = None
+
+
+ConfirmedVisitListResponse = PaginatedResponse[ConfirmedVisitResponse]  
+

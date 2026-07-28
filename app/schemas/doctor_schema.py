@@ -61,7 +61,7 @@ def validate_phone_number_india(v: str | None, required: bool = True) -> str | N
         return v
     # Use common mobile validator, which returns exactly 10 digits
     res = common_validate_mobile(v, "Phone number")
-    return "+91" + res
+    return res
 
 
 def validate_password_strength(v: str) -> str:

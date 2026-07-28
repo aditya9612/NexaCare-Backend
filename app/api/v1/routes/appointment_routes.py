@@ -18,6 +18,7 @@ from app.schemas.appointment_schema import (
     AppointmentCheckOutResponse,
     QueueTokenResponse,
     QueueStatusResponse,
+    ConfirmedVisitListResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -89,6 +90,36 @@ async def upcoming_appointments(
 ):
     appointments = await AppointmentService(db).get_upcoming(limit)
     return APIResponse(message="Upcoming appointments", data=appointments)
+
+
+@router.get("/confirmed-visits", response_model=APIResponse[ConfirmedVisitListResponse])
+async def confirmed_visits(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    limit: int = 20,
+    search: str | None = None,
+    doctor_id: int | None = None,
+    department_id: int | None = None,
+    appointment_date: date | None = None,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN)),
+):
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 20
+    elif limit > 100:
+        limit = 100
+        
+    result = await AppointmentService(db).get_confirmed_visit_list(
+        page=page,
+        limit=limit,
+        search=search,
+        doctor_id=doctor_id,
+        department_id=department_id,
+        appointment_date=appointment_date,
+    )
+    return APIResponse(message="Confirmed visits retrieved", data=result)
 
 
 @router.post("/reschedule", response_model=APIResponse[AppointmentResponse])

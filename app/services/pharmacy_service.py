@@ -47,6 +47,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionUpdate,
     PurchaseCreate,
     PurchaseItemResponse,
+    PrescriptionStatusUpdate,
     PurchaseResponse,
     SalesReport,
     SupplierCreate,
@@ -392,6 +393,34 @@ class PharmacyService:
         prescription = await self.prescription_repo.get_by_id(prescription.id)
         await self.audit_repo.create("update", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
         return self._prescription_response(prescription)
+    
+    async def update_prescription_status(  
+        self,
+        prescription_id: int,
+        data: PrescriptionStatusUpdate,
+        user_id: int
+    ) -> PrescriptionResponse:
+        prescription = await self.prescription_repo.get_by_id(prescription_id)
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        prescription.status = data.status
+        if data.status.lower() in ("completed", "dispensed"):
+            prescription.dispensed_at = utc_now()
+        else:
+            prescription.dispensed_at = None
+
+        prescription = await self.prescription_repo.update(prescription)
+        prescription = await self.prescription_repo.get_by_id(prescription.id)
+        
+        await self.audit_repo.create(
+            "update_status",
+            "pharmacy_prescription",
+            user_id=user_id,
+            resource_id=str(prescription.id)
+        )
+        return self._prescription_response(prescription)
+
 
     async def delete_prescription(self, prescription_id: int, doctor_id: int, user_id: int) -> None:
         prescription = await self.prescription_repo.get_by_id(prescription_id)

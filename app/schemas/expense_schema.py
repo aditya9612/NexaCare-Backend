@@ -152,8 +152,8 @@ class VendorPaymentCreate(BaseModel):
     @classmethod
     def validate_payment_method(cls, value: str) -> str:
         stripped = value.strip()
-        if len(stripped) < 1:
-            raise ValueError("payment_method cannot be empty or only spaces")
+        if stripped.lower() not in {"cash", "upi", "cheques"}:
+            raise ValueError("payment_method must be one of: cash, upi, cheques")
         return stripped
 
 
@@ -168,8 +168,8 @@ class VendorPaymentUpdate(BaseModel):
     def validate_payment_method(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             stripped = value.strip()
-            if len(stripped) < 1:
-                raise ValueError("payment_method cannot be empty or only spaces")
+            if stripped.lower() not in {"cash", "upi", "cheques"}:
+                raise ValueError("payment_method must be one of: cash, upi, cheques")
             return stripped
         return value
 

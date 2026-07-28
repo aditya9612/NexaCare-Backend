@@ -81,6 +81,7 @@ class PaymentMethod:
     UPI = "upi"
     BANK_TRANSFER = "bank_transfer"
     INSURANCE = "insurance"
+    CHEQUE = "cheque"
 
 
 class PharmacyStatus:

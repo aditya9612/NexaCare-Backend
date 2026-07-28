@@ -250,6 +250,11 @@ class PrescriptionUpdate(BaseSchema):
     items: Optional[List[PrescriptionItemCreate]] = None
 
 
+class PrescriptionStatusUpdate(BaseSchema):
+    status: str = Field(..., min_length=1, description="New status of the prescription")
+
+
+
 class PharmacyInvoiceItemCreate(BaseSchema):
     medicine_id: int = Field(..., gt=0)
     quantity: int = Field(1, ge=1)

@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import BillingStatus
+from app.core.constants import AppointmentStatus, BillingStatus
 from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
 from app.repositories.audit_repository import AuditRepository
@@ -104,7 +104,7 @@ class BillingService:
             subtotal=subtotal,
             discount_percent=billing.discount_percent,
             discount_amount=billing.discount_amount,
-            gst_rate=billing.gst_rate,
+            gst_rate=billing.gst_rate if billing.gst_rate is not None else 18.0,
             tax_amount=billing.tax_amount,
         )
         billing.subtotal = totals["subtotal"]
@@ -124,11 +124,10 @@ class BillingService:
             billing.gst_amount = round(total_gst, 2)
             
             # Recalculate the effective gst_rate for the bill
-            taxable = max(billing.subtotal - billing.discount_amount, 0.0)
             if len(billing.items) == 1:
                 billing.gst_rate = billing.items[0].gst_rate
-            elif taxable > 0:
-                billing.gst_rate = round((billing.gst_amount / taxable) * 100, 2)
+            elif billing.subtotal > 0:
+                billing.gst_rate = round((billing.gst_amount / billing.subtotal) * 100, 2)
             else:
                 billing.gst_rate = 0.0
         else:
@@ -168,6 +167,16 @@ class BillingService:
             if appointment.patient_id != data.patient_id:
                 raise BadRequestException("Appointment does not belong to the supplied patient")
 
+            if appointment.appointment_status == AppointmentStatus.CANCELLED:
+                raise BadRequestException(
+                    "Billing cannot be created for a cancelled appointment."
+                )
+
+            if appointment.appointment_status != AppointmentStatus.COMPLETED:
+                raise BadRequestException(
+                    "Billing can only be created for completed appointments."
+                )
+
             existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
             if existing_billing:
                 raise ConflictException("Billing already exists for this patient and appointment.")
@@ -177,9 +186,18 @@ class BillingService:
             from datetime import timezone as py_timezone
             due_date = due_date.astimezone(py_timezone.utc).replace(tzinfo=None)
 
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        from app.utils.helpers import generate_code
+
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user.hospital_id if user and user.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
         billing = Billing(
             patient_id=data.patient_id,
-            bill_number=generate_bill_number(),
+            bill_number=generate_code(billing_settings.get("invoice_prefix", "BIL")),
             discount_percent=data.discount_percent,
             discount_amount=data.discount_amount,
             due_date=due_date,
@@ -431,6 +449,14 @@ class BillingService:
                 from datetime import timezone as py_timezone
                 dump["due_date"] = dt.astimezone(py_timezone.utc).replace(tzinfo=None)
 
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user.hospital_id if user and user.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
         if "items" in dump:
             items_data = dump.pop("items")
             # Remove old items
@@ -440,7 +466,7 @@ class BillingService:
                     desc = item_data.get("description")
                     qty = item_data.get("quantity", 1)
                     price = item_data.get("unit_price")
-                    gst_r = item_data.get("gst_rate", 18.0)
+                    gst_r = item_data.get("gst_rate", billing_settings.get("gst_percentage", 18.0))
                     item_t = item_data.get("item_type", "service")
                     _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
                     item = BillItem(

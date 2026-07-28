@@ -480,19 +480,31 @@ class PharmacyService:
             ))
             await self.medicine_repo.update_stock(item_data.medicine_id, -item_data.quantity)
 
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        from app.utils.helpers import generate_code
+
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
+        payment_mode_val = data.payment_mode or billing_settings.get("default_payment_mode", "Cash")
+        tax_percentage_val = data.tax_percentage if data.tax_percentage else billing_settings.get("gst_percentage", 0.0)
+
         discount_amount = round((subtotal * data.discount_percentage) / 100, 2)
-        tax_amount = round((subtotal - discount_amount) * data.tax_percentage / 100, 2)
+        tax_amount = round((subtotal - discount_amount) * tax_percentage_val / 100, 2)
         gst_amount = tax_amount
         total = round(subtotal - discount_amount + tax_amount, 2)
         invoice = PharmacyInvoice(
-            invoice_number=generate_pharmacy_invoice_number(),
+            invoice_number=generate_code(billing_settings.get("receipt_prefix", "PHR")),
             patient_id=data.patient_id,
             prescription_id=data.prescription_id,
-            payment_mode=data.payment_mode or "Cash",
+            payment_mode=payment_mode_val,
             subtotal=subtotal,
             discount_percentage=data.discount_percentage,
             discount_amount=discount_amount,
-            tax_percentage=data.tax_percentage,
+            tax_percentage=tax_percentage_val,
             tax_amount=tax_amount,
             gst_amount=gst_amount,
             total_amount=total,
@@ -853,8 +865,6 @@ class PharmacyService:
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
-        for item in purchase_items:
-            await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
         
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
@@ -973,6 +983,46 @@ class PharmacyService:
             tx.is_deleted = True
             tx.deleted_at = utc_now()
             await self.db.flush()
+
+    async def receive_purchase_order(
+        self,
+        purchase_order_id: int,
+        current_user,
+    ) -> PurchaseResponse:
+        purchase = await self.purchase_repo.get_by_id(purchase_order_id)
+
+        if not purchase:
+            raise NotFoundException("Purchase not found")
+
+        if getattr(purchase, "is_deleted", False):
+            raise NotFoundException("Purchase not found")
+
+        current_status = purchase.status.lower() if purchase.status else ""
+        if current_status == "received":
+            raise BadRequestException("Purchase Order already received")
+
+        allowed_statuses = {"ordered", "pending", "partially_received"}
+        if current_status not in allowed_statuses:
+            raise BadRequestException("Invalid Purchase Order status")
+
+        purchase.status = "received"
+        purchase.received_at = utc_now()
+        purchase.received_by = current_user.id
+
+        for item in purchase.items:
+            await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+
+        await self.purchase_repo.update(purchase)
+
+        await self.audit_repo.create(
+            "receive",
+            "pharmacy_purchase",
+            user_id=current_user.id,
+            resource_id=str(purchase.id),
+        )
+
+        await self.db.flush()
+        return self._purchase_response(purchase)
 
     async def get_sales_report(self, period: str = "monthly") -> SalesReport:
         now = utc_now()

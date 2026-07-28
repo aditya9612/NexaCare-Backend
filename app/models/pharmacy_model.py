@@ -125,6 +125,7 @@ class Purchase(Base, TimestampMixin):
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    received_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     items: Mapped[list["PurchaseItem"]] = relationship(back_populates="purchase", cascade="all, delete-orphan")
     supplier: Mapped["Supplier"] = relationship()

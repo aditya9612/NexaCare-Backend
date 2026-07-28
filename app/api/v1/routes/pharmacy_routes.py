@@ -440,6 +440,22 @@ async def delete_purchase(
     return APIResponse(
         message="Purchase deleted",
         data=MessageResponse(message="Soft deleted"),
+    )
+
+
+@router.patch("/purchases/{purchase_id}/receive", response_model=APIResponse[PurchaseResponse])
+async def receive_purchase_order(
+    purchase_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    purchase = await PharmacyService(db).receive_purchase_order(
+        purchase_id, current_user
+    )
+    return APIResponse(
+        message="Purchase order received and stock updated",
+        data=purchase,
     )    
 
 

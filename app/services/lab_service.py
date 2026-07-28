@@ -912,35 +912,11 @@ class LabService:
 
         return LabReportResponse.model_validate(report)
 
-
-    async def update_doctor_remarks(
-        self,
-        report_id: int,
-        data,
-        user_id: int,
-    ) -> LabReportResponse:
-        from app.models.doctor_model import Doctor
-        from app.models.lab_model import LabReport
-        doctor_result = await self.db.execute(
-            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
-        )
-        doctor = doctor_result.scalar_one_or_none()
-        if not doctor:
-            raise ForbiddenException("Doctor profile not found")
-
+    async def delete_report(self, report_id: int, user_id: int) -> None:
         report = await self.report_repo.get_by_id(report_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
-        order = await self.order_repo.get_by_id(report.test_order_id)
-        if not order:
-            raise NotFoundException("Test order not found")
-
-        if order.doctor_id != doctor.id:
-            raise ForbiddenException("You can only add remarks to reports assigned to you")
-
-        report.remarks = data.remarks
-        await self.report_repo.update(report)
-        await self.audit_repo.create("update", "lab_report_remarks", user_id=user_id, resource_id=str(report.id))
-        return LabReportResponse.model_validate(report)
+        await self.report_repo.delete(report)
+        await self.audit_repo.create("delete", "lab_report", user_id=user_id, resource_id=str(report_id))
 

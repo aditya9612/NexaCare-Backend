@@ -369,6 +369,10 @@ class LabReportRepository:
         await self.db.refresh(report)
         return report
 
+    async def delete(self, report: LabReport) -> None:
+        await self.db.delete(report)
+        await self.db.flush()
+
     async def reject_report(
         self,
         report_id: int,

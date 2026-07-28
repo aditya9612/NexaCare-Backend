@@ -516,6 +516,22 @@ class NursePatientAssignmentRepository:
             query = query.where(NursePatientAssignment.patient_status == patient_status)
         return await self.db.scalar(query) or 0
 
+    async def create(self, assignment: NursePatientAssignment) -> NursePatientAssignment:
+        self.db.add(assignment)
+        await self.db.flush()
+        await self.db.refresh(assignment)
+        return assignment
+
+    async def get_active_assignment(self, nurse_id: int, patient_id: int) -> NursePatientAssignment | None:
+        result = await self.db.execute(
+            select(NursePatientAssignment).where(
+                NursePatientAssignment.nurse_id == nurse_id,
+                NursePatientAssignment.patient_id == patient_id,
+                NursePatientAssignment.status == "Active"
+            )
+        )
+        return result.scalar_one_or_none()
+
 
 class NurseNotificationRepository:
     def __init__(self, db: AsyncSession):
@@ -671,6 +687,12 @@ class NurseTaskRepository:
         return result.scalar_one_or_none()
 
     async def update(self, task: NurseTask) -> NurseTask:
+        await self.db.flush()
+        await self.db.refresh(task)
+        return task
+
+    async def create(self, task: NurseTask) -> NurseTask:
+        self.db.add(task)
         await self.db.flush()
         await self.db.refresh(task)
         return task

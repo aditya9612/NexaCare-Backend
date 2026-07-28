@@ -5,6 +5,7 @@ from app.models.hospital_setting import HospitalSetting
 from app.models.notification_setting import NotificationSetting
 from app.models.user_preference import UserPreference
 from app.models.appointment_setting import AppointmentSetting
+from app.models.billing_setting import BillingSetting
 
 
 class HospitalSettingRepository:
@@ -90,6 +91,28 @@ class AppointmentSettingsRepository:
         return result.scalar_one_or_none()
 
     async def update(self, setting: AppointmentSetting) -> AppointmentSetting:
+        await self.db.flush()
+        await self.db.refresh(setting)
+        return setting
+
+
+class BillingSettingsRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def create(self, setting: BillingSetting) -> BillingSetting:
+        self.db.add(setting)
+        await self.db.flush()
+        await self.db.refresh(setting)
+        return setting
+
+    async def get_by_hospital_id(self, hospital_id: int) -> BillingSetting | None:
+        result = await self.db.execute(
+            select(BillingSetting).where(BillingSetting.hospital_id == hospital_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update(self, setting: BillingSetting) -> BillingSetting:
         await self.db.flush()
         await self.db.refresh(setting)
         return setting

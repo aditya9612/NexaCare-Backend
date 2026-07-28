@@ -15,7 +15,7 @@ class VendorRepository:
         query = self._base_query()
         if vendor_type is not None:
             query = query.where(Vendor.vendor_type == vendor_type)
-        query = query.order_by(Vendor.name.asc())
+        query = query.order_by(Vendor.created_at.desc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 

@@ -430,6 +430,8 @@ class PurchaseResponse(BaseSchema):
     ordered_at: datetime
     received_at: datetime | None
     notes: str | None
+    created_by: int | None = None
+    received_by: int | None = None
     items: List[PurchaseItemResponse] = []
     created_at: datetime
 
@@ -458,12 +460,7 @@ class SalesReport(BaseSchema):
     top_medicines: List[dict]
 
 
-class PharmacyDashboardResponse(BaseSchema):
-    total_medicines: int
-    low_stock_alerts: int
-    expired_medicines_alerts: int
-    daily_sales: float
-    monthly_sales: float
+
 
 
 class DailyStockDeduction(BaseSchema):
@@ -531,6 +528,7 @@ class PharmacyDashboardResponse(BaseSchema):
     expired_alerts: int
     expired_subtext: str = "Near expiry and expired"
     today_sales: float
+    daily_sales: float | None = None
     today_sales_subtext: str = "Paid invoices only"
     monthly_sales: float
     monthly_sales_subtext: str = "Current month revenue"
@@ -538,6 +536,7 @@ class PharmacyDashboardResponse(BaseSchema):
     pending_purchases_subtext: str = "Awaiting completion"
     total_suppliers: int
     total_suppliers_subtext: str = "Active + inactive partners"
+    expired_medicines_alerts: int | None = None
     prescriptions: int | None = None
     prescriptions_count: int | None = None
     prescriptions_subtext: str = "Today and backlog queue"

@@ -1085,7 +1085,7 @@ class PharmacyService:
         today_sales = (await self.db.scalar(
             select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
                 PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.status == "dispensed",
                 PharmacyInvoice.created_at >= today_start,
                 PharmacyInvoice.created_at < tomorrow_start
             )
@@ -1100,7 +1100,7 @@ class PharmacyService:
         monthly_sales = (await self.db.scalar(
             select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
                 PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.status == "dispensed",
                 PharmacyInvoice.created_at >= month_start,
                 PharmacyInvoice.created_at < next_month_start
             )
@@ -1116,8 +1116,7 @@ class PharmacyService:
         # 7. Total Suppliers (Count active suppliers)
         total_suppliers = (await self.db.scalar(
             select(func.count(Supplier.id)).where(
-                Supplier.is_deleted.is_(False),
-                Supplier.is_active.is_(True)
+                Supplier.is_deleted.is_(False)
             )
         )) or 0
 
@@ -1166,7 +1165,7 @@ class PharmacyService:
             )
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.status == "dispensed",
                 PharmacyInvoice.created_at >= today_start,
                 PharmacyInvoice.created_at < tomorrow_start
             )
@@ -1196,7 +1195,7 @@ class PharmacyService:
             )
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.status == "dispensed",
                 PharmacyInvoice.created_at >= month_start,
                 PharmacyInvoice.created_at < next_month_start
             )
@@ -1212,6 +1211,9 @@ class PharmacyService:
                 "amount": float(row.amt or 0.0),
                 "label": dt_str
             })
+
+        today_sales = round(float(today_sales or 0.0), 2)
+        monthly_sales = round(float(monthly_sales or 0.0), 2)
 
         return PharmacyDashboardResponse(
             total_medicines=total_medicines,

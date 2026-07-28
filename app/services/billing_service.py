@@ -178,9 +178,18 @@ class BillingService:
             from datetime import timezone as py_timezone
             due_date = due_date.astimezone(py_timezone.utc).replace(tzinfo=None)
 
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        from app.utils.helpers import generate_code
+
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user.hospital_id if user and user.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
         billing = Billing(
             patient_id=data.patient_id,
-            bill_number=generate_bill_number(),
+            bill_number=generate_code(billing_settings.get("invoice_prefix", "BIL")),
             discount_percent=data.discount_percent,
             discount_amount=data.discount_amount,
             due_date=due_date,
@@ -432,6 +441,14 @@ class BillingService:
                 from datetime import timezone as py_timezone
                 dump["due_date"] = dt.astimezone(py_timezone.utc).replace(tzinfo=None)
 
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user.hospital_id if user and user.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
         if "items" in dump:
             items_data = dump.pop("items")
             # Remove old items
@@ -441,7 +458,7 @@ class BillingService:
                     desc = item_data.get("description")
                     qty = item_data.get("quantity", 1)
                     price = item_data.get("unit_price")
-                    gst_r = item_data.get("gst_rate", 18.0)
+                    gst_r = item_data.get("gst_rate", billing_settings.get("gst_percentage", 18.0))
                     item_t = item_data.get("item_type", "service")
                     _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
                     item = BillItem(

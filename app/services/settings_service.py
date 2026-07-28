@@ -10,11 +10,13 @@ from app.models.hospital_setting import HospitalSetting
 from app.models.notification_setting import NotificationSetting
 from app.models.user_preference import UserPreference
 from app.models.appointment_setting import AppointmentSetting
+from app.models.billing_setting import BillingSetting
 from app.repositories.settings_repository import (
     HospitalSettingRepository,
     NotificationSettingRepository,
     UserPreferenceRepository,
     AppointmentSettingsRepository,
+    BillingSettingsRepository,
 )
 from app.utils.redis_service import cache_delete, cache_get, cache_set
 
@@ -28,6 +30,7 @@ class SettingsService:
         self.notification_repo = NotificationSettingRepository(db)
         self.user_repo = UserPreferenceRepository(db)
         self.appointment_repo = AppointmentSettingsRepository(db)
+        self.billing_repo = BillingSettingsRepository(db)
 
     def _serialize(self, record) -> dict:
         """Helper to serialize SQLAlchemy models for Redis caching and API returns."""
@@ -304,4 +307,38 @@ class SettingsService:
             hospital_id=hospital_id,
             cache_key=f"appointment_settings:{hospital_id}",
             get_method=self.get_appointment_settings
+        )
+
+    # ---------------------------------------------------------
+    # BILLING SETTINGS
+    # ---------------------------------------------------------
+    def _default_billing_setting(self, hospital_id: int) -> BillingSetting:
+        return BillingSetting(
+            hospital_id=hospital_id
+        )
+
+    async def get_billing_settings(self, hospital_id: int) -> dict:
+        if not settings.ENABLE_SETTINGS:
+            return self._serialize(self._default_billing_setting(hospital_id))
+
+        return await self._get_with_fallback(
+            cache_key=f"billing_settings:{hospital_id}",
+            repo=self.billing_repo,
+            entity_id=hospital_id,
+            fallback_method=self._default_billing_setting
+        )
+
+    async def update_billing_settings(self, hospital_id: int, update_data: dict, updated_by_user_id: int) -> dict:
+        if not settings.ENABLE_SETTINGS:
+            return self._serialize(self._default_billing_setting(hospital_id))
+
+        return await self._update_with_audit(
+            repo=self.billing_repo,
+            entity_id=hospital_id,
+            update_data=update_data,
+            category="Billing Settings",
+            user_id=updated_by_user_id,
+            hospital_id=hospital_id,
+            cache_key=f"billing_settings:{hospital_id}",
+            get_method=self.get_billing_settings
         )

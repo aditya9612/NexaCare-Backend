@@ -63,6 +63,7 @@ from app.models.hospital_voice_model import (
 from app.models.hospital_setting import HospitalSetting
 from app.models.user_preference import UserPreference
 from app.models.notification_setting import NotificationSetting
+from app.models.billing_setting import BillingSetting
 
 __all__ = [
     "Notification",
@@ -159,4 +160,5 @@ __all__ = [
     "HospitalSetting",
     "UserPreference",
     "NotificationSetting",
+    "BillingSetting",
 ]

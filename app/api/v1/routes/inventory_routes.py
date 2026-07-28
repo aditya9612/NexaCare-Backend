@@ -16,6 +16,7 @@ from app.schemas.inventory_schema import (
     WarehouseCreate,
     WarehouseResponse,
     WarehouseUpdate,
+    InventoryDashboardResponse,
 )
 from app.services.inventory_service import InventoryService
 from app.utils.pagination import PaginatedResult
@@ -248,3 +249,14 @@ async def consumption_report(
 ):
     report = await InventoryService(db).get_consumption_report(period=period)
     return APIResponse(message="Consumption report", data=report)
+
+
+@router.get("/dashboard", response_model=APIResponse[InventoryDashboardResponse])
+async def get_inventory_dashboard(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "read")),
+):
+    dashboard_data = await InventoryService(db).get_dashboard_summary()
+    return APIResponse(message="Inventory dashboard stats retrieved", data=dashboard_data)
+

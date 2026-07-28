@@ -480,19 +480,31 @@ class PharmacyService:
             ))
             await self.medicine_repo.update_stock(item_data.medicine_id, -item_data.quantity)
 
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        from app.utils.helpers import generate_code
+
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
+        payment_mode_val = data.payment_mode or billing_settings.get("default_payment_mode", "Cash")
+        tax_percentage_val = data.tax_percentage if data.tax_percentage else billing_settings.get("gst_percentage", 0.0)
+
         discount_amount = round((subtotal * data.discount_percentage) / 100, 2)
-        tax_amount = round((subtotal - discount_amount) * data.tax_percentage / 100, 2)
+        tax_amount = round((subtotal - discount_amount) * tax_percentage_val / 100, 2)
         gst_amount = tax_amount
         total = round(subtotal - discount_amount + tax_amount, 2)
         invoice = PharmacyInvoice(
-            invoice_number=generate_pharmacy_invoice_number(),
+            invoice_number=generate_code(billing_settings.get("receipt_prefix", "PHR")),
             patient_id=data.patient_id,
             prescription_id=data.prescription_id,
-            payment_mode=data.payment_mode or "Cash",
+            payment_mode=payment_mode_val,
             subtotal=subtotal,
             discount_percentage=data.discount_percentage,
             discount_amount=discount_amount,
-            tax_percentage=data.tax_percentage,
+            tax_percentage=tax_percentage_val,
             tax_amount=tax_amount,
             gst_amount=gst_amount,
             total_amount=total,

@@ -13,6 +13,10 @@ from app.schemas.appointment_setting_schema import (
     AppointmentSettingsResponse,
     AppointmentSettingsUpdate,
 )
+from app.schemas.billing_setting_schema import (
+    BillingSettingResponse,
+    BillingSettingUpdate,
+)
 
 from app.core.exceptions import ForbiddenException
 from app.core.constants import UserRole
@@ -174,6 +178,38 @@ async def update_appointment_settings(hospital_id: int, payload: AppointmentSett
 
     service = SettingsService(db)
     return await service.update_appointment_settings(
+        hospital_id, 
+        payload.model_dump(exclude_unset=True),
+        updated_by_user_id=current_user.id
+    )
+
+# ---------------------------------------------------------
+# BILLING SETTINGS
+# ---------------------------------------------------------
+@router.get(
+    "/billing/{hospital_id}",
+    response_model=BillingSettingResponse,
+    summary="Get Billing Settings",
+    description="Retrieve the billing configuration for a specific hospital.",
+    dependencies=[Depends(require_permission("settings", "read"))]
+)
+async def get_billing_settings(hospital_id: int, db: DbSession, current_user: CurrentUser):
+    _check_hospital_access(hospital_id, current_user)
+    service = SettingsService(db)
+    return await service.get_billing_settings(hospital_id)
+
+
+@router.patch(
+    "/billing/{hospital_id}",
+    response_model=BillingSettingResponse,
+    summary="Update Billing Settings",
+    description="Update the billing configuration for a specific hospital.",
+    dependencies=[Depends(require_permission("settings", "update"))]
+)
+async def update_billing_settings(hospital_id: int, payload: BillingSettingUpdate, db: DbSession, current_user: CurrentUser):
+    _check_hospital_access(hospital_id, current_user)
+    service = SettingsService(db)
+    return await service.update_billing_settings(
         hospital_id, 
         payload.model_dump(exclude_unset=True),
         updated_by_user_id=current_user.id

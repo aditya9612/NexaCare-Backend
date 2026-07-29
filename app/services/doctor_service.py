@@ -105,6 +105,19 @@ class DoctorService:
 
         counts = await self.repo.get_doctor_counts()
 
+        if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            from app.models.staff_model import Staff
+            from sqlalchemy import select
+            result = await self.db.execute(
+                select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+
         if current_user.role and current_user.role.name == UserRole.DOCTOR:
             doctor = await self.repo.get_by_user_id(current_user.id)
             if not doctor:

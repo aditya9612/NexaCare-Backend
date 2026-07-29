@@ -59,10 +59,10 @@ async def list_lab_tests(
 
     service = LabService(db)
     if q:
-        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id)
+        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id, current_user=current_user)
     else:
         result = await service.list_tests(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id, current_user=current_user
         )
     return APIResponse(message="Lab tests retrieved", data=result)
 

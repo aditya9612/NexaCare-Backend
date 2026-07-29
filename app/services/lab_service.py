@@ -6,7 +6,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
+from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus, UserRole
 from app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException, ConflictException
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
 from app.models.staff_model import Staff
@@ -97,17 +97,43 @@ class LabService:
     async def list_tests(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, doctor_id: int | None = None,
+        current_user = None
     ):
+        department_id = None
+        if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            result = await self.db.execute(
+                select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+
         skip = (page - 1) * size
         items = await self.test_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
-                                               sort_order=sort_order, category=category, doctor_id=doctor_id)
-        total = await self.test_repo.count_all(category=category, doctor_id=doctor_id)
+                                               sort_order=sort_order, category=category, doctor_id=doctor_id,
+                                               department_id=department_id)
+        total = await self.test_repo.count_all(category=category, doctor_id=doctor_id, department_id=department_id)
         return build_paginated_result([LabTestResponse.model_validate(t) for t in items], total, page, size)
 
-    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None):
+    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None, current_user = None):
+        department_id = None
+        if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            result = await self.db.execute(
+                select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+
         skip = (page - 1) * size
-        items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id)
-        total = await self.test_repo.count_search(q, doctor_id=doctor_id)
+        items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id, department_id=department_id)
+        total = await self.test_repo.count_search(q, doctor_id=doctor_id, department_id=department_id)
         return build_paginated_result([LabTestResponse.model_validate(t) for t in items], total, page, size)
 
     async def get_test(self, test_id: int) -> LabTestResponse:
@@ -159,47 +185,48 @@ class LabService:
 
     # --- Test Orders ---
     async def create_order(self, data: TestOrderCreate, user_id: int) -> TestOrderResponse:
-        if not data.appointment_id:
-            raise BadRequestException("Appointment ID is required to create test order.")
-        if not data.doctor_id:
-            raise BadRequestException("Doctor ID is required to create test order.")
+        # Validate patient existence
+        from app.models.patient_model import Patient
+        patient = await self.db.get(Patient, data.patient_id)
+        if not patient or getattr(patient, "is_deleted", False):
+            raise NotFoundException("Patient not found")
 
-        # 5. For One appointment_id It Should be Possible to create only One Lab Test Order.
-        from sqlalchemy import select
-        existing_order_result = await self.db.execute(
-            select(TestOrder).where(TestOrder.appointment_id == data.appointment_id, TestOrder.is_deleted == False)
-        )
-        existing_order = existing_order_result.scalar_one_or_none()
-        if existing_order:
-            raise ConflictException("A lab test order has already been created for this appointment")
+        # Validate doctor existence if provided
+        if data.doctor_id is not None:
+            from app.models.doctor_model import Doctor
+            doc_exists = await self.db.get(Doctor, data.doctor_id)
+            if not doc_exists or getattr(doc_exists, "is_deleted", False):
+                raise NotFoundException("Doctor not found")
 
-        # Get the appointment and verify basic integrity (patient and doctor match)
-        from app.models.appointment_model import Appointment
-        appointment_result = await self.db.execute(
-            select(Appointment).where(Appointment.id == data.appointment_id)
-        )
-        appointment = appointment_result.scalar_one_or_none()
-        if not appointment:
-            raise NotFoundException("Appointment not found")
+        appointment = None
+        if data.appointment_id is not None:
+            # Get the appointment and verify basic integrity (patient and doctor match)
+            from app.models.appointment_model import Appointment
+            appointment_result = await self.db.execute(
+                select(Appointment).where(Appointment.id == data.appointment_id)
+            )
+            appointment = appointment_result.scalar_one_or_none()
+            if not appointment:
+                raise NotFoundException("Appointment not found")
 
-        # 3. It Should be Possible For Doctor/Staff to Only Put Appointment Id of Selected Patient in appointment_id Field.
-        if appointment.patient_id != data.patient_id:
-            raise BadRequestException("Appointment patient does not match the test order patient")
+            # 3. It Should be Possible For Doctor/Staff to Only Put Appointment Id of Selected Patient in appointment_id Field.
+            if appointment.patient_id != data.patient_id:
+                raise BadRequestException("Appointment patient does not match the test order patient")
 
-        if appointment.doctor_id != data.doctor_id:
-            raise BadRequestException("Appointment doctor does not match the test order doctor")
+            if data.doctor_id is not None and appointment.doctor_id != data.doctor_id:
+                raise BadRequestException("Appointment doctor does not match the test order doctor")
 
-        # Check future date appointments
-        from datetime import date
-        from app.core.constants import AppointmentStatus
-        if appointment.appointment_date is not None and appointment.appointment_date > date.today():
-            raise BadRequestException("Cannot create test order for future date appointments")
+            # Check future date appointments
+            from datetime import date
+            if appointment.appointment_date is not None and appointment.appointment_date > date.today():
+                raise BadRequestException("Cannot create test order for future date appointments")
 
-        # Check completed appointments only
-        appointment_status = (appointment.appointment_status or "").strip().lower()
-        completed_status = AppointmentStatus.COMPLETED.strip().lower()
-        if appointment_status != completed_status:
-            raise BadRequestException("Can only create test order for completed appointments")
+            # Check completed appointments only
+            from app.core.constants import AppointmentStatus
+            appointment_status = (appointment.appointment_status or "").strip().lower()
+            completed_status = AppointmentStatus.COMPLETED.strip().lower()
+            if appointment_status != completed_status:
+                raise BadRequestException("Can only create test order for completed appointments")
 
         # Resolve doctor profile of logged-in user
         from app.models.doctor_model import Doctor
@@ -210,10 +237,10 @@ class LabService:
 
         if doctor:
             # 2. It Should be Possible For Doctor to Only Put His Doctor Id in doctor_id Field.
-            if data.doctor_id != doctor.id:
+            if data.doctor_id is not None and data.doctor_id != doctor.id:
                 raise ForbiddenException("Doctors can only create test orders using their own doctor ID")
             # 1. It Should be Possible For Doctor to Create Test order for his Patients Only.
-            if appointment.doctor_id != doctor.id:
+            if appointment and appointment.doctor_id != doctor.id:
                 raise ForbiddenException("Doctors can only create test orders for their own patients")
 
         test = await self.test_repo.get_by_id(data.lab_test_id)
@@ -226,11 +253,15 @@ class LabService:
                 raise ForbiddenException("Doctors can only order lab tests created by themselves")
 
         await self._validate_department(test.department_id)
+        order_data = data.model_dump()
+        if doctor and order_data.get("doctor_id") is None:
+            order_data["doctor_id"] = doctor.id
+
         order = TestOrder(
             order_number=generate_lab_order_number(),
             ordered_at=utc_now(),
             department_id=test.department_id,
-            **data.model_dump(),
+            **order_data,
         )
         order = await self.order_repo.create(order)
         await self.audit_repo.create("create", "lab_order", user_id=user_id, resource_id=str(order.id))

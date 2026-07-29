@@ -323,7 +323,10 @@ class BedAnalyticsSummaryResponse(BaseModel):
     total_beds: int
     occupied_beds: int
     available_beds: int
+    reserved_beds: int
+    maint_clean_beds: int
     utilization_percentage: float
+
 
 
 class ICUAnalyticsResponse(BaseModel):

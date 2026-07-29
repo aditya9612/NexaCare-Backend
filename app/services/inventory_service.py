@@ -27,6 +27,7 @@ from app.schemas.inventory_schema import (
     WarehouseCreate,
     WarehouseResponse,
     WarehouseUpdate,
+    InventoryDashboardResponse,
 )
 from app.utils.helpers import generate_code, generate_stock_transaction_number, utc_now
 from app.utils.pagination import build_paginated_result
@@ -502,3 +503,16 @@ class InventoryService:
         if not transaction:
             raise NotFoundException("Stock transaction not found")
         return StockTransactionResponse.model_validate(transaction)
+
+    async def get_dashboard_summary(self) -> InventoryDashboardResponse:
+        total_registered_items = await self.item_repo.count_all()
+        stock_alerts = await self.alert_repo.count_active()
+        active_warehouse_units = await self.warehouse_repo.count_active()
+        total_vendors = await self.vendor_repo.count_all()
+        return InventoryDashboardResponse(
+            total_registered_items=total_registered_items,
+            stock_alerts=stock_alerts,
+            active_warehouse_units=active_warehouse_units,
+            total_vendors=total_vendors,
+        )
+

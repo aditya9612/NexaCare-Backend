@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 
@@ -58,6 +58,18 @@ class AppointmentResponse(BaseSchema):
     check_out_time: datetime | None = None
     queue_token: str | None = None
     queue_status: str | None = None
+
+    cancel_reason: str | None = None
+    cancellation_reason: str | None = None
+
+    @model_validator(mode="after")
+    def populate_cancellation_reason(self) -> "AppointmentResponse":
+        from app.core.constants import AppointmentStatus
+        if self.appointment_status in ("cancelled", AppointmentStatus.CANCELLED):
+            self.cancel_reason = self.notes
+            self.cancellation_reason = self.notes
+        return self
+
 
 
 class AppointmentCheckInResponse(BaseSchema):

@@ -150,6 +150,13 @@ class BedAllocationRepository:
     async def count_available_beds(self) -> int:
         return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status == "Available")) or 0
 
+    async def count_reserved_beds(self) -> int:
+        return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status == "Reserved")) or 0
+
+    async def count_maint_clean_beds(self) -> int:
+        return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status.in_(["Cleaning", "Maintenance"]))) or 0
+
+
     async def get_icu_bed_stats(self):
         total = await self.db.scalar(select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu")) or 0
         occupied = await self.db.scalar(

@@ -18,6 +18,7 @@ from app.schemas.doctor_schema import (
     DoctorScheduleResponse,
     DoctorScheduleUpdate,
     DoctorUpdate,
+    DoctorPaginatedResult,
 )
 from app.schemas.doctor_medical_record_schema import (
     DiagnosisResponse,
@@ -176,7 +177,7 @@ async def onboard_doctor(
     return APIResponse(message="Doctor onboarded successfully", data=result)
 
 
-@router.get("", response_model=APIResponse[PaginatedResult[DoctorResponse]])
+@router.get("", response_model=APIResponse[DoctorPaginatedResult])
 async def list_doctors(
     db: DbSession,
     current_user: CurrentUser,

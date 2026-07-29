@@ -461,6 +461,13 @@ class DoctorScheduleCreate(BaseSchema):
     end_time: time
     slot_duration_minutes: int = Field(30, gt=0, le=180)
 
+    @field_validator("start_time", "end_time", mode="after")
+    @classmethod
+    def strip_timezone(cls, v: time) -> time:
+        if v.tzinfo is not None:
+            return v.replace(tzinfo=None)
+        return v
+
     @field_validator("day_of_week")
     @classmethod
     def map_day_of_week_to_db(cls, v: int) -> int:
@@ -490,12 +497,20 @@ class DoctorScheduleUpdate(BaseSchema):
     slot_duration_minutes: int | None = Field(None, gt=0, le=180)
     is_active: bool | None = None
 
+    @field_validator("start_time", "end_time", mode="after")
+    @classmethod
+    def strip_timezone(cls, v: time | None) -> time | None:
+        if v is not None and v.tzinfo is not None:
+            return v.replace(tzinfo=None)
+        return v
+
     @field_validator("day_of_week")
     @classmethod
     def map_day_of_week_to_db(cls, v: int | None) -> int | None:
         if v is None:
             return v
         return v - 1
+
 
 
 class DoctorScheduleResponse(BaseSchema):
@@ -514,4 +529,16 @@ class DoctorScheduleResponse(BaseSchema):
 
 
 DoctorListResponse = PaginatedResponse[DoctorResponse]
+
+
+class DoctorPaginatedResult(BaseSchema):
+    items: list[DoctorResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+    total_doctors: int
+    available_doctors: int
+    on_leave_doctors: int
+
 

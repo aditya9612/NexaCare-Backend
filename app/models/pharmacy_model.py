@@ -113,7 +113,7 @@ class Supplier(Base, TimestampMixin, SoftDeleteMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class Purchase(Base, TimestampMixin):
+class Purchase(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "purchases"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)

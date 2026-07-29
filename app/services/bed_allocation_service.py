@@ -491,6 +491,8 @@ class BedAllocationService:
         total_beds = await self.repo.count_beds()
         occupied_beds = await self.repo.count_occupied_beds()
         available_beds = await self.repo.count_available_beds()
+        reserved_beds = await self.repo.count_reserved_beds()
+        maint_clean_beds = await self.repo.count_maint_clean_beds()
 
         utilization_percentage = 0.0
         if total_beds > 0:
@@ -502,8 +504,11 @@ class BedAllocationService:
             total_beds=total_beds,
             occupied_beds=occupied_beds,
             available_beds=available_beds,
+            reserved_beds=reserved_beds,
+            maint_clean_beds=maint_clean_beds,
             utilization_percentage=utilization_percentage,
         )
+
 
     async def get_icu_analytics(self) -> ICUAnalyticsResponse:
         total, occupied, available = await self.repo.get_icu_bed_stats()

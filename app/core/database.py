@@ -90,28 +90,22 @@ async def init_db():
         doctor_medical_record_model,
     )
 
-    # Disabled auto-seeding on server startup
-    # async with AsyncSessionLocal() as session:
-    #     try:
-    #         print("Running seed_roles...")
-    #         await _seed_roles_and_permissions(session)
-    #
-    #         print("Running lab...")
-    #         await _seed_lab_technician_permissions(session)
-    #
-    #         print("Running super admin...")
-    #         await _seed_default_super_admin(session)
-    #
-    #         print("Running nurse...")
-    #         await _seed_nurse_adesh(session)
-    #
-    #         await session.commit()
-    #     except Exception as e:
-    #         import traceback
-    #         traceback.print_exc()
-    #         print(e)
-    #         await session.rollback()
-    #         raise
+    # Enabled select auto-seeding on server startup
+    async with AsyncSessionLocal() as session:
+        try:
+            print("Running seed_roles...")
+            await _seed_roles_and_permissions(session)
+
+            print("Running lab...")
+            await _seed_lab_technician_permissions(session)
+
+            await session.commit()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(e)
+            await session.rollback()
+            raise
 
 
 async def _seed_roles_and_permissions(session: AsyncSession) -> None:

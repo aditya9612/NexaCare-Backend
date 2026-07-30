@@ -1,5 +1,5 @@
 from datetime import date
-from sqlalchemy import func, or_, select, cast, String
+from sqlalchemy import func, or_, select, cast, String, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment_model import Appointment
@@ -188,6 +188,21 @@ class PatientRepository:
         if status:
             query = query.where(Patient.status == status)
         return await self.db.scalar(query) or 0
+
+    async def get_patient_stats(self) -> dict[str, int]:
+        query = select(
+            func.count(case((Patient.status == "active", 1))).label("active_count"),
+            func.count(case((Patient.status == "inactive", 1))).label("inactive_count"),
+            func.count(func.distinct(case((Patient.city != "", Patient.city), else_=None))).label("cities_count")
+        ).select_from(Patient).where(Patient.is_deleted.is_(False))
+        
+        result = await self.db.execute(query)
+        row = result.one()
+        return {
+            "active_count": row.active_count or 0,
+            "inactive_count": row.inactive_count or 0,
+            "cities_count": row.cities_count or 0,
+        }
 
     async def create(self, patient: Patient) -> Patient:
         self.db.add(patient)

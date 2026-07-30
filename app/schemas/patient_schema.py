@@ -231,7 +231,7 @@ class PatientUpdate(BaseSchema):
     allergies: str | None = None
     medical_history: str | None = None
     chronic_disease: str | None = None
-    diagnosis: str
+    diagnosis: str | None = None
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str | None = None
@@ -502,4 +502,13 @@ class PatientDocumentResponse(BaseSchema):
     created_at: datetime
 
 
-PatientListResponse = PaginatedResponse[PatientResponse]
+class PatientListResponse(BaseSchema):
+    items: list[PatientResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+    active_count: int
+    inactive_count: int
+    cities_count: int
+

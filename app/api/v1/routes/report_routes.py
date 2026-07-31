@@ -138,12 +138,12 @@ def validate_period_filters(period: FinancialPeriod, date_filter: date | None, m
 async def get_accountant_financial_report(
     db: DbSession, 
     current_user: CurrentUser, 
-    period: FinancialPeriod = Query(FinancialPeriod.DAILY, description="Report period (daily, monthly, yearly). Default is daily.", example="daily"),
-    date_filter: date | None = Query(None, alias="date", description="YYYY-MM-DD for daily reports. Defaults to current date if omitted.", example="2026-07-31"),
-    month_filter: str | None = Query(None, alias="month", description="YYYY-MM for monthly reports. Defaults to current month if omitted.", example="2026-07"),
-    year_filter: str | None = Query(None, alias="year", description="YYYY for yearly reports. Defaults to current year if omitted.", example="2026"),
-    format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", example="json"), 
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", example=False)
+    period: FinancialPeriod = Query(FinancialPeriod.DAILY, description="Report period (daily, monthly, yearly). Default is daily.", examples={"default": {"summary": "Example", "value": "daily"}}),
+    date_filter: date | None = Query(None, alias="date", description="YYYY-MM-DD for daily reports. Defaults to current date if omitted.", examples={"default": {"summary": "Example", "value": "2026-07-31"}}),
+    month_filter: str | None = Query(None, alias="month", description="YYYY-MM for monthly reports. Defaults to current month if omitted.", examples={"default": {"summary": "Example", "value": "2026-07"}}),
+    year_filter: str | None = Query(None, alias="year", description="YYYY for yearly reports. Defaults to current year if omitted.", examples={"default": {"summary": "Example", "value": "2026"}}),
+    format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
 ):
     target_date, target_month, target_year = validate_period_filters(
         period, date_filter, month_filter, year_filter
@@ -187,8 +187,8 @@ async def get_accountant_revenue_vs_expense(
     current_user: CurrentUser, 
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
-    format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", example="json"), 
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", example=False)
+    format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
 ):
     data = await ReportService(db).get_accountant_revenue_vs_expense(start_date, end_date)
     return export_response(
@@ -219,8 +219,8 @@ async def get_accountant_department_wise(
     current_user: CurrentUser,
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
-    format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", example="json"), 
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", example=False)
+    format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
 ):
     data = await ReportService(db).get_accountant_department_wise(start_date, end_date)
     return export_response(

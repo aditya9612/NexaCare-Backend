@@ -17,6 +17,7 @@ from app.schemas.patient_schema import (
     PatientUpdate,
     PatientFilterQuery,
     PatientDocumentCreate,
+    PatientListResponse,
 )
 from app.schemas.clinical_record_schema import ClinicalRecordResponse
 from app.services.patient_service import PatientService
@@ -36,7 +37,7 @@ async def create_patient(
     return APIResponse(message="Patient created", data=patient)
 
 
-@router.get("", response_model=APIResponse[PaginatedResult[PatientResponse]])
+@router.get("", response_model=APIResponse[PatientListResponse])
 async def list_patients(
     db: DbSession,
     current_user: CurrentUser,

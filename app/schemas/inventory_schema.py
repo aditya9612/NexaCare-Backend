@@ -380,3 +380,11 @@ class ConsumptionReport(BaseSchema):
     total_consumed: int
     total_value: float
 
+
+class InventoryDashboardResponse(BaseSchema):
+    total_registered_items: int
+    stock_alerts: int
+    active_warehouse_units: int
+    total_vendors: int
+
+

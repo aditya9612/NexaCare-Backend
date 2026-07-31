@@ -66,7 +66,8 @@ class AppointmentService:
         doctor = await self.doctor_repo.get_by_id(doctor_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
-        if doctor.availability_status not in ("available", "busy"):
+        status = (doctor.availability_status or "available").lower().strip()
+        if status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
 
 

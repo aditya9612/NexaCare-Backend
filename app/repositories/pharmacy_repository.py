@@ -552,7 +552,7 @@ class PurchaseRepository:
         self.db = db
 
     def _base_query(self):
-        return select(Purchase).options(selectinload(Purchase.items))
+        return select(Purchase).options(selectinload(Purchase.items)).where(Purchase.is_deleted.is_(False))
 
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[Purchase]:
         result = await self.db.execute(
@@ -561,7 +561,8 @@ class PurchaseRepository:
         return list(result.scalars().unique().all())
 
     async def count_all(self) -> int:
-        return (await self.db.scalar(select(func.count()).select_from(Purchase))) or 0
+        return (await self.db.scalar(select(func.count()).select_from(Purchase).where(Purchase.is_deleted.is_(False)))) or 0
+
 
     async def get_by_id(self, purchase_id: int) -> Purchase | None:
         result = await self.db.execute(self._base_query().where(Purchase.id == purchase_id))

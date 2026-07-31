@@ -100,12 +100,26 @@ class DoctorService:
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ):
+        from app.schemas.doctor_schema import DoctorPaginatedResult
+        import math
+
+        counts = await self.repo.get_doctor_counts()
+
         if current_user.role and current_user.role.name == UserRole.DOCTOR:
             doctor = await self.repo.get_by_user_id(current_user.id)
             if not doctor:
                 raise NotFoundException("Doctor profile not found")
             items = [DoctorResponse.model_validate(doctor)] if page == 1 else []
-            return build_paginated_result(items, 1, page, size)
+            return DoctorPaginatedResult(
+                items=items,
+                total=1,
+                page=page,
+                size=size,
+                pages=1 if page == 1 else 0,
+                total_doctors=counts["total_doctors"],
+                available_doctors=counts["available_doctors"],
+                on_leave_doctors=counts["on_leave_doctors"]
+            )
 
         skip = (page - 1) * size
         items = await self.repo.list_all(
@@ -113,8 +127,16 @@ class DoctorService:
             availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
         )
         total = await self.repo.count_all(department_id=department_id, availability_status=availability_status)
-        return build_paginated_result(
-            [DoctorResponse.model_validate(d) for d in items], total, page, size
+        pages = math.ceil(total / size) if size else 0
+        return DoctorPaginatedResult(
+            items=[DoctorResponse.model_validate(d) for d in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            total_doctors=counts["total_doctors"],
+            available_doctors=counts["available_doctors"],
+            on_leave_doctors=counts["on_leave_doctors"]
         )
 
     async def get_by_id(self, doctor_id: int) -> DoctorResponse:

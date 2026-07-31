@@ -32,14 +32,17 @@ class TransactionService:
         is_completed = data.status is None or data.status.lower() == "completed"
 
         if is_completed:
+            total_amt = billing.total_amount or 0.0
+            paid_amt = billing.paid_amount or 0.0
             if is_refund:
-                if data.amount > billing.paid_amount:
+                if data.amount > paid_amt:
                     raise BadRequestException("Refund amount exceeds paid amount")
-                billing.paid_amount = round(billing.paid_amount - data.amount, 2)
+                billing.paid_amount = round(paid_amt - data.amount, 2)
             else:
-                if data.amount > billing.balance_amount:
+                balance_due = round(total_amt - paid_amt, 2)
+                if data.amount > balance_due:
                     raise BadRequestException("Payment amount exceeds balance due")
-                billing.paid_amount = round(billing.paid_amount + data.amount, 2)
+                billing.paid_amount = round(paid_amt + data.amount, 2)
 
         payment = Payment(
             billing_id=data.billing_id,

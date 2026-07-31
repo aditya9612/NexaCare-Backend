@@ -277,7 +277,8 @@ class PublicService:
         doctor = await self.doctor_repo.get_by_id(data.doctor_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
-        if doctor.availability_status not in ("available", "busy"):
+        status = (doctor.availability_status or "available").lower().strip()
+        if status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
             
         # 3. Apply Dynamic Appointment Settings and Conflict Rules
@@ -435,7 +436,8 @@ class PublicService:
         doctor = await self.doctor_repo.get_by_id(data.doctor_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
-        if doctor.availability_status not in ("available", "busy"):
+        status = (doctor.availability_status or "available").lower().strip()
+        if status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
             
         conflict = await self.repo.exists_conflict(data.doctor_id, data.booking_date, data.booking_time)

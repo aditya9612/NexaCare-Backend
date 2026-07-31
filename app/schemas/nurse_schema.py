@@ -73,13 +73,14 @@ NurseListResponse = PaginatedResponse[NurseResponse]
 
 class NurseShiftCreate(BaseSchema):
     shift_name: str = Field(..., description="Name of the shift (e.g. Morning, Afternoon, Night)", min_length=1, max_length=50)
-    shift_date: date = Field(..., description="Date of the shift")
+    shift_date: date | None = Field(None, description="Date of the shift (for single day)")
+    start_date: date | None = Field(None, description="Start date of the shift range")
+    end_date: date | None = Field(None, description="End date of the shift range")
     start_time: time = Field(..., description="Start time of the shift")
     end_time: time = Field(..., description="End time of the shift")
-    status: str = Field("Scheduled", description="Status of the shift", min_length=1, max_length=50)
     notes: str | None = Field(None, description="Optional notes for the shift")
 
-    @field_validator("shift_name", "status")
+    @field_validator("shift_name")
     @classmethod
     def validate_required_strings(cls, v: str) -> str:
         stripped = v.strip()
@@ -100,10 +101,9 @@ class NurseShiftUpdate(BaseSchema):
     shift_date: date | None = None
     start_time: time | None = None
     end_time: time | None = None
-    status: str | None = Field(None, min_length=1, max_length=50)
     notes: str | None = None
 
-    @field_validator("shift_name", "status")
+    @field_validator("shift_name")
     @classmethod
     def validate_required_strings(cls, v: str | None) -> str | None:
         if v is not None:
@@ -112,6 +112,7 @@ class NurseShiftUpdate(BaseSchema):
                 raise ValueError("cannot be empty or only spaces")
             return stripped
         return v
+
 
     @field_validator("notes")
     @classmethod
@@ -150,16 +151,7 @@ class NurseAttendanceCreate(BaseSchema):
     attendance_date: date = Field(..., description="Date of attendance")
     check_in_time: time | None = Field(None, description="Check-in time")
     check_out_time: time | None = Field(None, description="Check-out time")
-    status: str = Field("Present", description="Attendance status", min_length=1, max_length=50)
     notes: str | None = Field(None, description="Optional notes")
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v: str) -> str:
-        stripped = v.strip()
-        if len(stripped) < 1:
-            raise ValueError("status cannot be empty or only spaces")
-        return stripped
 
     @field_validator("notes")
     @classmethod
@@ -167,6 +159,7 @@ class NurseAttendanceCreate(BaseSchema):
         if v is not None:
             return v.strip()
         return v
+
 
 
 class NurseAttendanceResponse(BaseSchema):
@@ -343,8 +336,18 @@ class PatientVitalResponse(BaseSchema):
     pulse_rate: int
     oxygen_saturation: float
     recorded_at: datetime
+    notes: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class PatientVitalUpdate(BaseSchema):
+    temperature: float | None = Field(None, ge=0.0, description="Body temperature in Celsius")
+    systolic_bp: int | None = Field(None, ge=1, description="Systolic blood pressure")
+    diastolic_bp: int | None = Field(None, ge=1, description="Diastolic blood pressure")
+    pulse_rate: int | None = Field(None, ge=1, description="Pulse rate in beats per minute")
+    oxygen_level: float | None = Field(None, ge=0.0, le=100.0, description="Oxygen saturation level (SPO2)")
+    notes: str | None = Field(None, description="Optional notes")
 
 
 class NurseTaskResponse(BaseSchema):
@@ -480,6 +483,9 @@ class NurseDashboardResponse(BaseSchema):
     upcoming_medications: list[UpcomingMedicationResponse] = []
     critical_alerts: list[CriticalAlertResponse] = []
     recent_activities: list[RecentActivityResponse] = []
+    assigned_patients_list: list[NurseAssignedPatientStatusResponse] = []
+    shift_details: list[NurseShiftResponse] = []
+    alerts: list[CriticalAlertResponse] = []
 
 
 class NurseTaskCreate(BaseSchema):

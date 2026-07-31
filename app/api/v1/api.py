@@ -37,6 +37,7 @@ from app.api.v1.routes import (
     lab_dashboard_routes,
     hospital_voice_routes,
     notification_routes,
+    report_routes,
 )
 from app.api import settings
 
@@ -88,3 +89,4 @@ api_router.include_router(transaction_history_routes.router, prefix="/transactio
 api_router.include_router(clinical_record_router.router, prefix="/clinical-records", tags=["Clinical Records"])
 api_router.include_router(notification_routes.router, prefix="/notifications", tags=["Notifications"])
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
+api_router.include_router(report_routes.router, prefix="/reports", tags=["Reports"])

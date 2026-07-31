@@ -61,6 +61,7 @@ from app.models.hospital_voice_model import (
     VoiceCallbackTicket,
 )
 from app.models.hospital_setting import HospitalSetting
+from app.models.appointment_setting import AppointmentSetting
 from app.models.user_preference import UserPreference
 from app.models.notification_setting import NotificationSetting
 from app.models.billing_setting import BillingSetting
@@ -158,6 +159,7 @@ __all__ = [
     "VendorPayment",
     "ClinicalRecord",
     "HospitalSetting",
+    "AppointmentSetting",
     "UserPreference",
     "NotificationSetting",
     "BillingSetting",

@@ -26,7 +26,6 @@ from app.schemas.doctor_schema import (
     DoctorScheduleUpdate,
     DoctorUpdate,
 )
-from app.utils.file_upload import save_upload
 from app.utils.helpers import generate_doctor_code, generate_user_code
 from app.utils.pagination import build_paginated_result
 
@@ -207,7 +206,7 @@ class DoctorService:
 
         profile_image_path: Optional[str] = data.profile_image
         if image_file and image_file.filename:
-            profile_image_path = await save_upload(image_file, subfolder="doctors")
+            profile_image_path = await save_doctor_image(image_file)
 
         full_name = f"{data.first_name} {data.last_name}".strip()
         hospital_id = actor.hospital_id
@@ -275,7 +274,7 @@ class DoctorService:
         data: DoctorUpdate,
         user_id: int,
         image_file: Optional[UploadFile] = None,
-    ) -> DoctorResponse:
+    ) -> DoctorOnboardResponse:
         doctor = await self.repo.get_by_id(doctor_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
@@ -298,7 +297,15 @@ class DoctorService:
             if existing_license:
                 raise ConflictException("A doctor with this license number already exists")
 
+        if data.department_id is not None:
+            await self._validate_department(data.department_id)
+
         update_data = data.model_dump(exclude_unset=True)
+
+        # User-only fields — do not apply to Doctor model
+        password = update_data.pop("password", None)
+        gender = update_data.pop("gender", None)
+        date_of_birth = update_data.pop("date_of_birth", None)
 
         # If a new image file is uploaded, save it and override profile_image
         if image_file and image_file.filename:
@@ -313,8 +320,9 @@ class DoctorService:
 
         try:
             doctor = await self.repo.update(doctor)
-            
+
             # Synchronise the updated details with the associated User record
+            user = None
             if doctor.user_id:
                 user = await self.auth_repo.get_by_id(doctor.user_id)
                 if user:
@@ -323,14 +331,39 @@ class DoctorService:
                         user.email = data.email.strip().lower()
                     if data.phone:
                         user.phone = data.phone
+                    if password:
+                        user.hashed_password = get_password_hash(password)
+                    if gender is not None:
+                        user.gender = gender.value if hasattr(gender, "value") else gender
+                    if date_of_birth is not None:
+                        user.date_of_birth = date_of_birth
                     if "profile_image" in update_data:
                         user.profile_image = update_data["profile_image"]
                     await self.auth_repo.update(user)
-                    
+                    user = await self.auth_repo.get_by_id(user.id)
+
         except IntegrityError as exc:
             self._raise_doctor_integrity_error(exc)
         await self.audit_repo.create("update", "doctors", user_id=user_id, resource_id=str(doctor.id))
-        return DoctorResponse.model_validate(doctor)
+
+        if not user and doctor.user_id:
+            user = await self.auth_repo.get_by_id(doctor.user_id)
+
+        return DoctorOnboardResponse(
+            doctor=DoctorResponse.model_validate(doctor),
+            user=DoctorOnboardUserSummary(
+                id=user.id if user else 0,
+                user_code=user.user_code if user else "",
+                email=user.email if user else (doctor.email or ""),
+                full_name=user.full_name if user else f"{doctor.first_name} {doctor.last_name}".strip(),
+                phone=user.phone if user else doctor.phone,
+                role_name=user.role.name if user and user.role else UserRole.DOCTOR,
+                hospital_id=user.hospital_id if user else None,
+                gender=user.gender if user else None,
+                date_of_birth=user.date_of_birth if user else None,
+                is_active=user.is_active if user else False,
+            ),
+        )
 
 
     async def delete(self, doctor_id: int, user_id: int) -> None:

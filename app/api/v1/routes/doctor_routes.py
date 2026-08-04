@@ -189,6 +189,21 @@ async def list_doctors(
     sort_order: str = "desc",
     _: User = Depends(require_permission("doctors", "read")),
 ):
+    from app.models.staff_model import Staff
+    from app.core.exceptions import BadRequestException
+    from sqlalchemy import select
+
+    # Resolve department_id for Lab Technician
+    role_name = current_user.role.name.lower() if current_user and current_user.role else ""
+    if role_name in ["lab technician", "lab_technician"]:
+        staff_result = await db.execute(
+            select(Staff).where(Staff.email == current_user.email)
+        )
+        staff = staff_result.scalar_one_or_none()
+        if not staff or not staff.department_id:
+            raise BadRequestException("Lab technician department is not assigned")
+        department_id = staff.department_id
+
     result = await DoctorService(db).list_doctors(
         current_user=current_user,
         page=page, size=size, department_id=department_id,

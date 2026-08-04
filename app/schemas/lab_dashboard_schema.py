@@ -67,6 +67,35 @@ class CategoryPerformanceMetric(BaseModel):
     abnormal_rate: float
 
 
+class DailyReportSummary(BaseModel):
+    total_reports: int
+    approved_reports: int
+    pending_reports: int
+
+
+class MonthlyReportSummary(BaseModel):
+    total_reports: int
+    approved_reports: int
+    pending_reports: int
+
+
+class RevenueReport(BaseModel):
+    total_revenue: float
+    period_revenue: float
+    currency: str = "USD"
+
+
+class PerformanceMetric(BaseModel):
+    staff_name: str
+    samples_collected: int
+    avg_turnaround_hours: float
+
+
+class PerformanceTracking(BaseModel):
+    overall_efficiency: float
+    metrics: List[PerformanceMetric]
+
+
 class LabAnalyticsSummaryResponse(BaseModel):
     total_approved_reports: int
     approved_reports_growth_percentage: float = 0.0
@@ -81,4 +110,8 @@ class LabAnalyticsSummaryResponse(BaseModel):
     volume_by_category: List[CategoryVolumeMetric]
     turnaround_time_trend: List[TurnaroundTrendMetric]
     category_performance_metrics: List[CategoryPerformanceMetric]
+    daily_report_summary: DailyReportSummary
+    monthly_report_summary: MonthlyReportSummary
+    revenue_report: RevenueReport
+    performance_tracking: PerformanceTracking
 

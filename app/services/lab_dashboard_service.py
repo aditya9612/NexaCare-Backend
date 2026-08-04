@@ -132,6 +132,16 @@ class LabDashboardService:
         end_date: Optional[date] = None,
         department_id: Optional[int] = None,
     ) -> LabAnalyticsSummaryResponse:
+        from datetime import datetime, time, timedelta
+        import calendar
+        from app.schemas.lab_dashboard_schema import (
+            DailyReportSummary,
+            MonthlyReportSummary,
+            RevenueReport,
+            PerformanceMetric,
+            PerformanceTracking
+        )
+
         start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
 
         approved_count = await self.repo.get_approved_reports_count(start_dt, end_dt, department_id)
@@ -161,6 +171,43 @@ class LabDashboardService:
         turnaround_time_trend = [TurnaroundTrendMetric(**item) for item in turnaround_trend_raw]
         category_performance_metrics = [CategoryPerformanceMetric(**item) for item in category_perf_raw]
 
+        # 1. Fetch Daily Report Summary
+        today = date.today()
+        today_start = datetime.combine(today, time.min)
+        today_end = datetime.combine(today, time.max)
+        daily_summary_raw = await self.repo.get_daily_reports_summary(today_start, today_end, department_id)
+        daily_report_summary = DailyReportSummary(
+            total_reports=daily_summary_raw["total"],
+            approved_reports=daily_summary_raw["approved"],
+            pending_reports=daily_summary_raw["pending"]
+        )
+
+        # 2. Fetch Monthly Report Summary
+        month_start = datetime.combine(date(today.year, today.month, 1), time.min)
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        month_end = datetime.combine(date(today.year, today.month, last_day), time.max)
+        monthly_summary_raw = await self.repo.get_monthly_reports_summary(month_start, month_end, department_id)
+        monthly_report_summary = MonthlyReportSummary(
+            total_reports=monthly_summary_raw["total"],
+            approved_reports=monthly_summary_raw["approved"],
+            pending_reports=monthly_summary_raw["pending"]
+        )
+
+        # 3. Calculate Revenue Report
+        revenue_raw = await self.repo.get_revenue_report(start_dt, end_dt, department_id)
+        revenue_report = RevenueReport(
+            total_revenue=revenue_raw["total_revenue"],
+            period_revenue=revenue_raw["period_revenue"]
+        )
+
+        # 4. Fetch/aggregate Performance Tracking metrics
+        perf_metrics_raw = await self.repo.get_performance_tracking_metrics(start_dt, end_dt, department_id)
+        perf_metrics = [PerformanceMetric(**m) for m in perf_metrics_raw]
+        performance_tracking = PerformanceTracking(
+            overall_efficiency=completion_rate,
+            metrics=perf_metrics
+        )
+
         return LabAnalyticsSummaryResponse(
             total_approved_reports=approved_count if approved_count > 0 else 27,
             approved_reports_growth_percentage=growth_pct,
@@ -175,5 +222,11 @@ class LabDashboardService:
             volume_by_category=volume_by_category,
             turnaround_time_trend=turnaround_time_trend,
             category_performance_metrics=category_performance_metrics,
+            daily_report_summary=daily_report_summary,
+            monthly_report_summary=monthly_report_summary,
+            revenue_report=revenue_report,
+            performance_tracking=performance_tracking
         )
+
+
 

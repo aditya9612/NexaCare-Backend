@@ -261,6 +261,7 @@ class LabService:
             order_number=generate_lab_order_number(),
             ordered_at=utc_now(),
             department_id=test.department_id,
+            created_by=user_id,
             **order_data,
         )
         order = await self.order_repo.create(order)
@@ -367,12 +368,27 @@ class LabService:
         await self.audit_repo.create("update", "lab_order", user_id=user_id, resource_id=str(order.id))
         return self._order_response(order)
 
-    async def delete_order(self, order_id: int, user_id: int) -> None:
+    async def delete_order(self, order_id: int, current_user) -> None:
         order = await self.order_repo.get_by_id(order_id)
         if not order:
             raise NotFoundException("Test order not found")
+
+        # Dynamic Authorization Check
+        role_name = current_user.role.name if current_user.role else ""
+        is_admin = role_name in UserRole.ADMIN_ROLES
+
+        from app.repositories.rbac_repository import RBACRepository
+        rbac_repo = RBACRepository(self.db)
+        permissions = await rbac_repo.get_user_permissions(current_user.role_id)
+        has_global_delete = "lab:delete" in permissions
+
+        is_creator = order.created_by == current_user.id
+
+        if not (is_admin or has_global_delete or is_creator):
+            raise ForbiddenException("You do not have permission to delete this test order")
+
         await self.order_repo.soft_delete(order)
-        await self.audit_repo.create("delete", "lab_order", user_id=user_id, resource_id=str(order.id))
+        await self.audit_repo.create("delete", "lab_order", user_id=current_user.id, resource_id=str(order.id))
 
 
 

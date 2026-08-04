@@ -156,9 +156,8 @@ async def delete_test_order_legacy(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_order(order_id, current_user.id)
+    await LabService(db).delete_order(order_id, current_user)
     return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -179,9 +178,8 @@ async def delete_test_order(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_order(order_id, current_user.id)
+    await LabService(db).delete_order(order_id, current_user)
     return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 

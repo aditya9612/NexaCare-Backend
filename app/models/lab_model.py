@@ -44,6 +44,7 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     ordered_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     lab_test: Mapped["LabTest"] = relationship(back_populates="orders")
     samples: Mapped[list["Sample"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")

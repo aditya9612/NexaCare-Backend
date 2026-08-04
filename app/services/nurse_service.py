@@ -39,6 +39,7 @@ from app.schemas.nurse_schema import (
     NurseUpdate,
     PatientVitalCreate,
     PatientVitalResponse,
+    PatientVitalUpdate,
     NurseTaskResponse,
     NurseTaskStatusUpdate,
     NursePatientLabTestResponse,
@@ -208,14 +209,89 @@ class NurseService:
 
     async def create_shift(
         self, nurse_id: int, data: NurseShiftCreate, user_id: int
-    ) -> NurseShiftResponse:
+    ) -> NurseShiftResponse | list[NurseShiftResponse]:
+        from datetime import date, datetime, timedelta
+        from app.models.nurse_model import NurseShift
+        from sqlalchemy import select
+
         await self._get_nurse_or_raise(nurse_id)
-        shift = NurseShift(nurse_id=nurse_id, **data.model_dump())
-        shift = await self.shift_repo.create(shift)
-        await self.audit_repo.create(
-            "create", "nurses", user_id=user_id, resource_id=str(shift.id)
-        )
-        return NurseShiftResponse.model_validate(shift)
+
+        # 2. Start Time Should not be Greater Than End Time
+        if data.start_time >= data.end_time:
+            raise BadRequestException("Start time must be before end time")
+
+        # 3. It Should be Possible to Create Shift Schedule For Particular Date Range.
+        target_dates = []
+        is_range = False
+        if data.shift_date is not None:
+            target_dates = [data.shift_date]
+        elif data.start_date is not None and data.end_date is not None:
+            if data.start_date > data.end_date:
+                raise BadRequestException("Start date must be before or equal to end date")
+            is_range = True
+            current_date = data.start_date
+            while current_date <= data.end_date:
+                target_dates.append(current_date)
+                current_date += timedelta(days=1)
+        else:
+            raise BadRequestException("Either shift_date or both start_date and end_date must be provided")
+
+        created_shifts = []
+
+        # Validate all dates and check overlaps before inserting any records
+        for target_date in target_dates:
+            # 1. It Should Not be Possible to Create Nurse Shift For Past Dates.
+            if target_date < date.today():
+                raise BadRequestException(f"Cannot create shift for past date {target_date}")
+
+            # 4. It Should not be Possible to Create Shift For Same Time Slot Twice.
+            overlap_query = select(NurseShift).where(
+                NurseShift.nurse_id == nurse_id,
+                NurseShift.shift_date == target_date
+            )
+            res = await self.db.execute(overlap_query)
+            existing_shifts = res.scalars().all()
+            for existing in existing_shifts:
+                if existing.start_time < data.end_time and data.start_time < existing.end_time:
+                    raise BadRequestException(
+                        f"Shift overlaps with an existing shift on {target_date}"
+                    )
+
+        # Create all shifts
+        for target_date in target_dates:
+            # Calculate dynamic status
+            # 5. Remove Status Filed, Status need To Change Automatically
+            if target_date > date.today():
+                status = "Scheduled"
+            elif target_date == date.today():
+                current_time = datetime.now().time()
+                if current_time < data.start_time:
+                    status = "Scheduled"
+                elif data.start_time <= current_time <= data.end_time:
+                    status = "Active"
+                else:
+                    status = "Completed"
+            else:
+                status = "Completed"
+
+            shift = NurseShift(
+                nurse_id=nurse_id,
+                shift_name=data.shift_name,
+                shift_date=target_date,
+                start_time=data.start_time,
+                end_time=data.end_time,
+                status=status,
+                notes=data.notes
+            )
+            shift = await self.shift_repo.create(shift)
+            await self.audit_repo.create(
+                "create", "nurses", user_id=user_id, resource_id=str(shift.id)
+            )
+            created_shifts.append(shift)
+
+        if is_range:
+            return [NurseShiftResponse.model_validate(s) for s in created_shifts]
+        return NurseShiftResponse.model_validate(created_shifts[0])
 
     async def update_shift(
         self,
@@ -224,12 +300,59 @@ class NurseService:
         data: NurseShiftUpdate,
         user_id: int,
     ) -> NurseShiftResponse:
+        from datetime import date, datetime
+        from app.models.nurse_model import NurseShift
+        from sqlalchemy import select
+
         await self._get_nurse_or_raise(nurse_id)
         shift = await self.shift_repo.get_by_id_for_nurse(shift_id, nurse_id)
         if not shift:
             raise NotFoundException("Shift not found")
-        for key, value in data.model_dump(exclude_unset=True).items():
+
+        # Create copies of values to check updated constraints
+        dump = data.model_dump(exclude_unset=True)
+        new_start_time = dump.get("start_time", shift.start_time)
+        new_end_time = dump.get("end_time", shift.end_time)
+        new_shift_date = dump.get("shift_date", shift.shift_date)
+
+        # 1. Past Date Validation
+        if new_shift_date < date.today():
+            raise BadRequestException("Cannot update shift to a past date")
+
+        # 2. Time Ordering
+        if new_start_time >= new_end_time:
+            raise BadRequestException("Start time must be before end time")
+
+        # 4. Overlap Check
+        overlap_query = select(NurseShift).where(
+            NurseShift.nurse_id == nurse_id,
+            NurseShift.shift_date == new_shift_date,
+            NurseShift.id != shift_id
+        )
+        res = await self.db.execute(overlap_query)
+        existing_shifts = res.scalars().all()
+        for existing in existing_shifts:
+            if existing.start_time < new_end_time and new_start_time < existing.end_time:
+                raise BadRequestException("Shift overlaps with another existing shift")
+
+        # Apply update
+        for key, value in dump.items():
             setattr(shift, key, value)
+
+        # 5. Status updates automatically
+        if new_shift_date > date.today():
+            shift.status = "Scheduled"
+        elif new_shift_date == date.today():
+            current_time = datetime.now().time()
+            if current_time < new_start_time:
+                shift.status = "Scheduled"
+            elif new_start_time <= current_time <= new_end_time:
+                shift.status = "Active"
+            else:
+                shift.status = "Completed"
+        else:
+            shift.status = "Completed"
+
         shift = await self.shift_repo.update(shift)
         await self.audit_repo.create(
             "update", "nurses", user_id=user_id, resource_id=str(shift.id)
@@ -239,13 +362,100 @@ class NurseService:
     async def create_attendance(
         self, nurse_id: int, data: NurseAttendanceCreate, user_id: int
     ) -> NurseAttendanceResponse:
+        from datetime import datetime, date, time
+        from app.models.nurse_model import NurseShift, NurseAttendance
+        from sqlalchemy import select
+
         await self._get_nurse_or_raise(nurse_id)
-        attendance = NurseAttendance(nurse_id=nurse_id, **data.model_dump())
-        attendance = await self.attendance_repo.create(attendance)
+
+        # 1. It Should Not be Possible For Nurse to Mark Attendance For Past and Future Date and Time.
+        if data.attendance_date != date.today():
+            raise BadRequestException("Attendance date must be today's date")
+
+        # 5. It Should not be Possible to Check In and Check Out at Once.
+        if data.check_in_time is not None and data.check_out_time is not None:
+            raise BadRequestException("Cannot check in and check out at the same time")
+        if data.check_in_time is None and data.check_out_time is None:
+            raise BadRequestException("Either check-in time or check-out time must be provided")
+
+        current_time = datetime.now().time()
+        if data.check_in_time is not None and data.check_in_time > current_time:
+            raise BadRequestException("Check-in time cannot be in the future")
+        if data.check_out_time is not None and data.check_out_time > current_time:
+            raise BadRequestException("Check-out time cannot be in the future")
+
+        # Fetch shift timing of the nurse on this attendance date
+        shift_query = select(NurseShift).where(
+            NurseShift.nurse_id == nurse_id,
+            NurseShift.shift_date == data.attendance_date
+        )
+        res = await self.db.execute(shift_query)
+        shift = res.scalar_one_or_none()
+        if not shift:
+            raise BadRequestException("No shift scheduled for this date")
+
+        # Status Helper Logic
+        def calculate_status(check_in: time | None, check_out: time | None) -> str:
+            if check_out is not None:
+                if check_out < shift.end_time:
+                    return "Early Departure"
+                elif check_out > shift.end_time:
+                    return "Late Departure"
+                else:
+                    return "On Time"
+            if check_in is not None:
+                if check_in < shift.start_time:
+                    return "Early Arrival"
+                elif check_in > shift.start_time:
+                    return "Late"
+                else:
+                    return "On Time"
+            return "Absent"
+
+        # 3. It Should be Possible For Nurse to Mark Check In and Check Out Once in a Day.
+        existing = await self.attendance_repo.get_by_date(nurse_id, data.attendance_date)
+
+        if data.check_in_time is not None:
+            # Check-in flow
+            if existing and existing.check_in_time is not None:
+                raise BadRequestException("Already checked in for today")
+            
+            status = calculate_status(data.check_in_time, None)
+            attendance = NurseAttendance(
+                nurse_id=nurse_id,
+                attendance_date=data.attendance_date,
+                check_in_time=data.check_in_time,
+                check_out_time=None,
+                status=status,
+                notes=data.notes
+            )
+            attendance = await self.attendance_repo.create(attendance)
+            action = "create"
+        else:
+            # Check-out flow
+            if not existing or existing.check_in_time is None:
+                raise BadRequestException("Cannot check out without checking in first")
+            if existing.check_out_time is not None:
+                raise BadRequestException("Already checked out for today")
+
+            # 4. Check Out Time Should be Greater Than Check In Time.
+            if data.check_out_time <= existing.check_in_time:
+                raise BadRequestException("Check-out time must be after check-in time")
+
+            status = calculate_status(existing.check_in_time, data.check_out_time)
+            existing.check_out_time = data.check_out_time
+            existing.status = status
+            if data.notes is not None:
+                existing.notes = data.notes
+
+            attendance = await self.attendance_repo.update(existing)
+            action = "update"
+
         await self.audit_repo.create(
-            "create", "nurses", user_id=user_id, resource_id=str(attendance.id)
+            action, "nurses", user_id=user_id, resource_id=str(attendance.id)
         )
         return NurseAttendanceResponse.model_validate(attendance)
+
 
     async def list_attendance(
         self,
@@ -459,13 +669,31 @@ class NurseService:
         )
 
         # Check vital thresholds and trigger critical alert if breached
+        await self._check_vital_thresholds_and_notify(
+            patient_id=patient_id,
+            temperature=vital.temperature,
+            blood_pressure=vital.blood_pressure,
+            pulse_rate=vital.pulse_rate,
+            oxygen_saturation=vital.oxygen_saturation,
+        )
+
+        return PatientVitalResponse.model_validate(vital)
+
+    async def _check_vital_thresholds_and_notify(
+        self,
+        patient_id: int,
+        temperature: float,
+        blood_pressure: str,
+        pulse_rate: int,
+        oxygen_saturation: float,
+    ) -> None:
         from app.core.constants import VITAL_THRESHOLDS, VitalType
         breaches = []
         
         # Parse BP systolic/diastolic
         systolic, diastolic = None, None
-        if "/" in data.blood_pressure:
-            parts = data.blood_pressure.split("/")
+        if "/" in blood_pressure:
+            parts = blood_pressure.split("/")
             if len(parts) == 2:
                 try:
                     systolic = float(parts[0].strip())
@@ -476,21 +704,21 @@ class NurseService:
         # Check Temperature
         temp_rules = VITAL_THRESHOLDS.get(VitalType.TEMPERATURE)
         if temp_rules:
-            val = data.temperature
+            val = temperature
             if val < temp_rules.get("min") or val > temp_rules.get("max"):
                 breaches.append(f"Temperature abnormal: {val}°C (Normal: {temp_rules.get('min')}-{temp_rules.get('max')})")
 
         # Check Pulse Rate (HEART_RATE)
         pulse_rules = VITAL_THRESHOLDS.get(VitalType.HEART_RATE)
         if pulse_rules:
-            val = data.pulse_rate
+            val = pulse_rate
             if val < pulse_rules.get("min") or val > pulse_rules.get("max"):
                 breaches.append(f"Pulse rate abnormal: {val} bpm (Normal: {pulse_rules.get('min')}-{pulse_rules.get('max')})")
 
         # Check SPO2
         spo2_rules = VITAL_THRESHOLDS.get(VitalType.SPO2)
         if spo2_rules:
-            val = data.oxygen_saturation
+            val = oxygen_saturation
             if val < spo2_rules.get("min"):
                 breaches.append(f"Oxygen saturation abnormal: {val}% (Normal: >= {spo2_rules.get('min')})")
 
@@ -513,6 +741,72 @@ class NurseService:
                 message=f"Abnormal vitals recorded: {', '.join(breaches)}",
                 reference_id=patient_id,
             )
+
+    async def list_patient_vitals(
+        self, patient_id: int, page: int = 1, size: int = 20
+    ):
+        patient = await self.assignment_repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+        skip = (page - 1) * size
+        items = await self.vital_repo.list_by_patient_id(patient_id, skip=skip, limit=size)
+        total = await self.vital_repo.count_by_patient_id(patient_id)
+        return build_paginated_result(
+            [PatientVitalResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
+        )
+
+    async def get_patient_vital(self, vital_id: int) -> PatientVitalResponse:
+        vital = await self.vital_repo.get_by_id(vital_id)
+        if not vital:
+            raise NotFoundException("Vital record not found")
+        return PatientVitalResponse.model_validate(vital)
+
+    async def update_patient_vital(
+        self, vital_id: int, data: PatientVitalUpdate, user_id: int
+    ) -> PatientVitalResponse:
+        vital = await self.vital_repo.get_by_id(vital_id)
+        if not vital:
+            raise NotFoundException("Vital record not found")
+
+        if data.temperature is not None:
+            vital.temperature = data.temperature
+        if data.pulse_rate is not None:
+            vital.pulse_rate = data.pulse_rate
+        if data.oxygen_level is not None:
+            vital.oxygen_saturation = data.oxygen_level
+        if data.notes is not None:
+            vital.notes = data.notes
+
+        if data.systolic_bp is not None or data.diastolic_bp is not None:
+            current_systolic, current_diastolic = 120, 80
+            if "/" in vital.blood_pressure:
+                parts = vital.blood_pressure.split("/")
+                if len(parts) == 2:
+                    try:
+                        current_systolic = int(float(parts[0].strip()))
+                        current_diastolic = int(float(parts[1].strip()))
+                    except ValueError:
+                        pass
+            
+            new_systolic = data.systolic_bp if data.systolic_bp is not None else current_systolic
+            new_diastolic = data.diastolic_bp if data.diastolic_bp is not None else current_diastolic
+            vital.blood_pressure = f"{new_systolic}/{new_diastolic}"
+
+        vital = await self.vital_repo.update(vital)
+        await self.audit_repo.create(
+            "update", "nurses", user_id=user_id, resource_id=str(vital.id)
+        )
+
+        await self._check_vital_thresholds_and_notify(
+            patient_id=vital.patient_id,
+            temperature=vital.temperature,
+            blood_pressure=vital.blood_pressure,
+            pulse_rate=vital.pulse_rate,
+            oxygen_saturation=vital.oxygen_saturation,
+        )
 
         return PatientVitalResponse.model_validate(vital)
 
@@ -876,6 +1170,12 @@ class NurseService:
         self.db.add(log)
         await self.db.flush()
         await self.db.commit()
+
+        # Fetch nurse's user to assign nurse_name for serialization
+        from app.models.user_model import User
+        user = await self.db.get(User, user_id)
+        log.nurse_name = user.full_name if user else None
+
         return log
 
     async def delete_medication_log(self, prescription_id: int, log_id: int, user_id: int):
@@ -1001,7 +1301,9 @@ class NurseService:
             NurseDashboardResponse,
             UpcomingMedicationResponse,
             CriticalAlertResponse,
-            RecentActivityResponse
+            RecentActivityResponse,
+            NurseAssignedPatientStatusResponse,
+            NurseShiftResponse,
         )
         from app.models.user_model import User
 
@@ -1028,7 +1330,10 @@ class NurseService:
                 available_beds=available_beds,
                 upcoming_medications=[],
                 critical_alerts=[],
-                recent_activities=[]
+                recent_activities=[],
+                assigned_patients_list=[],
+                shift_details=[],
+                alerts=[]
             )
 
         # Timezones
@@ -1144,6 +1449,42 @@ class NurseService:
             for log in activities_res.scalars().all()
         ]
 
+        # 8. Assigned Patients List (Detailed)
+        assigned_rows = await self.assignment_repo.list_patient_statuses_by_nurse(
+            nurse_id=nurse.id,
+            skip=0,
+            limit=100
+        )
+        assigned_patients_list = [
+            NurseAssignedPatientStatusResponse(
+                patient_id=pat.id,
+                patient_code=pat.patient_code,
+                first_name=pat.first_name,
+                last_name=pat.last_name,
+                patient_status=assignment.patient_status,
+                assignment_status=assignment.status,
+                notes=assignment.notes,
+                updated_at=assignment.updated_at,
+            )
+            for pat, assignment in assigned_rows
+        ]
+
+        # 9. Shift Details List (Latest 10)
+        shift_items = await self.shift_repo.list_by_nurse(
+            nurse_id=nurse.id,
+            skip=0,
+            limit=10,
+            sort_by="shift_date",
+            sort_order="desc"
+        )
+        shift_details = [
+            NurseShiftResponse.model_validate(item)
+            for item in shift_items
+        ]
+
+        # 10. Alerts (alias of critical_alerts)
+        alerts = critical_alerts
+
         return NurseDashboardResponse(
             assigned_patients=assigned_patients_count,
             today_patients=today_patients_count,
@@ -1154,7 +1495,10 @@ class NurseService:
             available_beds=available_beds,
             upcoming_medications=upcoming_medications,
             critical_alerts=critical_alerts,
-            recent_activities=recent_activities
+            recent_activities=recent_activities,
+            assigned_patients_list=assigned_patients_list,
+            shift_details=shift_details,
+            alerts=alerts
         )
 
     async def assign_patient(
@@ -1213,3 +1557,17 @@ class NurseService:
             "create", "nurses", user_id=user_id, resource_id=str(task.id)
         )
         return NurseTaskResponse.model_validate(task)
+
+    async def delete_task(
+        self, nurse_id: int, task_id: int, user_id: int
+    ) -> None:
+        await self._get_nurse_or_raise(nurse_id)
+        task = await self.task_repo.get_by_id(task_id, nurse_id)
+        if not task:
+            raise NotFoundException("Nurse task not found")
+        await self.db.delete(task)
+        await self.db.commit()
+        await self.audit_repo.create(
+            "delete", "nurses", user_id=user_id, resource_id=str(task_id)
+        )
+

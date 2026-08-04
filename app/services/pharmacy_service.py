@@ -123,45 +123,6 @@ class PharmacyService:
         else:
             return None, None
 
-    async def get_dashboard_summary(
-        self,
-        time_filter: str = "7_days",
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> PharmacyDashboardResponse:
-        start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
-        repo = self.dashboard_repo
-        total_medicines = await repo.get_total_medicines()
-        low_stock_alerts = await repo.get_low_stock_count()
-        expired_alerts = await repo.get_expired_alerts_count()
-        today_sales = await repo.get_today_sales(start_dt, end_dt)
-        monthly_sales = await repo.get_monthly_sales(start_dt, end_dt)
-        pending_purchases = await repo.get_pending_purchases_count(start_dt, end_dt)
-        total_suppliers = await repo.get_total_suppliers_count()
-        prescriptions_count = await repo.get_prescriptions_count(start_dt, end_dt)
-
-        low_stock_raw = await repo.get_low_stock_items()
-        today_trend_raw = await repo.get_today_sales_trend(start_dt, end_dt)
-        monthly_trend_raw = await repo.get_monthly_sales_trend(start_dt, end_dt)
-
-        low_stock_items = [LowStockItemAlert(**item) for item in low_stock_raw]
-        today_sales_trend = [PharmacySalesTrendPoint(**item) for item in today_trend_raw]
-        monthly_sales_trend = [PharmacySalesTrendPoint(**item) for item in monthly_trend_raw]
-
-        return PharmacyDashboardResponse(
-            total_medicines=total_medicines if total_medicines > 0 else 3,
-            low_stock_alerts=low_stock_alerts if low_stock_alerts > 0 else 1,
-            expired_alerts=expired_alerts,
-            today_sales=today_sales,
-            monthly_sales=monthly_sales if monthly_sales > 0 else 145000.0,
-            pending_purchases=pending_purchases if pending_purchases > 0 else 5,
-            total_suppliers=total_suppliers if total_suppliers > 0 else 4,
-            prescriptions_count=prescriptions_count,
-            low_stock_items=low_stock_items,
-            today_sales_trend=today_sales_trend,
-            monthly_sales_trend=monthly_sales_trend,
-        )
-
 
 
     # --- Medicines ---
@@ -1038,19 +999,23 @@ class PharmacyService:
     async def get_dashboard_summary(
         self,
         time_filter: str = "7_days",
-        start_date: date | None = None,
-        end_date: date | None = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ) -> PharmacyDashboardResponse:
-        return await self.get_dashboard_overview()
-
-    async def get_dashboard_overview(self) -> PharmacyDashboardResponse:
         from datetime import timezone, timedelta, time, date as dt_date
         from sqlalchemy import select, func, or_, cast, Date
-        
+
         # Indian Standard Time (UTC+5:30) or local date.today()
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         now_ist = datetime.now(ist_tz)
         today_ist = now_ist.date()
+
+        # Parse date range filters
+        start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
+        if start_dt is None or end_dt is None:
+            # Fallback to defaults
+            start_dt = datetime.min
+            end_dt = datetime.max
 
         # 1. Total Medicines (active, i.e., is_deleted=False and is_active=True)
         total_medicines = (await self.db.scalar(
@@ -1079,20 +1044,22 @@ class PharmacyService:
             )
         )) or 0
 
-        # 4. Today Sales (Invoice/billing amount created today)
-        today_start = datetime.combine(today_ist, time.min)
-        tomorrow_start = today_start + timedelta(days=1)
+        # 4. Period Sales (Invoice/billing amount created in filtered period)
         today_sales = (await self.db.scalar(
             select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= today_start,
-                PharmacyInvoice.created_at < tomorrow_start
+                PharmacyInvoice.created_at >= start_dt,
+                PharmacyInvoice.created_at <= end_dt
             )
         )) or 0.0
 
-        # 5. Monthly Sales (Invoice/billing amount for current month)
-        month_start = datetime.combine(today_ist.replace(day=1), time.min)
+        # 5. Monthly Sales (Invoice/billing amount for month of filtering end date)
+        if end_dt == datetime.max or end_dt.year > 9990:
+            end_date_val = today_ist
+        else:
+            end_date_val = end_dt.date()
+        month_start = datetime.combine(end_date_val.replace(day=1), time.min)
         if month_start.month == 12:
             next_month_start = month_start.replace(year=month_start.year + 1, month=1)
         else:
@@ -1106,10 +1073,12 @@ class PharmacyService:
             )
         )) or 0.0
 
-        # 6. Pending Purchases (Count status: Pending, Ordered)
+        # 6. Pending Purchases (Count status: Pending, Ordered in period)
         pending_purchases = (await self.db.scalar(
             select(func.count(Purchase.id)).where(
-                Purchase.status.in_(["Pending", "Ordered"])
+                Purchase.status.in_(["Pending", "Ordered"]),
+                Purchase.created_at >= start_dt,
+                Purchase.created_at <= end_dt
             )
         )) or 0
 
@@ -1121,11 +1090,13 @@ class PharmacyService:
             )
         )) or 0
 
-        # 8. Prescriptions (Count active prescriptions pending to be dispensed)
+        # 8. Prescriptions (Count active prescriptions pending to be dispensed created in period)
         prescriptions = (await self.db.scalar(
             select(func.count(Prescription.id)).where(
                 Prescription.is_deleted.is_(False),
-                Prescription.status == "pending"
+                Prescription.status == "pending",
+                Prescription.created_at >= start_dt,
+                Prescription.created_at <= end_dt
             )
         )) or 0
 
@@ -1158,7 +1129,7 @@ class PharmacyService:
             for m in low_stock_res.scalars().all()
         ]
 
-        # 10. Today Sales Trend (Hourly sales for today - DIALECT AGNOSTIC EXTRACT)
+        # 10. Period Sales Trend (Hourly sales for the filtered period - DIALECT AGNOSTIC EXTRACT)
         today_trend_query = (
             select(
                 func.extract('hour', PharmacyInvoice.created_at).label("hr"),
@@ -1167,8 +1138,8 @@ class PharmacyService:
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= today_start,
-                PharmacyInvoice.created_at < tomorrow_start
+                PharmacyInvoice.created_at >= start_dt,
+                PharmacyInvoice.created_at <= end_dt
             )
             .group_by(func.extract('hour', PharmacyInvoice.created_at))
             .order_by(func.extract('hour', PharmacyInvoice.created_at).asc())
@@ -1188,7 +1159,7 @@ class PharmacyService:
                 "label": f"{hr_val:02d}:00"
             })
 
-        # 11. Monthly Sales Trend (Daily sales for current month - DIALECT AGNOSTIC CAST)
+        # 11. Monthly Sales Trend (Daily sales for the filtered period - DIALECT AGNOSTIC CAST)
         monthly_trend_query = (
             select(
                 cast(PharmacyInvoice.created_at, Date).label("dt"),
@@ -1197,8 +1168,8 @@ class PharmacyService:
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= month_start,
-                PharmacyInvoice.created_at < next_month_start
+                PharmacyInvoice.created_at >= start_dt,
+                PharmacyInvoice.created_at <= end_dt
             )
             .group_by(cast(PharmacyInvoice.created_at, Date))
             .order_by(cast(PharmacyInvoice.created_at, Date).asc())

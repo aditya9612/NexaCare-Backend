@@ -515,7 +515,10 @@ class BillingService:
             raise NotFoundException("Billing record not found")
         if billing.status == BillingStatus.CANCELLED:
             raise BadRequestException("Cannot collect payment on cancelled bill")
-        if data.amount > billing.balance_amount:
+        total_amt = billing.total_amount or 0.0
+        paid_amt = billing.paid_amount or 0.0
+        balance_due = round(total_amt - paid_amt, 2)
+        if data.amount > balance_due:
             raise BadRequestException("Payment amount exceeds balance due")
 
         # Defensive normalization

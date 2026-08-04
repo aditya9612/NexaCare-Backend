@@ -48,9 +48,18 @@ class PatientService:
             end_date=end_date,
         )
         total = await self.repo.count_all(start_date=start_date, end_date=end_date)
-        return build_paginated_result(
+        paginated = build_paginated_result(
             [PatientResponse.model_validate(p) for p in items], total, page, size
         )
+        stats = await self.repo.get_patient_stats()
+        return {
+            "items": paginated.items,
+            "total": paginated.total,
+            "page": paginated.page,
+            "size": paginated.size,
+            "pages": paginated.pages,
+            **stats
+        }
 
     async def get_by_id(self, patient_id: int) -> PatientResponse:
         patient = await self.repo.get_by_id(patient_id)

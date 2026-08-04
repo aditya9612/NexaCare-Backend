@@ -24,6 +24,7 @@ from app.schemas.nurse_schema import (
     NurseUpdate,
     PatientVitalCreate,
     PatientVitalResponse,
+    PatientVitalUpdate,
     NurseTaskResponse,
     NurseTaskStatusUpdate,
     NursePatientLabTestResponse,
@@ -144,7 +145,10 @@ async def delete_prescription(
     return APIResponse(message="Prescription deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
-@router.post("/prescriptions/{prescription_id}/logs")
+@router.post(
+    "/prescriptions/{prescription_id}/logs",
+    response_model=APIResponse[NurseMedicationLogResponse],
+)
 async def log_medication(
     prescription_id: int,
     data: NurseMedicationLogCreate,
@@ -286,6 +290,27 @@ async def update_nurse_task_status(
     return APIResponse(message="Task status updated", data=task)
 
 
+@router.delete(
+    "/{nurse_id}/tasks/{task_id}",
+    response_model=APIResponse[MessageResponse],
+)
+async def delete_nurse_task(
+    nurse_id: int,
+    task_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "delete")),
+):
+    await NurseService(db).delete_task(
+        nurse_id=nurse_id, task_id=task_id, user_id=current_user.id
+    )
+    return APIResponse(
+        message="Nurse task deleted successfully",
+        data=MessageResponse(message="Deleted successfully"),
+    )
+
+
+
 @router.get(
     "/{nurse_id}/patients/status",
     response_model=APIResponse[PaginatedResult[NurseAssignedPatientStatusResponse]],
@@ -375,6 +400,51 @@ async def record_patient_vitals(
 
 
 @router.get(
+    "/patients/{patient_id}/vitals",
+    response_model=APIResponse[PaginatedResult[PatientVitalResponse]],
+)
+async def list_patient_vitals(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    result = await NurseService(db).list_patient_vitals(patient_id, page, size)
+    return APIResponse(message="Patient vitals retrieved", data=result)
+
+
+@router.get(
+    "/patient-vitals/{vital_id}",
+    response_model=APIResponse[PatientVitalResponse],
+)
+async def get_patient_vital(
+    vital_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    vital = await NurseService(db).get_patient_vital(vital_id)
+    return APIResponse(message="Patient vital record retrieved", data=vital)
+
+
+@router.put(
+    "/patient-vitals/{vital_id}",
+    response_model=APIResponse[PatientVitalResponse],
+)
+async def update_patient_vital(
+    vital_id: int,
+    data: PatientVitalUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    vital = await NurseService(db).update_patient_vital(vital_id, data, current_user.id)
+    return APIResponse(message="Patient vital record updated", data=vital)
+
+
+@router.get(
     "/{nurse_id}/patients/{patient_id}/lab-tests",
     response_model=APIResponse[PaginatedResult[NursePatientLabTestResponse]],
 )
@@ -418,7 +488,7 @@ async def get_nurse_shift_details(
 
 @router.post(
     "/{nurse_id}/shifts",
-    response_model=APIResponse[NurseShiftResponse],
+    response_model=APIResponse[NurseShiftResponse | list[NurseShiftResponse]],
     status_code=201,
 )
 async def create_nurse_shift(

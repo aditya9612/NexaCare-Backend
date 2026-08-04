@@ -277,6 +277,21 @@ class NurseAttendanceRepository:
         await self.db.refresh(attendance)
         return attendance
 
+    async def get_by_date(self, nurse_id: int, attendance_date: date) -> NurseAttendance | None:
+        result = await self.db.execute(
+            select(NurseAttendance).where(
+                NurseAttendance.nurse_id == nurse_id,
+                NurseAttendance.attendance_date == attendance_date,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update(self, attendance: NurseAttendance) -> NurseAttendance:
+        await self.db.flush()
+        await self.db.refresh(attendance)
+        return attendance
+
+
 
 class NurseHandoverNoteRepository:
     def __init__(self, db: AsyncSession):
@@ -605,6 +620,36 @@ class NursePatientVitalRepository:
         await self.db.flush()
         await self.db.refresh(vital)
         return vital
+
+    async def get_by_id(self, vital_id: int) -> PatientVital | None:
+        from sqlalchemy import select
+        stmt = select(PatientVital).where(PatientVital.id == vital_id)
+        res = await self.db.execute(stmt)
+        return res.scalar_one_or_none()
+
+    async def update(self, vital: PatientVital) -> PatientVital:
+        await self.db.flush()
+        await self.db.refresh(vital)
+        return vital
+
+    async def list_by_patient_id(
+        self, patient_id: int, skip: int = 0, limit: int = 20
+    ) -> list[PatientVital]:
+        from sqlalchemy import select
+        stmt = (
+            select(PatientVital)
+            .where(PatientVital.patient_id == patient_id)
+            .order_by(PatientVital.recorded_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        res = await self.db.execute(stmt)
+        return list(res.scalars().all())
+
+    async def count_by_patient_id(self, patient_id: int) -> int:
+        from sqlalchemy import select, func
+        stmt = select(func.count(PatientVital.id)).where(PatientVital.patient_id == patient_id)
+        return await self.db.scalar(stmt) or 0
 
 
 class NurseTaskRepository:

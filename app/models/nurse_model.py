@@ -151,6 +151,7 @@ class PatientVital(Base, TimestampMixin):
     pulse_rate: Mapped[int] = mapped_column(Integer)
     oxygen_saturation: Mapped[float] = mapped_column(Float)
     recorded_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     nurse = relationship("Nurse", back_populates="patient_vitals")
     patient = relationship("Patient")

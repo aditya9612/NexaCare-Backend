@@ -20,9 +20,11 @@ class LabDashboardRepository:
         return query
 
     async def get_test_order_status_counts(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> Dict[str, int]:
         query = select(TestOrder.status, func.count(TestOrder.id)).where(TestOrder.is_deleted.is_(False))
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.ordered_at, start_date, end_date)
         query = query.group_by(TestOrder.status)
         
@@ -31,16 +33,25 @@ class LabDashboardRepository:
         return counts
 
     async def get_samples_collected_count(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> int:
-        query = select(func.count(Sample.id)).where(Sample.status == SampleStatus.COLLECTED)
+        query = select(func.count(Sample.id)).join(TestOrder, Sample.test_order_id == TestOrder.id).where(
+            Sample.status == SampleStatus.COLLECTED,
+            TestOrder.is_deleted.is_(False)
+        )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, Sample.created_at, start_date, end_date)
         return (await self.db.scalar(query)) or 0
 
     async def get_report_status_counts(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> Dict[str, int]:
-        query = select(LabReport.status, func.count(LabReport.id))
+        query = select(LabReport.status, func.count(LabReport.id)).join(TestOrder, LabReport.test_order_id == TestOrder.id).where(
+            TestOrder.is_deleted.is_(False)
+        )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, LabReport.created_at, start_date, end_date)
         query = query.group_by(LabReport.status)
         
@@ -49,7 +60,7 @@ class LabDashboardRepository:
         return counts
 
     async def get_critical_reports_count(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> int:
         # Count test orders in range that have at least one critical test result
         query = (
@@ -61,22 +72,27 @@ class LabDashboardRepository:
                 TestResult.is_critical.is_(True)
             )
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.ordered_at, start_date, end_date)
         return (await self.db.scalar(query)) or 0
 
     async def get_reports_delivered_count(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> int:
         # Delivered counts are approved reports with report_path generated
-        query = select(func.count(LabReport.id)).where(
+        query = select(func.count(LabReport.id)).join(TestOrder, LabReport.test_order_id == TestOrder.id).where(
             LabReport.status == LabReportStatus.APPROVED,
-            LabReport.report_path.is_not(None)
+            LabReport.report_path.is_not(None),
+            TestOrder.is_deleted.is_(False)
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, LabReport.created_at, start_date, end_date)
         return (await self.db.scalar(query)) or 0
 
     async def get_recent_test_orders(
-        self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10
+        self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10, department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         query = (
             select(
@@ -95,6 +111,8 @@ class LabDashboardRepository:
             .join(LabTest, LabTest.id == TestOrder.lab_test_id)
             .where(TestOrder.is_deleted.is_(False))
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.ordered_at, start_date, end_date)
         query = query.order_by(TestOrder.ordered_at.desc()).limit(limit)
         
@@ -114,7 +132,7 @@ class LabDashboardRepository:
         return orders
 
     async def get_critical_alerts(
-        self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10
+        self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10, department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         query = (
             select(
@@ -136,6 +154,8 @@ class LabDashboardRepository:
                 TestResult.is_critical.is_(True)
             )
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestResult.created_at, start_date, end_date)
         query = query.order_by(TestResult.created_at.desc()).limit(limit)
         
@@ -155,7 +175,7 @@ class LabDashboardRepository:
         return alerts
 
     async def get_pending_report_approvals(
-        self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10
+        self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10, department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         query = (
             select(
@@ -177,6 +197,8 @@ class LabDashboardRepository:
                 LabReport.status == LabReportStatus.PENDING_APPROVAL
             )
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, LabReport.created_at, start_date, end_date)
         query = query.order_by(LabReport.created_at.desc()).limit(limit)
         
@@ -195,14 +217,19 @@ class LabDashboardRepository:
         return approvals
 
     async def get_approved_reports_count(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> int:
-        query = select(func.count(LabReport.id)).where(LabReport.status == LabReportStatus.APPROVED)
+        query = select(func.count(LabReport.id)).join(TestOrder, LabReport.test_order_id == TestOrder.id).where(
+            LabReport.status == LabReportStatus.APPROVED,
+            TestOrder.is_deleted.is_(False)
+        )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, LabReport.approved_at, start_date, end_date)
         return (await self.db.scalar(query)) or 0
 
     async def get_average_turnaround_hours(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> float:
         query = (
             select(TestOrder.ordered_at, TestOrder.completed_at)
@@ -211,6 +238,8 @@ class LabDashboardRepository:
                 TestOrder.completed_at.is_not(None)
             )
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.completed_at, start_date, end_date)
         res = await self.db.execute(query)
         rows = res.all()
@@ -220,9 +249,11 @@ class LabDashboardRepository:
         return round(total_hours / len(rows), 1) if rows else 2.4
 
     async def get_abnormal_detect_rate(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> float:
         total_orders_query = select(func.count(TestOrder.id)).where(TestOrder.is_deleted.is_(False))
+        if department_id is not None:
+            total_orders_query = total_orders_query.where(TestOrder.department_id == department_id)
         total_orders_query = self._apply_date_filter(total_orders_query, TestOrder.ordered_at, start_date, end_date)
         total = (await self.db.scalar(total_orders_query)) or 0
         if total == 0:
@@ -234,14 +265,18 @@ class LabDashboardRepository:
             .join(TestResult, TestResult.test_order_id == TestOrder.id)
             .where(TestOrder.is_deleted.is_(False), TestResult.is_critical.is_(True))
         )
+        if department_id is not None:
+            critical_query = critical_query.where(TestOrder.department_id == department_id)
         critical_query = self._apply_date_filter(critical_query, TestOrder.ordered_at, start_date, end_date)
         critical_count = (await self.db.scalar(critical_query)) or 0
         return round((critical_count / total) * 100.0, 1)
 
     async def get_completion_rate(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> float:
         total_query = select(func.count(TestOrder.id)).where(TestOrder.is_deleted.is_(False))
+        if department_id is not None:
+            total_query = total_query.where(TestOrder.department_id == department_id)
         total_query = self._apply_date_filter(total_query, TestOrder.ordered_at, start_date, end_date)
         total = (await self.db.scalar(total_query)) or 0
         if total == 0:
@@ -251,12 +286,14 @@ class LabDashboardRepository:
             TestOrder.is_deleted.is_(False),
             TestOrder.status == LabOrderStatus.COMPLETED
         )
+        if department_id is not None:
+            completed_query = completed_query.where(TestOrder.department_id == department_id)
         completed_query = self._apply_date_filter(completed_query, TestOrder.ordered_at, start_date, end_date)
         completed = (await self.db.scalar(completed_query)) or 0
         return round((completed / total) * 100.0, 1)
 
     async def get_volume_by_category(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         query = (
             select(func.coalesce(LabTest.category, "Unassigned"), func.count(TestOrder.id))
@@ -264,6 +301,8 @@ class LabDashboardRepository:
             .join(LabTest, LabTest.id == TestOrder.lab_test_id)
             .where(TestOrder.is_deleted.is_(False))
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.ordered_at, start_date, end_date)
         query = query.group_by(LabTest.category)
 
@@ -289,7 +328,7 @@ class LabDashboardRepository:
         ]
 
     async def get_turnaround_time_trend(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         query = (
             select(TestOrder.ordered_at, TestOrder.completed_at)
@@ -298,6 +337,8 @@ class LabDashboardRepository:
                 TestOrder.completed_at.is_not(None)
             )
         )
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.completed_at, start_date, end_date)
         res = await self.db.execute(query)
         rows = res.all()
@@ -330,7 +371,7 @@ class LabDashboardRepository:
         ]
 
     async def get_category_performance_metrics(
-        self, start_date: Optional[datetime], end_date: Optional[datetime]
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         categories = ["Hematology", "Biochemistry", "Radiology", "Immunology", "Pathology"]
         result = []
@@ -341,6 +382,8 @@ class LabDashboardRepository:
                 .join(LabTest, LabTest.id == TestOrder.lab_test_id)
                 .where(TestOrder.is_deleted.is_(False), LabTest.category == cat)
             )
+            if department_id is not None:
+                query = query.where(TestOrder.department_id == department_id)
             query = self._apply_date_filter(query, TestOrder.ordered_at, start_date, end_date)
             cat_total = (await self.db.scalar(query)) or 0
 
@@ -355,6 +398,8 @@ class LabDashboardRepository:
                     LabReport.status == LabReportStatus.APPROVED
                 )
             )
+            if department_id is not None:
+                app_query = app_query.where(TestOrder.department_id == department_id)
             app_query = self._apply_date_filter(app_query, LabReport.approved_at, start_date, end_date)
             approved = (await self.db.scalar(app_query)) or 0
 

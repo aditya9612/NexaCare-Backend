@@ -97,17 +97,19 @@ class LabService:
     async def list_tests(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, doctor_id: int | None = None,
+        department_id: int | None = None,
     ):
         skip = (page - 1) * size
         items = await self.test_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
-                                               sort_order=sort_order, category=category, doctor_id=doctor_id)
-        total = await self.test_repo.count_all(category=category, doctor_id=doctor_id)
+                                               sort_order=sort_order, category=category, doctor_id=doctor_id,
+                                               department_id=department_id)
+        total = await self.test_repo.count_all(category=category, doctor_id=doctor_id, department_id=department_id)
         return build_paginated_result([LabTestResponse.model_validate(t) for t in items], total, page, size)
 
-    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None):
+    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None, department_id: int | None = None):
         skip = (page - 1) * size
-        items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id)
-        total = await self.test_repo.count_search(q, doctor_id=doctor_id)
+        items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id, department_id=department_id)
+        total = await self.test_repo.count_search(q, doctor_id=doctor_id, department_id=department_id)
         return build_paginated_result([LabTestResponse.model_validate(t) for t in items], total, page, size)
 
     async def get_test(self, test_id: int) -> LabTestResponse:

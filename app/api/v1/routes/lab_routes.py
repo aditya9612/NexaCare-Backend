@@ -55,15 +55,31 @@ async def list_lab_tests(
     _: User = Depends(require_permission("lab", "read")),
 ):
     from app.repositories.doctor_repository import DoctorRepository
+    from app.models.staff_model import Staff
+    from app.core.exceptions import BadRequestException
+    from sqlalchemy import select
+
     doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
     doctor_id = doctor.id if doctor else None
 
+    # Resolve department_id for Lab Technician
+    role_name = current_user.role.name.lower() if current_user and current_user.role else ""
+    department_id = None
+    if role_name in ["lab technician", "lab_technician"]:
+        staff_result = await db.execute(
+            select(Staff).where(Staff.email == current_user.email)
+        )
+        staff = staff_result.scalar_one_or_none()
+        if not staff or not staff.department_id:
+            raise BadRequestException("Lab technician department is not assigned")
+        department_id = staff.department_id
+
     service = LabService(db)
     if q:
-        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id)
+        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id, department_id=department_id)
     else:
         result = await service.list_tests(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id, department_id=department_id
         )
     return APIResponse(message="Lab tests retrieved", data=result)
 

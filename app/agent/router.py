@@ -360,6 +360,8 @@ async def call_status(
 # ── Route 6: Health check ──────────────────────────────────────────────────────
 @router.get("/health")
 async def agent_health():
+    from app.services.sarvam_tts import voice_clone_ready
+
     base_url = _base_url()
     logger.info(f"▶ HEALTH | base_url={base_url} | active_calls={session_store.active_session_count()}")
     return {
@@ -367,9 +369,33 @@ async def agent_health():
         "agent": "NexaCare AI Voice Agent",
         "active_calls": session_store.active_session_count(),
         "base_url": base_url,
+        "voice_clone_enabled": voice_clone_ready(),
         "twilio_incoming_webhook": f"{base_url}/agent/v1/voice/incoming",
         "twilio_status_webhook": f"{base_url}/agent/v1/voice/status",
     }
+
+
+# ── Route 6b: Public audio for Twilio <Play> (Sarvam clone cache) ─────────────
+@router.get("/audio/{filename}")
+async def voice_audio(filename: str):
+    """
+    Served to Twilio when TwiML contains <Play>.
+    No webhook signature — Twilio Media fetches this as a plain GET.
+    """
+    from app.services.sarvam_tts import read_cached_audio
+
+    try:
+        data, content_type = read_cached_audio(filename)
+    except ValueError:
+        return PlainTextResponse("invalid filename", status_code=400)
+    except FileNotFoundError:
+        return PlainTextResponse("not found", status_code=404)
+
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 # ── Route 7: Reminder call TwiML ───────────────────────────────────────────────

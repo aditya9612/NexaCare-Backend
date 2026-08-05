@@ -1,3 +1,3 @@
-from app.agent.router import router as agent_router
- 
-__all__ = ["agent_router"]
+"""NexaCare AI Voice Agent package (Flow B)."""
+
+__all__: list[str] = []

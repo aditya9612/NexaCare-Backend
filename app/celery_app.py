@@ -19,6 +19,8 @@ celery_app = Celery(
     ],
 )
 
+# Webhook paths (.delay() on transfer/callback) must never block on broker retries.
+# Tickets are persisted before enqueue; beat picks up missed enqueues when Redis is down.
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -28,6 +30,19 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_always_eager=False,
+    task_publish_retry=False,
+    broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        "socket_connect_timeout": 1,
+        "socket_timeout": 1,
+        "max_retries": 0,
+    },
+    result_backend_transport_options={
+        "socket_connect_timeout": 1,
+        "socket_timeout": 1,
+        "max_retries": 0,
+    },
     beat_schedule={
         "process-pending-voice-calls": {
             "task": "app.tasks.voice_tasks.process_pending_calls",

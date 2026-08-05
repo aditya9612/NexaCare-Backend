@@ -225,7 +225,8 @@ class PrescriptionRepository:
         status: str | None = None,
         doctor_id: int | None = None,
         patient_id: int | None = None,
-        appointment_id: int | None = None
+        appointment_id: int | None = None,
+        department_id: int | None = None
     ) -> list[Prescription]:
         query = self._base_query()
         if status:
@@ -236,6 +237,9 @@ class PrescriptionRepository:
             query = query.where(Prescription.patient_id == patient_id)
         if appointment_id is not None:
             query = query.where(Prescription.appointment_id == appointment_id)
+        if department_id is not None:
+            from app.models.doctor_model import Doctor
+            query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
         result = await self.db.execute(query.order_by(Prescription.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
@@ -244,7 +248,8 @@ class PrescriptionRepository:
         status: str | None = None,
         doctor_id: int | None = None,
         patient_id: int | None = None,
-        appointment_id: int | None = None
+        appointment_id: int | None = None,
+        department_id: int | None = None
     ) -> int:
         query = select(func.count()).select_from(Prescription).where(Prescription.is_deleted.is_(False))
         if status:
@@ -255,6 +260,9 @@ class PrescriptionRepository:
             query = query.where(Prescription.patient_id == patient_id)
         if appointment_id is not None:
             query = query.where(Prescription.appointment_id == appointment_id)
+        if department_id is not None:
+            from app.models.doctor_model import Doctor
+            query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, prescription_id: int) -> Prescription | None:

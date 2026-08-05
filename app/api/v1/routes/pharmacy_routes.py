@@ -167,16 +167,33 @@ async def list_prescriptions(
     appointment_id: int | None = Query(None),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
+    from app.core.constants import UserRole
+    from app.core.exceptions import NotFoundException
+    from app.repositories.nurse_repository import NurseRepository
     from app.repositories.doctor_repository import DoctorRepository
-    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+
+    role_name = current_user.role.name if current_user.role else None
     
+    doctor_id = None
+    department_id = None
+    
+    if role_name == UserRole.NURSE:
+        nurse = await NurseRepository(db).get_by_user_id(current_user.id)
+        if not nurse:
+            raise NotFoundException("Nurse profile not found")
+        department_id = nurse.department_id
+    elif role_name == UserRole.DOCTOR:
+        doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+        doctor_id = doctor.id if doctor else None
+        
     result = await PharmacyService(db).list_prescriptions(
         page=page,
         size=size,
         status=status,
-        doctor_id=doctor.id if doctor else None,
+        doctor_id=doctor_id,
         patient_id=patient_id,
         appointment_id=appointment_id,
+        department_id=department_id,
     )
     return APIResponse(message="Prescriptions retrieved", data=result)
 

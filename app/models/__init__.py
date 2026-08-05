@@ -19,6 +19,8 @@ from app.models.nurse_model import (
     NurseTask,
     NursePrescription,
     NurseMedicationLog,
+    PatientUpdate,
+    EmergencyAlert,
 )
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.models.permission_model import Permission
@@ -61,6 +63,7 @@ from app.models.hospital_voice_model import (
     VoiceCallbackTicket,
 )
 from app.models.hospital_setting import HospitalSetting
+from app.models.appointment_setting import AppointmentSetting
 from app.models.user_preference import UserPreference
 from app.models.notification_setting import NotificationSetting
 from app.models.billing_setting import BillingSetting
@@ -123,6 +126,8 @@ __all__ = [
     "NurseTask",
     "NursePrescription",
     "NurseMedicationLog",
+    "PatientUpdate",
+    "EmergencyAlert",
     "AuditLog",
     "ChatSession",
     "ChatMessage",
@@ -158,6 +163,7 @@ __all__ = [
     "VendorPayment",
     "ClinicalRecord",
     "HospitalSetting",
+    "AppointmentSetting",
     "UserPreference",
     "NotificationSetting",
     "BillingSetting",

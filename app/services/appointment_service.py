@@ -265,7 +265,9 @@ class AppointmentService:
             raise BadRequestException("Token already generated for this appointment")
         
         # Calculate next token for today
-        today = date.today()
+        from datetime import timezone, timedelta
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(ist_tz).date()
         result = await self.db.execute(
             select(Appointment.queue_token)
             .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
@@ -289,8 +291,10 @@ class AppointmentService:
         return appointment
 
     async def get_today_queue(self) -> list[Appointment]:
+        from datetime import timezone, timedelta
         from sqlalchemy import select
-        today = date.today()
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(ist_tz).date()
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
@@ -299,8 +303,10 @@ class AppointmentService:
         return list(result.scalars().all())
 
     async def get_current_queue(self) -> Appointment | None:
+        from datetime import timezone, timedelta
         from sqlalchemy import select
-        today = date.today()
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(ist_tz).date()
         result = await self.db.execute(
             select(Appointment)
             .where(

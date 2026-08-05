@@ -48,9 +48,9 @@ class LabTestResponse(BaseSchema):
 
 class TestOrderCreate(BaseSchema):
     patient_id: int
-    doctor_id: int
+    doctor_id: int | None = None
     lab_test_id: int
-    appointment_id: int
+    appointment_id: int | None = None
     priority: str = "normal"
     notes: str | None = None
 

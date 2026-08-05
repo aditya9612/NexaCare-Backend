@@ -20,7 +20,10 @@ def process_pending_calls():
     run_celery_async(_process_pending_calls())
 
 
-@celery_app.task(name="app.tasks.voice_tasks.process_reception_callback_tickets")
+@celery_app.task(
+    name="app.tasks.voice_tasks.process_reception_callback_tickets",
+    ignore_result=True,
+)
 def process_reception_callback_tickets():
     run_celery_async(_process_reception_callback_tickets())
 

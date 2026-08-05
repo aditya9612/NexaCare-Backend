@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600
     VOICE_AI_CONFIDENCE_THRESHOLD: float = 0.65
+    # Phase 6: multi-turn FAQ, FAQ↔Booking switching, goodbye flow (default OFF)
+    VOICE_PHASE6_ENABLED: bool = True
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"

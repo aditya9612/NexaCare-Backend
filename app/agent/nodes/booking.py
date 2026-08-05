@@ -229,8 +229,9 @@ VOICE_BY_LANG = {
 }
 
 
-def _say(text: str, lang: str) -> str:
-    voice = VOICE_BY_LANG.get(lang)
+def _say(text: str, lang: str, voice_profile: str | None = None) -> str:
+    """Prefer hospital voice_profile when set; else Chirp3 for mr-IN."""
+    voice = voice_profile or VOICE_BY_LANG.get(lang)
     voice_attr = f' voice="{escape(voice)}"' if voice else ""
     return f'<Say language="{escape(lang)}"{voice_attr}>{escape(text)}</Say>'
 
@@ -267,22 +268,35 @@ def _speech_timeout_for(lang: str, base: int = 8) -> int:
     return base + 2 if lang == "mr" else base
 
 
-def _gather_speech(action: str, prompt: str, twilio_lang: str, lang_code: str = "en", timeout: int = 8) -> str:
+def _gather_speech(
+    action: str,
+    prompt: str,
+    twilio_lang: str,
+    lang_code: str = "en",
+    timeout: int = 8,
+    voice_profile: str | None = None,
+) -> str:
     hints = SPEECH_HINTS.get(lang_code, SPEECH_HINTS["en"])
     return (
         f'<Gather input="speech" action="{escape(action)}" method="POST" '
         f'language="{escape(twilio_lang)}" speechTimeout="auto" timeout="{timeout}" '
         f'hints="{escape(hints)}">'
-        f'{_say(prompt, twilio_lang)}'
+        f'{_say(prompt, twilio_lang, voice_profile=voice_profile)}'
         f'</Gather>'
         f'<Redirect method="POST">{escape(action)}</Redirect>'
     )
 
 
-def _gather_dtmf(action: str, prompt: str, lang: str, num_digits: int = 1) -> str:
+def _gather_dtmf(
+    action: str,
+    prompt: str,
+    lang: str,
+    num_digits: int = 1,
+    voice_profile: str | None = None,
+) -> str:
     return (
         f'<Gather numDigits="{num_digits}" action="{escape(action)}" method="POST" timeout="10">'
-        f'{_say(prompt, lang)}'
+        f'{_say(prompt, lang, voice_profile=voice_profile)}'
         f'</Gather>'
         f'<Redirect method="POST">{escape(action)}</Redirect>'
     )
@@ -292,8 +306,12 @@ def _twiml(*elements: str) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?><Response>' + "".join(elements) + "</Response>"
 
 
-def _hangup_twiml(text: str, lang: str) -> str:
-    return _twiml(_say(text, lang), "<Hangup/>")
+def _hangup_twiml(text: str, lang: str, voice_profile: str | None = None) -> str:
+    return _twiml(_say(text, lang, voice_profile=voice_profile), "<Hangup/>")
+
+
+def _voice_from_state(state: BookingCallState) -> str | None:
+    return state.get("voice_profile")
 
 
 def _format_time_for_tts(time_str: str) -> str:
@@ -310,8 +328,18 @@ def _format_time_for_tts(time_str: str) -> str:
 def build_collect_name_twiml(state: BookingCallState) -> str:
     lang = state["language"]
     twilio_lang = state["twilio_language"]
+    vp = _voice_from_state(state)
     action = f"{state['base_url']}/agent/v1/voice/turn"
-    return _twiml(_gather_speech(action, _s("ask_name", lang), twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang)))
+    return _twiml(
+        _gather_speech(
+            action,
+            _s("ask_name", lang),
+            twilio_lang,
+            lang_code=lang,
+            timeout=_speech_timeout_for(lang),
+            voice_profile=vp,
+        )
+    )
 
 
 def process_collect_name(state: BookingCallState, speech_result: str, confidence: float = -1.0) -> dict:
@@ -323,6 +351,7 @@ def process_collect_name(state: BookingCallState, speech_result: str, confidence
     """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
+    vp = _voice_from_state(state)
     action = f"{state['base_url']}/agent/v1/voice/turn"
 
     logger.info(f"[{state['call_sid']}] Name transcript: {speech_result!r} | confidence={confidence}")
@@ -344,8 +373,15 @@ def process_collect_name(state: BookingCallState, speech_result: str, confidence
             "patient_name": name,
             "retry_count": 0,
             "_twiml": _twiml(
-                _say(confirm_msg, twilio_lang),
-                _gather_speech(action, ask_problem_msg, twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang, base=10)),
+                _say(confirm_msg, twilio_lang, voice_profile=vp),
+                _gather_speech(
+                    action,
+                    ask_problem_msg,
+                    twilio_lang,
+                    lang_code=lang,
+                    timeout=_speech_timeout_for(lang, base=10),
+                    voice_profile=vp,
+                ),
             ),
         }
 
@@ -365,8 +401,15 @@ def process_collect_name(state: BookingCallState, speech_result: str, confidence
             "patient_name": "Patient",
             "retry_count": 0,
             "_twiml": _twiml(
-                _say(_s("ask_problem", lang), twilio_lang),
-                _gather_speech(action, _s("ask_problem", lang), twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang, base=10)),
+                _say(_s("ask_problem", lang), twilio_lang, voice_profile=vp),
+                _gather_speech(
+                    action,
+                    _s("ask_problem", lang),
+                    twilio_lang,
+                    lang_code=lang,
+                    timeout=_speech_timeout_for(lang, base=10),
+                    voice_profile=vp,
+                ),
             ),
         }
 
@@ -374,8 +417,15 @@ def process_collect_name(state: BookingCallState, speech_result: str, confidence
         "step": "collect_name",
         "retry_count": retry,
         "_twiml": _twiml(
-            _say(_s("name_not_found", lang), twilio_lang),
-            _gather_speech(action, _s("ask_name", lang), twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang)),
+            _say(_s("name_not_found", lang), twilio_lang, voice_profile=vp),
+            _gather_speech(
+                action,
+                _s("ask_name", lang),
+                twilio_lang,
+                lang_code=lang,
+                timeout=_speech_timeout_for(lang),
+                voice_profile=vp,
+            ),
         ),
     }
 
@@ -391,6 +441,7 @@ def process_collect_problem(state: BookingCallState, speech_result: str, confide
     """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
+    vp = _voice_from_state(state)
     action = f"{state['base_url']}/agent/v1/voice/turn"
 
     logger.info(f"[{state['call_sid']}] Problem transcript: {speech_result!r} | confidence={confidence}")
@@ -426,8 +477,15 @@ def process_collect_problem(state: BookingCallState, speech_result: str, confide
             "step": "collect_problem",
             "retry_count": retry,
             "_twiml": _twiml(
-                _say(_s("problem_not_found", lang), twilio_lang),
-                _gather_speech(action, _s("ask_problem", lang), twilio_lang, lang_code=lang, timeout=_speech_timeout_for(lang, base=10)),
+                _say(_s("problem_not_found", lang), twilio_lang, voice_profile=vp),
+                _gather_speech(
+                    action,
+                    _s("ask_problem", lang),
+                    twilio_lang,
+                    lang_code=lang,
+                    timeout=_speech_timeout_for(lang, base=10),
+                    voice_profile=vp,
+                ),
             ),
         }
 
@@ -500,11 +558,12 @@ def build_suggest_doctors_twiml(
 ) -> str:
     lang = state["language"]
     twilio_lang = state["twilio_language"]
+    vp = _voice_from_state(state)
     action = f"{state['base_url']}/agent/v1/voice/turn"
     specialty = state.get("detected_specialty", "General Medicine")
 
     if not doctors:
-        return _hangup_twiml(_s("no_doctors", lang), twilio_lang)
+        return _hangup_twiml(_s("no_doctors", lang), twilio_lang, voice_profile=vp)
 
     intro = _s("suggest_doctors_intro", lang, specialty=specialty)
     options = "".join(
@@ -516,8 +575,8 @@ def build_suggest_doctors_twiml(
     elements = []
     # Prepend problem confirmation TTS if present
     if confirm_problem_tts:
-        elements.append(_say(confirm_problem_tts, twilio_lang))
-    elements.append(_gather_dtmf(action, prompt, twilio_lang))
+        elements.append(_say(confirm_problem_tts, twilio_lang, voice_profile=vp))
+    elements.append(_gather_dtmf(action, prompt, twilio_lang, voice_profile=vp))
 
     return _twiml(*elements)
 
@@ -594,6 +653,7 @@ async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
 def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
     lang = state["language"]
     twilio_lang = state["twilio_language"]
+    vp = _voice_from_state(state)
     action = f"{state['base_url']}/agent/v1/voice/turn"
     doctor_name = state.get("selected_doctor_name", "the doctor")
 
@@ -602,7 +662,7 @@ def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
         _s("press_for_slot", lang, n=i + 1, date=s["date"], time=_format_time_for_tts(s["time"]))
         for i, s in enumerate(slots)
     )
-    return _twiml(_gather_dtmf(action, intro + options, twilio_lang))
+    return _twiml(_gather_dtmf(action, intro + options, twilio_lang, voice_profile=vp))
 
 
 def process_select_slot(state: BookingCallState, digit: str) -> dict:
@@ -711,7 +771,10 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             "step": "booked",
             "appointment_id": appt.id,
             "appointment_number": appt_no,
-            "_twiml": _twiml(_say(confirm_text, twilio_lang), "<Hangup/>"),
+            "_twiml": _twiml(
+                _say(confirm_text, twilio_lang, voice_profile=_voice_from_state(state)),
+                "<Hangup/>",
+            ),
         }
 
     except Exception as e:
@@ -719,5 +782,9 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
         await db.rollback()
         return {
             "step": "error",
-            "_twiml": _hangup_twiml(_s("error", lang), twilio_lang),
+            "_twiml": _hangup_twiml(
+                _s("error", lang),
+                twilio_lang,
+                voice_profile=_voice_from_state(state),
+            ),
         }

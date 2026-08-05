@@ -38,6 +38,14 @@ from app.schemas.nurse_schema import (
     NursePatientAssignmentResponse,
 )
 from app.services.nurse_service import NurseService
+from app.services.nurse_communication_service import NurseCommunicationService
+from app.schemas.nurse_communication_schema import (
+    PatientUpdateCreate,
+    PatientUpdateResponse,
+    EmergencyAlertCreate,
+    EmergencyAlertResponse,
+)
+from typing import List
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
@@ -687,6 +695,36 @@ async def list_nurse_notifications(
         sort_order=sort_order,
     )
     return APIResponse(message="Nurse notifications retrieved", data=result)
+
+
+@singular_router.post("/patient-updates", response_model=APIResponse[PatientUpdateResponse], status_code=201)
+async def create_patient_update(
+    data: PatientUpdateCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).create_patient_update(data, current_user.id)
+    return APIResponse(message="Patient update recorded successfully", data=result)
+
+
+@singular_router.get("/patient-updates/{patient_id}", response_model=APIResponse[List[PatientUpdateResponse]])
+async def get_patient_updates(
+    patient_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).get_patient_updates(patient_id, current_user)
+    return APIResponse(message="Patient updates retrieved successfully", data=result)
+
+
+@singular_router.post("/emergency-alert", response_model=APIResponse[EmergencyAlertResponse], status_code=201)
+async def create_emergency_alert(
+    data: EmergencyAlertCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).create_emergency_alert(data, current_user.id)
+    return APIResponse(message="Emergency alert recorded successfully", data=result)
 
 
 

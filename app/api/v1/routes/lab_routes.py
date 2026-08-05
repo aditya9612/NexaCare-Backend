@@ -76,10 +76,19 @@ async def list_lab_tests(
 
     service = LabService(db)
     if q:
-        result = await service.search_tests(q, page=page, size=size, doctor_id=doctor_id, department_id=department_id)
+        result = await service.search_tests(
+            q, page=page, size=size, doctor_id=doctor_id, department_id=department_id, current_user=current_user
+        )
     else:
         result = await service.list_tests(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category, doctor_id=doctor_id, department_id=department_id
+            page=page,
+            size=size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            category=category,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            current_user=current_user,
         )
     return APIResponse(message="Lab tests retrieved", data=result)
 
@@ -173,9 +182,8 @@ async def delete_test_order_legacy(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_order(order_id, current_user.id)
+    await LabService(db).delete_order(order_id, current_user)
     return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -196,9 +204,8 @@ async def delete_test_order(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_order(order_id, current_user.id)
+    await LabService(db).delete_order(order_id, current_user)
     return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 

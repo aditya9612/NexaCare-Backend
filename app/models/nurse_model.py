@@ -37,6 +37,7 @@ class Nurse(Base, TimestampMixin):
         "PatientVital", back_populates="nurse", cascade="all, delete-orphan"
     )
     tasks = relationship("NurseTask", back_populates="nurse", cascade="all, delete-orphan")
+    user = relationship("User")
 
 
 class NurseShift(Base, TimestampMixin):
@@ -216,6 +217,33 @@ class NurseMedicationLog(Base, TimestampMixin):
     nurse = relationship("Nurse")
 
 
+class PatientUpdate(Base, TimestampMixin):
+    __tablename__ = "patient_updates"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
+    nurse_id: Mapped[int] = mapped_column(ForeignKey("nurses.id", ondelete="CASCADE"), index=True)
+    update_type: Mapped[str] = mapped_column(String(100), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String(50), default="NORMAL", index=True)
+
+    patient = relationship("Patient")
+    nurse = relationship("Nurse")
+
+
+class EmergencyAlert(Base, TimestampMixin):
+    __tablename__ = "emergency_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
+    nurse_id: Mapped[int] = mapped_column(ForeignKey("nurses.id", ondelete="CASCADE"), index=True)
+    emergency_type: Mapped[str] = mapped_column(String(100), index=True)
+    message: Mapped[str] = mapped_column(Text)
+
+    patient = relationship("Patient")
+    nurse = relationship("Nurse")
+
+
 __all__ = [
     "Nurse",
     "NurseShift",
@@ -227,4 +255,6 @@ __all__ = [
     "NurseTask",
     "NursePrescription",
     "NurseMedicationLog",
+    "PatientUpdate",
+    "EmergencyAlert",
 ]

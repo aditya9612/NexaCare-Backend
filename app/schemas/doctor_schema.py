@@ -352,12 +352,27 @@ class DoctorUpdate(BaseSchema):
     experience: int | None = Field(None, ge=0, le=60)
     phone: str | None = None
     email: EmailStr | None = None
+    password: str | None = Field(None, min_length=8, max_length=20)
     department_id: int | None = Field(None, gt=0)
     consultation_fee: float | None = Field(None, ge=0)
     license_number: str | None = None
     availability_status: str | None = None
     profile_image: str | None = None
     bio: str | None = None
+    gender: DoctorGenderOption | None = None
+    date_of_birth: date | None = None
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def dob_validation(cls, value: date | None) -> date | None:
+        return validate_dob_field(value)
+
+    @field_validator("password")
+    @classmethod
+    def validate_doctor_password(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return validate_password_strength(v)
 
     @field_validator("specialization")
     @classmethod

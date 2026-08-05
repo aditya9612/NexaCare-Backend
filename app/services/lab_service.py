@@ -6,7 +6,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
+from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus, UserRole
 from app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException, ConflictException
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
 from app.models.staff_model import Staff
@@ -97,8 +97,20 @@ class LabService:
     async def list_tests(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, doctor_id: int | None = None,
-        department_id: int | None = None,
+        department_id: int | None = None, current_user = None
     ):
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
+
         skip = (page - 1) * size
         items = await self.test_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
                                                sort_order=sort_order, category=category, doctor_id=doctor_id,
@@ -106,7 +118,21 @@ class LabService:
         total = await self.test_repo.count_all(category=category, doctor_id=doctor_id, department_id=department_id)
         return build_paginated_result([LabTestResponse.model_validate(t) for t in items], total, page, size)
 
-    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None, department_id: int | None = None):
+    async def search_tests(
+        self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None,
+        department_id: int | None = None, current_user = None
+    ):
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
         skip = (page - 1) * size
         items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id, department_id=department_id)
         total = await self.test_repo.count_search(q, doctor_id=doctor_id, department_id=department_id)
@@ -163,9 +189,22 @@ class LabService:
     async def create_order(self, data: TestOrderCreate, user_id: int) -> TestOrderResponse:
         from sqlalchemy import select
 
-        # Get the appointment and verify basic integrity (patient and doctor match)
+        # Validate patient existence
+        from app.models.patient_model import Patient
+        patient = await self.db.get(Patient, data.patient_id)
+        if not patient or getattr(patient, "is_deleted", False):
+            raise NotFoundException("Patient not found")
+
+        # Validate doctor existence if provided
+        if data.doctor_id is not None:
+            from app.models.doctor_model import Doctor
+            doc_exists = await self.db.get(Doctor, data.doctor_id)
+            if not doc_exists or getattr(doc_exists, "is_deleted", False):
+                raise NotFoundException("Doctor not found")
+
         appointment = None
         if data.appointment_id is not None:
+            # Get the appointment and verify basic integrity (patient and doctor match)
             from app.models.appointment_model import Appointment
             appointment_result = await self.db.execute(
                 select(Appointment).where(Appointment.id == data.appointment_id)
@@ -183,11 +222,11 @@ class LabService:
 
             # Check future date appointments
             from datetime import date
-            from app.core.constants import AppointmentStatus
             if appointment.appointment_date is not None and appointment.appointment_date > date.today():
                 raise BadRequestException("Cannot create test order for future date appointments")
 
             # Check completed appointments only
+            from app.core.constants import AppointmentStatus
             appointment_status = (appointment.appointment_status or "").strip().lower()
             completed_status = AppointmentStatus.COMPLETED.strip().lower()
             if appointment_status != completed_status:
@@ -226,16 +265,17 @@ class LabService:
                 resolved_doctor_id = appointment.doctor_id
 
         await self._validate_department(test.department_id)
-        
+
         # Prepare the TestOrder data dictionary
-        order_dict = data.model_dump()
-        order_dict["doctor_id"] = resolved_doctor_id
+        order_data = data.model_dump()
+        order_data["doctor_id"] = resolved_doctor_id
 
         order = TestOrder(
             order_number=generate_lab_order_number(),
             ordered_at=utc_now(),
             department_id=test.department_id,
-            **order_dict,
+            created_by=user_id,
+            **order_data,
         )
         order = await self.order_repo.create(order)
         await self.audit_repo.create("create", "lab_order", user_id=user_id, resource_id=str(order.id))
@@ -315,12 +355,27 @@ class LabService:
         await self.audit_repo.create("update", "lab_order", user_id=user_id, resource_id=str(order.id))
         return self._order_response(order)
 
-    async def delete_order(self, order_id: int, user_id: int) -> None:
+    async def delete_order(self, order_id: int, current_user) -> None:
         order = await self.order_repo.get_by_id(order_id)
         if not order:
             raise NotFoundException("Test order not found")
+
+        # Dynamic Authorization Check
+        role_name = current_user.role.name if current_user.role else ""
+        is_admin = role_name in UserRole.ADMIN_ROLES
+
+        from app.repositories.rbac_repository import RBACRepository
+        rbac_repo = RBACRepository(self.db)
+        permissions = await rbac_repo.get_user_permissions(current_user.role_id)
+        has_global_delete = "lab:delete" in permissions
+
+        is_creator = order.created_by == current_user.id
+
+        if not (is_admin or has_global_delete or is_creator):
+            raise ForbiddenException("You do not have permission to delete this test order")
+
         await self.order_repo.soft_delete(order)
-        await self.audit_repo.create("delete", "lab_order", user_id=user_id, resource_id=str(order.id))
+        await self.audit_repo.create("delete", "lab_order", user_id=current_user.id, resource_id=str(order.id))
 
 
 

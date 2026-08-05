@@ -19,6 +19,8 @@ from app.models.nurse_model import (
     NurseTask,
     NursePrescription,
     NurseMedicationLog,
+    PatientUpdate,
+    EmergencyAlert,
 )
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.models.permission_model import Permission
@@ -123,6 +125,8 @@ __all__ = [
     "NurseTask",
     "NursePrescription",
     "NurseMedicationLog",
+    "PatientUpdate",
+    "EmergencyAlert",
     "AuditLog",
     "ChatSession",
     "ChatMessage",

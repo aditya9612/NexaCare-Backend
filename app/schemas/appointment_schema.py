@@ -59,14 +59,12 @@ class AppointmentResponse(BaseSchema):
     queue_token: str | None = None
     queue_status: str | None = None
 
-    cancel_reason: str | None = None
     cancellation_reason: str | None = None
 
     @model_validator(mode="after")
     def populate_cancellation_reason(self) -> "AppointmentResponse":
         from app.core.constants import AppointmentStatus
         if self.appointment_status in ("cancelled", AppointmentStatus.CANCELLED):
-            self.cancel_reason = self.notes
             self.cancellation_reason = self.notes
         return self
 

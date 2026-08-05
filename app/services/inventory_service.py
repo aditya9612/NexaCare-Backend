@@ -479,6 +479,10 @@ class InventoryService:
 
     async def get_stock_summary(self) -> StockSummary:
         data = await self.item_repo.get_stock_summary()
+        data["total_registered_items"] = await self.item_repo.count_all()
+        data["stock_alerts"] = await self.alert_repo.count_active()
+        data["active_warehouse_units"] = await self.warehouse_repo.count_active()
+        data["total_vendors"] = await self.vendor_repo.count_all()
         return StockSummary(**data)
 
     async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:

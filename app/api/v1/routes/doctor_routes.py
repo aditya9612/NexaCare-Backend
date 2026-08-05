@@ -126,18 +126,102 @@ async def create_doctor(
     return APIResponse(message="Doctor created", data=doctor_obj)
 
 
-@router.post("/onboard", response_model=APIResponse[DoctorOnboardResponse], status_code=201)
+@router.post(
+    "/onboard",
+    response_model=APIResponse[DoctorOnboardResponse],
+    status_code=201,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "required": [
+                            "first_name",
+                            "last_name",
+                            "specialization",
+                            "license_number",
+                            "experience",
+                            "phone",
+                            "email",
+                            "password",
+                        ]
+                    }
+                }
+            }
+        }
+    },
+)
 async def onboard_doctor(
     db: DbSession,
     current_user: CurrentUser,
-    data: DoctorOnboardCreate,
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    specialization: Optional[str] = Form(None),
+    license_number: Optional[str] = Form(None),
+    qualification: Optional[str] = Form(None),
+    experience: Optional[int] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    password: Optional[str] = Form(None),
+    department_id: Optional[int] = Form(None),
+    consultation_fee: Optional[float] = Form(None),
+    availability_status: Optional[str] = Form(None),
+    bio: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    date_of_birth: Optional[str] = Form(None),
+    profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "create")),
 ):
     """
     Create a doctor login account (`users`) and clinical profile (`doctors`) in one step.
+    Accepts multipart/form-data only (optional profile image file).
     The new doctor can log in immediately with the provided email and password.
     """
-    result = await DoctorService(db).onboard(data, current_user)
+    missing_fields = []
+    required = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "specialization": specialization,
+        "license_number": license_number,
+        "experience": experience,
+        "phone": phone,
+        "email": email,
+        "password": password,
+    }
+    for field_name, value in required.items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing_fields.append({
+                "type": "missing",
+                "loc": ["body", field_name],
+                "msg": "Field required",
+                "input": None,
+            })
+    if missing_fields:
+        raise HTTPException(status_code=422, detail=missing_fields)
+
+    try:
+        onboard_data = DoctorOnboardCreate(
+            first_name=first_name,
+            last_name=last_name,
+            specialization=specialization,
+            qualification=qualification,
+            experience=experience,
+            phone=phone,
+            email=email,
+            password=password,
+            department_id=department_id,
+            consultation_fee=consultation_fee,
+            license_number=license_number,
+            availability_status=availability_status or "available",
+            bio=bio,
+            gender=gender,
+            date_of_birth=date_of_birth or None,
+            profile_image=None,
+        )
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
+    result = await DoctorService(db).onboard(onboard_data, current_user, image_file=profile_image)
     return APIResponse(message="Doctor onboarded successfully", data=result)
 
 
@@ -433,7 +517,7 @@ async def get_doctor(
     return APIResponse(message="Doctor retrieved", data=doctor)
 
 
-@router.put("/{doctor_id}", response_model=APIResponse[DoctorResponse])
+@router.put("/{doctor_id}", response_model=APIResponse[DoctorOnboardResponse])
 async def update_doctor(
     doctor_id: int,
     db: DbSession,
@@ -445,11 +529,14 @@ async def update_doctor(
     experience: Optional[int] = Form(None),
     phone: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
-    department: Optional[str] = Form(None),
+    password: Optional[str] = Form(None),
+    department_id: Optional[int] = Form(None),
     consultation_fee: Optional[float] = Form(None),
     license_number: Optional[str] = Form(None),
     availability_status: Optional[str] = Form(None),
     bio: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    date_of_birth: Optional[str] = Form(None),
     profile_image: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("doctors", "update")),
 ):
@@ -468,11 +555,10 @@ async def update_doctor(
         update_args["phone"] = phone.strip()
     if email is not None and email.strip() != "":
         update_args["email"] = email.strip()
-    if department is not None and department.strip() != "":
-        try:
-            update_args["department_id"] = int(department)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="Department ID must be a valid integer")
+    if password is not None and password.strip() != "":
+        update_args["password"] = password
+    if department_id is not None:
+        update_args["department_id"] = department_id
     if consultation_fee is not None:
         update_args["consultation_fee"] = consultation_fee
     if license_number is not None and license_number.strip() != "":
@@ -481,13 +567,17 @@ async def update_doctor(
         update_args["availability_status"] = availability_status.strip()
     if bio is not None and bio.strip() != "":
         update_args["bio"] = bio.strip()
+    if gender is not None and gender.strip() != "":
+        update_args["gender"] = gender.strip()
+    if date_of_birth is not None and date_of_birth.strip() != "":
+        update_args["date_of_birth"] = date_of_birth.strip()
 
     try:
         data = DoctorUpdate(**update_args)
     except ValidationError as e:
         raise RequestValidationError(e.errors())
-    doctor = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image)
-    return APIResponse(message="Doctor updated", data=doctor)
+    result = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image)
+    return APIResponse(message="Doctor updated", data=result)
 
 
 @router.delete("/{doctor_id}", response_model=APIResponse[MessageResponse])

@@ -370,31 +370,19 @@ class NurseService:
 
         await self._get_nurse_or_raise(nurse_id)
 
-        # 1. It Should Not be Possible For Nurse to Mark Attendance For Past and Future Date and Time.
-        if data.attendance_date != date.today():
-            raise BadRequestException("Attendance date must be today's date")
-
-        # 5. It Should not be Possible to Check In and Check Out at Once.
-        if data.check_in_time is not None and data.check_out_time is not None:
-            raise BadRequestException("Cannot check in and check out at the same time")
-        if data.check_in_time is None and data.check_out_time is None:
-            raise BadRequestException("Either check-in time or check-out time must be provided")
-
+        # 1. Use server-side current date and time
+        today = date.today()
         current_time = datetime.now().time()
-        if data.check_in_time is not None and data.check_in_time > current_time:
-            raise BadRequestException("Check-in time cannot be in the future")
-        if data.check_out_time is not None and data.check_out_time > current_time:
-            raise BadRequestException("Check-out time cannot be in the future")
 
-        # Fetch shift timing of the nurse on this attendance date
+        # 3. Fetch NurseShift for today
         shift_query = select(NurseShift).where(
             NurseShift.nurse_id == nurse_id,
-            NurseShift.shift_date == data.attendance_date
+            NurseShift.shift_date == today
         )
         res = await self.db.execute(shift_query)
         shift = res.scalar_one_or_none()
         if not shift:
-            raise BadRequestException("No shift scheduled for this date")
+            raise BadRequestException("No shift scheduled for today")
 
         # Status Helper Logic
         def calculate_status(check_in: time | None, check_out: time | None) -> str:
@@ -414,44 +402,55 @@ class NurseService:
                     return "On Time"
             return "Absent"
 
-        # 3. It Should be Possible For Nurse to Mark Check In and Check Out Once in a Day.
-        existing = await self.attendance_repo.get_by_date(nurse_id, data.attendance_date)
+        # Fetch today's attendance record
+        existing = await self.attendance_repo.get_by_date(nurse_id, today)
 
-        if data.check_in_time is not None:
+        if data.action == "check_in":
             # Check-in flow
             if existing and existing.check_in_time is not None:
-                raise BadRequestException("Already checked in for today")
+                raise BadRequestException("Check-in has already been marked for today")
             
-            status = calculate_status(data.check_in_time, None)
-            attendance = NurseAttendance(
-                nurse_id=nurse_id,
-                attendance_date=data.attendance_date,
-                check_in_time=data.check_in_time,
-                check_out_time=None,
-                status=status,
-                notes=data.notes
-            )
-            attendance = await self.attendance_repo.create(attendance)
-            action = "create"
-        else:
+            status = calculate_status(current_time, None)
+            
+            if existing:
+                existing.check_in_time = current_time
+                existing.status = status
+                if data.notes is not None:
+                    existing.notes = data.notes
+                attendance = await self.attendance_repo.update(existing)
+                action = "update"
+            else:
+                attendance = NurseAttendance(
+                    nurse_id=nurse_id,
+                    attendance_date=today,
+                    check_in_time=current_time,
+                    check_out_time=None,
+                    status=status,
+                    notes=data.notes
+                )
+                attendance = await self.attendance_repo.create(attendance)
+                action = "create"
+        elif data.action == "check_out":
             # Check-out flow
             if not existing or existing.check_in_time is None:
-                raise BadRequestException("Cannot check out without checking in first")
+                raise BadRequestException("Check-in must be marked before check-out")
             if existing.check_out_time is not None:
-                raise BadRequestException("Already checked out for today")
+                raise BadRequestException("Check-out has already been marked for today")
 
-            # 4. Check Out Time Should be Greater Than Check In Time.
-            if data.check_out_time <= existing.check_in_time:
-                raise BadRequestException("Check-out time must be after check-in time")
+            # Validate check-out time is greater than check-in time
+            if current_time <= existing.check_in_time:
+                raise BadRequestException("Check-out time must be greater than check-in time")
 
-            status = calculate_status(existing.check_in_time, data.check_out_time)
-            existing.check_out_time = data.check_out_time
+            status = calculate_status(existing.check_in_time, current_time)
+            existing.check_out_time = current_time
             existing.status = status
             if data.notes is not None:
                 existing.notes = data.notes
 
             attendance = await self.attendance_repo.update(existing)
             action = "update"
+        else:
+            raise BadRequestException("Invalid action")
 
         await self.audit_repo.create(
             action, "nurses", user_id=user_id, resource_id=str(attendance.id)
@@ -505,9 +504,24 @@ class NurseService:
     async def create_handover_note(
         self, nurse_id: int, data: NurseHandoverNoteCreate, user_id: int
     ) -> NurseHandoverNoteResponse:
+        from datetime import date
         await self._get_nurse_or_raise(nurse_id)
         await self._validate_shift(nurse_id, data.shift_id)
-        note = NurseHandoverNote(nurse_id=nurse_id, **data.model_dump())
+
+        # 1. Handover Date should not be a past date
+        if data.handover_date < date.today():
+            raise BadRequestException("Handover date cannot be in the past")
+
+        # 2. Handover Note should be possible to create only after check-out for that handover date
+        attendance = await self.attendance_repo.get_by_date(nurse_id, data.handover_date)
+        if not attendance or attendance.check_out_time is None:
+            raise BadRequestException("Handover note can only be created after check-out")
+
+        note = NurseHandoverNote(
+            nurse_id=nurse_id,
+            status="Active",
+            **data.model_dump()
+        )
         note = await self.handover_repo.create(note)
         await self.audit_repo.create(
             "create", "nurses", user_id=user_id, resource_id=str(note.id)

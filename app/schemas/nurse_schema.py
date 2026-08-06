@@ -148,9 +148,7 @@ class NurseShiftDetailsResponse(BaseSchema):
 
 
 class NurseAttendanceCreate(BaseSchema):
-    attendance_date: date = Field(..., description="Date of attendance")
-    check_in_time: time | None = Field(None, description="Check-in time")
-    check_out_time: time | None = Field(None, description="Check-out time")
+    action: Literal["check_in", "check_out"] = Field(..., description="Action to perform: check_in or check_out")
     notes: str | None = Field(None, description="Optional notes")
 
     @field_validator("notes")
@@ -183,10 +181,9 @@ class NurseHandoverNoteCreate(BaseSchema):
     summary: str = Field(..., description="Summary of the shift handover", min_length=1)
     pending_tasks: str | None = Field(None, description="Tasks pending for the incoming nurse")
     patient_updates: str | None = Field(None, description="Patient status updates")
-    status: str = Field("Active", description="Status of the handover note", min_length=1, max_length=50)
     notes: str | None = Field(None, description="Additional notes")
 
-    @field_validator("summary", "status")
+    @field_validator("summary")
     @classmethod
     def validate_required_strings(cls, v: str) -> str:
         stripped = v.strip()

@@ -220,9 +220,9 @@ class ExpenseService:
                     phone=p.supplier.phone,
                     email=p.supplier.email,
                     address=p.supplier.address,
-                    is_active=p.supplier.is_active,
-                    created_at=p.supplier.created_at,
-                    updated_at=p.supplier.updated_at
+                    is_active=p.supplier.is_active if p.supplier.is_active is not None else True,
+                    created_at=p.supplier.created_at or p.created_at or utc_now(),
+                    updated_at=p.supplier.updated_at or p.created_at or utc_now()
                 )
 
             cat_data = ExpenseCategoryResponse(
@@ -234,11 +234,11 @@ class ExpenseService:
                 updated_at=p.created_at or utc_now()
             )
 
-            status_val = p.status.capitalize()
+            status_val = p.status.capitalize() if p.status else "Pending"
             if status_val == "Received":
                 status_val = "Paid"
 
-            desc_val = f"Pharmacy Purchase {p.purchase_number}"
+            desc_val = f"Pharmacy Purchase {p.purchase_number or ''}"
             if p.notes:
                 desc_val += f". Notes: {p.notes}"
 
@@ -246,9 +246,9 @@ class ExpenseService:
                 id=p.id,
                 category_id=pharm_cat_id,
                 vendor_id=p.supplier_id,
-                amount=p.total_amount,
+                amount=p.total_amount or 0.0,
                 description=desc_val,
-                expense_date=p.ordered_at.date(),
+                expense_date=p.ordered_at.date() if p.ordered_at else (p.created_at.date() if p.created_at else utc_now().date()),
                 status=status_val,
                 category=cat_data,
                 vendor=vendor_data,
@@ -337,9 +337,9 @@ class ExpenseService:
                     phone=p.supplier.phone,
                     email=p.supplier.email,
                     address=p.supplier.address,
-                    is_active=p.supplier.is_active,
-                    created_at=p.supplier.created_at,
-                    updated_at=p.supplier.updated_at
+                    is_active=p.supplier.is_active if p.supplier.is_active is not None else True,
+                    created_at=p.supplier.created_at or p.created_at or utc_now(),
+                    updated_at=p.supplier.updated_at or p.created_at or utc_now()
                 )
 
             cat_data = ExpenseCategoryResponse(
@@ -351,11 +351,11 @@ class ExpenseService:
                 updated_at=p.created_at or utc_now()
             )
 
-            status_val = p.status.capitalize()
+            status_val = p.status.capitalize() if p.status else "Pending"
             if status_val == "Received":
                 status_val = "Paid"
 
-            desc_val = f"Pharmacy Purchase {p.purchase_number}"
+            desc_val = f"Pharmacy Purchase {p.purchase_number or ''}"
             if p.notes:
                 desc_val += f". Notes: {p.notes}"
 
@@ -363,9 +363,9 @@ class ExpenseService:
                 id=p.id,
                 category_id=pharm_cat_id,
                 vendor_id=p.supplier_id,
-                amount=p.total_amount,
+                amount=p.total_amount or 0.0,
                 description=desc_val,
-                expense_date=p.ordered_at.date(),
+                expense_date=p.ordered_at.date() if p.ordered_at else (p.created_at.date() if p.created_at else utc_now().date()),
                 status=status_val,
                 category=cat_data,
                 vendor=vendor_data,

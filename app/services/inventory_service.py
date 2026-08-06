@@ -180,6 +180,14 @@ class InventoryService:
                     "Invalid reference_type. Allowed values are: Purchase Order, Sales Order, Adjustment, Transfer, Return, Opening Stock."
                 )
             data.reference_type = CANONICAL_REF_TYPES[ref_type_lower]
+
+        # Validate duplicate reference
+        if data.reference_type is not None and data.reference_id is not None:
+            existing_ref = await self.transaction_repo.get_by_reference(data.reference_type, data.reference_id)
+            if existing_ref:
+                raise ConflictException(
+                    f"Stock transaction with reference type '{data.reference_type}' and reference ID {data.reference_id} already exists"
+                )
             
         await self._validate_warehouse(data.warehouse_id)
         await self._validate_warehouse(data.target_warehouse_id)

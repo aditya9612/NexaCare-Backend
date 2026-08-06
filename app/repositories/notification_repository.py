@@ -107,16 +107,16 @@ class NotificationRepository:
         reference_type: str | None,
         reference_id: int | None,
     ) -> bool:
+        if reference_type is None or reference_id is None:
+            return False
+
         query = select(func.count(Notification.id)).where(
             Notification.user_id == user_id,
             Notification.notification_type == notification_type,
+            Notification.reference_type == reference_type,
+            Notification.reference_id == reference_id,
             Notification.is_deleted.is_(False),
         )
-        if reference_type is not None:
-            query = query.where(Notification.reference_type == reference_type)
-        if reference_id is not None:
-            query = query.where(Notification.reference_id == reference_id)
-
         result = await self.db.execute(query)
         count = result.scalar() or 0
         return count > 0

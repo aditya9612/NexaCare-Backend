@@ -142,6 +142,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         PermissionAction.EXPORT,
         PermissionAction.APPROVE,
         PermissionAction.ASSIGN,
+        PermissionAction.SHARE,
     ]
 
     # Load existing permissions
@@ -628,6 +629,7 @@ async def _seed_lab_technician_permissions(session: AsyncSession) -> None:
         ("lab", PermissionAction.EXPORT),
         ("lab", PermissionAction.APPROVE),
         ("lab", PermissionAction.ASSIGN),
+        ("lab", PermissionAction.SHARE),
         # Read-only associations needed for lookup/validation in lab service
         ("patients", PermissionAction.READ),
         ("doctors", PermissionAction.READ),

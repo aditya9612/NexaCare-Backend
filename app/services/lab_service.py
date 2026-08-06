@@ -314,6 +314,30 @@ class LabService:
                 )
                 staff = result.scalar_one_or_none()
                 department_id = staff.department_id if staff else None
+            elif role_name == "nurse":
+                from app.models.nurse_model import Nurse, NursePatientAssignment
+                res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+                nurse = res.scalar_one_or_none()
+                if not nurse:
+                    return build_paginated_result([], 0, page, size)
+                
+                # Fetch active assigned patient IDs
+                assignment_res = await self.db.execute(
+                    select(NursePatientAssignment.patient_id)
+                    .where(
+                        NursePatientAssignment.nurse_id == nurse.id,
+                        NursePatientAssignment.status == "Active"
+                    )
+                )
+                assigned_patient_ids = [row[0] for row in assignment_res.all()]
+                if not assigned_patient_ids:
+                    return build_paginated_result([], 0, page, size)
+                
+                if patient_id is not None:
+                    if patient_id not in assigned_patient_ids:
+                        return build_paginated_result([], 0, page, size)
+                else:
+                    patient_id = assigned_patient_ids
 
         items = await self.order_repo.list_all(
             skip=skip,

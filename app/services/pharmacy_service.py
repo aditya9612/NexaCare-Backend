@@ -325,8 +325,12 @@ class PharmacyService:
         doctor_id: int | None = None,
         patient_id: int | None = None,
         appointment_id: int | None = None,
-        department_id: int | None = None
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
     ):
+        if assigned_patient_ids == []:
+            return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.prescription_repo.list_all(
             skip=skip,
@@ -335,14 +339,16 @@ class PharmacyService:
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
         total = await self.prescription_repo.count_all(
             status=status,
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
 
         return build_paginated_result(

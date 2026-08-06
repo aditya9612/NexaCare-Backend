@@ -56,6 +56,7 @@ async def list_patients(
         sort_order=sort_order,
         start_date=start_date,
         end_date=end_date,
+        current_user=current_user,
     )
     return APIResponse(message="Patients retrieved", data=result)
 
@@ -69,7 +70,7 @@ async def search_patients(
     size: int = 20,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    result = await PatientService(db).search(q, page=page, size=size)
+    result = await PatientService(db).search(q, page=page, size=size, current_user=current_user)
     return APIResponse(message="Search results", data=result)
 
 
@@ -111,6 +112,7 @@ async def filter_patients(
         status=params.status,
         page=params.page,
         size=params.size,
+        current_user=current_user,
     )
     return APIResponse(message="Filtered patients", data=result)
 

@@ -365,6 +365,14 @@ class NurseTaskResponse(BaseSchema):
 NurseTaskListResponse = PaginatedResponse[NurseTaskResponse]
 
 
+class NurseTaskListWithCountsResponse(PaginatedResponse[NurseTaskResponse]):
+    total_tasks: int
+    pending_tasks: int
+    completed_tasks: int
+    delayed_tasks: int
+
+
+
 class NurseTaskStatusUpdate(BaseSchema):
     status: Literal["Pending", "Completed", "Delayed"] = Field(
         ..., description="Task status (Pending, Completed, or Delayed)"

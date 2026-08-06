@@ -104,13 +104,16 @@ class TestOrderRepository:
         )
 
     async def list_all(
-        self, skip: int = 0, limit: int = 20, status: str | None = None, patient_id: int | None = None, doctor_id: int | None = None, department_id: int | None = None
+        self, skip: int = 0, limit: int = 20, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None
     ) -> list[TestOrder]:
         query = self._base_query()
         if status:
             query = query.where(TestOrder.status == status)
-        if patient_id:
-            query = query.where(TestOrder.patient_id == patient_id)
+        if patient_id is not None:
+            if isinstance(patient_id, list):
+                query = query.where(TestOrder.patient_id.in_(patient_id))
+            else:
+                query = query.where(TestOrder.patient_id == patient_id)
         if doctor_id is not None:
             query = query.where(TestOrder.doctor_id == doctor_id)
         if department_id is not None:
@@ -118,12 +121,15 @@ class TestOrderRepository:
         result = await self.db.execute(query.order_by(TestOrder.ordered_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None, patient_id: int | None = None, doctor_id: int | None = None, department_id: int | None = None) -> int:
+    async def count_all(self, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None) -> int:
         query = select(func.count()).select_from(TestOrder).where(TestOrder.is_deleted.is_(False))
         if status:
             query = query.where(TestOrder.status == status)
-        if patient_id:
-            query = query.where(TestOrder.patient_id == patient_id)
+        if patient_id is not None:
+            if isinstance(patient_id, list):
+                query = query.where(TestOrder.patient_id.in_(patient_id))
+            else:
+                query = query.where(TestOrder.patient_id == patient_id)
         if doctor_id is not None:
             query = query.where(TestOrder.doctor_id == doctor_id)
         if department_id is not None:

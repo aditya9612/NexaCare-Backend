@@ -6,6 +6,7 @@ from app.core.constants import LabOrderStatus
 from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.models.lab_model import TestOrder
 from app.models.nurse_model import Nurse, NurseAttendance, NurseHandoverNote, NurseShift, PatientVital
+from app.models.user_model import User
 from app.repositories.nurse_repository import (
     NurseAttendanceRepository,
     NurseHandoverNoteRepository,
@@ -46,6 +47,7 @@ from app.schemas.nurse_schema import (
     NurseTaskCreate,
     NursePatientAssignmentCreate,
     NursePatientAssignmentResponse,
+    NurseDashboardResponse,
 )
 from app.utils.helpers import generate_nurse_code, utc_now
 from app.utils.pagination import build_paginated_result
@@ -919,12 +921,49 @@ class NurseService:
             status=status,
             priority=priority,
         )
-        return build_paginated_result(
+
+        # Calculate overall daily counts for the nurse/patient
+        total_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            due_date=due_date,
+            patient_id=patient_id,
+        )
+        pending_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            due_date=due_date,
+            patient_id=patient_id,
+            status="Pending",
+        )
+        completed_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            due_date=due_date,
+            patient_id=patient_id,
+            status="Completed",
+        )
+        delayed_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse_id,
+            due_date=due_date,
+            patient_id=patient_id,
+            status="Delayed",
+        )
+
+        paginated = build_paginated_result(
             [NurseTaskResponse.model_validate(item) for item in items],
             total,
             page,
             size,
         )
+        return {
+            "items": paginated.items,
+            "total": paginated.total,
+            "page": paginated.page,
+            "size": paginated.size,
+            "pages": paginated.pages,
+            "total_tasks": total_tasks,
+            "pending_tasks": pending_tasks,
+            "completed_tasks": completed_tasks,
+            "delayed_tasks": delayed_tasks,
+        }
 
     async def update_task_status(
         self,
@@ -1298,14 +1337,12 @@ class NurseService:
         from app.models.patient_model import Patient
         from app.models.audit_log_model import AuditLog
         from app.schemas.nurse_schema import (
-            NurseDashboardResponse,
             UpcomingMedicationResponse,
             CriticalAlertResponse,
             RecentActivityResponse,
             NurseAssignedPatientStatusResponse,
             NurseShiftResponse,
         )
-        from app.models.user_model import User
 
         # Get nurse matching logged-in user_id
         res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))

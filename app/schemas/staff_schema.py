@@ -3,7 +3,7 @@ from enum import Enum
 import re
 from pydantic import EmailStr, Field, field_validator
 
-from app.schemas.common_schema import BaseSchema
+from app.schemas.common_schema import BaseSchema, PaginatedResponse
 from app.schemas.department_schema import DepartmentResponse
 from app.schemas.rbac_schema import RoleResponse
 from app.utils.common_validators import (
@@ -150,6 +150,12 @@ class StaffResponse(BaseSchema):
 
     department: DepartmentResponse | None = None
     role: RoleResponse | None = None
+
+
+class StaffListWithCountsResponse(PaginatedResponse[StaffResponse]):
+    total_staff: int
+    active_staff: int
+    inactive_staff: int
 
 
 class StaffScheduleCreate(BaseSchema):

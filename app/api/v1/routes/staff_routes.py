@@ -12,6 +12,7 @@ from app.schemas.staff_schema import (
     StaffUpdate,
     StaffScheduleCreate,
     StaffScheduleResponse,
+    StaffListWithCountsResponse,
 )
 from app.services.staff_service import StaffService
 from app.utils.pagination import PaginatedResult
@@ -30,7 +31,7 @@ async def create_staff(
     return APIResponse(message="Staff created successfully", data=staff)
 
 
-@router.get("", response_model=APIResponse[PaginatedResult[StaffResponse]])
+@router.get("", response_model=APIResponse[StaffListWithCountsResponse])
 async def list_staff(
     db: DbSession,
     current_user: CurrentUser,

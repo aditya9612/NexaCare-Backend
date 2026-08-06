@@ -172,7 +172,13 @@ class BillingService:
                     "Billing cannot be created for a cancelled appointment."
                 )
 
-            if appointment.appointment_status != AppointmentStatus.COMPLETED:
+            is_completed = (
+                appointment.appointment_status == AppointmentStatus.COMPLETED
+                or appointment.appointment_status == "Checked-Out"
+                or appointment.queue_status == "COMPLETED"
+                or appointment.check_out_time is not None
+            )
+            if not is_completed:
                 raise BadRequestException(
                     "Billing can only be created for completed appointments."
                 )

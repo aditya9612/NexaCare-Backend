@@ -9,6 +9,58 @@ class NotificationRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    def _apply_category_filter(self, query, category: str):
+        cat = category.lower()
+        if cat == "critical":
+            query = query.where(
+                (Notification.priority.in_(["CRITICAL", "HIGH"])) |
+                (Notification.notification_type.in_([
+                    "CRITICAL_VALUE", 
+                    "CRITICAL_PATIENT_ALERT", 
+                    "PATIENT_EMERGENCY_ALERT", 
+                    "CRITICAL_ALERT"
+                ]))
+            )
+        elif cat == "medication":
+            query = query.where(Notification.notification_type == "MEDICATION_REMINDER")
+        elif cat == "doctors":
+            query = query.where(
+                Notification.notification_type.in_(["DOCTOR_APPOINTMENT_REMINDER", "DOCTOR_INSTRUCTION"])
+            )
+        elif cat == "vitals":
+            query = query.where(Notification.notification_type.in_(["CRITICAL_VALUE"]))
+        elif cat == "updates":
+            query = query.where(
+                Notification.notification_type.in_(["PATIENT_UPDATE", "SHIFT_UPDATE", "PENDING_TEST"])
+            )
+        elif cat == "tasks":
+            query = query.where(
+                Notification.notification_type.in_(["TASK", "NURSE_TASK", "DOCTOR_INSTRUCTION"])
+            )
+        elif cat == "system":
+            query = query.where(
+                Notification.notification_type.in_(["SYSTEM", "QUEUE_ALERT"])
+            )
+        elif cat == "unread":
+            query = query.where(Notification.is_read.is_(False))
+        elif cat == "completed":
+            query = query.where(Notification.is_read.is_(True))
+        return query
+
+    async def get_category_counts(self, user_id: int) -> dict[str, int]:
+        categories = ["all", "critical", "medication", "doctors", "vitals", "updates", "tasks", "system", "unread", "completed"]
+        counts = {}
+        for cat in categories:
+            query = select(func.count(Notification.id)).where(
+                Notification.user_id == user_id,
+                Notification.is_deleted.is_(False)
+            )
+            if cat != "all":
+                query = self._apply_category_filter(query, cat)
+            result = await self.db.execute(query)
+            counts[cat] = result.scalar() or 0
+        return counts
+
     async def create(self, notification: Notification) -> Notification:
         self.db.add(notification)
         await self.db.commit()
@@ -31,6 +83,7 @@ class NotificationRepository:
         limit: int = 20,
         is_read: bool | None = None,
         notification_type: str | None = None,
+        category: str | None = None,
     ) -> list[Notification]:
         query = select(Notification).where(
             Notification.user_id == user_id,
@@ -41,6 +94,8 @@ class NotificationRepository:
             query = query.where(Notification.is_read.is_(is_read))
         if notification_type is not None:
             query = query.where(Notification.notification_type == notification_type)
+        if category is not None:
+            query = self._apply_category_filter(query, category)
 
         query = query.order_by(Notification.created_at.desc()).offset(skip).limit(limit)
         result = await self.db.execute(query)
@@ -51,6 +106,7 @@ class NotificationRepository:
         user_id: int,
         is_read: bool | None = None,
         notification_type: str | None = None,
+        category: str | None = None,
     ) -> int:
         query = select(func.count(Notification.id)).where(
             Notification.user_id == user_id,
@@ -61,6 +117,8 @@ class NotificationRepository:
             query = query.where(Notification.is_read.is_(is_read))
         if notification_type is not None:
             query = query.where(Notification.notification_type == notification_type)
+        if category is not None:
+            query = self._apply_category_filter(query, category)
 
         result = await self.db.execute(query)
         return result.scalar() or 0

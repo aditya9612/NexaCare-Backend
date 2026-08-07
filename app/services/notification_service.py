@@ -54,6 +54,7 @@ class NotificationService:
         limit: int = 20,
         is_read: bool | None = None,
         notification_type: str | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
@@ -65,11 +66,13 @@ class NotificationService:
             limit=limit,
             is_read=is_read,
             notification_type=notification_type,
+            category=category,
         )
         total = await self.repo.count_user_notifications(
             user_id=user_id,
             is_read=is_read,
             notification_type=notification_type,
+            category=category,
         )
         responses = [NotificationResponse.model_validate(item) for item in items]
         return build_paginated_result(responses, total, page, limit)
@@ -80,6 +83,11 @@ class NotificationService:
 
         count = await self.repo.get_unread_count(user_id)
         return UnreadCountResponse(unread_count=count)
+
+    async def get_category_counts(self, user_id: int) -> dict[str, int]:
+        if not self.repo:
+            raise ValueError("Database session required for NotificationService DB methods")
+        return await self.repo.get_category_counts(user_id)
 
     async def mark_as_read(self, notification_id: int, user_id: int) -> NotificationResponse:
         if not self.repo:

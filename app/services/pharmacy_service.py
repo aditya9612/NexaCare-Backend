@@ -847,9 +847,19 @@ class PharmacyService:
         )
     # --- Purchases ---
     async def create_purchase(self, data: PurchaseCreate, user_id: int) -> PurchaseResponse:
+        # Validate Supplier
+        supplier = await self.supplier_repo.get_by_id(data.supplier_id)
+        if not supplier:
+            raise NotFoundException(f"Supplier with ID {data.supplier_id} not found")
+
         total = 0.0
         purchase_items: list[PurchaseItem] = []
         for item_data in data.items:
+            # Validate Medicine
+            medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+            if not medicine:
+                raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
+
             line_total = round(item_data.quantity * item_data.unit_price, 2)
             total += line_total
             purchase_items.append(PurchaseItem(
@@ -865,6 +875,7 @@ class PharmacyService:
             total_amount=total,
             ordered_at=utc_now(),
             notes=data.notes,
+            status=data.status or "Pending",
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
@@ -893,8 +904,34 @@ class PharmacyService:
         return build_paginated_result([self._purchase_response(p) for p in items], total, page, size)
 
     def _purchase_response(self, purchase: Purchase) -> PurchaseResponse:
-        resp = PurchaseResponse.model_validate(purchase)
-        resp.items = [PurchaseItemResponse.model_validate(i) for i in purchase.items]
+        items_resp = []
+        for i in purchase.items:
+            items_resp.append(PurchaseItemResponse(
+                id=i.id,
+                purchase_id=i.purchase_id,
+                medicine_id=i.medicine_id,
+                quantity=i.quantity or 0,
+                unit_price=i.unit_price or 0.0,
+                expiry_date=i.expiry_date,
+                line_total=i.line_total or 0.0,
+                created_at=i.created_at or utc_now(),
+                updated_at=i.updated_at or utc_now()
+            ))
+
+        resp = PurchaseResponse(
+            id=purchase.id,
+            purchase_number=purchase.purchase_number or "",
+            supplier_id=purchase.supplier_id,
+            total_amount=purchase.total_amount or 0.0,
+            status=purchase.status or "Pending",
+            ordered_at=purchase.ordered_at or purchase.created_at or utc_now(),
+            received_at=purchase.received_at,
+            notes=purchase.notes,
+            created_by=purchase.created_by,
+            received_by=purchase.received_by,
+            items=items_resp,
+            created_at=purchase.created_at or utc_now()
+        )
         return resp
 
     async def get_purchase(self, purchase_id: int) -> PurchaseResponse:

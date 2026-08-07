@@ -63,8 +63,15 @@ class AppointmentService:
         return appointment_date, appointment_time
 
     async def _validate_entities(self, patient_id: int, doctor_id: int) -> None:
-        if not await self.patient_repo.get_by_id(patient_id):
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if not patient:
             raise NotFoundException("Patient not found")
+        
+        from app.core.constants import PatientStatus
+        if patient.status == PatientStatus.INACTIVE:
+            raise BadRequestException(
+                "Cannot create an appointment for an inactive patient. Please activate the patient before booking an appointment."
+            )
         doctor = await self.doctor_repo.get_by_id(doctor_id)
         if not doctor:
             raise NotFoundException("Doctor not found")

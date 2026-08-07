@@ -40,6 +40,8 @@ class PermissionAction:
     EXPORT = "export"
     APPROVE = "approve"
     ASSIGN = "assign"
+    SHARE = "share"
+
 
 
 class AppointmentStatus:

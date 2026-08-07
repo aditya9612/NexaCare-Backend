@@ -224,8 +224,9 @@ class AuthService:
             UserRole.PHARMACIST,
             UserRole.LAB_TECHNICIAN,
         }:
+            from app.schemas.staff_schema import StaffStatus
             staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
-            return staff is None or staff.is_deleted
+            return staff is None or staff.is_deleted or staff.status == StaffStatus.INACTIVE.value
         return False
 
     async def send_otp(self, data: SendOTPRequest) -> None:

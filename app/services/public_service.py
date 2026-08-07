@@ -272,6 +272,12 @@ class PublicService:
                 status="active"
             )
             patient = await self.patient_repo.create(patient)
+        else:
+            from app.core.constants import PatientStatus
+            if patient.status == PatientStatus.INACTIVE:
+                raise BadRequestException(
+                    "Cannot create an appointment for an inactive patient. Please activate the patient before booking an appointment."
+                )
             
         # 2. Check doctor availability and conflict
         doctor = await self.doctor_repo.get_by_id(data.doctor_id)

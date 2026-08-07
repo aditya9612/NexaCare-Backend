@@ -1,7 +1,7 @@
 from datetime import date, datetime
 import re
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 from app.utils.common_validators import (
@@ -304,6 +304,96 @@ class PatientUpdate(BaseSchema):
 
 
 
+class BedHistoryResponse(BaseSchema):
+    floor_name: str | None = None
+    room_name: str | None = None
+    bed_name: str | None = None
+    admitted_date: str | None = None
+    discharged_date: str | None = None
+
+
+def parse_medical_history_to_bed_history(medical_history: str | None) -> list[dict]:
+    if not medical_history:
+        return []
+        
+    history_list = []
+    lines = medical_history.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Parse Bed Admission:
+        admission_match = re.search(
+            r"\[Bed Admission\]:\s*Admitted to Bed\s+(.*?)\s+\(Room:\s*([^,)]*)(?:,\s*Floor:\s*([^)]*))?\)\s+on\s+(\d{4}-\d{2}-\d{2})",
+            line
+        )
+        if admission_match:
+            bed_name = admission_match.group(1).strip()
+            room_name = admission_match.group(2).strip()
+            floor_name = admission_match.group(3).strip() if admission_match.group(3) else None
+            admitted_date = admission_match.group(4).strip()
+            
+            history_list.append({
+                "floor_name": floor_name,
+                "room_name": room_name,
+                "bed_name": bed_name,
+                "admitted_date": admitted_date,
+                "discharged_date": None
+            })
+            continue
+
+        # Parse Bed Discharge:
+        discharge_match = re.search(
+            r"\[Bed Discharge\]:\s*Discharged from Bed\s+([^(\n]+?)(?:\s+\(Room:\s*([^,)]*)(?:,\s*Floor:\s*([^)]*))?\))?\s+on\s+(\d{4}-\d{2}-\d{2})",
+            line
+        )
+        if discharge_match:
+            bed_name = discharge_match.group(1).strip()
+            discharged_date = discharge_match.group(4).strip()
+            
+            for entry in reversed(history_list):
+                if entry["bed_name"] == bed_name and entry["discharged_date"] is None:
+                    entry["discharged_date"] = discharged_date
+                    if discharge_match.group(2):
+                        entry["room_name"] = discharge_match.group(2).strip()
+                    if discharge_match.group(3):
+                        entry["floor_name"] = discharge_match.group(3).strip()
+                    break
+            continue
+
+        # Parse Bed Transfer:
+        transfer_match = re.search(
+            r"\[Bed Transfer\]:\s*Transferred from Bed\s+(.*?)\s+to Bed\s+(.*?)\s+on\s+(\d{4}-\d{2}-\d{2})\.\s*From Room\s+([^,]*),\s*Floor\s+(.*?)\s+to Room\s+([^,]*),\s*Floor\s+(.*)",
+            line
+        )
+        if transfer_match:
+            old_bed = transfer_match.group(1).strip()
+            new_bed = transfer_match.group(2).strip()
+            transfer_date = transfer_match.group(3).strip()
+            old_room = transfer_match.group(4).strip()
+            old_floor = transfer_match.group(5).strip()
+            new_room = transfer_match.group(6).strip()
+            new_floor = transfer_match.group(7).strip()
+            
+            # Close the old bed admission
+            for entry in reversed(history_list):
+                if entry["bed_name"] == old_bed and entry["discharged_date"] is None:
+                    entry["discharged_date"] = transfer_date
+                    break
+            # Add the new bed admission
+            history_list.append({
+                "floor_name": new_floor,
+                "room_name": new_room,
+                "bed_name": new_bed,
+                "admitted_date": transfer_date,
+                "discharged_date": None
+            })
+            continue
+
+    return history_list
+
+
 class PatientBedAllocationResponse(BaseSchema):
     bed_id: int
     bed_name: str
@@ -349,6 +439,13 @@ class PatientResponse(BaseSchema):
     condition_status: str | None = None
     created_at: datetime
     updated_at: datetime
+    bed_history: list[BedHistoryResponse] | None = None
+
+    @model_validator(mode="after")
+    def populate_bed_history(self) -> "PatientResponse":
+        raw_history = parse_medical_history_to_bed_history(self.medical_history)
+        self.bed_history = [BedHistoryResponse.model_validate(item) for item in raw_history]
+        return self
 
 
 class PatientSearchQuery(BaseSchema):

@@ -183,6 +183,16 @@ class StockTransactionRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_reference(self, reference_type: str, reference_id: int) -> StockTransaction | None:
+        result = await self.db.execute(
+            select(StockTransaction).where(
+                StockTransaction.reference_type == reference_type,
+                StockTransaction.reference_id == reference_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+
     async def create(self, transaction: StockTransaction) -> StockTransaction:
         self.db.add(transaction)
         await self.db.flush()

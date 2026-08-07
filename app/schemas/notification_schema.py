@@ -20,3 +20,17 @@ class NotificationResponse(BaseSchema):
 
 class UnreadCountResponse(BaseModel):
     unread_count: int = Field(..., description="Total unread notifications count for the user")
+
+
+class CategoryCountsResponse(BaseModel):
+    all: int
+    critical: int
+    medication: int
+    doctors: int
+    vitals: int
+    updates: int
+    tasks: int
+    system: int
+    unread: int
+    completed: int
+

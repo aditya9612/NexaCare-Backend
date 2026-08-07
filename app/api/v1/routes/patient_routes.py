@@ -14,6 +14,7 @@ from app.schemas.patient_schema import (
     PatientCreate,
     PatientDocumentResponse,
     PatientResponse,
+    PatientCreateResponse,
     PatientUpdate,
     PatientFilterQuery,
     PatientDocumentCreate,
@@ -26,7 +27,7 @@ from app.utils.pagination import PaginatedResult
 router = APIRouter()
 
 
-@router.post("", response_model=APIResponse[PatientResponse], status_code=201)
+@router.post("", response_model=APIResponse[PatientCreateResponse], status_code=201)
 async def create_patient(
     data: PatientCreate,
     db: DbSession,

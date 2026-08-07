@@ -13,6 +13,7 @@ from app.schemas.patient_schema import (
     PatientCreate,
     PatientDocumentResponse,
     PatientResponse,
+    PatientCreateResponse,
     PatientUpdate,
 )
 from app.utils.file_upload import save_upload_file
@@ -159,7 +160,7 @@ class PatientService:
             raise NotFoundException("Patient not found")
         return PatientResponse.model_validate(patient)
 
-    async def create(self, data: PatientCreate, user_id: int) -> PatientResponse:
+    async def create(self, data: PatientCreate, user_id: int) -> PatientCreateResponse:
         if data.phone:
             existing_phone = await self.repo.get_by_phone(data.phone)
             if existing_phone:
@@ -173,7 +174,7 @@ class PatientService:
         patient = Patient(patient_code=generate_mrn(), **data.model_dump())
         patient = await self.repo.create(patient)
         await self.audit_repo.create("create", "patients", user_id=user_id, resource_id=str(patient.id))
-        return PatientResponse.model_validate(patient)
+        return PatientCreateResponse.model_validate(patient)
 
     async def update(self, patient_id: int, data: PatientUpdate, user_id: int) -> PatientResponse:
         patient = await self.repo.get_by_id(patient_id)

@@ -125,6 +125,7 @@ class AnalyticsService:
     async def get_revenue_analytics(
         self, start_date: Optional[date] = None, end_date: Optional[date] = None
     ) -> RevenueAnalyticsResponse:
+        from app.models.billing_model import Payment
         start, end = self._date_range(start_date, end_date)
         bills = await self.db.execute(
             select(Billing).where(
@@ -138,12 +139,29 @@ class AnalyticsService:
         paid = sum(b.paid_amount for b in items)
         pending = sum(b.balance_amount for b in items)
 
+        # Aggregate payment methods for collected payments in range
+        payment_query = (
+            select(Payment.payment_method, func.sum(Payment.amount))
+            .where(
+                Payment.status == "completed",
+                Payment.is_refund.is_(False),
+                Payment.payment_date >= start,
+                Payment.payment_date <= end,
+            )
+            .group_by(Payment.payment_method)
+        )
+        payment_res = await self.db.execute(payment_query)
+        payment_method_breakdown = [
+            ChartDataPoint(label=row[0], value=float(row[1] or 0.0))
+            for row in payment_res.all()
+        ]
+
         return RevenueAnalyticsResponse(
             total_revenue=round(total, 2),
             paid_amount=round(paid, 2),
             pending_amount=round(pending, 2),
             daily_revenue=await self._revenue_trend(start, end),
-            payment_method_breakdown=[],
+            payment_method_breakdown=payment_method_breakdown,
         )
 
     async def get_appointment_analytics(

@@ -474,7 +474,6 @@ class LabService:
             collection_date=data.collection_date,
             collected_by=user_id,
             status=SampleStatus.COLLECTED,
-            status=SampleStatus.COLLECTED,
             volume=data.volume,
             notes=data.notes,
         )

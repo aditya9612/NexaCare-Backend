@@ -100,9 +100,46 @@ class AppointmentService:
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
         )
-        return build_paginated_result(
+
+        # Calculate summary counts independently of pagination and status/date filters where appropriate
+        from app.utils.helpers import utc_now
+        today = utc_now().date()
+        
+        total_appointments = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
+        )
+        today_appointments = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            appointment_date=today
+        )
+        total_scheduled = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
+        )
+        completed = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date
+        )
+        cancelled = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CANCELLED, appointment_date=appointment_date
+        )
+
+        paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
         )
+        return {
+            "items": paginated.items,
+            "total": paginated.total,
+            "page": paginated.page,
+            "size": paginated.size,
+            "pages": paginated.pages,
+            "total_appointments": total_appointments,
+            "today_appointments": today_appointments,
+            "total_scheduled": total_scheduled,
+            "completed": completed,
+            "cancelled": cancelled,
+        }
 
     async def get_by_id(self, appointment_id: int) -> AppointmentResponse:
         appointment = await self.repo.get_by_id(appointment_id)

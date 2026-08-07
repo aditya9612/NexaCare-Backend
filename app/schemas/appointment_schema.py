@@ -135,6 +135,14 @@ class AppointmentFilterQuery(BaseSchema):
 
 AppointmentListResponse = PaginatedResponse[AppointmentResponse]
 
+
+class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
+    total_appointments: int
+    today_appointments: int
+    total_scheduled: int
+    completed: int
+    cancelled: int
+
 class ConfirmedVisitResponse(BaseSchema):
     appointment_id: int
     appointment_number: str

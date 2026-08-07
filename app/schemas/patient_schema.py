@@ -304,6 +304,20 @@ class PatientUpdate(BaseSchema):
 
 
 
+class PatientBedAllocationResponse(BaseSchema):
+    bed_id: int
+    bed_name: str
+    bed_type: str
+    room_id: int
+    room_number: int
+    room_name: str
+    floor_id: int
+    floor_number: int
+    floor_name: str
+    allocation_time: datetime | None = None
+    admission_date: datetime | None = None
+
+
 class BedHistoryResponse(BaseSchema):
     floor_name: str | None = None
     room_name: str | None = None
@@ -421,6 +435,8 @@ class PatientResponse(BaseSchema):
     preferred_language: str | None = None
     guardian_patient_id: int | None = None
     relationship_to_guardian: str | None = None
+    bed_allocation: PatientBedAllocationResponse | None = None
+    condition_status: str | None = None
     created_at: datetime
     updated_at: datetime
     bed_history: list[BedHistoryResponse] | None = None

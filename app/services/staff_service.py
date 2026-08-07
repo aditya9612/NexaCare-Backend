@@ -116,18 +116,34 @@ class StaffService:
         q: str | None = None,
         department_id: int | None = None,
         status: int | None = None,
-    ) -> PaginatedResult[StaffResponse]:
+    ):
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip, limit=size, q=q, department_id=department_id, status=status
         )
         total = await self.repo.count_all(q=q, department_id=department_id, status=status)
-        return build_paginated_result(
+        
+        # Calculate overall global counts (not affected by pagination, search query, department, or status filters)
+        total_staff = await self.repo.count_all()
+        active_staff = await self.repo.count_all(status=1)
+        inactive_staff = await self.repo.count_all(status=0)
+
+        paginated = build_paginated_result(
             [StaffResponse.model_validate(item) for item in items],
             total,
             page,
             size
         )
+        return {
+            "items": paginated.items,
+            "total": paginated.total,
+            "page": paginated.page,
+            "size": paginated.size,
+            "pages": paginated.pages,
+            "total_staff": total_staff,
+            "active_staff": active_staff,
+            "inactive_staff": inactive_staff,
+        }
 
     async def get_dashboard_stats(self) -> dict:
         return await self.repo.get_dashboard_stats()
@@ -204,8 +220,9 @@ class StaffService:
         await self.repo.soft_delete(staff)
         if staff.email:
             from app.models.user_model import User
-            from sqlalchemy import select
-            user = await self.db.scalar(select(User).where(sa.func.lower(User.email) == staff.email.lower())) if "sa" in globals() else await self.db.scalar(select(User).where(func.lower(User.email) == staff.email.lower()))
+            user = await self.db.scalar(
+                select(User).where(func.lower(User.email) == staff.email.lower())
+            )
             if user:
                 user.is_active = False
         await self.audit_repo.create("delete", "staff", user_id=current_user_id, resource_id=str(staff.id))

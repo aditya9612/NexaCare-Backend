@@ -325,8 +325,12 @@ class PharmacyService:
         doctor_id: int | None = None,
         patient_id: int | None = None,
         appointment_id: int | None = None,
-        department_id: int | None = None
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
     ):
+        if assigned_patient_ids == []:
+            return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.prescription_repo.list_all(
             skip=skip,
@@ -335,14 +339,16 @@ class PharmacyService:
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
         total = await self.prescription_repo.count_all(
             status=status,
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
 
         return build_paginated_result(
@@ -1140,7 +1146,7 @@ class PharmacyService:
         monthly_sales = (await self.db.scalar(
             select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
                 PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.status == "dispensed",
                 PharmacyInvoice.created_at >= month_start,
                 PharmacyInvoice.created_at < next_month_start
             )
@@ -1156,8 +1162,7 @@ class PharmacyService:
         # 7. Total Suppliers (Count active suppliers)
         total_suppliers = (await self.db.scalar(
             select(func.count(Supplier.id)).where(
-                Supplier.is_deleted.is_(False),
-                Supplier.is_active.is_(True)
+                Supplier.is_deleted.is_(False)
             )
         )) or 0
 
@@ -1252,6 +1257,9 @@ class PharmacyService:
                 "amount": float(row.amt or 0.0),
                 "label": dt_str
             })
+
+        today_sales = round(float(today_sales or 0.0), 2)
+        monthly_sales = round(float(monthly_sales or 0.0), 2)
 
         return PharmacyDashboardResponse(
             total_medicines=total_medicines,

@@ -176,12 +176,25 @@ async def list_prescriptions(
     
     doctor_id = None
     department_id = None
+    assigned_patient_ids = None
     
     if role_name == UserRole.NURSE:
         nurse = await NurseRepository(db).get_by_user_id(current_user.id)
         if not nurse:
             raise NotFoundException("Nurse profile not found")
-        department_id = nurse.department_id
+        department_id = None
+
+        # Fetch active assigned patients for this nurse
+        from app.models.nurse_model import NursePatientAssignment
+        from sqlalchemy import select
+        res = await db.execute(
+            select(NursePatientAssignment.patient_id)
+            .where(
+                NursePatientAssignment.nurse_id == nurse.id,
+                NursePatientAssignment.status == "Active"
+            )
+        )
+        assigned_patient_ids = list(res.scalars().all())
     elif role_name == UserRole.DOCTOR:
         doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
         doctor_id = doctor.id if doctor else None
@@ -194,6 +207,7 @@ async def list_prescriptions(
         patient_id=patient_id,
         appointment_id=appointment_id,
         department_id=department_id,
+        assigned_patient_ids=assigned_patient_ids,
     )
     return APIResponse(message="Prescriptions retrieved", data=result)
 

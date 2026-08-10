@@ -316,7 +316,7 @@ class DashboardService:
             completed_visits = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
                     Appointment.appointment_date == t_date,
-                    Appointment.appointment_status == AppointmentStatus.COMPLETED
+                    Appointment.appointment_status.in_([AppointmentStatus.COMPLETED, "Checked-Out"])
                 )
             ) or 0
         except Exception:
@@ -381,17 +381,6 @@ class DashboardService:
         except Exception:
             rescheduled_appointments = 0
 
-        # 11. total_patient_footfall
-        try:
-            total_patient_footfall = await self.db.scalar(
-                select(func.count(func.distinct(Appointment.patient_id))).where(
-                    Appointment.appointment_date == t_date,
-                    Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in", "Waiting", "waiting", "Completed", "completed"])
-                )
-            ) or 0
-        except Exception:
-            total_patient_footfall = 0
-
         # Today's Queue stats
         try:
             queue_waiting = await self.db.scalar(
@@ -448,7 +437,6 @@ class DashboardService:
             walk_in_patients=walk_in_patients,
             pending_billing=pending_billing,
             rescheduled_appointments=rescheduled_appointments,
-            total_patient_footfall=total_patient_footfall,
             queue_waiting=queue_waiting,
             queue_current=queue_current,
             queue_completed=queue_completed,

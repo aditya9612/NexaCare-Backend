@@ -101,21 +101,9 @@ class DashboardService:
         )
         patient_ids = {a.patient_id for a in today_appts}
 
-        upcoming_query = (
-            select(Appointment)
-            .where(
-                Appointment.doctor_id == doctor.id,
-                ~Appointment.appointment_status.in_(list(AppointmentStatus.TERMINAL)),
-                or_(
-                    and_(Appointment.appointment_date == today, Appointment.appointment_time >= current_time),
-                    Appointment.appointment_date == tomorrow
-                )
-            )
-            .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
-            .limit(10)
+        upcoming = await self.appointment_repo.get_upcoming_appointments(
+            doctor_id=doctor.id, limit=10
         )
-        upcoming_result = await self.db.execute(upcoming_query)
-        upcoming = list(upcoming_result.scalars().all())
 
         completed = await self.appointment_repo.count_all(
             doctor_id=doctor.id, status=AppointmentStatus.COMPLETED
@@ -123,21 +111,26 @@ class DashboardService:
 
         pending_statuses = [LabOrderStatus.ORDERED, LabOrderStatus.SAMPLE_COLLECTED, LabOrderStatus.IN_PROGRESS]
 
-        # Count total pending test orders
+        # Count total pending test orders (excluding soft-deleted patients)
         total_pending_labs = await self.db.scalar(
-            select(func.count()).select_from(TestOrder).where(
+            select(func.count()).select_from(TestOrder)
+            .join(Patient, TestOrder.patient_id == Patient.id)
+            .where(
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 TestOrder.status.in_(pending_statuses)
             )
         ) or 0
 
-        # Fetch 5 most recent pending test orders
+        # Fetch 5 most recent pending test orders (excluding soft-deleted patients)
         recent_labs_result = await self.db.execute(
             select(TestOrder)
+            .join(Patient, TestOrder.patient_id == Patient.id)
             .where(
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 TestOrder.status.in_(pending_statuses)
             )
             .order_by(TestOrder.created_at.desc())
@@ -214,9 +207,11 @@ class DashboardService:
             select(func.count(LabReport.id))
             .select_from(LabReport)
             .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+            .join(Patient, TestOrder.patient_id == Patient.id)
             .where(
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 LabReport.status != LabReportStatus.APPROVED,
             )
         ) or len(lab_reports_list)
@@ -316,7 +311,7 @@ class DashboardService:
             completed_visits = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
                     Appointment.appointment_date == t_date,
-                    Appointment.appointment_status == AppointmentStatus.COMPLETED
+                    Appointment.appointment_status.in_([AppointmentStatus.COMPLETED, "Checked-Out"])
                 )
             ) or 0
         except Exception:
@@ -381,17 +376,6 @@ class DashboardService:
         except Exception:
             rescheduled_appointments = 0
 
-        # 11. total_patient_footfall
-        try:
-            total_patient_footfall = await self.db.scalar(
-                select(func.count(func.distinct(Appointment.patient_id))).where(
-                    Appointment.appointment_date == t_date,
-                    Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in", "Waiting", "waiting", "Completed", "completed"])
-                )
-            ) or 0
-        except Exception:
-            total_patient_footfall = 0
-
         # Today's Queue stats
         try:
             queue_waiting = await self.db.scalar(
@@ -448,7 +432,6 @@ class DashboardService:
             walk_in_patients=walk_in_patients,
             pending_billing=pending_billing,
             rescheduled_appointments=rescheduled_appointments,
-            total_patient_footfall=total_patient_footfall,
             queue_waiting=queue_waiting,
             queue_current=queue_current,
             queue_completed=queue_completed,

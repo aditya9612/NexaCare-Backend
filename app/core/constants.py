@@ -40,6 +40,7 @@ class PermissionAction:
     EXPORT = "export"
     APPROVE = "approve"
     ASSIGN = "assign"
+    REMARK = "remark"
     SHARE = "share"
 
     REMARK = "remark"

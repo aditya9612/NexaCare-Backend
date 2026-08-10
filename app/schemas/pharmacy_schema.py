@@ -520,6 +520,20 @@ class PharmacySalesTrendPoint(BaseSchema):
     date: str | None = None
 
 
+class InventoryStatusMix(BaseSchema):
+    expiring_soon: int = 0
+    in_stock: int = 0
+    low_stock: int = 0
+    out_of_stock: int = 0
+
+
+class InventoryHealthProgress(BaseSchema):
+    in_stock: float = 0.0
+    low_stock: float = 0.0
+    out_of_stock: float = 0.0
+    expiring_soon: float = 0.0
+
+
 class PharmacyDashboardResponse(BaseSchema):
     total_medicines: int
     total_medicines_subtext: str = "Current catalog count"
@@ -544,4 +558,7 @@ class PharmacyDashboardResponse(BaseSchema):
     low_stock_items: List[LowStockItemAlert] = []
     today_sales_trend: List[PharmacySalesTrendPoint] = []
     monthly_sales_trend: List[PharmacySalesTrendPoint] = []
+    inventory_status_mix: InventoryStatusMix = Field(default_factory=InventoryStatusMix)
+    inventory_health_progress: InventoryHealthProgress = Field(default_factory=InventoryHealthProgress)
+
 

@@ -174,6 +174,22 @@ class StaffScheduleCreate(BaseSchema):
         return v
 
 
+class StaffScheduleUpdate(BaseSchema):
+    day_of_week: int | None = Field(None, ge=0, le=6, description="0=Monday, 6=Sunday")
+    start_time: time | None = None
+    end_time: time | None = None
+    slot_duration_minutes: int | None = Field(None, ge=5, le=1440)
+    is_active: bool | None = None
+
+    @field_validator("end_time")
+    @classmethod
+    def validate_time_range(cls, v, info):
+        start = info.data.get("start_time")
+        if start and v:
+            return common_validate_start_end_times(start, v)
+        return v
+
+
 class StaffScheduleResponse(BaseSchema):
     id: int
     staff_id: int

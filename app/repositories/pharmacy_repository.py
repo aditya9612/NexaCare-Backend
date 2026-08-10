@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -758,5 +758,28 @@ class PharmacyDashboardRepository:
             {"label": "Week 4", "amount": 30000.0},
         ]
         return weeks
+
+    async def get_inventory_status_mix(self) -> dict:
+        today = date.today()
+        thirty_days_later = today + timedelta(days=30)
+
+        query = select(
+            func.sum(case(((Medicine.expiry_date != None) & (Medicine.expiry_date >= today) & (Medicine.expiry_date <= thirty_days_later) & (Medicine.stock_quantity > 0) & (Medicine.is_active == True), 1), else_=0)).label("expiring_soon"),
+            func.sum(case(((Medicine.stock_quantity <= 0) & (Medicine.is_active == True), 1), else_=0)).label("out_of_stock"),
+            func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= today) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
+            func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= today) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
+        ).where(Medicine.is_deleted.is_(False))
+
+        res = await self.db.execute(query)
+        row = res.fetchone()
+        if not row:
+            return {"expiring_soon": 0, "in_stock": 0, "low_stock": 0, "out_of_stock": 0}
+
+        return {
+            "expiring_soon": int(row.expiring_soon) if row.expiring_soon else 0,
+            "in_stock": int(row.in_stock) if row.in_stock else 0,
+            "low_stock": int(row.low_stock) if row.low_stock else 0,
+            "out_of_stock": int(row.out_of_stock) if row.out_of_stock else 0,
+        }
 
 

@@ -407,12 +407,15 @@ class LabReportRepository:
 
     async def get_upcoming_lab_reports(self, doctor_id: int, limit: int = 10) -> list[LabReport]:
         from app.core.constants import LabReportStatus
+        from app.models.patient_model import Patient
         query = (
             select(LabReport)
             .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+            .join(Patient, TestOrder.patient_id == Patient.id)
             .where(
                 TestOrder.doctor_id == doctor_id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 LabReport.status != LabReportStatus.APPROVED
             )
             .order_by(LabReport.created_at.desc())

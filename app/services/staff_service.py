@@ -15,6 +15,7 @@ from app.schemas.staff_schema import (
     StaffResponse,
     StaffScheduleCreate,
     StaffScheduleResponse,
+    StaffScheduleUpdate,
 )
 from app.utils.pagination import build_paginated_result, PaginatedResult
 
@@ -293,3 +294,45 @@ class StaffService:
         await self.db.delete(slot)
         await self.db.flush()
         await self.audit_repo.create("delete_schedule_slot", "staff", user_id=current_user_id, resource_id=str(staff_id))
+
+    async def update_schedule_slot(
+        self, staff_id: int, slot_id: int, data: StaffScheduleUpdate, current_user_id: int
+    ) -> StaffScheduleResponse:
+        staff = await self.repo.get_by_id(staff_id)
+        if not staff:
+            raise NotFoundException("Staff member not found")
+
+        slot = await self.db.get(StaffSchedule, slot_id)
+        if not slot or slot.staff_id != staff_id:
+            raise NotFoundException("Schedule slot not found")
+
+        update_data = data.model_dump(exclude_unset=True)
+        if not update_data:
+            return StaffScheduleResponse.model_validate(slot)
+
+        new_day = update_data.get("day_of_week", slot.day_of_week)
+        new_start = update_data.get("start_time", slot.start_time)
+        new_end = update_data.get("end_time", slot.end_time)
+
+        if new_start >= new_end:
+            raise ConflictException("Start time must be before end time")
+
+        # Check for overlaps
+        existing_schedules = await self.db.scalars(
+            select(StaffSchedule)
+            .where(
+                StaffSchedule.staff_id == staff_id,
+                StaffSchedule.day_of_week == new_day
+            )
+        )
+        for sched in existing_schedules.all():
+            if sched.id != slot_id:
+                if not (new_end <= sched.start_time or new_start >= sched.end_time):
+                    raise ConflictException("Schedule overlaps with an existing slot")
+
+        for key, val in update_data.items():
+            setattr(slot, key, val)
+
+        await self.db.flush()
+        await self.audit_repo.create("update_schedule_slot", "staff", user_id=current_user_id, resource_id=str(staff_id))
+        return StaffScheduleResponse.model_validate(slot)

@@ -761,7 +761,20 @@ class LabService:
 
         order = await self.order_repo.get_by_id(result.test_order_id)
         if not order:
-            raise NotFoundException("Test order not found")
+            from sqlalchemy import text
+            raw_order = await self.db.execute(
+                text("SELECT id, order_number, is_deleted, deleted_at FROM test_orders WHERE id = :order_id"),
+                {"order_id": result.test_order_id}
+            )
+            row = raw_order.fetchone()
+            if row:
+                raise NotFoundException(
+                    f"Test order not found (Raw order exists in DB with is_deleted={row.is_deleted}, deleted_at={row.deleted_at})"
+                )
+            else:
+                raise NotFoundException(
+                    f"Test order not found (No record exists in test_orders table with ID={result.test_order_id})"
+                )
 
         sample = await self.sample_repo.get_by_test_order(result.test_order_id)
 

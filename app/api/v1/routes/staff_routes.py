@@ -13,6 +13,7 @@ from app.schemas.staff_schema import (
     StaffScheduleCreate,
     StaffScheduleResponse,
     StaffListWithCountsResponse,
+    StaffScheduleUpdate,
 )
 from app.services.staff_service import StaffService
 from app.utils.pagination import PaginatedResult
@@ -165,3 +166,17 @@ async def delete_staff_schedule_slot(
         message="Schedule slot removed successfully",
         data=MessageResponse(message="Schedule slot removed"),
     )
+
+
+@router.put("/{staff_id}/schedule/{slot_id}", response_model=APIResponse[StaffScheduleResponse])
+@router.patch("/{staff_id}/schedule/{slot_id}", response_model=APIResponse[StaffScheduleResponse])
+async def update_staff_schedule_slot(
+    staff_id: int,
+    slot_id: int,
+    data: StaffScheduleUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("staff", "update")),
+):
+    schedule = await StaffService(db).update_schedule_slot(staff_id, slot_id, data, current_user.id)
+    return APIResponse(message="Schedule slot updated successfully", data=schedule)

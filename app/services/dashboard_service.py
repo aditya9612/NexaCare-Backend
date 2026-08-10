@@ -101,21 +101,9 @@ class DashboardService:
         )
         patient_ids = {a.patient_id for a in today_appts}
 
-        upcoming_query = (
-            select(Appointment)
-            .where(
-                Appointment.doctor_id == doctor.id,
-                ~Appointment.appointment_status.in_(list(AppointmentStatus.TERMINAL)),
-                or_(
-                    and_(Appointment.appointment_date == today, Appointment.appointment_time >= current_time),
-                    Appointment.appointment_date == tomorrow
-                )
-            )
-            .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
-            .limit(10)
+        upcoming = await self.appointment_repo.get_upcoming_appointments(
+            doctor_id=doctor.id, limit=10
         )
-        upcoming_result = await self.db.execute(upcoming_query)
-        upcoming = list(upcoming_result.scalars().all())
 
         completed = await self.appointment_repo.count_all(
             doctor_id=doctor.id, status=AppointmentStatus.COMPLETED
@@ -123,21 +111,26 @@ class DashboardService:
 
         pending_statuses = [LabOrderStatus.ORDERED, LabOrderStatus.SAMPLE_COLLECTED, LabOrderStatus.IN_PROGRESS]
 
-        # Count total pending test orders
+        # Count total pending test orders (excluding soft-deleted patients)
         total_pending_labs = await self.db.scalar(
-            select(func.count()).select_from(TestOrder).where(
+            select(func.count()).select_from(TestOrder)
+            .join(Patient, TestOrder.patient_id == Patient.id)
+            .where(
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 TestOrder.status.in_(pending_statuses)
             )
         ) or 0
 
-        # Fetch 5 most recent pending test orders
+        # Fetch 5 most recent pending test orders (excluding soft-deleted patients)
         recent_labs_result = await self.db.execute(
             select(TestOrder)
+            .join(Patient, TestOrder.patient_id == Patient.id)
             .where(
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 TestOrder.status.in_(pending_statuses)
             )
             .order_by(TestOrder.created_at.desc())
@@ -214,9 +207,11 @@ class DashboardService:
             select(func.count(LabReport.id))
             .select_from(LabReport)
             .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+            .join(Patient, TestOrder.patient_id == Patient.id)
             .where(
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
                 LabReport.status != LabReportStatus.APPROVED,
             )
         ) or len(lab_reports_list)

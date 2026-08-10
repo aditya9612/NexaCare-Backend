@@ -15,6 +15,8 @@ class AppointmentCreate(BaseSchema):
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
+    patient_name: str | None = None
+    age: int | None = None
 
 
 class AppointmentUpdate(BaseSchema):
@@ -52,6 +54,8 @@ class AppointmentResponse(BaseSchema):
     reminder_sent: bool
     created_at: datetime
     updated_at: datetime | None = None
+    patient_name: str | None = None
+    age: int | None = None
     
     # Receptionist Queue fields
     check_in_time: datetime | None = None

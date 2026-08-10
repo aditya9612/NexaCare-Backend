@@ -37,3 +37,22 @@ class Appointment(Base, TimestampMixin):
     doctor = relationship("Doctor", back_populates="appointments")
     department = relationship("Department", back_populates="appointments")
     clinical_record = relationship("ClinicalRecord", back_populates="appointment", uselist=False)
+
+    @property
+    def patient_name(self) -> str | None:
+        if not self.patient:
+            return None
+        return f"{self.patient.first_name or ''} {self.patient.last_name or ''}".strip() or None
+
+    @property
+    def age(self) -> int | None:
+        if not self.patient or not self.patient.dob:
+            return None
+        today = date.today()
+        dob = self.patient.dob
+        return (
+            today.year
+            - dob.year
+            - ((today.month, today.day) < (dob.month, dob.day))
+        )
+

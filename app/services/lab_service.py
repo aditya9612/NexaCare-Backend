@@ -528,6 +528,11 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
+        if sample.collected_at and data.status == SampleStatus.PENDING:
+            raise BadRequestException(
+                "You cannot change the status of an already collected sample back to pending"
+            )
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(sample, key, value)
 
@@ -587,7 +592,7 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
-        if sample.status != SampleStatus.COLLECTED:
+        if sample.status != SampleStatus.COLLECTED and not sample.collected_at:
             raise BadRequestException(
                 "You cannot enter test result before collecting sample"
             )

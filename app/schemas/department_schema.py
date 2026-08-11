@@ -88,3 +88,4 @@ class DepartmentResponse(BaseSchema):
     department_name: str
     created_at: datetime
     updated_at: datetime
+    staff_linked: int = 0

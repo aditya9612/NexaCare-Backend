@@ -10,8 +10,10 @@ class DepartmentService:
         self.db = db
         self.repo = DepartmentRepository(db)
 
-    def _to_response(self, department: Department) -> DepartmentResponse:
-        return DepartmentResponse.model_validate(department)
+    def _to_response(self, department: Department, staff_count: int = 0) -> DepartmentResponse:
+        res = DepartmentResponse.model_validate(department)
+        res.staff_linked = staff_count
+        return res
 
     async def create(self, data: DepartmentCreate) -> DepartmentResponse:
         existing = await self.repo.get_by_name(data.department_name)
@@ -28,20 +30,42 @@ class DepartmentService:
             department_name=data.department_name
         )
         department = await self.repo.create(department)
-        return self._to_response(department)
+        return self._to_response(department, 0)
 
     async def get_by_id(self, department_id: int) -> DepartmentResponse:
         department = await self.repo.get_by_id(department_id)
         if not department:
             raise NotFoundException(f"Department with ID {department_id} not found")
-        return self._to_response(department)
+        
+        from app.models.staff_model import Staff
+        from sqlalchemy import select, func
+        staff_count = await self.db.scalar(
+            select(func.count(Staff.id)).where(Staff.department_id == department_id, Staff.is_deleted.is_(False))
+        ) or 0
+        return self._to_response(department, staff_count)
 
     async def list_departments(self, page: int = 1, size: int = 20) -> PaginatedResult[DepartmentResponse]:
         skip = (page - 1) * size
         items = await self.repo.list_all(skip=skip, limit=size)
         total = await self.repo.count_all()
+
+        # Batch fetch staff count for each department to avoid N+1 queries
+        from app.models.staff_model import Staff
+        from sqlalchemy import select, func
+        dept_ids = [d.department_id for d in items]
+        
+        staff_counts = {}
+        if dept_ids:
+            stmt = (
+                select(Staff.department_id, func.count(Staff.id))
+                .where(Staff.department_id.in_(dept_ids), Staff.is_deleted.is_(False))
+                .group_by(Staff.department_id)
+            )
+            res = await self.db.execute(stmt)
+            staff_counts = {dept_id: count for dept_id, count in res.all()}
+
         return build_paginated_result(
-            [self._to_response(item) for item in items],
+            [self._to_response(item, staff_counts.get(item.department_id, 0)) for item in items],
             total,
             page,
             size
@@ -65,7 +89,13 @@ class DepartmentService:
             department.department_name = data.department_name
 
         department = await self.repo.update(department)
-        return self._to_response(department)
+        
+        from app.models.staff_model import Staff
+        from sqlalchemy import select, func
+        staff_count = await self.db.scalar(
+            select(func.count(Staff.id)).where(Staff.department_id == department_id, Staff.is_deleted.is_(False))
+        ) or 0
+        return self._to_response(department, staff_count)
 
     async def delete(self, department_id: int) -> None:
         from sqlalchemy.exc import SQLAlchemyError

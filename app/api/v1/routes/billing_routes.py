@@ -97,7 +97,7 @@ async def monthly_revenue_report(
 async def yearly_revenue_report(
     db: DbSession,
     current_user: CurrentUser,
-    year: int | None = Query(default=None, ge=1900, le=2100, description="Select year"),
+    year: int = Query(..., ge=1900, le=2100, description="Select year"),
     _: User = Depends(require_permission("billing", "read")),
 ):
     report = await BillingService(db).get_yearly_report(year)

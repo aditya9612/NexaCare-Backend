@@ -56,6 +56,8 @@ from app.schemas.pharmacy_schema import (
     PharmacyDashboardResponse,
     LowStockItemAlert,
     PharmacySalesTrendPoint,
+    InventoryStatusMix,
+    InventoryHealthProgress,
 )
 from app.utils.helpers import (
     calculate_gst_amount,
@@ -143,10 +145,12 @@ class PharmacyService:
         low_stock_raw = await repo.get_low_stock_items()
         today_trend_raw = await repo.get_today_sales_trend(start_dt, end_dt)
         monthly_trend_raw = await repo.get_monthly_sales_trend(start_dt, end_dt)
+        status_mix_raw = await repo.get_inventory_status_mix()
 
         low_stock_items = [LowStockItemAlert(**item) for item in low_stock_raw]
         today_sales_trend = [PharmacySalesTrendPoint(**item) for item in today_trend_raw]
         monthly_sales_trend = [PharmacySalesTrendPoint(**item) for item in monthly_trend_raw]
+        inventory_status_mix = InventoryStatusMix(**status_mix_raw)
 
         return PharmacyDashboardResponse(
             total_medicines=total_medicines if total_medicines > 0 else 3,
@@ -160,6 +164,7 @@ class PharmacyService:
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
             monthly_sales_trend=monthly_sales_trend,
+            inventory_status_mix=inventory_status_mix,
         )
 
 
@@ -325,8 +330,12 @@ class PharmacyService:
         doctor_id: int | None = None,
         patient_id: int | None = None,
         appointment_id: int | None = None,
-        department_id: int | None = None
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
     ):
+        if assigned_patient_ids == []:
+            return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.prescription_repo.list_all(
             skip=skip,
@@ -335,14 +344,16 @@ class PharmacyService:
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
         total = await self.prescription_repo.count_all(
             status=status,
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
 
         return build_paginated_result(
@@ -1156,8 +1167,7 @@ class PharmacyService:
         # 7. Total Suppliers (Count active suppliers)
         total_suppliers = (await self.db.scalar(
             select(func.count(Supplier.id)).where(
-                Supplier.is_deleted.is_(False),
-                Supplier.is_active.is_(True)
+                Supplier.is_deleted.is_(False)
             )
         )) or 0
 
@@ -1253,6 +1263,35 @@ class PharmacyService:
                 "label": dt_str
             })
 
+        today_sales = round(float(today_sales or 0.0), 2)
+        monthly_sales = round(float(monthly_sales or 0.0), 2)
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix()
+        inventory_status_mix = InventoryStatusMix(**status_mix_raw)
+
+        total_mix = (
+            inventory_status_mix.expiring_soon
+            + inventory_status_mix.in_stock
+            + inventory_status_mix.low_stock
+            + inventory_status_mix.out_of_stock
+        )
+        if total_mix > 0:
+            in_stock_pct = round((inventory_status_mix.in_stock / total_mix) * 100, 2)
+            low_stock_pct = round((inventory_status_mix.low_stock / total_mix) * 100, 2)
+            out_of_stock_pct = round((inventory_status_mix.out_of_stock / total_mix) * 100, 2)
+            expiring_soon_pct = round((inventory_status_mix.expiring_soon / total_mix) * 100, 2)
+        else:
+            in_stock_pct = 0.0
+            low_stock_pct = 0.0
+            out_of_stock_pct = 0.0
+            expiring_soon_pct = 0.0
+
+        inventory_health_progress = InventoryHealthProgress(
+            in_stock=in_stock_pct,
+            low_stock=low_stock_pct,
+            out_of_stock=out_of_stock_pct,
+            expiring_soon=expiring_soon_pct,
+        )
+
         return PharmacyDashboardResponse(
             total_medicines=total_medicines,
             low_stock_alerts=low_stock_alerts,
@@ -1267,7 +1306,9 @@ class PharmacyService:
             daily_sales=today_sales,
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
-            monthly_sales_trend=monthly_sales_trend
+            monthly_sales_trend=monthly_sales_trend,
+            inventory_status_mix=inventory_status_mix,
+            inventory_health_progress=inventory_health_progress,
         )
 
     async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:

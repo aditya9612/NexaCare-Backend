@@ -19,6 +19,7 @@ from app.schemas.appointment_schema import (
     QueueTokenResponse,
     QueueStatusResponse,
     ConfirmedVisitListResponse,
+    AppointmentListWithCountsResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -38,7 +39,7 @@ async def create_appointment(
     return APIResponse(message="Appointment booked", data=appointment)
 
 
-@router.get("", response_model=APIResponse[PaginatedResult[AppointmentResponse]])
+@router.get("", response_model=APIResponse[AppointmentListWithCountsResponse])
 async def list_appointments(
     db: DbSession,
     current_user: CurrentUser,

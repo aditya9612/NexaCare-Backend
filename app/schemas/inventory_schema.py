@@ -370,6 +370,10 @@ class StockSummary(BaseSchema):
     low_stock_count: int
     expired_count: int
     total_value: float
+    total_registered_items: int
+    stock_alerts: int
+    active_warehouse_units: int
+    total_vendors: int
 
 
 class ConsumptionReport(BaseSchema):

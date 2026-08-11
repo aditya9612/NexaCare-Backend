@@ -11,6 +11,7 @@ Uses Sarvam cloned voice via <Play> when VOICE_CLONE_ENABLED is on.
 import logging
 from xml.sax.saxutils import escape
 
+from app.agent.state import BookingCallState
 from app.services.sarvam_tts import speak
 
 logger = logging.getLogger("nexacare.agent.nodes.greeting")
@@ -117,9 +118,9 @@ def build_ask_faq_twiml(state: BookingCallState) -> str:
 
     lang = state["language"]
     twilio_lang = state["twilio_language"]
-    action = f"{state['base_url']}/agent/v1/voice/turn"
+    base_url = state.get("base_url", "")
+    action = f"{base_url}/agent/v1/voice/turn"
     prompt = ask_faq_question(lang)
-    voice_profile = state.get("voice_profile")
     return book_node._twiml(
         book_node._gather_speech(
             action,
@@ -127,7 +128,8 @@ def build_ask_faq_twiml(state: BookingCallState) -> str:
             twilio_lang,
             lang_code=lang,
             timeout=book_node._speech_timeout_for(lang),
-            voice_profile=voice_profile,
+            base_url=base_url,
+            voice_profile=state.get("voice_profile"),
         )
     )
 
@@ -188,5 +190,6 @@ def build_goodbye_twiml(state: BookingCallState) -> str:
     return book_node._hangup_twiml(
         goodbye_message(lang),
         state["twilio_language"],
+        base_url=state.get("base_url", ""),
         voice_profile=state.get("voice_profile"),
     )

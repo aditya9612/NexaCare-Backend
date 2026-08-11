@@ -226,7 +226,14 @@ def _s(key: str, lang: str, **kwargs) -> str:
 # Cloned voice path uses <Play> via app.services.sarvam_tts.speak.
 
 
-def _say(text: str, lang: str, base_url: str = "") -> str:
+def _say(
+    text: str,
+    lang: str,
+    base_url: str = "",
+    voice_profile: str | None = None,
+) -> str:
+    # voice_profile kept for Phase 6 call sites; Sarvam <Play> / Speak path ignores it.
+    _ = voice_profile
     return speak(text, lang, base_url)
 
 
@@ -269,13 +276,14 @@ def _gather_speech(
     lang_code: str = "en",
     timeout: int = 8,
     base_url: str = "",
+    voice_profile: str | None = None,
 ) -> str:
     hints = SPEECH_HINTS.get(lang_code, SPEECH_HINTS["en"])
     return (
         f'<Gather input="speech" action="{escape(action)}" method="POST" '
         f'language="{escape(twilio_lang)}" speechTimeout="auto" timeout="{timeout}" '
         f'hints="{escape(hints)}">'
-        f'{_say(prompt, twilio_lang, base_url)}'
+        f'{_say(prompt, twilio_lang, base_url, voice_profile=voice_profile)}'
         f'</Gather>'
         f'<Redirect method="POST">{escape(action)}</Redirect>'
     )
@@ -294,8 +302,13 @@ def _twiml(*elements: str) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?><Response>' + "".join(elements) + "</Response>"
 
 
-def _hangup_twiml(text: str, lang: str, base_url: str = "") -> str:
-    return _twiml(_say(text, lang, base_url), "<Hangup/>")
+def _hangup_twiml(
+    text: str,
+    lang: str,
+    base_url: str = "",
+    voice_profile: str | None = None,
+) -> str:
+    return _twiml(_say(text, lang, base_url, voice_profile=voice_profile), "<Hangup/>")
 
 
 def _format_time_for_tts(time_str: str) -> str:

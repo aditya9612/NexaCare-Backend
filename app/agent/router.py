@@ -125,7 +125,10 @@ async def _limit_twiml_and_cleanup(call_sid: str, state: dict) -> str:
     vp = state.get("voice_profile")
     record_analytics_event(state, "limit_exceeded")
     twiml = book_node._hangup_twiml(
-        limit_message(lang), state["twilio_language"], voice_profile=vp
+        limit_message(lang),
+        state["twilio_language"],
+        base_url=state.get("base_url", ""),
+        voice_profile=vp,
     )
     await session_store.delete_session(call_sid)
     return twiml
@@ -149,8 +152,9 @@ def _booking_lock_redirect_twiml(state: dict) -> str:
     lang = state.get("language") or "en"
     twilio_lang = state.get("twilio_language") or "en-IN"
     vp = state.get("voice_profile")
+    base_url = state.get("base_url", "")
     redirect = booking_lock_redirect_message(lang)
-    say_xml = book_node._say(redirect, twilio_lang, voice_profile=vp)
+    say_xml = book_node._say(redirect, twilio_lang, base_url=base_url, voice_profile=vp)
     step = state.get("step") or ""
     action = f"{state['base_url']}/agent/v1/voice/turn"
 
@@ -165,6 +169,7 @@ def _booking_lock_redirect_twiml(state: dict) -> str:
             twilio_lang,
             lang_code=lang,
             timeout=book_node._speech_timeout_for(lang, base=10),
+            base_url=base_url,
             voice_profile=vp,
         )
         return book_node._twiml(say_xml, gather)
@@ -286,7 +291,12 @@ async def _process_faq_transcript(
 
     if not phase6:
         await session_store.delete_session(call_sid)
-        return book_node._hangup_twiml(faq.answer, state["twilio_language"], voice_profile=vp)
+        return book_node._hangup_twiml(
+            faq.answer,
+            state["twilio_language"],
+            base_url=state.get("base_url", ""),
+            voice_profile=vp,
+        )
 
     await session_store.update_session(
         call_sid,

@@ -246,7 +246,11 @@ class WarehouseRepository:
 
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[Warehouse]:
         result = await self.db.execute(
-            select(Warehouse).where(Warehouse.is_deleted.is_(False)).offset(skip).limit(limit)
+            select(Warehouse)
+            .where(Warehouse.is_deleted.is_(False))
+            .order_by(Warehouse.created_at.desc())
+            .offset(skip)
+            .limit(limit)
         )
         return list(result.scalars().all())
 

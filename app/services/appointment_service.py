@@ -90,15 +90,67 @@ class AppointmentService:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        date_filter: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
+        if date_filter is not None:
+            valid_filters = {"today", "yesterday", "last_7_days", "last_30_days", "last_3_months", "overall", "custom"}
+            if date_filter not in valid_filters:
+                raise BadRequestException(f"Invalid date_filter. Must be one of: {', '.join(sorted(valid_filters))}")
+            
+            if date_filter == "custom":
+                if not start_date or not end_date:
+                    raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
+                if start_date > end_date:
+                    raise BadRequestException("start_date cannot be greater than end_date")
+
+        filter_start = None
+        filter_end = None
+
+        if date_filter:
+            from datetime import timezone, timedelta
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            today = datetime.now(ist_tz).date()
+
+            if date_filter == "today":
+                filter_start = today
+                filter_end = today
+            elif date_filter == "yesterday":
+                yesterday = today - timedelta(days=1)
+                filter_start = yesterday
+                filter_end = yesterday
+            elif date_filter == "last_7_days":
+                filter_start = today - timedelta(days=7)
+                filter_end = today
+            elif date_filter == "last_30_days":
+                filter_start = today - timedelta(days=30)
+                filter_end = today
+            elif date_filter == "last_3_months":
+                import calendar
+                month = today.month - 3
+                year = today.year
+                if month <= 0:
+                    year -= 1
+                    month += 12
+                day = min(today.day, calendar.monthrange(year, month)[1])
+                filter_start = date(year, month, day)
+                filter_end = today
+            elif date_filter == "custom":
+                filter_start = start_date
+                filter_end = end_date
+            # For "overall", filter_start and filter_end remain None
+
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            start_date=filter_start, end_date=filter_end
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            start_date=filter_start, end_date=filter_end
         )
         return build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
@@ -169,6 +221,44 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
 
         update_data = data.model_dump(exclude_unset=True)
+        if "appointment_status" in update_data:
+            new_status = update_data["appointment_status"]
+            if new_status == AppointmentStatus.CONFIRMED:
+                from app.models.user_model import User
+                from sqlalchemy import select
+                from sqlalchemy.orm import selectinload
+                from app.core.constants import UserRole
+                from app.core.exceptions import ForbiddenException
+                
+                user_res = await self.db.execute(
+                    select(User)
+                    .where(User.id == user_id)
+                    .options(selectinload(User.role))
+                )
+                user_obj = user_res.scalar_one_or_none()
+                if not user_obj:
+                    raise ForbiddenException("User not found")
+                role_name = user_obj.role.name if user_obj.role else ""
+                if role_name not in UserRole.ADMIN_ROLES:
+                    from app.repositories.rbac_repository import RBACRepository
+                    rbac_repo = RBACRepository(self.db)
+                    permissions = await rbac_repo.get_user_permissions(user_obj.role_id)
+                    if "appointments:approve" not in permissions:
+                        raise ForbiddenException("Missing permission: appointments:approve")
+                        
+                if appointment.appointment_status == "Checked-In":
+                    raise BadRequestException("Cannot confirm an appointment that is already checked in")
+                elif appointment.appointment_status == AppointmentStatus.COMPLETED:
+                    raise BadRequestException("Cannot confirm a completed appointment")
+                elif appointment.appointment_status == "Checked-Out":
+                    raise BadRequestException("Cannot confirm a checked-out appointment")
+                elif appointment.appointment_status == AppointmentStatus.CANCELLED:
+                    raise BadRequestException("Cannot confirm a cancelled appointment")
+                elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+                    raise BadRequestException("Cannot confirm a no-show appointment")
+            elif new_status in (AppointmentStatus.COMPLETED, "Checked-Out"):
+                raise BadRequestException(f"Direct update to '{new_status}' status is not allowed. Please use the dedicated lifecycle endpoints.")
+
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
         
@@ -227,6 +317,18 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+            
+        if appointment.appointment_status == "Checked-In":
+            raise BadRequestException("Cannot confirm an appointment that is already checked in")
+        elif appointment.appointment_status == AppointmentStatus.COMPLETED:
+            raise BadRequestException("Cannot confirm a completed appointment")
+        elif appointment.appointment_status == "Checked-Out":
+            raise BadRequestException("Cannot confirm a checked-out appointment")
+        elif appointment.appointment_status == AppointmentStatus.CANCELLED:
+            raise BadRequestException("Cannot confirm a cancelled appointment")
+        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+            raise BadRequestException("Cannot confirm a no-show appointment")
+            
         appointment.appointment_status = AppointmentStatus.CONFIRMED
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("confirm", "appointments", user_id=user_id, resource_id=str(appointment.id))
@@ -266,8 +368,17 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        if appointment.appointment_status != "Checked-In":
-            raise BadRequestException("Appointment must be checked in first")
+        
+        if appointment.appointment_status == "Checked-Out":
+            raise BadRequestException("Appointment already checked out")
+        elif appointment.appointment_status == AppointmentStatus.CANCELLED:
+            raise BadRequestException("Cannot check out a cancelled appointment")
+        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+            raise BadRequestException("Cannot check out a no-show appointment")
+            
+        if appointment.appointment_status != AppointmentStatus.COMPLETED or appointment.queue_status != "COMPLETED":
+            raise BadRequestException("Appointment must be completed before check-out")
+            
         appointment.appointment_status = "Checked-Out"
         appointment.check_out_time = datetime.now()
         await self.db.flush()
@@ -349,7 +460,21 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+            
+        if appointment.appointment_status == AppointmentStatus.CANCELLED:
+            raise BadRequestException("Cannot complete token for a cancelled appointment")
+        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+            raise BadRequestException("Cannot complete token for a no-show appointment")
+        elif appointment.appointment_status == "Checked-Out":
+            raise BadRequestException("Cannot complete token for a checked-out appointment")
+        elif appointment.appointment_status == AppointmentStatus.COMPLETED or appointment.queue_status == "COMPLETED":
+            raise BadRequestException("Cannot complete token for an already completed appointment")
+        elif appointment.appointment_status != "Checked-In":
+            raise BadRequestException("Appointment must be checked in first")
+            
         appointment.queue_status = "COMPLETED"
+        appointment.appointment_status = AppointmentStatus.COMPLETED
+            
         await self.db.flush()
         return appointment
 

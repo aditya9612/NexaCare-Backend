@@ -71,7 +71,7 @@ class ClinicalRecordService:
         
         if data.appointment_id:
             appointment = await self.appointment_repo.get_by_id(data.appointment_id)
-            if appointment:
+            if appointment and appointment.queue_status == "COMPLETED":
                 appointment.appointment_status = AppointmentStatus.COMPLETED
                 await self.appointment_repo.update(appointment)
 

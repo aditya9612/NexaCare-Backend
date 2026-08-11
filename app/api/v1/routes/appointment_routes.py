@@ -49,11 +49,15 @@ async def list_appointments(
     department_id: int | None = None,
     status: str | None = None,
     appointment_date: date | None = None,
+    date_filter: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
+        date_filter=date_filter, start_date=start_date, end_date=end_date,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 

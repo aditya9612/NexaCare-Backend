@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.core.constants import AppointmentStatus
 from app.models.appointment_model import Appointment
@@ -25,6 +26,8 @@ class AppointmentRepository:
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> list[Appointment]:
+        query = select(Appointment).options(joinedload(Appointment.patient))
+        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
         query = select(Appointment)
         query = self._apply_filters(
             query, patient_id, doctor_id, department_id, status, appointment_date, start_date, end_date
@@ -71,7 +74,11 @@ class AppointmentRepository:
         return query
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:
-        result = await self.db.execute(select(Appointment).where(Appointment.id == appointment_id))
+        result = await self.db.execute(
+            select(Appointment)
+            .options(joinedload(Appointment.patient))
+            .where(Appointment.id == appointment_id)
+        )
         return result.scalar_one_or_none()
 
     async def exists_conflict(
@@ -105,12 +112,22 @@ class AppointmentRepository:
         self.db.add(appointment)
         await self.db.flush()
         await self.db.refresh(appointment)
-        return appointment
+        result = await self.db.execute(
+            select(Appointment)
+            .options(joinedload(Appointment.patient))
+            .where(Appointment.id == appointment.id)
+        )
+        return result.scalar_one()
 
     async def update(self, appointment: Appointment) -> Appointment:
         await self.db.flush()
         await self.db.refresh(appointment)
-        return appointment
+        result = await self.db.execute(
+            select(Appointment)
+            .options(joinedload(Appointment.patient))
+            .where(Appointment.id == appointment.id)
+        )
+        return result.scalar_one()
 
     async def delete(self, appointment: Appointment) -> None:
         await self.db.delete(appointment)
@@ -122,9 +139,13 @@ class AppointmentRepository:
         end_date: date,
         doctor_id: int | None = None,
     ) -> list[Appointment]:
-        query = select(Appointment).where(
-            Appointment.appointment_date >= start_date,
-            Appointment.appointment_date <= end_date,
+        query = (
+            select(Appointment)
+            .options(joinedload(Appointment.patient))
+            .where(
+                Appointment.appointment_date >= start_date,
+                Appointment.appointment_date <= end_date,
+            )
         )
         if doctor_id:
             query = query.where(Appointment.doctor_id == doctor_id)
@@ -136,6 +157,7 @@ class AppointmentRepository:
         today = date.today()
         result = await self.db.execute(
             select(Appointment)
+            .options(joinedload(Appointment.patient))
             .where(Appointment.appointment_date == today)
             .order_by(Appointment.appointment_time)
         )
@@ -145,6 +167,7 @@ class AppointmentRepository:
         today = date.today()
         result = await self.db.execute(
             select(Appointment)
+            .options(joinedload(Appointment.patient))
             .where(
                 Appointment.appointment_date >= today,
                 Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),

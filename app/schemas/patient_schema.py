@@ -408,7 +408,21 @@ def parse_medical_history_to_bed_history(medical_history: str | None) -> list[di
     return history_list
 
 
-class PatientResponse(BaseSchema):
+class PatientBedAllocationResponse(BaseSchema):
+    bed_id: int
+    bed_name: str
+    bed_type: str
+    room_id: int
+    room_number: int
+    room_name: str
+    floor_id: int
+    floor_number: int
+    floor_name: str
+    allocation_time: datetime | None = None
+    admission_date: datetime | None = None
+
+
+class PatientResponseBase(BaseSchema):
     id: int
     patient_code: str
     first_name: str
@@ -433,8 +447,6 @@ class PatientResponse(BaseSchema):
     insurance_number: str | None
     status: str
     preferred_language: str | None = None
-    guardian_patient_id: int | None = None
-    relationship_to_guardian: str | None = None
     bed_allocation: PatientBedAllocationResponse | None = None
     condition_status: str | None = None
     created_at: datetime
@@ -446,6 +458,15 @@ class PatientResponse(BaseSchema):
         raw_history = parse_medical_history_to_bed_history(self.medical_history)
         self.bed_history = [BedHistoryResponse.model_validate(item) for item in raw_history]
         return self
+
+
+class PatientCreateResponse(PatientResponseBase):
+    pass
+
+
+class PatientResponse(PatientResponseBase):
+    guardian_patient_id: int | None = None
+    relationship_to_guardian: str | None = None
 
 
 class PatientSearchQuery(BaseSchema):

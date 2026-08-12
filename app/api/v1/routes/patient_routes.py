@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Optional
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, UploadFile, Query, Form, Request
+from fastapi import APIRouter, Depends, File, UploadFile, Query, Form, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
@@ -14,6 +14,7 @@ from app.schemas.patient_schema import (
     PatientCreate,
     PatientDocumentResponse,
     PatientResponse,
+    PatientCreateResponse,
     PatientUpdate,
     PatientFilterQuery,
     PatientDocumentCreate,
@@ -26,14 +27,107 @@ from app.utils.pagination import PaginatedResult
 router = APIRouter()
 
 
-@router.post("", response_model=APIResponse[PatientResponse], status_code=201)
+@router.post(
+    "",
+    response_model=APIResponse[PatientCreateResponse],
+    status_code=201,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "required": ["first_name", "last_name", "diagnosis"]
+                    }
+                }
+            }
+        }
+    }
+)
 async def create_patient(
-    data: PatientCreate,
+    request: Request,
     db: DbSession,
     current_user: CurrentUser,
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    dob: Optional[date] = Form(None),
+    blood_group: Optional[str] = Form(None),
+    marital_status: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    city: Optional[str] = Form(None),
+    state: Optional[str] = Form(None),
+    pincode: Optional[str] = Form(None),
+    emergency_contact_name: Optional[str] = Form(None),
+    emergency_contact_number: Optional[str] = Form(None),
+    allergies: Optional[str] = Form(None),
+    medical_history: Optional[str] = Form(None),
+    chronic_disease: Optional[str] = Form(None),
+    diagnosis: Optional[str] = Form(None),
+    insurance_provider: Optional[str] = Form(None),
+    insurance_number: Optional[str] = Form(None),
+    status: Optional[str] = Form(None),
+    preferred_language: Optional[str] = Form(None),
+    consent_form: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("patients", "create")),
 ):
-    patient = await PatientService(db).create(data, current_user.id)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            patient_data = PatientCreate(**body)
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["body"], "msg": f"Invalid JSON payload: {str(e)}", "type": "json_invalid"}]
+            )
+        consent_file = None
+    else:
+        # Check required fields manually for Form/Multipart request
+        missing_fields = []
+        if not first_name:
+            missing_fields.append({"type": "missing", "loc": ["body", "first_name"], "msg": "Field required", "input": None})
+        if not last_name:
+            missing_fields.append({"type": "missing", "loc": ["body", "last_name"], "msg": "Field required", "input": None})
+        if not diagnosis:
+            missing_fields.append({"type": "missing", "loc": ["body", "diagnosis"], "msg": "Field required", "input": None})
+            
+        if missing_fields:
+            raise HTTPException(status_code=422, detail=missing_fields)
+
+        try:
+            patient_data = PatientCreate(
+                first_name=first_name,
+                last_name=last_name,
+                gender=gender,
+                dob=dob,
+                blood_group=blood_group,
+                marital_status=marital_status,
+                phone=phone,
+                email=email,
+                address=address,
+                city=city,
+                state=state,
+                pincode=pincode,
+                emergency_contact_name=emergency_contact_name,
+                emergency_contact_number=emergency_contact_number,
+                allergies=allergies,
+                medical_history=medical_history,
+                chronic_disease=chronic_disease,
+                diagnosis=diagnosis,
+                insurance_provider=insurance_provider,
+                insurance_number=insurance_number,
+                status=status or "active",
+                preferred_language=preferred_language,
+            )
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+        consent_file = consent_form
+
+    patient = await PatientService(db).create(patient_data, current_user.id, consent_file=consent_file)
     return APIResponse(message="Patient created", data=patient)
 
 

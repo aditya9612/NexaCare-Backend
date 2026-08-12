@@ -121,6 +121,28 @@ class LabService:
             if staff.department_id is None:
                 raise BadRequestException("Lab technician department is not assigned")
             department_id = staff.department_id
+        department_id = None
+        if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            result = await self.db.execute(
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email), Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
 
         skip = (page - 1) * size
         items = await self.test_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
@@ -157,6 +179,34 @@ class LabService:
                 raise BadRequestException("Lab technician department is not assigned")
             department_id = staff.department_id
 
+    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None, current_user = None):
+        department_id = None
+        if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            result = await self.db.execute(
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email), Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+
+    async def search_tests(
+        self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None,
+        department_id: int | None = None, current_user = None
+    ):
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
         skip = (page - 1) * size
         items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id, department_id=department_id)
         total = await self.test_repo.count_search(q, doctor_id=doctor_id, department_id=department_id)
@@ -528,6 +578,11 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
+        if sample.collected_at and data.status == SampleStatus.PENDING:
+            raise BadRequestException(
+                "You cannot change the status of an already collected sample back to pending"
+            )
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(sample, key, value)
 
@@ -587,7 +642,7 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
-        if sample.status != SampleStatus.COLLECTED:
+        if sample.status != SampleStatus.COLLECTED and not sample.collected_at:
             raise BadRequestException(
                 "You cannot enter test result before collecting sample"
             )
@@ -835,6 +890,7 @@ class LabService:
                 raise BadRequestException("Lab technician department is not assigned")
 
             department_id = staff.department_id
+            generated_by = current_user.id
             generated_by = current_user.id
         elif role_name == "doctor":
             from app.models.doctor_model import Doctor

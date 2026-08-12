@@ -189,16 +189,18 @@ class AppointmentService:
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
+        appointment_data = data.model_dump(exclude={"patient_name", "age"})
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
             appointment_status=AppointmentStatus.PENDING,
-            **data.model_dump(),
+            **appointment_data,
         )
         appointment = await self.repo.create(appointment)
         await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id))
         await self._notify_confirmation_safely(appointment, user_id)
         return AppointmentResponse.model_validate(appointment)
+
 
     async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int) -> AppointmentResponse:
         appointment = await self.repo.get_by_id(appointment_id)

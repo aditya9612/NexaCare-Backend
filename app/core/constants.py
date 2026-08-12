@@ -43,6 +43,7 @@ class PermissionAction:
     REMARK = "remark"
     SHARE = "share"
 
+    REMARK = "remark"
 
 
 class AppointmentStatus:

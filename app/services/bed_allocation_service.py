@@ -346,8 +346,15 @@ class BedAllocationService:
             raise BadRequestException(
                 "Cannot allocate a bed to an inactive patient. Please activate the patient first."
             )
+        from datetime import datetime as dt, timezone as tz, timedelta
+        ist_tz = tz(timedelta(hours=5, minutes=30))
+        admission_dt = data.admissionDate
+        if admission_dt.tzinfo is None:
+            admission_dt = admission_dt.replace(tzinfo=tz.utc)
+        admission_date_ist = admission_dt.astimezone(ist_tz).date()
+        current_date_ist = dt.now(ist_tz).date()
 
-        if data.admissionDate.date() < utc_now().date():
+        if admission_date_ist < current_date_ist:
             raise BadRequestException("Admission date cannot be in the past.")
 
         from app.models.appointment_model import Appointment

@@ -8,6 +8,7 @@ from app.schemas.settings_schema import (
     NotificationSettingUpdate,
     UserPreferenceResponse,
     UserPreferenceUpdate,
+    SystemConfigResponse,
 )
 from app.schemas.appointment_setting_schema import (
     AppointmentSettingsResponse,
@@ -34,6 +35,22 @@ def _check_hospital_access(hospital_id: int, current_user: CurrentUser):
         return
     if current_user.hospital_id != hospital_id:
         raise ForbiddenException("Cross-tenant access denied")
+
+
+# ---------------------------------------------------------
+# SYSTEM CONFIGURATION (READ-ONLY)
+# ---------------------------------------------------------
+@router.get(
+    "/system",
+    response_model=SystemConfigResponse,
+    summary="Get System Configuration",
+    description="Retrieve read-only system and facility metadata.",
+    dependencies=[Depends(require_permission("settings", "read"))]
+)
+async def get_system_configuration(db: DbSession, current_user: CurrentUser):
+
+    service = SettingsService(db)
+    return await service.get_system_configuration(current_user.hospital_id)
 
 
 # ---------------------------------------------------------

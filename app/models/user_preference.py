@@ -14,3 +14,6 @@ class UserPreference(Base, TimestampMixin):
     language: Mapped[str] = mapped_column(String(10), default="en")
     email_notifications: Mapped[bool] = mapped_column(Boolean, default=True)
     sms_notifications: Mapped[bool] = mapped_column(Boolean, default=True)
+    compact_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    push_notifications: Mapped[bool] = mapped_column(Boolean, default=True)
+    critical_emergency_alerts: Mapped[bool] = mapped_column(Boolean, default=True)

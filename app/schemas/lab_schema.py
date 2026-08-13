@@ -191,3 +191,16 @@ class CriticalAlert(BaseSchema):
 
 class DoctorRemarkUpdate(BaseSchema):
     remarks: str | None = None
+
+
+# --- AI OCR Schemas ---
+from pydantic import BaseModel
+
+class ExtractedTestResult(BaseModel):
+    test_name: str = Field(..., description="The name of the test parameter/analyte (e.g. Hemoglobin, WBC)")
+    result_value: str | None = Field(default=None, description="The extracted numeric or text value of the result")
+    normal_range: str | None = Field(default=None, description="The normal reference range if listed")
+    remarks: str | None = Field(default="", description="Any flags or remarks (e.g. High, Low, Critical)")
+
+class ExtractedLabReport(BaseModel):
+    test_results: list[ExtractedTestResult]

@@ -564,3 +564,15 @@ async def lab_analytics_alias(
     )
     return APIResponse(message="Lab analytics data retrieved", data=data)
 
+
+@router.post("/reports/ocr", response_model=APIResponse[dict], status_code=201)
+async def process_report_ocr(
+    db: DbSession,
+    current_user: CurrentUser,
+    order_id: int = Form(...),
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("lab", "create")),
+):
+    result = await LabService(db).process_report_ocr(order_id, file, current_user)
+    return APIResponse(message="Lab report OCR extraction successful", data=result)
+

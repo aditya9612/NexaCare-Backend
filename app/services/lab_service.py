@@ -1095,3 +1095,276 @@ class LabService:
         await self.report_repo.delete(report)
         await self.audit_repo.create("delete", "lab_report", user_id=user_id, resource_id=str(report_id))
 
+    async def process_report_ocr(self, order_id: int, file: UploadFile, current_user) -> dict:
+        import os
+        import json
+        from uuid import uuid4
+        import aiofiles
+        import logging
+        from sqlalchemy import select, func
+        from app.core.config import settings
+        from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
+        from app.core.exceptions import BadRequestException, NotFoundException
+        from app.models.lab_model import LabReport, TestResult, LabTest
+        from app.schemas.lab_schema import ExtractedLabReport
+        from app.utils.ocr import extract_text_from_image_bytes, extract_text_from_pdf_bytes
+
+        logger = logging.getLogger("nexacare.lab.service")
+
+        # 1. Retrieve and validate TestOrder
+        order = await self.order_repo.get_by_id(order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        # 2. Check if sample has been collected
+        sample = await self.sample_repo.get_by_test_order(order_id)
+        if not sample or sample.status != SampleStatus.COLLECTED:
+            raise BadRequestException(
+                "Cannot process OCR report: Sample has not been collected for this test order"
+            )
+
+        # 3. Validate file size and extension
+        file_size = getattr(file, "size", None)
+        if file_size is None:
+            # Fallback: read file to get size, then seek back to 0
+            content = await file.read()
+            file_size = len(content)
+            await file.seek(0)
+        
+        max_size_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if file_size > max_size_bytes:
+            raise BadRequestException(f"File size exceeds limit of {settings.MAX_UPLOAD_SIZE_MB}MB")
+
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in [".pdf", ".png", ".jpg", ".jpeg"]:
+            raise BadRequestException("Invalid file type. Supported types: PDF, PNG, JPG, JPEG")
+
+        # 4. Save uploaded file to disk
+        import time
+        t_start = time.time()
+        
+        upload_dir = os.path.join(settings.UPLOAD_DIR, "lab_reports")
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        file_uuid = str(uuid4())
+        file_name = f"{file_uuid}{file_ext}"
+        disk_path = os.path.join(settings.UPLOAD_DIR, "lab_reports", file_name)
+
+        # Read file bytes once to save locally, run OCR, and upload to S3
+        file_bytes = await file.read()
+
+        # Write to local disk
+        async with aiofiles.open(disk_path, "wb") as f:
+            await f.write(file_bytes)
+
+        t_save = time.time()
+        logger.info(f"TIMING: File read and local save took {t_save - t_start:.2f} seconds")
+
+        # Try to upload to AWS S3
+        from io import BytesIO
+        from app.utils.s3 import upload_file_to_s3
+        
+        s3_url = upload_file_to_s3(
+            BytesIO(file_bytes),
+            f"lab_reports/{file_name}",
+            file.content_type
+        )
+        if s3_url:
+            file_path = s3_url
+        else:
+            file_path = os.path.join("uploads/lab_reports", file_name)
+
+        t_s3 = time.time()
+        logger.info(f"TIMING: AWS S3 upload attempt took {t_s3 - t_save:.2f} seconds")
+
+        # 5. Extract raw OCR text
+        try:
+            if file_ext == ".pdf":
+                raw_text = extract_text_from_pdf_bytes(file_bytes)
+            else:
+                raw_text = extract_text_from_image_bytes(file_bytes)
+        except Exception as e:
+            logger.error(f"OCR processing failed: {e}")
+            raise BadRequestException(f"OCR processing failed: {str(e)}")
+            
+        if not raw_text.strip():
+            raise BadRequestException("OCR result is empty. No readable text found in the document.")
+
+        t_ocr = time.time()
+        logger.info(f"TIMING: PaddleOCR text extraction took {t_ocr - t_s3:.2f} seconds")
+
+        # Save companion raw OCR text file to disk (and S3 if configured)
+        raw_txt_name = f"{file_uuid}_raw_ocr.txt"
+        raw_txt_disk_path = os.path.join(settings.UPLOAD_DIR, "lab_reports", raw_txt_name)
+        async with aiofiles.open(raw_txt_disk_path, "w", encoding="utf-8") as f:
+            await f.write(raw_text)
+
+        upload_file_to_s3(
+            BytesIO(raw_text.encode("utf-8")),
+            f"lab_reports/{raw_txt_name}",
+            "text/plain"
+        )
+
+        t_raw_txt = time.time()
+        logger.info(f"TIMING: Raw OCR text saving took {t_raw_txt - t_ocr:.2f} seconds")
+
+        # 6. Call Gemini LLM using google-genai
+        from google import genai
+        from google.genai import types
+
+        api_key = (settings.GEMINI_API_KEY or "").strip()
+        if not api_key:
+            raise BadRequestException("GEMINI_API_KEY environment variable is not set.")
+        
+        try:
+            client = genai.Client(api_key=api_key)
+            model = settings.GEMINI_MODEL or "gemini-2.5-flash"
+            
+            system_prompt = (
+                "You are an expert AI clinical data extractor.\n"
+                "Analyze the provided document file and raw OCR text from a laboratory report and extract the test results into the required structured JSON format.\n"
+                "Each extracted test result must conform to this schema:\n"
+                "- test_name: The name of the test parameter (e.g. Hemoglobin, WBC, Platelets, TSH)\n"
+                "- result_value: The numeric or text value of the test result (e.g. '13.5', 'Positive')\n"
+                "- normal_range: The normal reference range if listed (e.g. '13-17', 'Negative')\n"
+                "- remarks: Any remarks, flags or notes specifically linked to this parameter (e.g. 'High', 'Low')\n\n"
+                "CRITICAL RULES:\n"
+                "1. Never invent or guess medical values. If a value is missing or unclear, return null/empty according to the schema.\n"
+                "2. Preserve the value exactly as extracted where possible (no rounding or conversions).\n"
+                "3. Do not provide any medical diagnosis or interpretation. Only extract structured data.\n"
+                "4. Extract multiple test results/parameters from the same report if present."
+            )
+            
+            # Determine mime type based on file extension
+            mime_type = "image/jpeg"
+            if file_ext == ".pdf":
+                mime_type = "application/pdf"
+            elif file_ext == ".png":
+                mime_type = "image/png"
+            elif file_ext == ".webp":
+                mime_type = "image/webp"
+            elif file_ext == ".gif":
+                mime_type = "image/gif"
+                
+            contents = [
+                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                f"Raw OCR Text:\n{raw_text}\n\nAnalyze both the provided document file and the raw OCR text above to extract all parameters accurately."
+            ]
+            
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                    response_schema=ExtractedLabReport,
+                ),
+            )
+            extracted_json = json.loads(response.text)
+            report_data = ExtractedLabReport.model_validate(extracted_json)
+        except Exception as e:
+            logger.error(f"Gemini LLM extraction failed: {e}")
+            raise BadRequestException(f"LLM extraction failed: {str(e)}")
+
+        t_llm = time.time()
+        logger.info(f"TIMING: Gemini LLM extraction took {t_llm - t_raw_txt:.2f} seconds")
+
+        # 7. Map results to DB entities and run matching validation
+        created_results = []
+        unmatched_params = []
+        
+        for param in report_data.test_results:
+            if not param.test_name or not param.test_name.strip():
+                continue
+                
+            # Matching validation against test catalog
+            is_matched = False
+            ordered_test_name = order.lab_test.test_name if order.lab_test else ""
+            if ordered_test_name.lower().strip() == param.test_name.lower().strip():
+                is_matched = True
+            else:
+                catalog_test_res = await self.db.execute(
+                    select(LabTest).where(
+                        func.lower(LabTest.test_name) == param.test_name.lower().strip(),
+                        LabTest.is_active == True,
+                        LabTest.is_deleted == False
+                    )
+                )
+                if catalog_test_res.scalar_one_or_none():
+                    is_matched = True
+            
+            # Map unmatched parameters as pending human-review items
+            result_status = "completed" if is_matched else "pending"
+            if not is_matched:
+                unmatched_params.append(param.test_name)
+                
+            # Create TestResult record
+            test_result = TestResult(
+                test_order_id=order.id,
+                parameter_name=param.test_name,
+                result_value=param.result_value or "",
+                unit=None,
+                normal_range=param.normal_range,
+                is_critical=False,
+                status=result_status,
+                entered_by=current_user.id,
+                entered_at=utc_now(),
+                document_url=file_path,
+                remark=param.remarks or ""
+            )
+            self.db.add(test_result)
+            created_results.append(test_result)
+
+        # 8. Create LabReport in draft status
+        report_remarks = "AI OCR extraction complete."
+        if unmatched_params:
+            report_remarks += f" Parameters requiring manual review (not found in catalog): {', '.join(unmatched_params)}."
+            
+        report = LabReport(
+            test_order_id=order.id,
+            report_number=generate_lab_report_number(),
+            status=LabReportStatus.DRAFT,
+            summary="AI OCR Extracted report.",
+            remarks=report_remarks,
+            report_path=file_path,
+            generated_by=current_user.id,
+            generated_at=utc_now()
+        )
+        self.db.add(report)
+        
+        # Flush to populate IDs
+        await self.db.flush()
+        
+        # Update TestOrder status to in_progress
+        order.status = LabOrderStatus.IN_PROGRESS
+        await self.order_repo.update(order)
+        
+        # Create audit log
+        await self.audit_repo.create(
+            action="create",
+            resource="lab_report",
+            user_id=current_user.id,
+            resource_id=str(report.id),
+            details=f"OCR extracted {len(created_results)} parameters. Saved original to {file_path}"
+        )
+        
+        return {
+            "report_id": report.id,
+            "report_number": report.report_number,
+            "status": report.status,
+            "remarks": report.remarks,
+            "test_order_number": order.order_number,
+            "test_results": [
+                {
+                    "result_id": r.id,
+                    "parameter_name": r.parameter_name,
+                    "result_value": r.result_value,
+                    "normal_range": r.normal_range,
+                    "status": r.status,
+                    "remarks": r.remark
+                }
+                for r in created_results
+            ]
+        }
+

@@ -52,7 +52,18 @@ class PublicService:
         from app.services.booking_rules_resolver import BookingRulesResolver
         
         hospital_id = await self.doctor_repo.get_doctor_hospital_id(doctor_id)
-        settings = await SettingsService(self.db).get_appointment_settings(hospital_id)
+        settings_dict = await SettingsService(self.db).get_appointment_settings(hospital_id)
+        
+        from app.models.appointment_setting import AppointmentSetting
+        from datetime import time
+        
+        for field in ["working_start_time", "working_end_time", "lunch_start_time", "lunch_end_time"]:
+            val = settings_dict.get(field)
+            if isinstance(val, str):
+                parts = val.split(":")
+                settings_dict[field] = time(int(parts[0]), int(parts[1]), int(parts[2][:2]) if len(parts)>2 else 0)
+                
+        settings = AppointmentSetting(**settings_dict)
         
         result = await self.db.execute(
             select(DoctorSchedule).where(

@@ -25,7 +25,7 @@ class PaginatedResponse(BaseModel, Generic[T]):
 
 
 from pydantic import field_validator
-from datetime import datetime
+from datetime import datetime, timezone
 
 class BaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -35,6 +35,13 @@ class BaseSchema(BaseModel):
     def coerce_zero_datetime(cls, v: any) -> any:
         if isinstance(v, str) and (v.startswith("0000-00-00") or v == "0000-00-00 00:00:00"):
             return datetime(1970, 1, 1)
+        return v
+
+    @field_validator("*", mode="after")
+    @classmethod
+    def localize_datetime(cls, v: any) -> any:
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
         return v
 
 

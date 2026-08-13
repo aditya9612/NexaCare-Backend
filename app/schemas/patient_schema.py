@@ -442,7 +442,7 @@ class PatientResponseBase(BaseSchema):
     allergies: str | None
     medical_history: str | None
     chronic_disease: str | None
-    diagnosis: str
+    diagnosis: str | None = ""
     insurance_provider: str | None
     insurance_number: str | None
     status: str

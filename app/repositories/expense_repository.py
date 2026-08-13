@@ -16,7 +16,7 @@ class ExpenseCategoryRepository:
         return select(ExpenseCategory).where(ExpenseCategory.is_deleted.is_(False))
 
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[ExpenseCategory]:
-        query = self._base_query().order_by(ExpenseCategory.name.asc())
+        query = self._base_query().order_by(ExpenseCategory.created_at.desc(), ExpenseCategory.id.desc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 

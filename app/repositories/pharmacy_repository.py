@@ -376,7 +376,45 @@ class PharmacyInvoiceRepository:
                 PharmacyInvoice.created_at <= end,
             )
         )
-        return {"total_sales": float(total or 0), "invoice_count": count or 0}
+        
+        # Query top selling medicines
+        top_meds_query = (
+            select(
+                Medicine.id.label("medicine_id"),
+                Medicine.name.label("name"),
+                Medicine.generic_name.label("generic_name"),
+                Medicine.sku.label("sku"),
+                func.sum(PharmacyInvoiceItem.quantity).label("total_sold_quantity")
+            )
+            .join(PharmacyInvoiceItem, Medicine.id == PharmacyInvoiceItem.medicine_id)
+            .join(PharmacyInvoice, PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id)
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= start,
+                PharmacyInvoice.created_at <= end
+            )
+            .group_by(Medicine.id, Medicine.name, Medicine.generic_name, Medicine.sku)
+            .order_by(func.sum(PharmacyInvoiceItem.quantity).desc())
+            .limit(5)
+        )
+        top_meds_res = await self.db.execute(top_meds_query)
+        top_medicines = [
+            {
+                "medicine_id": row.medicine_id,
+                "name": row.name,
+                "generic_name": row.generic_name,
+                "sku": row.sku,
+                "total_sold_quantity": int(row.total_sold_quantity)
+            }
+            for row in top_meds_res.all()
+        ]
+        
+        return {
+            "total_sales": float(total or 0), 
+            "invoice_count": count or 0,
+            "top_medicines": top_medicines
+        }
 
     async def get_dashboard_sales(self) -> dict:
         now = utc_now()

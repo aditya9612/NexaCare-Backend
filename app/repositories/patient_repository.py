@@ -272,9 +272,11 @@ class PatientRepository:
         return patient
 
     async def get_appointments(self, patient_id: int) -> list[Appointment]:
+        from sqlalchemy.orm import selectinload
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.patient_id == patient_id)
+            .options(selectinload(Appointment.patient))
             .order_by(Appointment.appointment_date.desc(), Appointment.appointment_time.desc())
         )
         return list(result.scalars().all())

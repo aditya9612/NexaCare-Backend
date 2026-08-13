@@ -140,8 +140,14 @@ class BillingService:
 
         billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
+        
+        # Check if there are any completed refund payments
+        has_refund = any(p.is_refund and p.status == "completed" for p in billing.payments) if billing.payments else False
+
         if billing.balance_amount <= 0:
             billing.status = BillingStatus.PAID
+        elif has_refund and billing.paid_amount <= 0:
+            billing.status = BillingStatus.REFUNDED
         elif billing.paid_amount > 0:
             billing.status = BillingStatus.PARTIAL
         elif due_date_naive and due_date_naive < utc_now():
@@ -602,7 +608,7 @@ class BillingService:
         billing.paid_amount = round(billing.paid_amount - data.amount, 2)
         billing = await self._recalculate_billing(billing)
         if billing.paid_amount == 0 and billing.balance_amount > 0:
-            billing.status = BillingStatus.PENDING
+            billing.status = BillingStatus.REFUNDED
         await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
 
         from app.services.transaction_history_service import TransactionHistoryService

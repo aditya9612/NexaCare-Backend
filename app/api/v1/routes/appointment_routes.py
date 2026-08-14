@@ -322,6 +322,22 @@ async def get_appointment(
     return APIResponse(message="Appointment retrieved", data=appointment)
 
 
+@router.get("/{appointment_id}/download")
+async def download_appointment(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    from fastapi import Response
+    pdf_bytes = await AppointmentService(db).download_appointment_pdf(appointment_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=appointment_{appointment_id}.pdf"}
+    )
+
+
 @router.put("/{appointment_id}", response_model=APIResponse[AppointmentResponse])
 async def update_appointment(
     appointment_id: int,

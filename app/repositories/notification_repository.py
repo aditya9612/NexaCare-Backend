@@ -93,7 +93,12 @@ class NotificationRepository:
         if is_read is not None:
             query = query.where(Notification.is_read.is_(is_read))
         if notification_type is not None:
-            query = query.where(Notification.notification_type == notification_type)
+            types = [t.strip() for t in notification_type.split(",") if t.strip()]
+            if types:
+                if len(types) == 1:
+                    query = query.where(Notification.notification_type == types[0])
+                else:
+                    query = query.where(Notification.notification_type.in_(types))
         if category is not None:
             query = self._apply_category_filter(query, category)
 
@@ -116,7 +121,12 @@ class NotificationRepository:
         if is_read is not None:
             query = query.where(Notification.is_read.is_(is_read))
         if notification_type is not None:
-            query = query.where(Notification.notification_type == notification_type)
+            types = [t.strip() for t in notification_type.split(",") if t.strip()]
+            if types:
+                if len(types) == 1:
+                    query = query.where(Notification.notification_type == types[0])
+                else:
+                    query = query.where(Notification.notification_type.in_(types))
         if category is not None:
             query = self._apply_category_filter(query, category)
 

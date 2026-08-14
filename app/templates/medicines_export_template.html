@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Medicine Inventory Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 20px;
+    }
+    body { font-family: Arial, sans-serif; font-size: 10px; line-height: 1.4; color: #333333; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 8px; margin-bottom: 5px; font-size: 18px; }
+    .meta { margin-bottom: 15px; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px 4px; text-align: left; word-break: break-all; }
+    th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
+    tr:nth-child(even) { background-color: #fafafa; }
+  </style>
+</head>
+<body>
+  <h1>Medicine Inventory Report</h1>
+  <div class="meta">
+    <strong>Total Records:</strong> {{ medicines|length }} | <strong>Generated At:</strong> {{ generated_at }}
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 8%;">SKU</th>
+        <th style="width: 15%;">Name</th>
+        <th style="width: 15%;">Generic Name</th>
+        <th style="width: 10%;">Category</th>
+        <th style="width: 10%;">Barcode</th>
+        <th style="width: 8%;">Batch No</th>
+        <th style="width: 8%;">Expiry Date</th>
+        <th style="width: 6%;">Unit</th>
+        <th style="width: 6%;">Unit Price</th>
+        <th style="width: 6%;">Stock</th>
+        <th style="width: 8%;">Reorder Lvl</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in medicines %}
+      <tr>
+        <td>{{ item.sku }}</td>
+        <td>{{ item.name }}</td>
+        <td>{{ item.generic_name or '-' }}</td>
+        <td>{{ item.category }}</td>
+        <td>{{ item.barcode or '-' }}</td>
+        <td>{{ item.batch_number or '-' }}</td>
+        <td>{{ item.expiry_date or '-' }}</td>
+        <td>{{ item.unit }}</td>
+        <td>${{ "%.2f"|format(item.unit_price) }}</td>
+        <td>{{ item.stock_quantity }}</td>
+        <td>{{ item.reorder_level }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

@@ -37,6 +37,11 @@ class MedicineRepository:
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
+    async def get_all_active(self) -> list[Medicine]:
+        query = self._base_query().order_by(Medicine.name.asc())
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def count_all(self, category: str | None = None) -> int:
         query = select(func.count()).select_from(Medicine).where(Medicine.is_deleted.is_(False))
         if category:

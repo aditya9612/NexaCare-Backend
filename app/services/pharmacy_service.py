@@ -1486,6 +1486,7 @@ class PharmacyService:
     async def export_medicines(self, format_type: str) -> tuple[BytesIO | bytes, str]:
         from io import BytesIO
         from app.utils.helpers import utc_now
+        from datetime import date, datetime
         
         medicines = await self.medicine_repo.get_all_active()
         
@@ -1496,27 +1497,32 @@ class PharmacyService:
             ws.title = "Medicines Inventory"
             
             headers = [
-                "sku", "name", "generic_name", "category", "barcode", "batch_number",
-                "expiry_date", "manufacturer", "unit", "unit_price",
-                "stock_quantity", "reorder_level", "description"
+                "id", "name", "generic_name", "barcode", "batch_number", "sku",
+                "category", "unit", "unit_price", "stock_quantity", "reorder_level",
+                "expiry_date", "manufacturer", "description", "is_active",
+                "created_at", "updated_at"
             ]
             ws.append(headers)
             
             for item in medicines:
                 row = [
-                    item.sku,
+                    item.id,
                     item.name,
                     item.generic_name or "",
-                    item.category,
                     item.barcode or "",
                     item.batch_number or "",
-                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
-                    item.manufacturer or "",
+                    item.sku,
+                    item.category,
                     item.unit,
                     float(item.unit_price) if item.unit_price is not None else 0.0,
                     int(item.stock_quantity) if item.stock_quantity is not None else 0,
                     int(item.reorder_level) if item.reorder_level is not None else 0,
-                    item.description or ""
+                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
+                    item.manufacturer or "",
+                    item.description or "",
+                    bool(item.is_active),
+                    item.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.created_at, datetime) else str(item.created_at),
+                    item.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.updated_at, datetime) else (str(item.updated_at) if item.updated_at else "")
                 ]
                 ws.append(row)
                 
@@ -1542,18 +1548,38 @@ class PharmacyService:
                     else:
                         expiry_str = str(item.expiry_date)
                 
+                created_str = "-"
+                if item.created_at:
+                    if isinstance(item.created_at, datetime):
+                        created_str = item.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        created_str = str(item.created_at)
+
+                updated_str = "-"
+                if item.updated_at:
+                    if isinstance(item.updated_at, datetime):
+                        updated_str = item.updated_at.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        updated_str = str(item.updated_at)
+                
                 formatted_medicines.append({
-                    "sku": item.sku,
+                    "id": item.id,
                     "name": item.name,
                     "generic_name": item.generic_name,
-                    "category": item.category,
                     "barcode": item.barcode,
                     "batch_number": item.batch_number,
-                    "expiry_date": expiry_str,
+                    "sku": item.sku,
+                    "category": item.category,
                     "unit": item.unit,
                     "unit_price": float(item.unit_price) if item.unit_price is not None else 0.0,
                     "stock_quantity": int(item.stock_quantity) if item.stock_quantity is not None else 0,
                     "reorder_level": int(item.reorder_level) if item.reorder_level is not None else 0,
+                    "expiry_date": expiry_str,
+                    "manufacturer": item.manufacturer or "",
+                    "description": item.description or "",
+                    "is_active": "Yes" if item.is_active else "No",
+                    "created_at": created_str,
+                    "updated_at": updated_str,
                 })
                 
             html = template.render(
@@ -1566,5 +1592,6 @@ class PharmacyService:
             
         else:
             raise BadRequestException("Invalid format specified for export")
+
 
 

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus, DayOfWeek
-from app.core.exceptions import ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.models.patient_model import Patient, PatientDocument
 from app.models.department_model import Department
@@ -42,90 +42,96 @@ class PublicService:
         self.audit_repo = AuditRepository(db)
 
     async def get_doctor_available_slots(self, doctor_id: int, target_date: date) -> List[str]:
-        day_of_week = target_date.weekday()
-        
-        doctor = await self.doctor_repo.get_by_id(doctor_id)
-        if not doctor:
-            return []
+        import logging
+        logger = logging.getLogger("nexacare.public.service")
+        try:
+            day_of_week = target_date.weekday()
             
-        from app.services.settings_service import SettingsService
-        from app.services.booking_rules_resolver import BookingRulesResolver
-        
-        hospital_id = await self.doctor_repo.get_doctor_hospital_id(doctor_id)
-        settings_dict = await SettingsService(self.db).get_appointment_settings(hospital_id)
-        
-        from app.models.appointment_setting import AppointmentSetting
-        from datetime import time
-        
-        for field in ["working_start_time", "working_end_time", "lunch_start_time", "lunch_end_time"]:
-            val = settings_dict.get(field)
-            if isinstance(val, str):
-                parts = val.split(":")
-                settings_dict[field] = time(int(parts[0]), int(parts[1]), int(parts[2][:2]) if len(parts)>2 else 0)
+            doctor = await self.doctor_repo.get_by_id(doctor_id)
+            if not doctor:
+                return []
                 
-        settings = AppointmentSetting(**settings_dict)
-        
-        result = await self.db.execute(
-            select(DoctorSchedule).where(
-                DoctorSchedule.doctor_id == doctor_id,
-                DoctorSchedule.day_of_week == day_of_week,
-                DoctorSchedule.is_active.is_(True)
-            )
-        )
-        schedules = result.scalars().all()
-        
-        slots_time = []
-        if not schedules:
-            return []
+            from app.services.settings_service import SettingsService
+            from app.services.booking_rules_resolver import BookingRulesResolver
             
-        # Optional: check if there's any active schedule to pass to resolver. 
-        # But we must check weekend rules.
-        rules = BookingRulesResolver.resolve(settings, target_date, schedules[0])
-        
-        if not rules.weekend_booking_enabled and day_of_week in (5, 6):
-            return []
+            hospital_id = await self.doctor_repo.get_doctor_hospital_id(doctor_id)
+            settings_dict = await SettingsService(self.db).get_appointment_settings(hospital_id)
             
-        for sched in schedules:
-            sched_rules = BookingRulesResolver.resolve(settings, target_date, sched)
+            from app.models.appointment_setting import AppointmentSetting
+            from datetime import time
             
-            curr = datetime.combine(target_date, sched_rules.working_start_time)
-            end = datetime.combine(target_date, sched_rules.working_end_time)
-            duration = sched_rules.slot_duration_minutes
-            
-            while curr < end:
-                slot_time = curr.time()
-                
-                # Check lunch break intersection
-                in_lunch = False
-                if sched_rules.lunch_break_enabled and sched_rules.lunch_start_time and sched_rules.lunch_end_time:
-                    slot_end = (curr + timedelta(minutes=duration)).time()
-                    # If the slot overlaps with lunch break (exclusive bounds for the slot, inclusive for lunch start)
-                    if not (slot_end <= sched_rules.lunch_start_time or slot_time >= sched_rules.lunch_end_time):
-                        in_lunch = True
-                
-                if not in_lunch:
-                    slots_time.append(slot_time)
+            for field in ["working_start_time", "working_end_time", "lunch_start_time", "lunch_end_time"]:
+                val = settings_dict.get(field)
+                if isinstance(val, str):
+                    parts = val.split(":")
+                    settings_dict[field] = time(int(parts[0]), int(parts[1]), int(parts[2][:2]) if len(parts)>2 else 0)
                     
-                curr += timedelta(minutes=duration + sched_rules.buffer_between_slots_minutes)
-        
-        # Query active appointments
-        booked_times = set()
-        if not rules.allow_overlapping:
+            settings = AppointmentSetting(**settings_dict)
+            
             result = await self.db.execute(
-                select(Appointment.appointment_time).where(
-                    Appointment.doctor_id == doctor_id,
-                    Appointment.appointment_date == target_date,
-                    Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE))
+                select(DoctorSchedule).where(
+                    DoctorSchedule.doctor_id == doctor_id,
+                    DoctorSchedule.day_of_week == day_of_week,
+                    DoctorSchedule.is_active.is_(True)
                 )
             )
-            booked_times = {row[0] for row in result.all()}
-        
-        available = []
-        for slot in slots_time:
-            if slot not in booked_times:
-                available.append(slot.strftime("%H:%M"))
+            schedules = result.scalars().all()
+            
+            slots_time = []
+            if not schedules:
+                return []
                 
-        return available
+            # Optional: check if there's any active schedule to pass to resolver. 
+            # But we must check weekend rules.
+            rules = BookingRulesResolver.resolve(settings, target_date, schedules[0])
+            
+            if not rules.weekend_booking_enabled and day_of_week in (5, 6):
+                return []
+                
+            for sched in schedules:
+                sched_rules = BookingRulesResolver.resolve(settings, target_date, sched)
+                
+                curr = datetime.combine(target_date, sched_rules.working_start_time)
+                end = datetime.combine(target_date, sched_rules.working_end_time)
+                duration = sched_rules.slot_duration_minutes
+                
+                while curr < end:
+                    slot_time = curr.time()
+                    
+                    # Check lunch break intersection
+                    in_lunch = False
+                    if sched_rules.lunch_break_enabled and sched_rules.lunch_start_time and sched_rules.lunch_end_time:
+                        slot_end = (curr + timedelta(minutes=duration)).time()
+                        # If the slot overlaps with lunch break (exclusive bounds for the slot, inclusive for lunch start)
+                        if not (slot_end <= sched_rules.lunch_start_time or slot_time >= sched_rules.lunch_end_time):
+                            in_lunch = True
+                    
+                    if not in_lunch:
+                        slots_time.append(slot_time)
+                        
+                    curr += timedelta(minutes=duration + sched_rules.buffer_between_slots_minutes)
+            
+            # Query active appointments
+            booked_times = set()
+            if not rules.allow_overlapping:
+                result = await self.db.execute(
+                    select(Appointment.appointment_time).where(
+                        Appointment.doctor_id == doctor_id,
+                        Appointment.appointment_date == target_date,
+                        Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE))
+                    )
+                )
+                booked_times = {row[0] for row in result.all()}
+            
+            available = []
+            for slot in slots_time:
+                if slot not in booked_times:
+                    available.append(slot.strftime("%H:%M"))
+                    
+            return available
+        except Exception as exc:
+            logger.error("Error in get_doctor_available_slots for doctor_id=%s date=%s: %s", doctor_id, target_date, exc, exc_info=True)
+            return []
 
     def _build_weekly_schedule(self, schedules: list[DoctorSchedule]) -> tuple[list[str], list[PublicDoctorWorkingDay]]:
         active = sorted(
@@ -152,121 +158,127 @@ class PublicService:
         specialty: Optional[str] = None,
         appointment_date: Optional[date] = None,
     ) -> List[PublicDoctorResponse]:
-        from sqlalchemy.orm import selectinload
-        # Base query to get all non-deleted, available doctors with department eagerly loaded
-        query = select(Doctor).options(
-            selectinload(Doctor.department),
-            selectinload(Doctor.schedules),
-        ).where(
-            Doctor.is_deleted.is_(False),
-            Doctor.availability_status == "available"
-        )
-
-        resolved_department_id = department_id
-        if resolved_department_id is None and department:
-            if department.isdigit():
-                resolved_department_id = int(department)
-            else:
-                query = query.join(Doctor.department).where(
-                    Department.department_name.ilike(f"%{department.strip()}%")
-                )
-
-        if resolved_department_id is not None:
-            query = query.where(Doctor.department_id == resolved_department_id)
-        
-        if specialty:
-            term = specialty.strip().lower()
-            variations = [term]
-            if term == "urology" or term == "urologist":
-                variations.extend(["urology", "urologist"])
-            elif term == "cardiology" or term == "cardiologist":
-                variations.extend(["cardiology", "cardiologist"])
-            elif term == "neurology" or term == "neurologist":
-                variations.extend(["neurology", "neurologist"])
-            elif term == "dermatology" or term == "dermatologist":
-                variations.extend(["dermatology", "dermatologist"])
-            elif term == "gynecology" or term == "gynecologist":
-                variations.extend(["gynecology", "gynecologist"])
-            elif term == "pediatrics" or term == "pediatrician":
-                variations.extend(["pediatrics", "pediatrician"])
-            elif term == "orthopedics" or term == "orthopedic" or term == "orthopedist":
-                variations.extend(["orthopedics", "orthopedic", "orthopedist"])
-            
-            from sqlalchemy import or_
-            # Make sure we outerjoin department if not already joined
-            query = query.outerjoin(Doctor.department)
-            
-            conds = []
-            for var in variations:
-                conds.append(Doctor.specialization.ilike(f"%{var}%"))
-                conds.append(Department.department_name.ilike(f"%{var}%"))
-            query = query.where(or_(*conds))
-            
-        result = await self.db.execute(query)
-        doctors = result.scalars().all()
-        
-        target_date = appointment_date or (date.today() + timedelta(days=1))
-        
-        response_list = []
-        for doc in doctors:
-            dept_name = doc.department.department_name if doc.department else None
-            if department:
-                matched_dept = False
-                if department.isdigit() and doc.department_id == int(department):
-                    matched_dept = True
-                elif dept_name:
-                    term = department.lower().strip()
-                    vars_check = [term]
-                    if term == "urology" or term == "urologist":
-                        vars_check.extend(["urology", "urologist"])
-                    elif term == "cardiology" or term == "cardiologist":
-                        vars_check.extend(["cardiology", "cardiologist"])
-                    elif term == "neurology" or term == "neurologist":
-                        vars_check.extend(["neurology", "neurologist"])
-                    elif term == "dermatology" or term == "dermatologist":
-                        vars_check.extend(["dermatology", "dermatologist"])
-                    elif term == "gynecology" or term == "gynecologist":
-                        vars_check.extend(["gynecology", "gynecologist"])
-                    elif term == "pediatrics" or term == "pediatrician":
-                        vars_check.extend(["pediatrics", "pediatrician"])
-                    elif term == "orthopedics" or term == "orthopedic" or term == "orthopedist":
-                        vars_check.extend(["orthopedics", "orthopedic", "orthopedist"])
-                    
-                    import re
-                    for vc in vars_check:
-                        pattern = rf"\b{re.escape(vc)}\b"
-                        if re.search(pattern, dept_name.lower()):
-                            matched_dept = True
-                            break
-                if not matched_dept:
-                    continue
-            
-            working_days, weekly_schedule = self._build_weekly_schedule(doc.schedules)
-            is_available_on_date = target_date.weekday() in {s.day_of_week for s in doc.schedules if s.is_active}
-
-            # Fetch slots
-            slots = await self.get_doctor_available_slots(doc.id, target_date)
-            
-            # If explicit date was filtered, only return doctor if they have available slots
-            if appointment_date and not slots:
-                continue
-                
-            response_list.append(
-                PublicDoctorResponse(
-                    id=doc.id,
-                    name=f"Dr. {doc.first_name} {doc.last_name}",
-                    specialty=doc.specialization,
-                    department=dept_name,
-                    department_id=doc.department_id,
-                    experience=doc.experience,
-                    working_days=working_days,
-                    weekly_schedule=weekly_schedule,
-                    availability_slots=slots,
-                    is_available_on_date=is_available_on_date,
-                )
+        import logging
+        logger = logging.getLogger("nexacare.public.service")
+        try:
+            from sqlalchemy.orm import selectinload
+            # Base query to get all non-deleted, available doctors with department eagerly loaded
+            query = select(Doctor).options(
+                selectinload(Doctor.department),
+                selectinload(Doctor.schedules),
+            ).where(
+                Doctor.is_deleted.is_(False),
+                Doctor.availability_status == "available"
             )
+
+            resolved_department_id = department_id
+            if resolved_department_id is None and department:
+                if department.isdigit():
+                    resolved_department_id = int(department)
+                else:
+                    query = query.join(Doctor.department).where(
+                        Department.department_name.ilike(f"%{department.strip()}%")
+                    )
+
+            if resolved_department_id is not None:
+                query = query.where(Doctor.department_id == resolved_department_id)
             
-        return response_list
+            if specialty:
+                term = specialty.strip().lower()
+                variations = [term]
+                if term == "urology" or term == "urologist":
+                    variations.extend(["urology", "urologist"])
+                elif term == "cardiology" or term == "cardiologist":
+                    variations.extend(["cardiology", "cardiologist"])
+                elif term == "neurology" or term == "neurologist":
+                    variations.extend(["neurology", "neurologist"])
+                elif term == "dermatology" or term == "dermatologist":
+                    variations.extend(["dermatology", "dermatologist"])
+                elif term == "gynecology" or term == "gynecologist":
+                    variations.extend(["gynecology", "gynecologist"])
+                elif term == "pediatrics" or term == "pediatrician":
+                    variations.extend(["pediatrics", "pediatrician"])
+                elif term == "orthopedics" or term == "orthopedic" or term == "orthopedist":
+                    variations.extend(["orthopedics", "orthopedic", "orthopedist"])
+                
+                from sqlalchemy import or_
+                # Make sure we outerjoin department if not already joined
+                query = query.outerjoin(Doctor.department)
+                
+                conds = []
+                for var in variations:
+                    conds.append(Doctor.specialization.ilike(f"%{var}%"))
+                    conds.append(Department.department_name.ilike(f"%{var}%"))
+                query = query.where(or_(*conds))
+                
+            result = await self.db.execute(query)
+            doctors = result.scalars().all()
+            
+            target_date = appointment_date or (date.today() + timedelta(days=1))
+            
+            response_list = []
+            for doc in doctors:
+                dept_name = doc.department.department_name if doc.department else None
+                if department:
+                    matched_dept = False
+                    if department.isdigit() and doc.department_id == int(department):
+                        matched_dept = True
+                    elif dept_name:
+                        term = department.lower().strip()
+                        vars_check = [term]
+                        if term == "urology" or term == "urologist":
+                            vars_check.extend(["urology", "urologist"])
+                        elif term == "cardiology" or term == "cardiologist":
+                            vars_check.extend(["cardiology", "cardiologist"])
+                        elif term == "neurology" or term == "neurologist":
+                            vars_check.extend(["neurology", "neurologist"])
+                        elif term == "dermatology" or term == "dermatologist":
+                            vars_check.extend(["dermatology", "dermatologist"])
+                        elif term == "gynecology" or term == "gynecologist":
+                            vars_check.extend(["gynecology", "gynecologist"])
+                        elif term == "pediatrics" or term == "pediatrician":
+                            vars_check.extend(["pediatrics", "pediatrician"])
+                        elif term == "orthopedics" or term == "orthopedic" or term == "orthopedist":
+                            vars_check.extend(["orthopedics", "orthopedic", "orthopedist"])
+                        
+                        import re
+                        for vc in vars_check:
+                            pattern = rf"\b{re.escape(vc)}\b"
+                            if re.search(pattern, dept_name.lower()):
+                                matched_dept = True
+                                break
+                    if not matched_dept:
+                        continue
+                
+                working_days, weekly_schedule = self._build_weekly_schedule(doc.schedules)
+                is_available_on_date = target_date.weekday() in {s.day_of_week for s in doc.schedules if s.is_active}
+
+                # Fetch slots
+                slots = await self.get_doctor_available_slots(doc.id, target_date)
+                
+                # If explicit date was filtered, only return doctor if they have available slots
+                if appointment_date and not slots:
+                    continue
+                    
+                response_list.append(
+                    PublicDoctorResponse(
+                        id=doc.id,
+                        name=f"Dr. {doc.first_name or ''} {doc.last_name or ''}".strip(),
+                        specialty=doc.specialization or "General Practice",
+                        department=dept_name,
+                        department_id=doc.department_id,
+                        experience=doc.experience,
+                        working_days=working_days,
+                        weekly_schedule=weekly_schedule,
+                        availability_slots=slots,
+                        is_available_on_date=is_available_on_date,
+                    )
+                )
+                
+            return response_list
+        except Exception as exc:
+            logger.error("Error in list_public_doctors service: %s", exc, exc_info=True)
+            raise
 
     async def quick_book_appointment(self, data: QuickBookingRequest) -> AppointmentResponse:
         # 1. Lookup or create patient

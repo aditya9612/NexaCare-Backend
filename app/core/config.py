@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     # Feature flag to enable/disable the Settings module gracefully.
     ENABLE_SETTINGS: bool = True
 
-   
+    # TOTP / 2FA Configuration
+    TOTP_ENCRYPTION_KEY: str | None = None
+    ENABLE_2FA_FEATURE: bool = False
 
     
     DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"

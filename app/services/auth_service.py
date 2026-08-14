@@ -10,6 +10,7 @@ from app.core.exceptions import BadRequestException, ConflictException, NotFound
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_2fa_challenge_token,
     decode_token,
     get_password_hash,
     verify_password,
@@ -17,6 +18,7 @@ from app.core.security import (
 from app.models.refresh_token_model import RefreshToken
 from app.models.user_model import User
 from app.models.department_model import Department
+from app.models.user_security_settings import UserSecuritySettings
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.rbac_repository import RBACRepository
@@ -33,10 +35,16 @@ from app.schemas.auth_schema import (
     SendOTPRequest,
     TokenResponse,
     UserProfileResponse,
+    TOTPSetupResponse,
+    TOTPEnableRequest,
+    TwoFAChallengeResponse,
+    TOTPLoginRequest,
+    Disable2FARequest,
 )
 from app.utils.helpers import generate_user_code, utc_now
 from app.utils.otp_delivery import deliver_otp
 from app.utils.otp_handler import generate_otp, store_otp, verify_otp
+from app.services.totp_service import TOTPService
 
 
 class AuthService:
@@ -143,8 +151,8 @@ class AuthService:
                 if not department:
                     raise BadRequestException(
                         "No department found. Please create a department before registering staff."
-    )        
-                
+    )
+
                 staff = Staff(
                     full_name=user.full_name,
                     email=user.email,
@@ -170,7 +178,7 @@ class AuthService:
         from app.models.patient_model import Patient
         from app.models.staff_model import Staff
         from sqlalchemy import select
-        
+
         if user.role.name == UserRole.DOCTOR:
             doctor = await self.db.scalar(select(Doctor).where(Doctor.user_id == user.id))
             return doctor is None or doctor.is_deleted
@@ -183,11 +191,11 @@ class AuthService:
                     select(Department).order_by(Department.department_id.asc())
                 )
                 dept_id = department.department_id if department else None
-                
+
                 staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
                 if staff and staff.department_id:
                     dept_id = staff.department_id
-                
+
                 nurse = Nurse(
                     nurse_code=generate_nurse_code(),
                     user_id=user.id,
@@ -205,7 +213,7 @@ class AuthService:
                 parts = (user.full_name or "Patient User").split(maxsplit=1)
                 first_name = parts[0]
                 last_name = parts[1] if len(parts) > 1 else "User"
-                
+
                 patient = Patient(
                     patient_code=generate_mrn(),
                     user_id=user.id,
@@ -263,6 +271,32 @@ class AuthService:
 
             if not user.is_active:
                 raise UnauthorizedException("Account not activated. Please verify OTP.")
+
+            # 2FA intercept logic
+            if settings.ENABLE_2FA_FEATURE:
+                result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
+                security_settings = result.scalar_one_or_none()
+                if security_settings and security_settings.is_2fa_enabled:
+                    challenge_token, jti = create_2fa_challenge_token(user.id)
+                    from app.utils.redis_service import cache_set
+                    await cache_set(f"2fa_jti:{jti}", "valid", ttl=300)
+
+                    try:
+                        await SecurityService(self.db).record_login(
+                            user_id=user.id,
+                            ip_address=ip_address,
+                            user_agent=user_agent,
+                            status="CHALLENGE",
+                            details="2FA challenge issued",
+                        )
+                    except Exception as e:
+                        logger.exception("Failed to record login history", exc_info=True)
+                        try:
+                            await self.db.rollback()
+                        except Exception:
+                            pass
+
+                    return TwoFAChallengeResponse(challenge_token=challenge_token)
 
             user.last_login = utc_now()
             await self.repo.update(user)
@@ -428,3 +462,190 @@ class AuthService:
             setattr(user, key, value)
         await self.repo.update(user)
         return await self.get_profile(user)
+
+    async def setup_totp(self, user: User) -> TOTPSetupResponse:
+        if not settings.ENABLE_2FA_FEATURE:
+            raise NotFoundException("2FA feature is disabled")
+
+        # Check if settings exist
+        result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
+        security_settings = result.scalar_one_or_none()
+
+        secret = TOTPService.generate_secret()
+        encrypted_secret = TOTPService.encrypt_secret(secret)
+
+        if not security_settings:
+            security_settings = UserSecuritySettings(
+                user_id=user.id,
+                is_2fa_enabled=False,
+                totp_secret_encrypted=encrypted_secret
+            )
+            self.db.add(security_settings)
+        else:
+            if security_settings.is_2fa_enabled:
+                raise ConflictException("2FA is already enabled")
+            security_settings.totp_secret_encrypted = encrypted_secret
+
+        await self.db.commit()
+
+        uri = TOTPService.generate_provisioning_uri(secret, user.email)
+        return TOTPSetupResponse(secret=secret, provisioning_uri=uri)
+
+    async def enable_totp(self, user: User, data: TOTPEnableRequest) -> None:
+        if not settings.ENABLE_2FA_FEATURE:
+            raise NotFoundException("2FA feature is disabled")
+
+        result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
+        security_settings = result.scalar_one_or_none()
+
+        if not security_settings or not security_settings.totp_secret_encrypted:
+            raise BadRequestException("TOTP setup not initialized")
+
+        if security_settings.is_2fa_enabled:
+            raise ConflictException("2FA is already enabled")
+
+        try:
+            secret = TOTPService.decrypt_secret(security_settings.totp_secret_encrypted)
+        except ValueError:
+            raise BadRequestException("Invalid or corrupted TOTP secret")
+
+        if not TOTPService.verify_totp(secret, data.code):
+            raise BadRequestException("Invalid TOTP code")
+
+        security_settings.is_2fa_enabled = True
+
+        # Phase 1: We can generate recovery codes here (unintegrated in login)
+        plain_codes = TOTPService.generate_recovery_codes()
+        hashed_codes = [TOTPService.hash_recovery_code(c) for c in plain_codes]
+        security_settings.recovery_codes_hashed = hashed_codes
+
+        await self.db.commit()
+
+    async def verify_totp_login(
+        self,
+        data: TOTPLoginRequest,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> TokenResponse:
+        from app.services.security_service import SecurityService
+        from app.utils.redis_service import cache_get, cache_delete, cache_set
+        from app.core.logger import logger
+
+        # Rate Limiting
+        rate_limit_key = f"2fa_attempts:{ip_address}"
+        attempts = await cache_get(rate_limit_key)
+        if attempts and int(attempts) >= 5:
+            raise UnauthorizedException("Too many failed 2FA attempts. Try again later.")
+
+        try:
+            payload = decode_token(data.challenge_token)
+        except ValueError:
+            raise UnauthorizedException("Invalid challenge token")
+
+        if payload.get("type") != "2fa_challenge":
+            raise UnauthorizedException("Invalid token type")
+
+        jti = payload.get("jti")
+        user_id = int(payload.get("sub", 0))
+
+        # Replay prevention
+        jti_status = await cache_get(f"2fa_jti:{jti}")
+        if not jti_status:
+            raise UnauthorizedException("Challenge token expired or already consumed")
+
+        user = await self.repo.get_by_id(user_id)
+        if not user or not user.is_active or await self._is_user_deleted(user):
+            raise UnauthorizedException("User not found or inactive")
+
+        result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
+        security_settings = result.scalar_one_or_none()
+
+        if not security_settings or not security_settings.is_2fa_enabled:
+            raise BadRequestException("2FA is not enabled for this account")
+
+        # Increment attempt counter
+        current_attempts = int(attempts) + 1 if attempts else 1
+        await cache_set(rate_limit_key, str(current_attempts), ttl=300)
+
+        # Verification Logic
+        is_valid = False
+        used_recovery_code = None
+
+        try:
+            secret = TOTPService.decrypt_secret(security_settings.totp_secret_encrypted)
+            if TOTPService.verify_totp(secret, data.code):
+                is_valid = True
+        except Exception:
+            pass
+
+        if not is_valid and security_settings.recovery_codes_hashed:
+            # Check recovery codes
+            updated_hashes = []
+            for hashed_code in security_settings.recovery_codes_hashed:
+                if not is_valid and TOTPService.verify_recovery_code(data.code, hashed_code):
+                    is_valid = True
+                    used_recovery_code = hashed_code
+                else:
+                    updated_hashes.append(hashed_code)
+
+            if is_valid:
+                security_settings.recovery_codes_hashed = updated_hashes
+                await self.db.commit()
+
+        if not is_valid:
+            try:
+                await SecurityService(self.db).record_login(
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILED",
+                    details="Invalid TOTP or Recovery code",
+                )
+            except Exception:
+                pass
+            raise UnauthorizedException("Invalid TOTP or Recovery code")
+
+        # Success - consume JTI
+        await cache_delete(f"2fa_jti:{jti}")
+        await cache_delete(rate_limit_key)
+
+        user.last_login = utc_now()
+        await self.repo.update(user)
+        tokens = await self._issue_tokens(user)
+
+        try:
+            await SecurityService(self.db).record_login(
+                user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="SUCCESS",
+                details="2FA Login successful (Recovery code)" if used_recovery_code else "2FA Login successful",
+            )
+        except Exception:
+            pass
+
+        return tokens
+
+    async def disable_totp(self, user: User, data: Disable2FARequest) -> None:
+        if not verify_password(data.password, user.hashed_password):
+            raise BadRequestException("Invalid password")
+
+        result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
+        security_settings = result.scalar_one_or_none()
+
+        if not security_settings or not security_settings.is_2fa_enabled:
+            raise BadRequestException("2FA is not enabled")
+
+        try:
+            secret = TOTPService.decrypt_secret(security_settings.totp_secret_encrypted)
+        except ValueError:
+            raise BadRequestException("Invalid or corrupted TOTP secret")
+
+        if not TOTPService.verify_totp(secret, data.code):
+            raise BadRequestException("Invalid TOTP code")
+
+        security_settings.is_2fa_enabled = False
+        security_settings.totp_secret_encrypted = None
+        security_settings.recovery_codes_hashed = None
+
+        await self.db.commit()

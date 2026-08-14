@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import bcrypt
+from cryptography.fernet import Fernet, InvalidToken
 from jose import JWTError, jwt
 
 from app.core.config import settings
@@ -48,6 +49,15 @@ def create_refresh_token(subject: str | Any) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def create_2fa_challenge_token(subject: str | Any) -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=5)
+    jti = secrets.token_urlsafe(32)
+    payload = {"sub": str(subject), "exp": expire, "type": "2fa_challenge", "iat": now, "jti": jti}
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return token, jti
+
+
 def normalize_bearer_token(token: str) -> str:
     """Strip common client formatting mistakes before JWT decode."""
     token = token.strip()
@@ -64,3 +74,22 @@ def decode_token(token: str) -> dict:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except JWTError as exc:
         raise ValueError("Invalid token") from exc
+
+def get_totp_fernet() -> Fernet:
+    if not settings.TOTP_ENCRYPTION_KEY:
+        raise ValueError("TOTP_ENCRYPTION_KEY is not configured")
+    try:
+        return Fernet(settings.TOTP_ENCRYPTION_KEY.encode("utf-8"))
+    except Exception as e:
+        raise ValueError("Invalid TOTP_ENCRYPTION_KEY format") from e
+
+def encrypt_totp_secret(secret: str) -> str:
+    f = get_totp_fernet()
+    return f.encrypt(secret.encode("utf-8")).decode("utf-8")
+
+def decrypt_totp_secret(encrypted_secret: str) -> str:
+    f = get_totp_fernet()
+    try:
+        return f.decrypt(encrypted_secret.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        raise ValueError("Failed to decrypt TOTP secret")

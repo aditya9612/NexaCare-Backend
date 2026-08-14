@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
 from typing import Optional
 
 # pyrefly: ignore [missing-import]
@@ -1323,3 +1324,247 @@ class PharmacyService:
             most_selling_medicines=most_selling,
             date_wise_medicines=date_wise
         )
+
+    async def generate_medicine_bulk_template(self) -> BytesIO:
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Medicines Template"
+        
+        headers = [
+            "name", "generic_name", "category", "barcode", "batch_number",
+            "expiry_date", "manufacturer", "unit", "unit_price",
+            "stock_quantity", "reorder_level", "description"
+        ]
+        ws.append(headers)
+        
+        # Add a valid sample medicine row
+        sample_row = [
+            "Paracetamol", "Acetaminophen", "Analgesics", "8901234567890", "BATCH-001",
+            "2028-12-31", "Nexa Pharma", "Tablets", 5.5, 100, 10,
+            "Take one tablet as directed by physician"
+        ]
+        ws.append(sample_row)
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_medicines_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        import openpyxl
+        from datetime import date, datetime
+        from pydantic import ValidationError
+        from app.schemas.pharmacy_schema import MedicineCreate
+        from app.models.pharmacy_model import Medicine
+        from app.core.exceptions import ConflictException
+
+        content = await file.read()
+        try:
+            wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+            ws = wb.active
+        except Exception as e:
+            raise BadRequestException(f"Invalid Excel file format: {str(e)}")
+
+        if not ws:
+            raise BadRequestException("The uploaded Excel workbook contains no active worksheet")
+
+        # Extract headers from the first row
+        headers = [str(cell.value).strip().lower() for cell in ws[1] if cell.value is not None]
+        required_headers = {"name", "category", "unit"}
+        missing_headers = required_headers - set(headers)
+        if missing_headers:
+            raise BadRequestException(f"Missing required columns in Excel: {', '.join(missing_headers)}")
+
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+
+        # We will track barcodes processed in this batch to prevent duplicate barcode insert within the same file
+        batch_barcodes = set()
+
+        # Iterate through rows starting from row 2
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            # Check if the row is completely empty/None
+            if all(cell is None for cell in row):
+                continue
+
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                # normalize empty/None values
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+
+            try:
+                # Pre-processing/normalization for the schema:
+                # 1. Barcode: handle float numeric representations safely (e.g. 1234567890123.0 -> "1234567890123")
+                barcode_raw = row_dict.get("barcode")
+                if barcode_raw is not None:
+                    if isinstance(barcode_raw, float):
+                        # Convert float to int string without adding padding/zeros or removing digits
+                        barcode_raw = str(int(barcode_raw))
+                    else:
+                        barcode_raw = str(barcode_raw).strip()
+                    row_dict["barcode"] = barcode_raw
+
+                # 2. Expiry date: handle datetime.datetime or datetime.date objects from Excel cells
+                expiry_raw = row_dict.get("expiry_date")
+                if expiry_raw is not None:
+                    if isinstance(expiry_raw, (datetime, date)):
+                        row_dict["expiry_date"] = expiry_raw.strftime("%Y-%m-%d")
+                    else:
+                        row_dict["expiry_date"] = str(expiry_raw).strip()
+
+                # 3. Numeric values: unit_price, stock_quantity, reorder_level
+                price_raw = row_dict.get("unit_price")
+                if price_raw is not None:
+                    try:
+                        row_dict["unit_price"] = float(price_raw)
+                    except ValueError:
+                        pass
+
+                qty_raw = row_dict.get("stock_quantity")
+                if qty_raw is not None:
+                    try:
+                        row_dict["stock_quantity"] = int(float(qty_raw))
+                    except ValueError:
+                        pass
+
+                reorder_raw = row_dict.get("reorder_level")
+                if reorder_raw is not None:
+                    try:
+                        row_dict["reorder_level"] = int(float(reorder_raw))
+                    except ValueError:
+                        pass
+
+                # Validate using MedicineCreate schema
+                validated_data = MedicineCreate(**row_dict)
+
+                # Check duplicate barcode in DB and current batch
+                if validated_data.barcode:
+                    if validated_data.barcode in batch_barcodes:
+                        raise ConflictException("Duplicate barcode in the uploaded file")
+                    
+                    existing = await self.medicine_repo.get_by_barcode(validated_data.barcode)
+                    if existing:
+                        raise ConflictException("Medicine with this barcode already exists")
+                    
+                    batch_barcodes.add(validated_data.barcode)
+
+                # Create the medicine
+                medicine = Medicine(sku=generate_medicine_sku(), **validated_data.model_dump())
+                medicine = await self.medicine_repo.create(medicine)
+                await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
+                created += 1
+
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({"row": row_idx, "error": err_msg})
+            except ConflictException as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e.detail)})
+            except Exception as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e)})
+
+        await self.db.flush()
+
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors,
+        }
+
+    async def export_medicines(self, format_type: str) -> tuple[BytesIO | bytes, str]:
+        from io import BytesIO
+        from app.utils.helpers import utc_now
+        
+        medicines = await self.medicine_repo.get_all_active()
+        
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Medicines Inventory"
+            
+            headers = [
+                "sku", "name", "generic_name", "category", "barcode", "batch_number",
+                "expiry_date", "manufacturer", "unit", "unit_price",
+                "stock_quantity", "reorder_level", "description"
+            ]
+            ws.append(headers)
+            
+            for item in medicines:
+                row = [
+                    item.sku,
+                    item.name,
+                    item.generic_name or "",
+                    item.category,
+                    item.barcode or "",
+                    item.batch_number or "",
+                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
+                    item.manufacturer or "",
+                    item.unit,
+                    float(item.unit_price) if item.unit_price is not None else 0.0,
+                    int(item.stock_quantity) if item.stock_quantity is not None else 0,
+                    int(item.reorder_level) if item.reorder_level is not None else 0,
+                    item.description or ""
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("medicines_export_template.html")
+            
+            # Format datetime dates for the Jinja template rendering
+            formatted_medicines = []
+            for item in medicines:
+                expiry_str = "-"
+                if item.expiry_date:
+                    if isinstance(item.expiry_date, (date, datetime)):
+                        expiry_str = item.expiry_date.strftime("%Y-%m-%d")
+                    else:
+                        expiry_str = str(item.expiry_date)
+                
+                formatted_medicines.append({
+                    "sku": item.sku,
+                    "name": item.name,
+                    "generic_name": item.generic_name,
+                    "category": item.category,
+                    "barcode": item.barcode,
+                    "batch_number": item.batch_number,
+                    "expiry_date": expiry_str,
+                    "unit": item.unit,
+                    "unit_price": float(item.unit_price) if item.unit_price is not None else 0.0,
+                    "stock_quantity": int(item.stock_quantity) if item.stock_quantity is not None else 0,
+                    "reorder_level": int(item.reorder_level) if item.reorder_level is not None else 0,
+                })
+                
+            html = template.render(
+                medicines=formatted_medicines,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_bytes = html_to_pdf(html)
+            return pdf_bytes, "application/pdf"
+            
+        else:
+            raise BadRequestException("Invalid format specified for export")
+
+

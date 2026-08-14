@@ -204,7 +204,7 @@ class PharmacyService:
         ]
 
     # --- Prescriptions ---
-    
+
     async def create_prescription(self, data: PrescriptionCreate, user_id: int) -> PrescriptionResponse:
         if not data.appointment_id:
             raise BadRequestException("Appointment ID is required to create prescription")
@@ -345,7 +345,7 @@ class PharmacyService:
             raise NotFoundException("Prescription not found")
         if prescription.doctor_id != doctor_id:
             raise ForbiddenException("You do not have permission to modify this prescription")
-        
+
         from app.core.constants import UserRole
         if current_user.role and current_user.role.name == UserRole.DOCTOR:
             if data.status is not None:
@@ -368,8 +368,8 @@ class PharmacyService:
         prescription = await self.prescription_repo.get_by_id(prescription.id)
         await self.audit_repo.create("update", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
         return self._prescription_response(prescription)
-    
-    async def update_prescription_status(  
+
+    async def update_prescription_status(
         self,
         prescription_id: int,
         data: PrescriptionStatusUpdate,
@@ -387,7 +387,7 @@ class PharmacyService:
 
         prescription = await self.prescription_repo.update(prescription)
         prescription = await self.prescription_repo.get_by_id(prescription.id)
-        
+
         await self.audit_repo.create(
             "update_status",
             "pharmacy_prescription",
@@ -418,8 +418,8 @@ class PharmacyService:
         ]
         return resp
 
-        
-           
+
+
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
         if data.patient_id is not None:
@@ -432,7 +432,7 @@ class PharmacyService:
             if not prescription:
                 raise NotFoundException("Prescription not found")
             if prescription.patient_id != data.patient_id:
-                raise BadRequestException("Prescription does not belong to this patient")    
+                raise BadRequestException("Prescription does not belong to this patient")
 
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
@@ -529,7 +529,7 @@ class PharmacyService:
         resp = PharmacyInvoiceResponse.model_validate(invoice)
         resp.items = [PharmacyInvoiceItemResponse.model_validate(i) for i in invoice.items]
         return resp
-    
+
     async def get_invoice_by_id(self, invoice_id: int) -> PharmacyInvoiceResponse:
         invoice = await self.invoice_repo.get_by_id(invoice_id)
         if not invoice:
@@ -775,8 +775,8 @@ class PharmacyService:
         items = await self.supplier_repo.list_all(skip=skip, limit=size)
         total = await self.supplier_repo.count_all()
         return build_paginated_result([SupplierResponse.model_validate(s) for s in items], total, page, size)
-    
-     
+
+
     async def get_supplier(self, supplier_id: int) -> SupplierResponse:
         supplier = await self.supplier_repo.get_by_id(supplier_id)
 
@@ -851,7 +851,7 @@ class PharmacyService:
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
-        
+
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
 
@@ -1064,7 +1064,7 @@ class PharmacyService:
     ) -> PharmacyDashboardResponse:
         from datetime import timezone, timedelta, time, date as dt_date
         from sqlalchemy import select, func, or_, cast, Date
-        
+
         # Indian Standard Time (UTC+5:30) or local date.today()
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         now_ist = datetime.now(ist_tz)
@@ -1304,7 +1304,7 @@ class PharmacyService:
         daily_deductions = await self.invoice_repo.get_daily_stock_deductions()
         most_selling = await self.invoice_repo.get_most_selling_medicines()
         date_wise = await self.invoice_repo.get_date_wise_medicines()
-        
+
         return PharmacyInventoryOverviewResponse(
             **counts,
             daily_stock_deductions=daily_deductions,
@@ -1314,18 +1314,18 @@ class PharmacyService:
 
     async def generate_medicine_bulk_template(self) -> BytesIO:
         import openpyxl
-        
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Medicines Template"
-        
+
         headers = [
             "name", "generic_name", "category", "barcode", "batch_number",
             "expiry_date", "manufacturer", "unit", "unit_price",
             "stock_quantity", "reorder_level", "description"
         ]
         ws.append(headers)
-        
+
         # Add a valid sample medicine row
         sample_row = [
             "Paracetamol", "Acetaminophen", "Analgesics", "8901234567890", "BATCH-001",
@@ -1333,7 +1333,7 @@ class PharmacyService:
             "Take one tablet as directed by physician"
         ]
         ws.append(sample_row)
-        
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -1437,11 +1437,11 @@ class PharmacyService:
                 if validated_data.barcode:
                     if validated_data.barcode in batch_barcodes:
                         raise ConflictException("Duplicate barcode in the uploaded file")
-                    
+
                     existing = await self.medicine_repo.get_by_barcode(validated_data.barcode)
                     if existing:
                         raise ConflictException("Medicine with this barcode already exists")
-                    
+
                     batch_barcodes.add(validated_data.barcode)
 
                 # Create the medicine
@@ -1473,22 +1473,22 @@ class PharmacyService:
     async def export_medicines(self, format_type: str) -> tuple[BytesIO | bytes, str]:
         from io import BytesIO
         from app.utils.helpers import utc_now
-        
+
         medicines = await self.medicine_repo.get_all_active()
-        
+
         if format_type == "excel":
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Medicines Inventory"
-            
+
             headers = [
                 "sku", "name", "generic_name", "category", "barcode", "batch_number",
                 "expiry_date", "manufacturer", "unit", "unit_price",
                 "stock_quantity", "reorder_level", "description"
             ]
             ws.append(headers)
-            
+
             for item in medicines:
                 row = [
                     item.sku,
@@ -1506,19 +1506,19 @@ class PharmacyService:
                     item.description or ""
                 ]
                 ws.append(row)
-                
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
             return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
+
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
-            
+
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("medicines_export_template.html")
-            
+
             # Format datetime dates for the Jinja template rendering
             formatted_medicines = []
             for item in medicines:
@@ -1528,7 +1528,7 @@ class PharmacyService:
                         expiry_str = item.expiry_date.strftime("%Y-%m-%d")
                     else:
                         expiry_str = str(item.expiry_date)
-                
+
                 formatted_medicines.append({
                     "sku": item.sku,
                     "name": item.name,
@@ -1542,16 +1542,14 @@ class PharmacyService:
                     "stock_quantity": int(item.stock_quantity) if item.stock_quantity is not None else 0,
                     "reorder_level": int(item.reorder_level) if item.reorder_level is not None else 0,
                 })
-                
+
             html = template.render(
                 medicines=formatted_medicines,
                 generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
             )
-            
+
             pdf_bytes = html_to_pdf(html)
             return pdf_bytes, "application/pdf"
-            
+
         else:
             raise BadRequestException("Invalid format specified for export")
-
-

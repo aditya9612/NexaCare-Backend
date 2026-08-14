@@ -17,6 +17,11 @@ from app.schemas.auth_schema import (
     SendOTPRequest,
     TokenResponse,
     UserProfileResponse,
+    TOTPSetupResponse,
+    TOTPEnableRequest,
+    TwoFAChallengeResponse,
+    TOTPLoginRequest,
+    Disable2FARequest,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.auth_service import AuthService
@@ -49,11 +54,23 @@ async def send_otp(data: SendOTPRequest, db: DbSession):
     )
 
 
-@router.post("/login", response_model=APIResponse[TokenResponse])
+@router.post("/login", response_model=APIResponse[TokenResponse | TwoFAChallengeResponse])
 async def login(data: LoginRequest, db: DbSession, request: Request):
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
-    tokens = await AuthService(db).login(
+    result = await AuthService(db).login(
+        data, ip_address=ip_address, user_agent=user_agent
+    )
+    if isinstance(result, TwoFAChallengeResponse):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"message": "2FA required", "data": result.model_dump()})
+    return APIResponse(message="Login successful", data=result)
+
+@router.post("/login/2fa", response_model=APIResponse[TokenResponse])
+async def login_2fa(data: TOTPLoginRequest, db: DbSession, request: Request):
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    tokens = await AuthService(db).verify_totp_login(
         data, ip_address=ip_address, user_agent=user_agent
     )
     return APIResponse(message="Login successful", data=tokens)
@@ -118,3 +135,18 @@ async def get_me(db: DbSession, current_user: CurrentUser):
 async def update_profile(data: ProfileUpdateRequest, db: DbSession, current_user: CurrentUser):
     profile = await AuthService(db).update_profile(current_user, data)
     return APIResponse(message="Profile updated", data=profile)
+
+@router.post("/2fa/setup", response_model=APIResponse[TOTPSetupResponse])
+async def setup_totp(db: DbSession, current_user: CurrentUser):
+    setup_data = await AuthService(db).setup_totp(current_user)
+    return APIResponse(message="2FA setup initialized", data=setup_data)
+
+@router.post("/2fa/enable", response_model=APIResponse[MessageResponse])
+async def enable_totp(data: TOTPEnableRequest, db: DbSession, current_user: CurrentUser):
+    await AuthService(db).enable_totp(current_user, data)
+    return APIResponse(message="2FA successfully enabled", data=MessageResponse(message="2FA enabled"))
+
+@router.post("/2fa/disable", response_model=APIResponse[MessageResponse])
+async def disable_totp(data: Disable2FARequest, db: DbSession, current_user: CurrentUser):
+    await AuthService(db).disable_totp(current_user, data)
+    return APIResponse(message="2FA successfully disabled", data=MessageResponse(message="2FA disabled"))

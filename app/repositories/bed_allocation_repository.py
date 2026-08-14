@@ -85,7 +85,10 @@ class BedAllocationRepository:
             query = (
                 select(Bed)
                 .where(Bed.id == bed_id)
-                .options(selectinload(Bed.patient), selectinload(Bed.room))
+                .options(
+                    selectinload(Bed.patient),
+                    selectinload(Bed.room).selectinload(Room.floor)
+                )
             )
         else:
             query = select(Bed).where(Bed.id == bed_id)

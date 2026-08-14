@@ -28,3 +28,4 @@ groq
 google-genai>=1.0.0
 langgraph
 pywebpush>=1.14.0
+openpyxl

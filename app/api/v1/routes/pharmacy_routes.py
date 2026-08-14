@@ -1,6 +1,13 @@
 from datetime import date
+from enum import Enum
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException, Response
+from fastapi.responses import StreamingResponse
+
+
+class MedicineExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -86,6 +93,60 @@ async def create_medicine(
 ):
     medicine = await PharmacyService(db).create_medicine(data, current_user.id)
     return APIResponse(message="Medicine created", data=medicine)
+
+
+@router.get("/medicines/bulk-template")
+async def download_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    stream = await PharmacyService(db).generate_medicine_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=medicine_bulk_template.xlsx"}
+    )
+
+
+@router.post("/medicines/bulk-upload", status_code=201)
+async def upload_medicines_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+
+    result = await PharmacyService(db).import_medicines_from_excel(file, current_user.id)
+    return APIResponse(message="Medicine bulk upload processed", data=result)
+
+
+@router.get("/medicines/export")
+async def export_medicines_list(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: MedicineExportFormat = Query(MedicineExportFormat.EXCEL),
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    data, media_type = await PharmacyService(db).export_medicines(format.value)
+    
+    if format == MedicineExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=medicines_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=medicines_export.pdf"}
+        )
 
 
 @router.get("/medicines", response_model=APIResponse[PaginatedResult[MedicineResponse]])

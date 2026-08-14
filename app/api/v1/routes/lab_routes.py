@@ -368,7 +368,7 @@ async def get_lab_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    report = await LabService(db).get_report(report_id)
+    report = await LabService(db).get_report(report_id, current_user)
     return APIResponse(message="Lab report retrieved", data=report)    
 
 
@@ -403,7 +403,7 @@ async def delete_lab_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_report(report_id, current_user.id)
+    await LabService(db).delete_report(report_id, current_user)
     return APIResponse(
         message="Lab report deleted successfully.",
         data=MessageResponse(message="Deleted successfully"),

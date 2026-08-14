@@ -1,6 +1,7 @@
 from datetime import date
 from sqlalchemy import func, or_, select, cast, String, case
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.appointment_model import Appointment
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
@@ -275,6 +276,7 @@ class PatientRepository:
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.patient_id == patient_id)
+            .options(selectinload(Appointment.patient))
             .order_by(Appointment.appointment_date.desc(), Appointment.appointment_time.desc())
         )
         return list(result.scalars().all())

@@ -17,6 +17,7 @@ class AppointmentCreate(BaseSchema):
     consultation_type: str | None = None
     patient_name: str | None = None
     age: int | None = None
+    patient_mobile_number: str | None = None
 
 
 class AppointmentUpdate(BaseSchema):
@@ -56,6 +57,7 @@ class AppointmentResponse(BaseSchema):
     updated_at: datetime | None = None
     patient_name: str | None = None
     age: int | None = None
+    patient_mobile_number: str | None = None
     
     # Receptionist Queue fields
     check_in_time: datetime | None = None

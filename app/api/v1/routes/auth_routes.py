@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.core.dependencies import CurrentUser, DbSession
 from app.schemas.auth_schema import (
+    TOTPEnableResponse,
     ActivateAccountRequest,
     ChangePasswordRequest,
     ForgotPasswordRequest,
@@ -141,10 +142,10 @@ async def setup_totp(db: DbSession, current_user: CurrentUser):
     setup_data = await AuthService(db).setup_totp(current_user)
     return APIResponse(message="2FA setup initialized", data=setup_data)
 
-@router.post("/2fa/enable", response_model=APIResponse[MessageResponse])
+@router.post("/2fa/enable", response_model=APIResponse[TOTPEnableResponse])
 async def enable_totp(data: TOTPEnableRequest, db: DbSession, current_user: CurrentUser):
-    await AuthService(db).enable_totp(current_user, data)
-    return APIResponse(message="2FA successfully enabled", data=MessageResponse(message="2FA enabled"))
+    recovery_codes = await AuthService(db).enable_totp(current_user, data)
+    return APIResponse(message="2FA successfully enabled", data=TOTPEnableResponse(recovery_codes=recovery_codes))
 
 @router.post("/2fa/disable", response_model=APIResponse[MessageResponse])
 async def disable_totp(data: Disable2FARequest, db: DbSession, current_user: CurrentUser):

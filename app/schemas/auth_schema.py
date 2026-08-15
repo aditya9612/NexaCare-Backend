@@ -272,6 +272,9 @@ class TOTPSetupResponse(BaseSchema):
     secret: str
     provisioning_uri: str
 
+class TOTPEnableResponse(BaseSchema):
+    recovery_codes: list[str]
+
 class TOTPEnableRequest(BaseModel):
     code: str = Field(..., min_length=6, max_length=6)
 

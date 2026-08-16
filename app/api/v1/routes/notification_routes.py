@@ -4,8 +4,15 @@ from fastapi import APIRouter, Query, status
 
 from app.core.dependencies import CurrentUser, DbSession
 from app.schemas.common_schema import APIResponse
-from app.schemas.notification_schema import NotificationResponse, UnreadCountResponse
+from app.schemas.notification_schema import (
+    NotificationResponse,
+    UnreadCountResponse,
+    CategoryCountsResponse,
+    PushSubscriptionCreate,
+    PushSubscriptionDelete
+)
 from app.services.notification_service import NotificationService
+from app.services.push_notification_service import PushNotificationService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
@@ -19,6 +26,7 @@ async def list_notifications(
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     is_read: bool | None = Query(None, description="Filter by read status"),
     notification_type: str | None = Query(None, description="Filter by type: CRITICAL_VALUE, PENDING_TEST, DOCTOR_APPOINTMENT_REMINDER"),
+    category: str | None = Query(None, description="Filter by category (e.g. critical, medication, doctors, vitals, updates, tasks, system, unread, completed)"),
 ) -> APIResponse[PaginatedResult[NotificationResponse]]:
     """Get logged-in user's notifications (newest first)."""
     result = await NotificationService(db).list_user_notifications(
@@ -27,8 +35,19 @@ async def list_notifications(
         limit=limit,
         is_read=is_read,
         notification_type=notification_type,
+        category=category,
     )
     return APIResponse(message="Notifications retrieved successfully", data=result)
+
+
+@router.get("/category-counts", response_model=APIResponse[CategoryCountsResponse])
+async def get_category_counts(
+    db: DbSession,
+    current_user: CurrentUser,
+) -> APIResponse[CategoryCountsResponse]:
+    """Get notification count for each category for the logged-in user."""
+    counts = await NotificationService(db).get_category_counts(current_user.id)
+    return APIResponse(message="Category counts retrieved successfully", data=CategoryCountsResponse(**counts))
 
 
 @router.get("/unread-count", response_model=APIResponse[UnreadCountResponse])
@@ -60,3 +79,25 @@ async def mark_all_notifications_as_read(
     """Mark all unread notifications as read for the logged-in user."""
     result = await NotificationService(db).mark_all_as_read(current_user.id)
     return APIResponse(message="All notifications marked as read", data=result)
+
+
+@router.post("/push/subscribe", response_model=APIResponse[dict[str, str]])
+async def subscribe_push_notifications(
+    payload: PushSubscriptionCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> APIResponse[dict[str, str]]:
+    """Subscribe to browser push notifications."""
+    result = await PushNotificationService(db).subscribe(current_user.id, payload)
+    return APIResponse(message=result["message"], data=result)
+
+
+@router.delete("/push/unsubscribe", response_model=APIResponse[dict[str, str]])
+async def unsubscribe_push_notifications(
+    payload: PushSubscriptionDelete,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> APIResponse[dict[str, str]]:
+    """Unsubscribe from browser push notifications by endpoint."""
+    result = await PushNotificationService(db).unsubscribe(current_user.id, payload.endpoint)
+    return APIResponse(message=result["message"], data=result)

@@ -36,6 +36,7 @@ from app.schemas.nurse_schema import (
     NurseTaskCreate,
     NursePatientAssignmentCreate,
     NursePatientAssignmentResponse,
+    NurseTaskListWithCountsResponse,
 )
 from app.services.nurse_service import NurseService
 from app.services.nurse_communication_service import NurseCommunicationService
@@ -216,7 +217,7 @@ async def delete_nurse(
 
 @router.get(
     "/{nurse_id}/tasks",
-    response_model=APIResponse[PaginatedResult[NurseTaskResponse]],
+    response_model=APIResponse[NurseTaskListWithCountsResponse],
 )
 async def list_nurse_daily_tasks(
     nurse_id: int,

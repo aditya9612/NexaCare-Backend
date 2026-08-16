@@ -172,7 +172,13 @@ class BillingService:
                     "Billing cannot be created for a cancelled appointment."
                 )
 
-            if appointment.appointment_status != AppointmentStatus.COMPLETED:
+            is_completed = (
+                appointment.appointment_status == AppointmentStatus.COMPLETED
+                or appointment.appointment_status == "Checked-Out"
+                or appointment.queue_status == "COMPLETED"
+                or appointment.check_out_time is not None
+            )
+            if not is_completed:
                 raise BadRequestException(
                     "Billing can only be created for completed appointments."
                 )
@@ -254,6 +260,8 @@ class BillingService:
         status: str | None,
         patient_id: int | None,
         q: str | None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
@@ -294,6 +302,14 @@ class BillingService:
         if patient_id:
             b_query = b_query.where(Billing.patient_id == patient_id)
             p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
+        if start_date:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            b_query = b_query.where(Billing.created_at >= start_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
+        if end_date:
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            b_query = b_query.where(Billing.created_at <= end_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -357,16 +373,22 @@ class BillingService:
     async def list_billings(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
+        start_date: date | None = None, end_date: date | None = None,
     ):
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
-            status=status, patient_id=patient_id, q=None
+            status=status, patient_id=patient_id, q=None,
+            start_date=start_date, end_date=end_date
         )
 
-    async def search(self, q: str, page: int = 1, size: int = 20, status: str | None = None):
+    async def search(
+        self, q: str, page: int = 1, size: int = 20, status: str | None = None,
+        start_date: date | None = None, end_date: date | None = None,
+    ):
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by="created_at", sort_order="desc",
-            status=status, patient_id=None, q=q
+            status=status, patient_id=None, q=q,
+            start_date=start_date, end_date=end_date
         )
 
     async def get_by_id(self, billing_id: int) -> BillingResponse:

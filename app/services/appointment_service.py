@@ -34,7 +34,7 @@ class AppointmentService:
         self.audit_repo = AuditRepository(db)
         self.doctor_repo = DoctorRepository(db)
 
-    def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> None:
+    def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> tuple[date, time]:
         from datetime import timezone, timedelta
 
         ist_tz = timezone(timedelta(hours=5, minutes=30))
@@ -60,9 +60,18 @@ class AppointmentService:
                     "Cannot book or reschedule an appointment for a past time slot today"
                 )
 
+        return appointment_date, appointment_time
+
     async def _validate_entities(self, patient_id: int, doctor_id: int) -> None:
-        if not await self.patient_repo.get_by_id(patient_id):
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if not patient:
             raise NotFoundException("Patient not found")
+        
+        from app.core.constants import PatientStatus
+        if patient.status == PatientStatus.INACTIVE:
+            raise BadRequestException(
+                "Cannot create an appointment for an inactive patient. Please activate the patient before booking an appointment."
+            )
         doctor = await self.doctor_repo.get_by_id(doctor_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
@@ -91,9 +100,46 @@ class AppointmentService:
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
         )
-        return build_paginated_result(
+
+        # Calculate summary counts independently of pagination and status/date filters where appropriate
+        from app.utils.helpers import utc_now
+        today = utc_now().date()
+        
+        total_appointments = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
+        )
+        today_appointments = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            appointment_date=today
+        )
+        total_scheduled = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
+        )
+        completed = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date
+        )
+        cancelled = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CANCELLED, appointment_date=appointment_date
+        )
+
+        paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
         )
+        return {
+            "items": paginated.items,
+            "total": paginated.total,
+            "page": paginated.page,
+            "size": paginated.size,
+            "pages": paginated.pages,
+            "total_appointments": total_appointments,
+            "today_appointments": today_appointments,
+            "total_scheduled": total_scheduled,
+            "completed": completed,
+            "cancelled": cancelled,
+        }
 
     async def get_by_id(self, appointment_id: int) -> AppointmentResponse:
         appointment = await self.repo.get_by_id(appointment_id)
@@ -138,21 +184,23 @@ class AppointmentService:
             logging.getLogger(__name__).warning("Failed to dispatch appointment notification: %s", exc)
 
     async def create(self, data: AppointmentCreate, user_id: int) -> AppointmentResponse:
-        self._validate_future_datetime(data.appointment_date, data.appointment_time)
+        data.appointment_date, data.appointment_time = self._validate_future_datetime(data.appointment_date, data.appointment_time)
         await self._validate_entities(data.patient_id, data.doctor_id)
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
+        appointment_data = data.model_dump(exclude={"patient_name", "age"})
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
             appointment_status=AppointmentStatus.PENDING,
-            **data.model_dump(),
+            **appointment_data,
         )
         appointment = await self.repo.create(appointment)
         await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id))
         await self._notify_confirmation_safely(appointment, user_id)
         return AppointmentResponse.model_validate(appointment)
+
 
     async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int) -> AppointmentResponse:
         appointment = await self.repo.get_by_id(appointment_id)
@@ -164,7 +212,11 @@ class AppointmentService:
         new_time = update_data.get("appointment_time", appointment.appointment_time)
         
         if "appointment_date" in update_data or "appointment_time" in update_data:
-            self._validate_future_datetime(new_date, new_time)
+            new_date, new_time = self._validate_future_datetime(new_date, new_time)
+            if "appointment_date" in update_data:
+                update_data["appointment_date"] = new_date
+            if "appointment_time" in update_data:
+                update_data["appointment_time"] = new_time
 
         if "appointment_date" in update_data or "appointment_time" in update_data:
             rules = await self.validation_service.validate(appointment.doctor_id, new_date, new_time, exclude_id=appointment_id)
@@ -186,12 +238,12 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        self._validate_future_datetime(data.appointment_date, data.appointment_time)
+        new_date, new_time = self._validate_future_datetime(data.appointment_date, data.appointment_time)
         rules = await self.validation_service.validate(
-            appointment.doctor_id, data.appointment_date, data.appointment_time, exclude_id=appointment.id
+            appointment.doctor_id, new_date, new_time, exclude_id=appointment.id
         )
-        appointment.appointment_date = data.appointment_date
-        appointment.appointment_time = data.appointment_time
+        appointment.appointment_date = new_date
+        appointment.appointment_time = new_time
         appointment.appointment_status = AppointmentStatus.PENDING
         if data.notes:
             appointment.notes = data.notes
@@ -236,8 +288,13 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        if appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in"):
-            raise BadRequestException("Appointment already checked in")
+        if appointment.appointment_status not in (AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED):
+            if appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in"):
+                raise BadRequestException("Appointment already checked in")
+            elif appointment.appointment_status in (AppointmentStatus.COMPLETED, "Checked-Out"):
+                raise BadRequestException("Cannot check in a completed or checked-out appointment")
+            else:
+                raise BadRequestException(f"Cannot check in appointment with status: {appointment.appointment_status}")
         appointment.appointment_status = "Checked-In"
         appointment.check_in_time = datetime.now()
         await self.db.flush()
@@ -297,7 +354,7 @@ class AppointmentService:
         today = datetime.now(ist_tz).date()
         result = await self.db.execute(
             select(Appointment)
-            .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
+            .where(Appointment.appointment_date == today)
             .order_by(Appointment.id.asc())
         )
         return list(result.scalars().all())

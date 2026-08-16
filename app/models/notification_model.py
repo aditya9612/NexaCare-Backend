@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -21,3 +21,18 @@ class Notification(Base, TimestampMixin, SoftDeleteMixin):
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     user = relationship("User", backref="notifications")
+
+class PushSubscription(Base, TimestampMixin):
+    """Stores Web Push subscriptions for users."""
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
+    p256dh: Mapped[str] = mapped_column(String(255), nullable=False)
+    auth: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "endpoint", name="uix_push_sub_user_endpoint"),
+    )

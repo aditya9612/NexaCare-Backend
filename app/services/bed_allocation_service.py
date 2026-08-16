@@ -341,7 +341,20 @@ class BedAllocationService:
 
         patient = await self.get_patient(data.patientId)
 
-        if data.admissionDate.date() < utc_now().date():
+        from app.core.constants import PatientStatus
+        if patient.status == PatientStatus.INACTIVE:
+            raise BadRequestException(
+                "Cannot allocate a bed to an inactive patient. Please activate the patient first."
+            )
+        from datetime import datetime as dt, timezone as tz, timedelta
+        ist_tz = tz(timedelta(hours=5, minutes=30))
+        admission_dt = data.admissionDate
+        if admission_dt.tzinfo is None:
+            admission_dt = admission_dt.replace(tzinfo=tz.utc)
+        admission_date_ist = admission_dt.astimezone(ist_tz).date()
+        current_date_ist = dt.now(ist_tz).date()
+
+        if admission_date_ist < current_date_ist:
             raise BadRequestException("Admission date cannot be in the past.")
 
         from app.models.appointment_model import Appointment
@@ -372,7 +385,8 @@ class BedAllocationService:
         bed.allocation_time = utc_now()
         bed.admission_date = data.admissionDate
 
-        admission_note = f"\n[Bed Admission]: Admitted to Bed {bed.name} (Room: {bed.room.name if bed.room else ''}) on {data.admissionDate.strftime('%Y-%m-%d')}. Notes: {data.notes or 'None'}"
+        floor_name = bed.room.floor.name if bed.room and bed.room.floor else ''
+        admission_note = f"\n[Bed Admission]: Admitted to Bed {bed.name} (Room: {bed.room.name if bed.room else ''}, Floor: {floor_name}) on {data.admissionDate.strftime('%Y-%m-%d')}. Notes: {data.notes or 'None'}"
         patient.medical_history = f"{patient.medical_history or ''}{admission_note}".strip()
 
         await self.db.flush()
@@ -396,7 +410,9 @@ class BedAllocationService:
 
         patient = await self.get_patient(bed.patient_id)
 
-        discharge_note = f"\n[Bed Discharge]: Discharged from Bed {bed.name} on {utc_now().strftime('%Y-%m-%d')}. Discharge Notes: {data.dischargeNotes or 'None'}"
+        floor_name = bed.room.floor.name if bed.room and bed.room.floor else ''
+        room_name = bed.room.name if bed.room else ''
+        discharge_note = f"\n[Bed Discharge]: Discharged from Bed {bed.name} (Room: {room_name}, Floor: {floor_name}) on {utc_now().strftime('%Y-%m-%d')}. Discharge Notes: {data.dischargeNotes or 'None'}"
         patient.medical_history = f"{patient.medical_history or ''}{discharge_note}".strip()
 
         floor_id = bed.room.floor_id if bed.room else None
@@ -462,6 +478,14 @@ class BedAllocationService:
         source_bed.patient_id = None
         source_bed.allocation_time = None
         source_bed.admission_date = None
+
+        old_room_name = source_bed.room.name if source_bed.room else "None"
+        old_floor_name = source_bed.room.floor.name if source_bed.room and source_bed.room.floor else "None"
+        new_room_name = target_bed.room.name if target_bed.room else "None"
+        new_floor_name = target_bed.room.floor.name if target_bed.room and target_bed.room.floor else "None"
+
+        transfer_note = f"\n[Bed Transfer]: Transferred from Bed {source_bed.name} to Bed {target_bed.name} on {utc_now().strftime('%Y-%m-%d')}. From Room {old_room_name}, Floor {old_floor_name} to Room {new_room_name}, Floor {new_floor_name}"
+        patient.medical_history = f"{patient.medical_history or ''}{transfer_note}".strip()
 
         await self.db.flush()
 

@@ -180,6 +180,14 @@ class InventoryService:
                     "Invalid reference_type. Allowed values are: Purchase Order, Sales Order, Adjustment, Transfer, Return, Opening Stock."
                 )
             data.reference_type = CANONICAL_REF_TYPES[ref_type_lower]
+
+        # Validate duplicate reference
+        if data.reference_type is not None and data.reference_id is not None:
+            existing_ref = await self.transaction_repo.get_by_reference(data.reference_type, data.reference_id)
+            if existing_ref:
+                raise ConflictException(
+                    f"Stock transaction with reference type '{data.reference_type}' and reference ID {data.reference_id} already exists"
+                )
             
         await self._validate_warehouse(data.warehouse_id)
         await self._validate_warehouse(data.target_warehouse_id)
@@ -479,6 +487,10 @@ class InventoryService:
 
     async def get_stock_summary(self) -> StockSummary:
         data = await self.item_repo.get_stock_summary()
+        data["total_registered_items"] = await self.item_repo.count_all()
+        data["stock_alerts"] = await self.alert_repo.count_active()
+        data["active_warehouse_units"] = await self.warehouse_repo.count_active()
+        data["total_vendors"] = await self.vendor_repo.count_all()
         return StockSummary(**data)
 
     async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:

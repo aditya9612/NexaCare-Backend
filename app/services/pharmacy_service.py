@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
 from typing import Optional
 
 # pyrefly: ignore [missing-import]
@@ -56,6 +57,8 @@ from app.schemas.pharmacy_schema import (
     PharmacyDashboardResponse,
     LowStockItemAlert,
     PharmacySalesTrendPoint,
+    InventoryStatusMix,
+    InventoryHealthProgress,
 )
 from app.utils.helpers import (
     calculate_gst_amount,
@@ -143,10 +146,12 @@ class PharmacyService:
         low_stock_raw = await repo.get_low_stock_items()
         today_trend_raw = await repo.get_today_sales_trend(start_dt, end_dt)
         monthly_trend_raw = await repo.get_monthly_sales_trend(start_dt, end_dt)
+        status_mix_raw = await repo.get_inventory_status_mix()
 
         low_stock_items = [LowStockItemAlert(**item) for item in low_stock_raw]
         today_sales_trend = [PharmacySalesTrendPoint(**item) for item in today_trend_raw]
         monthly_sales_trend = [PharmacySalesTrendPoint(**item) for item in monthly_trend_raw]
+        inventory_status_mix = InventoryStatusMix(**status_mix_raw)
 
         return PharmacyDashboardResponse(
             total_medicines=total_medicines if total_medicines > 0 else 3,
@@ -160,6 +165,7 @@ class PharmacyService:
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
             monthly_sales_trend=monthly_sales_trend,
+            inventory_status_mix=inventory_status_mix,
         )
 
 
@@ -238,7 +244,7 @@ class PharmacyService:
         ]
 
     # --- Prescriptions ---
-    
+
     async def create_prescription(self, data: PrescriptionCreate, user_id: int) -> PrescriptionResponse:
         if not data.appointment_id:
             raise BadRequestException("Appointment ID is required to create prescription")
@@ -325,8 +331,12 @@ class PharmacyService:
         doctor_id: int | None = None,
         patient_id: int | None = None,
         appointment_id: int | None = None,
-        department_id: int | None = None
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
     ):
+        if assigned_patient_ids == []:
+            return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.prescription_repo.list_all(
             skip=skip,
@@ -335,14 +345,16 @@ class PharmacyService:
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
         total = await self.prescription_repo.count_all(
             status=status,
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_id=appointment_id,
-            department_id=department_id
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids
         )
 
         return build_paginated_result(
@@ -373,7 +385,7 @@ class PharmacyService:
             raise NotFoundException("Prescription not found")
         if prescription.doctor_id != doctor_id:
             raise ForbiddenException("You do not have permission to modify this prescription")
-        
+
         from app.core.constants import UserRole
         if current_user.role and current_user.role.name == UserRole.DOCTOR:
             if data.status is not None:
@@ -396,8 +408,8 @@ class PharmacyService:
         prescription = await self.prescription_repo.get_by_id(prescription.id)
         await self.audit_repo.create("update", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
         return self._prescription_response(prescription)
-    
-    async def update_prescription_status(  
+
+    async def update_prescription_status(
         self,
         prescription_id: int,
         data: PrescriptionStatusUpdate,
@@ -415,7 +427,7 @@ class PharmacyService:
 
         prescription = await self.prescription_repo.update(prescription)
         prescription = await self.prescription_repo.get_by_id(prescription.id)
-        
+
         await self.audit_repo.create(
             "update_status",
             "pharmacy_prescription",
@@ -446,8 +458,8 @@ class PharmacyService:
         ]
         return resp
 
-        
-           
+
+
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
         if data.patient_id is not None:
@@ -460,7 +472,7 @@ class PharmacyService:
             if not prescription:
                 raise NotFoundException("Prescription not found")
             if prescription.patient_id != data.patient_id:
-                raise BadRequestException("Prescription does not belong to this patient")    
+                raise BadRequestException("Prescription does not belong to this patient")
 
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
@@ -557,7 +569,7 @@ class PharmacyService:
         resp = PharmacyInvoiceResponse.model_validate(invoice)
         resp.items = [PharmacyInvoiceItemResponse.model_validate(i) for i in invoice.items]
         return resp
-    
+
     async def get_invoice_by_id(self, invoice_id: int) -> PharmacyInvoiceResponse:
         invoice = await self.invoice_repo.get_by_id(invoice_id)
         if not invoice:
@@ -803,8 +815,8 @@ class PharmacyService:
         items = await self.supplier_repo.list_all(skip=skip, limit=size)
         total = await self.supplier_repo.count_all()
         return build_paginated_result([SupplierResponse.model_validate(s) for s in items], total, page, size)
-    
-     
+
+
     async def get_supplier(self, supplier_id: int) -> SupplierResponse:
         supplier = await self.supplier_repo.get_by_id(supplier_id)
 
@@ -847,9 +859,19 @@ class PharmacyService:
         )
     # --- Purchases ---
     async def create_purchase(self, data: PurchaseCreate, user_id: int) -> PurchaseResponse:
+        # Validate Supplier
+        supplier = await self.supplier_repo.get_by_id(data.supplier_id)
+        if not supplier:
+            raise NotFoundException(f"Supplier with ID {data.supplier_id} not found")
+
         total = 0.0
         purchase_items: list[PurchaseItem] = []
         for item_data in data.items:
+            # Validate Medicine
+            medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+            if not medicine:
+                raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
+
             line_total = round(item_data.quantity * item_data.unit_price, 2)
             total += line_total
             purchase_items.append(PurchaseItem(
@@ -865,10 +887,11 @@ class PharmacyService:
             total_amount=total,
             ordered_at=utc_now(),
             notes=data.notes,
+            status=data.status or "Pending",
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
-        
+
         purchase = await self.purchase_repo.get_by_id(purchase.id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
 
@@ -893,8 +916,34 @@ class PharmacyService:
         return build_paginated_result([self._purchase_response(p) for p in items], total, page, size)
 
     def _purchase_response(self, purchase: Purchase) -> PurchaseResponse:
-        resp = PurchaseResponse.model_validate(purchase)
-        resp.items = [PurchaseItemResponse.model_validate(i) for i in purchase.items]
+        items_resp = []
+        for i in purchase.items:
+            items_resp.append(PurchaseItemResponse(
+                id=i.id,
+                purchase_id=i.purchase_id,
+                medicine_id=i.medicine_id,
+                quantity=i.quantity or 0,
+                unit_price=i.unit_price or 0.0,
+                expiry_date=i.expiry_date,
+                line_total=i.line_total or 0.0,
+                created_at=i.created_at or utc_now(),
+                updated_at=i.updated_at or utc_now()
+            ))
+
+        resp = PurchaseResponse(
+            id=purchase.id,
+            purchase_number=purchase.purchase_number or "",
+            supplier_id=purchase.supplier_id,
+            total_amount=purchase.total_amount or 0.0,
+            status=purchase.status or "Pending",
+            ordered_at=purchase.ordered_at or purchase.created_at or utc_now(),
+            received_at=purchase.received_at,
+            notes=purchase.notes,
+            created_by=purchase.created_by,
+            received_by=purchase.received_by,
+            items=items_resp,
+            created_at=purchase.created_at or utc_now()
+        )
         return resp
 
     async def get_purchase(self, purchase_id: int) -> PurchaseResponse:
@@ -1049,7 +1098,7 @@ class PharmacyService:
     async def get_dashboard_overview(self) -> PharmacyDashboardResponse:
         from datetime import timezone, timedelta, time, date as dt_date
         from sqlalchemy import select, func, or_, cast, Date
-        
+
         # Indian Standard Time (UTC+5:30) or local date.today()
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         now_ist = datetime.now(ist_tz)
@@ -1119,8 +1168,7 @@ class PharmacyService:
         # 7. Total Suppliers (Count active suppliers)
         total_suppliers = (await self.db.scalar(
             select(func.count(Supplier.id)).where(
-                Supplier.is_deleted.is_(False),
-                Supplier.is_active.is_(True)
+                Supplier.is_deleted.is_(False)
             )
         )) or 0
 
@@ -1216,6 +1264,35 @@ class PharmacyService:
                 "label": dt_str
             })
 
+        today_sales = round(float(today_sales or 0.0), 2)
+        monthly_sales = round(float(monthly_sales or 0.0), 2)
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix()
+        inventory_status_mix = InventoryStatusMix(**status_mix_raw)
+
+        total_mix = (
+            inventory_status_mix.expiring_soon
+            + inventory_status_mix.in_stock
+            + inventory_status_mix.low_stock
+            + inventory_status_mix.out_of_stock
+        )
+        if total_mix > 0:
+            in_stock_pct = round((inventory_status_mix.in_stock / total_mix) * 100, 2)
+            low_stock_pct = round((inventory_status_mix.low_stock / total_mix) * 100, 2)
+            out_of_stock_pct = round((inventory_status_mix.out_of_stock / total_mix) * 100, 2)
+            expiring_soon_pct = round((inventory_status_mix.expiring_soon / total_mix) * 100, 2)
+        else:
+            in_stock_pct = 0.0
+            low_stock_pct = 0.0
+            out_of_stock_pct = 0.0
+            expiring_soon_pct = 0.0
+
+        inventory_health_progress = InventoryHealthProgress(
+            in_stock=in_stock_pct,
+            low_stock=low_stock_pct,
+            out_of_stock=out_of_stock_pct,
+            expiring_soon=expiring_soon_pct,
+        )
+
         return PharmacyDashboardResponse(
             total_medicines=total_medicines,
             low_stock_alerts=low_stock_alerts,
@@ -1230,7 +1307,9 @@ class PharmacyService:
             daily_sales=today_sales,
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
-            monthly_sales_trend=monthly_sales_trend
+            monthly_sales_trend=monthly_sales_trend,
+            inventory_status_mix=inventory_status_mix,
+            inventory_health_progress=inventory_health_progress,
         )
 
     async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:
@@ -1238,10 +1317,252 @@ class PharmacyService:
         daily_deductions = await self.invoice_repo.get_daily_stock_deductions()
         most_selling = await self.invoice_repo.get_most_selling_medicines()
         date_wise = await self.invoice_repo.get_date_wise_medicines()
-        
+
         return PharmacyInventoryOverviewResponse(
             **counts,
             daily_stock_deductions=daily_deductions,
             most_selling_medicines=most_selling,
             date_wise_medicines=date_wise
         )
+
+    async def generate_medicine_bulk_template(self) -> BytesIO:
+        import openpyxl
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Medicines Template"
+
+        headers = [
+            "name", "generic_name", "category", "barcode", "batch_number",
+            "expiry_date", "manufacturer", "unit", "unit_price",
+            "stock_quantity", "reorder_level", "description"
+        ]
+        ws.append(headers)
+
+        # Add a valid sample medicine row
+        sample_row = [
+            "Paracetamol", "Acetaminophen", "Analgesics", "8901234567890", "BATCH-001",
+            "2028-12-31", "Nexa Pharma", "Tablets", 5.5, 100, 10,
+            "Take one tablet as directed by physician"
+        ]
+        ws.append(sample_row)
+
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_medicines_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        import openpyxl
+        from datetime import date, datetime
+        from pydantic import ValidationError
+        from app.schemas.pharmacy_schema import MedicineCreate
+        from app.models.pharmacy_model import Medicine
+        from app.core.exceptions import ConflictException
+
+        content = await file.read()
+        try:
+            wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+            ws = wb.active
+        except Exception as e:
+            raise BadRequestException(f"Invalid Excel file format: {str(e)}")
+
+        if not ws:
+            raise BadRequestException("The uploaded Excel workbook contains no active worksheet")
+
+        # Extract headers from the first row
+        headers = [str(cell.value).strip().lower() for cell in ws[1] if cell.value is not None]
+        required_headers = {"name", "category", "unit"}
+        missing_headers = required_headers - set(headers)
+        if missing_headers:
+            raise BadRequestException(f"Missing required columns in Excel: {', '.join(missing_headers)}")
+
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+
+        # We will track barcodes processed in this batch to prevent duplicate barcode insert within the same file
+        batch_barcodes = set()
+
+        # Iterate through rows starting from row 2
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            # Check if the row is completely empty/None
+            if all(cell is None for cell in row):
+                continue
+
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                # normalize empty/None values
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+
+            try:
+                # Pre-processing/normalization for the schema:
+                # 1. Barcode: handle float numeric representations safely (e.g. 1234567890123.0 -> "1234567890123")
+                barcode_raw = row_dict.get("barcode")
+                if barcode_raw is not None:
+                    if isinstance(barcode_raw, float):
+                        # Convert float to int string without adding padding/zeros or removing digits
+                        barcode_raw = str(int(barcode_raw))
+                    else:
+                        barcode_raw = str(barcode_raw).strip()
+                    row_dict["barcode"] = barcode_raw
+
+                # 2. Expiry date: handle datetime.datetime or datetime.date objects from Excel cells
+                expiry_raw = row_dict.get("expiry_date")
+                if expiry_raw is not None:
+                    if isinstance(expiry_raw, (datetime, date)):
+                        row_dict["expiry_date"] = expiry_raw.strftime("%Y-%m-%d")
+                    else:
+                        row_dict["expiry_date"] = str(expiry_raw).strip()
+
+                # 3. Numeric values: unit_price, stock_quantity, reorder_level
+                price_raw = row_dict.get("unit_price")
+                if price_raw is not None:
+                    try:
+                        row_dict["unit_price"] = float(price_raw)
+                    except ValueError:
+                        pass
+
+                qty_raw = row_dict.get("stock_quantity")
+                if qty_raw is not None:
+                    try:
+                        row_dict["stock_quantity"] = int(float(qty_raw))
+                    except ValueError:
+                        pass
+
+                reorder_raw = row_dict.get("reorder_level")
+                if reorder_raw is not None:
+                    try:
+                        row_dict["reorder_level"] = int(float(reorder_raw))
+                    except ValueError:
+                        pass
+
+                # Validate using MedicineCreate schema
+                validated_data = MedicineCreate(**row_dict)
+
+                # Check duplicate barcode in DB and current batch
+                if validated_data.barcode:
+                    if validated_data.barcode in batch_barcodes:
+                        raise ConflictException("Duplicate barcode in the uploaded file")
+
+                    existing = await self.medicine_repo.get_by_barcode(validated_data.barcode)
+                    if existing:
+                        raise ConflictException("Medicine with this barcode already exists")
+
+                    batch_barcodes.add(validated_data.barcode)
+
+                # Create the medicine
+                medicine = Medicine(sku=generate_medicine_sku(), **validated_data.model_dump())
+                medicine = await self.medicine_repo.create(medicine)
+                await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
+                created += 1
+
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({"row": row_idx, "error": err_msg})
+            except ConflictException as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e.detail)})
+            except Exception as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e)})
+
+        await self.db.flush()
+
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors,
+        }
+
+    async def export_medicines(self, format_type: str) -> tuple[BytesIO | bytes, str]:
+        from io import BytesIO
+        from app.utils.helpers import utc_now
+
+        medicines = await self.medicine_repo.get_all_active()
+
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Medicines Inventory"
+
+            headers = [
+                "sku", "name", "generic_name", "category", "barcode", "batch_number",
+                "expiry_date", "manufacturer", "unit", "unit_price",
+                "stock_quantity", "reorder_level", "description"
+            ]
+            ws.append(headers)
+
+            for item in medicines:
+                row = [
+                    item.sku,
+                    item.name,
+                    item.generic_name or "",
+                    item.category,
+                    item.barcode or "",
+                    item.batch_number or "",
+                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
+                    item.manufacturer or "",
+                    item.unit,
+                    float(item.unit_price) if item.unit_price is not None else 0.0,
+                    int(item.stock_quantity) if item.stock_quantity is not None else 0,
+                    int(item.reorder_level) if item.reorder_level is not None else 0,
+                    item.description or ""
+                ]
+                ws.append(row)
+
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("medicines_export_template.html")
+
+            # Format datetime dates for the Jinja template rendering
+            formatted_medicines = []
+            for item in medicines:
+                expiry_str = "-"
+                if item.expiry_date:
+                    if isinstance(item.expiry_date, (date, datetime)):
+                        expiry_str = item.expiry_date.strftime("%Y-%m-%d")
+                    else:
+                        expiry_str = str(item.expiry_date)
+
+                formatted_medicines.append({
+                    "sku": item.sku,
+                    "name": item.name,
+                    "generic_name": item.generic_name,
+                    "category": item.category,
+                    "barcode": item.barcode,
+                    "batch_number": item.batch_number,
+                    "expiry_date": expiry_str,
+                    "unit": item.unit,
+                    "unit_price": float(item.unit_price) if item.unit_price is not None else 0.0,
+                    "stock_quantity": int(item.stock_quantity) if item.stock_quantity is not None else 0,
+                    "reorder_level": int(item.reorder_level) if item.reorder_level is not None else 0,
+                })
+
+            html = template.render(
+                medicines=formatted_medicines,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+
+            pdf_bytes = html_to_pdf(html)
+            return pdf_bytes, "application/pdf"
+
+        else:
+            raise BadRequestException("Invalid format specified for export")

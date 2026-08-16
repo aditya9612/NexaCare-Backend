@@ -13,6 +13,7 @@ from app.schemas.patient_schema import (
     PatientCreate,
     PatientDocumentResponse,
     PatientResponse,
+    PatientCreateResponse,
     PatientUpdate,
 )
 from app.utils.file_upload import save_upload_file
@@ -26,6 +27,72 @@ class PatientService:
         self.repo = PatientRepository(db)
         self.audit_repo = AuditRepository(db)
 
+    async def _enrich_assigned_patients(self, patient_responses: list[PatientResponse], patient_ids: list[int], current_user) -> None:
+        """
+        Enriches PatientResponse objects with bed allocation and clinical status details
+        specifically for the logged-in nurse, performing batch queries to avoid N+1 issues.
+        """
+        if not patient_ids or not current_user or not current_user.role or current_user.role.name.lower() != "nurse":
+            return
+
+        # 1. Resolve nurse_id first
+        from app.models.nurse_model import Nurse
+        from sqlalchemy import select
+        res = await self.db.execute(select(Nurse.id).where(Nurse.user_id == current_user.id))
+        nurse_id = res.scalar_one_or_none()
+        if not nurse_id:
+            return
+
+        # 2. Fetch Bed allocation details (Bed, Room, Floor)
+        from app.models.bed_allocation_model import Bed, Room, Floor
+        bed_query = (
+            select(Bed, Room, Floor)
+            .join(Room, Room.id == Bed.room_id)
+            .join(Floor, Floor.id == Room.floor_id)
+            .where(
+                Bed.patient_id.in_(patient_ids),
+                Bed.status.in_(["Occupied", "Reserved"])
+            )
+        )
+        bed_results = await self.db.execute(bed_query)
+        bed_lookup = {}
+        for bed, room, floor in bed_results.all():
+            from app.schemas.patient_schema import PatientBedAllocationResponse
+            bed_lookup[bed.patient_id] = PatientBedAllocationResponse(
+                bed_id=bed.id,
+                bed_name=bed.name,
+                bed_type=bed.type,
+                room_id=room.id,
+                room_number=room.number,
+                room_name=room.name,
+                floor_id=floor.id,
+                floor_number=floor.number,
+                floor_name=floor.name,
+                allocation_time=bed.allocation_time,
+                admission_date=bed.admission_date
+            )
+
+        # 3. Fetch NursePatientAssignment status
+        from app.models.nurse_model import NursePatientAssignment
+        assign_query = (
+            select(NursePatientAssignment)
+            .where(
+                NursePatientAssignment.nurse_id == nurse_id,
+                NursePatientAssignment.patient_id.in_(patient_ids),
+                NursePatientAssignment.status == "Active"
+            )
+        )
+        assign_results = await self.db.execute(assign_query)
+        status_lookup = {
+            a.patient_id: a.patient_status 
+            for a in assign_results.scalars().all()
+        }
+
+        # 4. Map back to responses
+        for p_res in patient_responses:
+            p_res.bed_allocation = bed_lookup.get(p_res.id)
+            p_res.condition_status = status_lookup.get(p_res.id)
+
     async def list_patients(
         self,
         page: int = 1,
@@ -34,9 +101,29 @@ class PatientService:
         sort_order: str = "desc",
         start_date: date | None = None,
         end_date: date | None = None,
+        current_user = None,
     ):
         if start_date and end_date and start_date > end_date:
             raise BadRequestException("Start date cannot be greater than end date")
+
+        # Resolve nurse_id if role is Nurse
+        nurse_id = None
+        if current_user and current_user.role and current_user.role.name.lower() == "nurse":
+            from app.models.nurse_model import Nurse
+            from sqlalchemy import select
+            res = await self.db.execute(select(Nurse.id).where(Nurse.user_id == current_user.id))
+            nurse_id = res.scalar_one_or_none()
+            if nurse_id is None:
+                return {
+                    "items": [],
+                    "total": 0,
+                    "page": page,
+                    "size": size,
+                    "pages": 0,
+                    "active_count": 0,
+                    "inactive_count": 0,
+                    "cities_count": 0,
+                }
 
         skip = (page - 1) * size
         items = await self.repo.list_all(
@@ -46,12 +133,18 @@ class PatientService:
             sort_order=sort_order,
             start_date=start_date,
             end_date=end_date,
+            nurse_id=nurse_id,
         )
-        total = await self.repo.count_all(start_date=start_date, end_date=end_date)
+        total = await self.repo.count_all(start_date=start_date, end_date=end_date, nurse_id=nurse_id)
+        
+        patient_responses = [PatientResponse.model_validate(p) for p in items]
+        patient_ids = [p.id for p in items]
+        await self._enrich_assigned_patients(patient_responses, patient_ids, current_user)
+
         paginated = build_paginated_result(
-            [PatientResponse.model_validate(p) for p in items], total, page, size
+            patient_responses, total, page, size
         )
-        stats = await self.repo.get_patient_stats()
+        stats = await self.repo.get_patient_stats(nurse_id=nurse_id)
         return {
             "items": paginated.items,
             "total": paginated.total,
@@ -67,7 +160,9 @@ class PatientService:
             raise NotFoundException("Patient not found")
         return PatientResponse.model_validate(patient)
 
-    async def create(self, data: PatientCreate, user_id: int) -> PatientResponse:
+    async def create(
+        self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None
+    ) -> PatientCreateResponse:
         if data.phone:
             existing_phone = await self.repo.get_by_phone(data.phone)
             if existing_phone:
@@ -80,8 +175,20 @@ class PatientService:
 
         patient = Patient(patient_code=generate_mrn(), **data.model_dump())
         patient = await self.repo.create(patient)
+
+        if consent_file:
+            file_path = await save_upload_file(consent_file, settings.UPLOAD_DIR)
+            doc = PatientDocument(
+                patient_id=patient.id,
+                document_name=consent_file.filename or "consent_form",
+                document_type="Consent Form",
+                file_path=file_path,
+                uploaded_by=user_id,
+            )
+            await self.repo.add_document(doc)
+
         await self.audit_repo.create("create", "patients", user_id=user_id, resource_id=str(patient.id))
-        return PatientResponse.model_validate(patient)
+        return PatientCreateResponse.model_validate(patient)
 
     async def update(self, patient_id: int, data: PatientUpdate, user_id: int) -> PatientResponse:
         patient = await self.repo.get_by_id(patient_id)
@@ -139,12 +246,26 @@ class PatientService:
                 user.is_active = False
         await self.audit_repo.create("delete", "patients", user_id=user_id, resource_id=str(patient.id))
 
-    async def search(self, q: str, page: int = 1, size: int = 20):
+    async def search(self, q: str, page: int = 1, size: int = 20, current_user = None):
+        nurse_id = None
+        if current_user and current_user.role and current_user.role.name.lower() == "nurse":
+            from app.models.nurse_model import Nurse
+            from sqlalchemy import select
+            res = await self.db.execute(select(Nurse.id).where(Nurse.user_id == current_user.id))
+            nurse_id = res.scalar_one_or_none()
+            if nurse_id is None:
+                return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size)
-        total = await self.repo.count_search(q)
+        items = await self.repo.search(q, skip=skip, limit=size, nurse_id=nurse_id)
+        total = await self.repo.count_search(q, nurse_id=nurse_id)
+        
+        patient_responses = [PatientResponse.model_validate(p) for p in items]
+        patient_ids = [p.id for p in items]
+        await self._enrich_assigned_patients(patient_responses, patient_ids, current_user)
+
         return build_paginated_result(
-            [PatientResponse.model_validate(p) for p in items], total, page, size
+            patient_responses, total, page, size
         )
 
     async def filter_patients(
@@ -156,17 +277,33 @@ class PatientService:
         status: str | None = None,
         page: int = 1,
         size: int = 20,
+        current_user = None,
     ):
+        nurse_id = None
+        if current_user and current_user.role and current_user.role.name.lower() == "nurse":
+            from app.models.nurse_model import Nurse
+            from sqlalchemy import select
+            res = await self.db.execute(select(Nurse.id).where(Nurse.user_id == current_user.id))
+            nurse_id = res.scalar_one_or_none()
+            if nurse_id is None:
+                return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.repo.filter_patients(
             gender=gender, blood_group=blood_group, city=city, state=state, status=status,
-            skip=skip, limit=size,
+            skip=skip, limit=size, nurse_id=nurse_id,
         )
         total = await self.repo.count_filter(
-            gender=gender, blood_group=blood_group, city=city, state=state, status=status
+            gender=gender, blood_group=blood_group, city=city, state=state, status=status,
+            nurse_id=nurse_id,
         )
+        
+        patient_responses = [PatientResponse.model_validate(p) for p in items]
+        patient_ids = [p.id for p in items]
+        await self._enrich_assigned_patients(patient_responses, patient_ids, current_user)
+
         return build_paginated_result(
-            [PatientResponse.model_validate(p) for p in items], total, page, size
+            patient_responses, total, page, size
         )
 
     async def get_appointments(self, patient_id: int):

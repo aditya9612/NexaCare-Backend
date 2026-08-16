@@ -47,7 +47,7 @@ class SettingsService:
         changed = {k: {"old": old_data.get(k), "new": new_data.get(k)} for k in new_data if new_data[k] != old_data.get(k) and k not in ["updated_at"]}
         if not changed:
             return
-            
+
         logger.info(
             "AUDIT Settings Update | Category: %s | Changes: %s | User: %s | Hospital: %s",
             category,
@@ -114,10 +114,10 @@ class SettingsService:
         return data
 
     async def _update_with_audit(
-        self, 
-        repo, 
-        entity_id: int, 
-        update_data: dict, 
+        self,
+        repo,
+        entity_id: int,
+        update_data: dict,
         category: str,
         user_id: int | None,
         hospital_id: int | None,
@@ -130,7 +130,7 @@ class SettingsService:
             record = await repo.get_by_hospital_id(entity_id)
         else:
             record = await repo.get_by_user_id(entity_id)
-            
+
         if not record:
             await get_method(entity_id)
             if hasattr(repo, "get_by_hospital_id"):
@@ -150,7 +150,7 @@ class SettingsService:
         except Exception:
             await self.db.rollback()
             raise
-        
+
         new_data = self._serialize(record)
         self._log_audit(category, old_data, new_data, user_id, hospital_id)
 
@@ -249,6 +249,9 @@ class SettingsService:
             language="en",
             email_notifications=True,
             sms_notifications=True,
+            compact_mode=False,
+            push_notifications=True,
+            critical_emergency_alerts=True,
         )
 
     async def get_user_preferences(self, user_id: int) -> dict:
@@ -342,3 +345,24 @@ class SettingsService:
             cache_key=f"billing_settings:{hospital_id}",
             get_method=self.get_billing_settings
         )
+
+    # ---------------------------------------------------------
+    # SYSTEM CONFIGURATION (READ-ONLY)
+    # ---------------------------------------------------------
+    async def get_system_configuration(self, hospital_id: int | None) -> dict:
+        from sqlalchemy import select
+        from app.models.hospital_model import Hospital
+
+        facility_name = None
+        if hospital_id:
+            res = await self.db.execute(select(Hospital.name).where(Hospital.id == hospital_id))
+            name = res.scalar_one_or_none()
+            if name:
+                facility_name = name
+
+        return {
+            "facility_name": facility_name,
+            "network_node": settings.NETWORK_NODE,
+            "platform_version": settings.PLATFORM_VERSION,
+            "hipaa_enforced": settings.HIPAA_ENFORCED
+        }

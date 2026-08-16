@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     # Feature flag to enable/disable the Settings module gracefully.
     ENABLE_SETTINGS: bool = True
 
-   
+    # TOTP / 2FA Configuration
+    TOTP_ENCRYPTION_KEY: str | None = None
+    ENABLE_2FA_FEATURE: bool = False
 
     
     DATABASE_URL: str = "mysql+aiomysql://nexauser:nexa123@localhost/nexacare"
@@ -40,7 +42,7 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -128,6 +130,11 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "app/uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
 
+    # VAPID Keys for Web Push
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_CLAIM_EMAIL: str = "mailto:admin@nexacare.com"
+
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
@@ -156,6 +163,10 @@ class Settings(BaseSettings):
     ICU_TELEMETRY_HISTORY_DEFAULT_HOURS: int = 24
     ICU_TELEMETRY_HISTORY_MAX_DAYS: int = 7
 
+    # System Configuration (Telemetry)
+    NETWORK_NODE: str | None = None
+    PLATFORM_VERSION: str | None = None
+    HIPAA_ENFORCED: bool | None = None
     NGROK_AUTH_TOKEN: str = ""
 
 

@@ -20,3 +20,25 @@ class NotificationResponse(BaseSchema):
 
 class UnreadCountResponse(BaseModel):
     unread_count: int = Field(..., description="Total unread notifications count for the user")
+
+
+class CategoryCountsResponse(BaseModel):
+    all: int
+    critical: int
+    medication: int
+    doctors: int
+    vitals: int
+    updates: int
+    tasks: int
+    system: int
+    unread: int
+    completed: int
+
+
+class PushSubscriptionCreate(BaseModel):
+    endpoint: str = Field(..., description="Browser Push endpoint URL")
+    p256dh: str = Field(..., description="Public key for encryption")
+    auth: str = Field(..., description="Auth secret for encryption")
+
+class PushSubscriptionDelete(BaseModel):
+    endpoint: str = Field(..., description="Browser Push endpoint URL to unsubscribe")

@@ -3,7 +3,7 @@ from enum import Enum
 import re
 from pydantic import EmailStr, Field, field_validator
 
-from app.schemas.common_schema import BaseSchema
+from app.schemas.common_schema import BaseSchema, PaginatedResponse
 from app.schemas.department_schema import DepartmentResponse
 from app.schemas.rbac_schema import RoleResponse
 from app.utils.common_validators import (
@@ -152,6 +152,12 @@ class StaffResponse(BaseSchema):
     role: RoleResponse | None = None
 
 
+class StaffListWithCountsResponse(PaginatedResponse[StaffResponse]):
+    total_staff: int
+    active_staff: int
+    inactive_staff: int
+
+
 class StaffScheduleCreate(BaseSchema):
     day_of_week: int = Field(..., ge=0, le=6, description="0=Monday, 6=Sunday")
     start_time: time
@@ -164,6 +170,22 @@ class StaffScheduleCreate(BaseSchema):
     def validate_time_range(cls, v, info):
         start = info.data.get("start_time")
         if start:
+            return common_validate_start_end_times(start, v)
+        return v
+
+
+class StaffScheduleUpdate(BaseSchema):
+    day_of_week: int | None = Field(None, ge=0, le=6, description="0=Monday, 6=Sunday")
+    start_time: time | None = None
+    end_time: time | None = None
+    slot_duration_minutes: int | None = Field(None, ge=5, le=1440)
+    is_active: bool | None = None
+
+    @field_validator("end_time")
+    @classmethod
+    def validate_time_range(cls, v, info):
+        start = info.data.get("start_time")
+        if start and v:
             return common_validate_start_end_times(start, v)
         return v
 

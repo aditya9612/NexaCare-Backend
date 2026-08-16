@@ -55,10 +55,7 @@ class TestOrderCreate(BaseSchema):
     notes: str | None = None
 
 class TestOrderUpdate(BaseSchema):
-    patient_id: int | None = None
-    doctor_id: int | None = None
     lab_test_id: int | None = None
-    appointment_id: int | None = None
     status: str | None = None
     priority: str | None = None
     notes: str | None = None
@@ -85,7 +82,7 @@ class SampleCreate(BaseSchema):
     test_order_id: int
     sample_type: str
     collection_date: datetime | None = None
-    status: str = "pending"
+    status: str = "collected"
     volume: str | None = None
     notes: str | None = None
 
@@ -190,3 +187,7 @@ class CriticalAlert(BaseSchema):
     parameter_name: str
     result_value: str
     entered_at: datetime | None
+
+
+class DoctorRemarkUpdate(BaseSchema):
+    remarks: str | None = None

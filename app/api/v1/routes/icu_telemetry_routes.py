@@ -179,6 +179,7 @@ async def acknowledge_alert(
     "/devices",
     response_model=APIResponse[IcuDeviceCreatedResponse],
     status_code=201,
+    tags=["Bed Allocation", "ICU Telemetry"]
 )
 async def register_device(
     data: IcuDeviceCreate,

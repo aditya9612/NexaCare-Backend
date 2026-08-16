@@ -19,6 +19,7 @@ from app.schemas.appointment_schema import (
     QueueTokenResponse,
     QueueStatusResponse,
     ConfirmedVisitListResponse,
+    AppointmentListWithCountsResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -38,7 +39,7 @@ async def create_appointment(
     return APIResponse(message="Appointment booked", data=appointment)
 
 
-@router.get("", response_model=APIResponse[PaginatedResult[AppointmentResponse]])
+@router.get("", response_model=APIResponse[AppointmentListWithCountsResponse])
 async def list_appointments(
     db: DbSession,
     current_user: CurrentUser,
@@ -102,7 +103,7 @@ async def confirmed_visits(
     doctor_id: int | None = None,
     department_id: int | None = None,
     appointment_date: date | None = None,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.DOCTOR)),
 ):
     if page < 1:
         page = 1
@@ -110,6 +111,15 @@ async def confirmed_visits(
         limit = 20
     elif limit > 100:
         limit = 100
+        
+    if current_user.role and current_user.role.name == UserRole.DOCTOR:
+        from app.repositories.doctor_repository import DoctorRepository
+        from app.core.exceptions import ForbiddenException
+        
+        doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+        if not doctor:
+            raise ForbiddenException("Doctor record not found")
+        doctor_id = doctor.id
         
     result = await AppointmentService(db).get_confirmed_visit_list(
         page=page,

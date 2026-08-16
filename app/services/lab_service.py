@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus, UserRole
 from app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException, ConflictException
@@ -97,12 +97,23 @@ class LabService:
     async def list_tests(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, doctor_id: int | None = None,
-        current_user = None
+        department_id: int | None = None, current_user = None
     ):
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
         department_id = None
         if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email), Staff.is_deleted == False)
             )
             staff = result.scalar_one_or_none()
             if not staff:
@@ -110,6 +121,28 @@ class LabService:
             if staff.department_id is None:
                 raise BadRequestException("Lab technician department is not assigned")
             department_id = staff.department_id
+        department_id = None
+        if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            result = await self.db.execute(
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email), Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
 
         skip = (page - 1) * size
         items = await self.test_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
@@ -118,11 +151,26 @@ class LabService:
         total = await self.test_repo.count_all(category=category, doctor_id=doctor_id, department_id=department_id)
         return build_paginated_result([LabTestResponse.model_validate(t) for t in items], total, page, size)
 
+    async def search_tests(
+        self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None,
+        department_id: int | None = None, current_user = None
+    ):
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
     async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None, current_user = None):
         department_id = None
         if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email), Staff.is_deleted == False)
             )
             staff = result.scalar_one_or_none()
             if not staff:
@@ -131,6 +179,34 @@ class LabService:
                 raise BadRequestException("Lab technician department is not assigned")
             department_id = staff.department_id
 
+    async def search_tests(self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None, current_user = None):
+        department_id = None
+        if current_user and current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+            result = await self.db.execute(
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email), Staff.is_deleted == False)
+            )
+            staff = result.scalar_one_or_none()
+            if not staff:
+                raise NotFoundException("Lab technician profile not found")
+            if staff.department_id is None:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
+
+    async def search_tests(
+        self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None,
+        department_id: int | None = None, current_user = None
+    ):
+        if department_id is None and current_user:
+            if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
+                result = await self.db.execute(
+                    select(Staff).where(Staff.email == current_user.email, Staff.is_deleted == False)
+                )
+                staff = result.scalar_one_or_none()
+                if not staff:
+                    raise NotFoundException("Lab technician profile not found")
+                if staff.department_id is None:
+                    raise BadRequestException("Lab technician department is not assigned")
+                department_id = staff.department_id
         skip = (page - 1) * size
         items = await self.test_repo.search(q, skip=skip, limit=size, doctor_id=doctor_id, department_id=department_id)
         total = await self.test_repo.count_search(q, doctor_id=doctor_id, department_id=department_id)
@@ -185,6 +261,8 @@ class LabService:
 
     # --- Test Orders ---
     async def create_order(self, data: TestOrderCreate, user_id: int) -> TestOrderResponse:
+        from sqlalchemy import select
+
         # Validate patient existence
         from app.models.patient_model import Patient
         patient = await self.db.get(Patient, data.patient_id)
@@ -252,10 +330,19 @@ class LabService:
             if test.doctor_id != doctor.id:
                 raise ForbiddenException("Doctors can only order lab tests created by themselves")
 
+        # Resolve doctor_id to store in the order
+        resolved_doctor_id = data.doctor_id
+        if resolved_doctor_id is None:
+            if doctor:
+                resolved_doctor_id = doctor.id
+            elif appointment:
+                resolved_doctor_id = appointment.doctor_id
+
         await self._validate_department(test.department_id)
+
+        # Prepare the TestOrder data dictionary
         order_data = data.model_dump()
-        if doctor and order_data.get("doctor_id") is None:
-            order_data["doctor_id"] = doctor.id
+        order_data["doctor_id"] = resolved_doctor_id
 
         order = TestOrder(
             order_number=generate_lab_order_number(),
@@ -297,10 +384,34 @@ class LabService:
                     patient_id = patient.id
             elif role_name in ["lab technician", "lab_technician"]:
                 result = await self.db.execute(
-                    select(Staff).where(Staff.email == current_user.email)
+                    select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
                 )
                 staff = result.scalar_one_or_none()
                 department_id = staff.department_id if staff else None
+            elif role_name == "nurse":
+                from app.models.nurse_model import Nurse, NursePatientAssignment
+                res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+                nurse = res.scalar_one_or_none()
+                if not nurse:
+                    return build_paginated_result([], 0, page, size)
+                
+                # Fetch active assigned patient IDs
+                assignment_res = await self.db.execute(
+                    select(NursePatientAssignment.patient_id)
+                    .where(
+                        NursePatientAssignment.nurse_id == nurse.id,
+                        NursePatientAssignment.status == "Active"
+                    )
+                )
+                assigned_patient_ids = [row[0] for row in assignment_res.all()]
+                if not assigned_patient_ids:
+                    return build_paginated_result([], 0, page, size)
+                
+                if patient_id is not None:
+                    if patient_id not in assigned_patient_ids:
+                        return build_paginated_result([], 0, page, size)
+                else:
+                    patient_id = assigned_patient_ids
 
         items = await self.order_repo.list_all(
             skip=skip,
@@ -329,37 +440,11 @@ class LabService:
         if not order:
             raise NotFoundException("Test order not found")
 
-        # Get final values for validation
-        p_id = data.patient_id if data.patient_id is not None else order.patient_id
-        d_id = data.doctor_id if data.doctor_id is not None else order.doctor_id
-        a_id = data.appointment_id if data.appointment_id is not None else order.appointment_id
-
-        from app.models.patient_model import Patient
-        from app.models.doctor_model import Doctor
-        from app.models.appointment_model import Appointment
-
-        if data.patient_id is not None:
-            patient = await self.db.get(Patient, data.patient_id)
-            if not patient:
-                raise NotFoundException(f"Patient with ID {data.patient_id} not found")
-
-        if data.doctor_id is not None:
-            doctor = await self.db.get(Doctor, data.doctor_id)
-            if not doctor:
-                raise NotFoundException(f"Doctor with ID {data.doctor_id} not found")
-
         if data.lab_test_id is not None:
             test = await self.test_repo.get_by_id(data.lab_test_id)
             if not test or not test.is_active:
                 raise NotFoundException("Lab test not found or inactive")
             order.department_id = test.department_id
-
-        if a_id is not None:
-            appointment = await self.db.get(Appointment, a_id)
-            if not appointment:
-                raise NotFoundException(f"Appointment with ID {a_id} not found")
-            if appointment.patient_id != p_id or appointment.doctor_id != d_id:
-                raise BadRequestException("Appointment does not match patient and doctor")
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(order, key, value)
@@ -409,12 +494,18 @@ class LabService:
         order = await self.order_repo.get_by_id(data.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
+
+        # Check if sample already exists for this test order
+        existing_sample = await self.sample_repo.get_by_test_order(data.test_order_id)
+        if existing_sample:
+            raise ConflictException("Sample has already been collected for this test order")
+
         user_id = current_user.id
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = result.scalar_one_or_none()
 
@@ -432,7 +523,7 @@ class LabService:
             collected_at=utc_now(),
             collection_date=data.collection_date,
             collected_by=user_id,
-            status=data.status,
+            status=SampleStatus.COLLECTED,
             volume=data.volume,
             notes=data.notes,
         )
@@ -450,7 +541,7 @@ class LabService:
 
         if role_name in ["lab technician", "lab_technician"]:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = result.scalar_one_or_none()
             department_id = staff.department_id if staff else None
@@ -487,6 +578,11 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
+        if sample.collected_at and data.status == SampleStatus.PENDING:
+            raise BadRequestException(
+                "You cannot change the status of an already collected sample back to pending"
+            )
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(sample, key, value)
 
@@ -511,14 +607,29 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
+        test_order_id = sample.test_order_id
+
         await self.sample_repo.delete(sample)
+
+        # Check if any active/undeleted samples still remain for the same test_order_id
+        from sqlalchemy import select, func
+        remaining_count_res = await self.db.execute(
+            select(func.count(Sample.id)).where(Sample.test_order_id == test_order_id)
+        )
+        remaining_count = remaining_count_res.scalar() or 0
+
+        if remaining_count == 0:
+            order = await self.order_repo.get_by_id(test_order_id)
+            if order:
+                order.status = LabOrderStatus.ORDERED
+                await self.order_repo.update(order)
 
         await self.audit_repo.create(
             "delete",
             "lab_sample",
             user_id=user_id,
             resource_id=str(sample.id),
-        )     
+        )
 
     # --- Results ---
     async def enter_result(
@@ -531,7 +642,7 @@ class LabService:
         if not sample:
             raise NotFoundException("Sample not found")
 
-        if sample.status != SampleStatus.COLLECTED:
+        if sample.status != SampleStatus.COLLECTED and not sample.collected_at:
             raise BadRequestException(
                 "You cannot enter test result before collecting sample"
             )
@@ -544,7 +655,7 @@ class LabService:
 
         if role_name in ["lab technician", "lab_technician"]:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = result.scalar_one_or_none()
 
@@ -611,10 +722,12 @@ class LabService:
 
         if role_name in ["lab technician", "lab_technician"]:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = result.scalar_one_or_none()
-            department_id = staff.department_id if staff else None
+            if not staff or not staff.department_id:
+                raise BadRequestException("Lab technician department is not assigned")
+            department_id = staff.department_id
         items = await self.result_repo.list_all(skip=skip, limit=size, test_order_id=test_order_id, is_critical=is_critical, department_id=department_id)
         total = await self.result_repo.count_all(test_order_id=test_order_id, is_critical=is_critical, department_id=department_id)
         return build_paginated_result([TestResultResponse.model_validate(r) for r in items], total, page, size)
@@ -667,7 +780,7 @@ class LabService:
 
         if role_name in ["lab technician", "lab_technician"]:
             result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = result.scalar_one_or_none()
 
@@ -703,7 +816,20 @@ class LabService:
 
         order = await self.order_repo.get_by_id(result.test_order_id)
         if not order:
-            raise NotFoundException("Test order not found")
+            from sqlalchemy import text
+            raw_order = await self.db.execute(
+                text("SELECT id, order_number, is_deleted, deleted_at FROM test_orders WHERE id = :order_id"),
+                {"order_id": result.test_order_id}
+            )
+            row = raw_order.fetchone()
+            if row:
+                raise NotFoundException(
+                    f"Test order not found (Raw order exists in DB with is_deleted={row.is_deleted}, deleted_at={row.deleted_at})"
+                )
+            else:
+                raise NotFoundException(
+                    f"Test order not found (No record exists in test_orders table with ID={result.test_order_id})"
+                )
 
         sample = await self.sample_repo.get_by_test_order(result.test_order_id)
 
@@ -716,7 +842,7 @@ class LabService:
 
         if role_name in ["lab technician", "lab_technician"]:
             staff_result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = staff_result.scalar_one_or_none()
 
@@ -751,11 +877,12 @@ class LabService:
 
         department_id = None
         generated_by = None
+        doctor_id = None
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
             staff_result = await self.db.execute(
-                select(Staff).where(Staff.email == current_user.email)
+                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
             )
             staff = staff_result.scalar_one_or_none()
 
@@ -763,7 +890,21 @@ class LabService:
                 raise BadRequestException("Lab technician department is not assigned")
 
             department_id = staff.department_id
-        generated_by = current_user.id
+            generated_by = current_user.id
+        elif role_name == "doctor":
+            from app.models.doctor_model import Doctor
+            doctor_res = await self.db.execute(
+                select(Doctor).where(Doctor.user_id == current_user.id, Doctor.is_deleted == False)
+            )
+            doctor = doctor_res.scalar_one_or_none()
+            if not doctor:
+                raise ForbiddenException("Doctor profile not found")
+            doctor_id = doctor.id
+        elif role_name == "pharmacist" or role_name in [r.lower() for r in UserRole.ADMIN_ROLES]:
+            # Pharmacists and Admins can view all lab reports (no filter applied)
+            pass
+        else:
+            generated_by = current_user.id
 
         items = await self.report_repo.list_all(
             skip=skip,
@@ -771,26 +912,30 @@ class LabService:
             status=status,
             department_id=department_id,
             generated_by=generated_by,
+            doctor_id=doctor_id,
         )
 
         total = await self.report_repo.count_all(
             status=status,
             department_id=department_id,
             generated_by=generated_by,
+            doctor_id=doctor_id,
         )
 
         return build_paginated_result(
             [LabReportResponse.model_validate(r) for r in items],
             total,
             page,
-        size,
-    )
+            size,
+        )
     
-    async def get_report(self, report_id: int) -> LabReportResponse:
+    async def get_report(self, report_id: int, current_user) -> LabReportResponse:
         report = await self.report_repo.get_by_id(report_id)
 
         if not report:
            raise NotFoundException("Lab report not found")
+
+        await self._validate_lab_report_access(report, current_user, "read")
 
         return LabReportResponse.model_validate(report)
 
@@ -810,7 +955,7 @@ class LabService:
             return
 
         staff_result = await self.db.execute(
-            select(Staff).where(Staff.email == current_user.email)
+            select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
         )
         staff = staff_result.scalar_one_or_none()
 
@@ -945,11 +1090,13 @@ class LabService:
 
         return LabReportResponse.model_validate(report)
 
-    async def delete_report(self, report_id: int, user_id: int) -> None:
+    async def delete_report(self, report_id: int, current_user) -> None:
         report = await self.report_repo.get_by_id(report_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
+        await self._validate_lab_report_access(report, current_user, "delete")
+
         await self.report_repo.delete(report)
-        await self.audit_repo.create("delete", "lab_report", user_id=user_id, resource_id=str(report_id))
+        await self.audit_repo.create("delete", "lab_report", user_id=current_user.id, resource_id=str(report_id))
 

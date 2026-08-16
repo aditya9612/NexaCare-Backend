@@ -183,6 +183,16 @@ class StockTransactionRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_reference(self, reference_type: str, reference_id: int) -> StockTransaction | None:
+        result = await self.db.execute(
+            select(StockTransaction).where(
+                StockTransaction.reference_type == reference_type,
+                StockTransaction.reference_id == reference_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+
     async def create(self, transaction: StockTransaction) -> StockTransaction:
         self.db.add(transaction)
         await self.db.flush()
@@ -236,7 +246,11 @@ class WarehouseRepository:
 
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[Warehouse]:
         result = await self.db.execute(
-            select(Warehouse).where(Warehouse.is_deleted.is_(False)).offset(skip).limit(limit)
+            select(Warehouse)
+            .where(Warehouse.is_deleted.is_(False))
+            .order_by(Warehouse.created_at.desc())
+            .offset(skip)
+            .limit(limit)
         )
         return list(result.scalars().all())
 

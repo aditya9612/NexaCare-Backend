@@ -125,6 +125,7 @@ class AnalyticsService:
     async def get_revenue_analytics(
         self, start_date: Optional[date] = None, end_date: Optional[date] = None
     ) -> RevenueAnalyticsResponse:
+        from app.models.billing_model import Payment
         start, end = self._date_range(start_date, end_date)
         bills = await self.db.execute(
             select(Billing).where(
@@ -138,17 +139,35 @@ class AnalyticsService:
         paid = sum(b.paid_amount for b in items)
         pending = sum(b.balance_amount for b in items)
 
+        # Aggregate payment methods for collected payments in range
+        payment_query = (
+            select(Payment.payment_method, func.sum(Payment.amount))
+            .where(
+                Payment.status == "completed",
+                Payment.is_refund.is_(False),
+                Payment.payment_date >= start,
+                Payment.payment_date <= end,
+            )
+            .group_by(Payment.payment_method)
+        )
+        payment_res = await self.db.execute(payment_query)
+        payment_method_breakdown = [
+            ChartDataPoint(label=row[0], value=float(row[1] or 0.0))
+            for row in payment_res.all()
+        ]
+
         return RevenueAnalyticsResponse(
             total_revenue=round(total, 2),
             paid_amount=round(paid, 2),
             pending_amount=round(pending, 2),
             daily_revenue=await self._revenue_trend(start, end),
-            payment_method_breakdown=[],
+            payment_method_breakdown=payment_method_breakdown,
         )
 
     async def get_appointment_analytics(
         self, start_date: Optional[date] = None, end_date: Optional[date] = None
     ) -> AppointmentAnalyticsResponse:
+        from app.models.department_model import Department
         start, end = self._date_range(start_date, end_date)
         result = await self.db.execute(
             select(Appointment).where(
@@ -161,6 +180,30 @@ class AnalyticsService:
         for a in appts:
             status_counts[a.appointment_status] = status_counts.get(a.appointment_status, 0) + 1
 
+        # Query department breakdown in the exact same date range
+        dept_counts = await self.db.execute(
+            select(
+                Department.department_id,
+                Department.department_name,
+                func.count(Appointment.id)
+            )
+            .join(Appointment, Appointment.department_id == Department.department_id)
+            .where(
+                Appointment.created_at >= start,
+                Appointment.created_at <= end,
+            )
+            .group_by(Department.department_id, Department.department_name)
+        )
+        
+        department_breakdown = [
+            ChartDataPoint(
+                label=row[1],
+                value=float(row[2]),
+                metadata={"department_id": row[0]}
+            )
+            for row in dept_counts.all()
+        ]
+
         return AppointmentAnalyticsResponse(
             total=len(appts),
             completed=status_counts.get(AppointmentStatus.COMPLETED, 0),
@@ -170,7 +213,7 @@ class AnalyticsService:
                 ChartDataPoint(label=k, value=float(v)) for k, v in status_counts.items()
             ],
             daily_trend=await self._appointment_trend(30),
-            department_breakdown=[],
+            department_breakdown=department_breakdown,
         )
 
     async def get_doctor_analytics(self) -> DoctorAnalyticsResponse:
@@ -221,6 +264,23 @@ class AnalyticsService:
             .where(Patient.is_deleted.is_(False))
             .group_by(Patient.gender)
         )
+
+        # Query patient registrations grouped by date for the last 30 days
+        trend_query = (
+            select(func.date(Patient.created_at), func.count(Patient.id))
+            .where(
+                Patient.is_deleted.is_(False),
+                Patient.created_at >= thirty_days_ago,
+            )
+            .group_by(func.date(Patient.created_at))
+            .order_by(func.date(Patient.created_at).asc())
+        )
+        trend_res = await self.db.execute(trend_query)
+        registration_trend = [
+            ChartDataPoint(label=str(row[0]), value=float(row[1]))
+            for row in trend_res.all()
+        ]
+
         return PatientAnalyticsResponse(
             total_patients=total,
             new_patients=new_patients,
@@ -228,7 +288,7 @@ class AnalyticsService:
             gender_breakdown=[
                 ChartDataPoint(label=r[0] or "unknown", value=float(r[1])) for r in gender.all()
             ],
-            registration_trend=[],
+            registration_trend=registration_trend,
         )
 
     async def get_ai_chatbot_analytics(self) -> ModuleAnalyticsResponse:

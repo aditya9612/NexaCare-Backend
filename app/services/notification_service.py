@@ -54,6 +54,7 @@ class NotificationService:
         limit: int = 20,
         is_read: bool | None = None,
         notification_type: str | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
@@ -65,11 +66,13 @@ class NotificationService:
             limit=limit,
             is_read=is_read,
             notification_type=notification_type,
+            category=category,
         )
         total = await self.repo.count_user_notifications(
             user_id=user_id,
             is_read=is_read,
             notification_type=notification_type,
+            category=category,
         )
         responses = [NotificationResponse.model_validate(item) for item in items]
         return build_paginated_result(responses, total, page, limit)
@@ -80,6 +83,11 @@ class NotificationService:
 
         count = await self.repo.get_unread_count(user_id)
         return UnreadCountResponse(unread_count=count)
+
+    async def get_category_counts(self, user_id: int) -> dict[str, int]:
+        if not self.repo:
+            raise ValueError("Database session required for NotificationService DB methods")
+        return await self.repo.get_category_counts(user_id)
 
     async def mark_as_read(self, notification_id: int, user_id: int) -> NotificationResponse:
         if not self.repo:
@@ -120,7 +128,19 @@ class NotificationService:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
 
-        # 1. DB Channel (with duplicate checking for same event)
+        # 1. Preference Check for Critical Emergency Alerts
+        if notification_type == "PATIENT_EMERGENCY_ALERT":
+            from app.services.settings_service import SettingsService
+            settings_service = SettingsService(self.db)
+            prefs = await settings_service.get_user_preferences(user_id)
+            if not prefs.get("critical_emergency_alerts", True):
+                logger.info(
+                    f"Skipping PATIENT_EMERGENCY_ALERT for user {user_id} "
+                    f"due to critical_emergency_alerts preference."
+                )
+                return None
+
+        # 2. DB Channel (with duplicate checking for same event)
         if await self.repo.exists_duplicate(
             user_id=user_id,
             notification_type=notification_type,
@@ -170,6 +190,17 @@ class NotificationService:
                 asyncio.create_task(send_sms(phone, message))
             except Exception as e:
                 logger.warning(f"Failed to dispatch SMS notification to {phone}: {e}")
+
+        # 5. Browser Push Channel (Async & Fault-Tolerant via Celery)
+        try:
+            from app.services.settings_service import SettingsService
+            settings_service = SettingsService(self.db)
+            prefs = await settings_service.get_user_preferences(user_id)
+            if prefs.get("push_notifications", True):
+                from app.tasks.notification_tasks import send_browser_push_async
+                send_browser_push_async.delay(user_id, title, message)
+        except Exception as e:
+            logger.warning(f"Failed to dispatch Browser Push for user {user_id}: {e}")
 
         return created
 

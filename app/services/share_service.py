@@ -42,6 +42,23 @@ class ShareService:
         if not order:
             raise NotFoundException("Associated test order not found")
 
+        # Security Boundary: Cross-Tenant Share Prevention
+        is_super_admin = current_user.role and current_user.role.name == "Super Admin"
+        if not is_super_admin:
+            if not order.created_by:
+                from app.core.exceptions import ForbiddenException
+                raise ForbiddenException("Cannot determine hospital ownership for this record. Sharing blocked.")
+                
+            from app.models.user_model import User
+            creator = await self.db.get(User, order.created_by)
+            if not creator:
+                from app.core.exceptions import ForbiddenException
+                raise ForbiddenException("Cannot determine hospital ownership for this record. Sharing blocked.")
+            
+            if not creator.hospital_id or not current_user.hospital_id or creator.hospital_id != current_user.hospital_id:
+                from app.core.exceptions import ForbiddenException
+                raise ForbiddenException("You are not authorized to share lab reports from other hospitals.")
+
         patient = await self.db.get(Patient, order.patient_id)
         if not patient:
             raise NotFoundException("Associated patient record not found")

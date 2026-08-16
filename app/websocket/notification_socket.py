@@ -56,6 +56,11 @@ async def dashboard_websocket(websocket: WebSocket):
     if not user:
         return
 
+    # Security Fix: Reject non-Super-Admin roles
+    if user.get("role") != "Super Admin":
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     await websocket.send_json({"type": "connected", "channel": "dashboard"})
 

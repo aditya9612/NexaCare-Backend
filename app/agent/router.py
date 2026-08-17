@@ -259,7 +259,9 @@ async def _process_faq_transcript(
         await session_store.delete_session(call_sid)
         return twiml
 
-    faq = await FaqRetrievalService(db).answer(hospital_id, transcript, lang)
+    faq = await FaqRetrievalService(db).answer(
+        hospital_id, transcript, lang, session_id=call_sid
+    )
     update_memory(
         state,
         question=transcript,
@@ -279,11 +281,12 @@ async def _process_faq_transcript(
 
     if faq.should_transfer:
         bump_counter(state, "transfer_count")
-        record_analytics_event(state, "transfer", reason="faq_low_confidence")
+        transfer_reason = faq.transfer_reason or "faq_low_confidence"
+        record_analytics_event(state, "transfer", reason=transfer_reason)
         twiml = await _do_reception_transfer(
             db,
             state,
-            reason="faq_low_confidence",
+            reason=transfer_reason,
             preface=faq.answer or TRANSFER_PHRASES.get(lang, TRANSFER_PHRASES["en"]),
         )
         await session_store.delete_session(call_sid)

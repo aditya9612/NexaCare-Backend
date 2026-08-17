@@ -10,6 +10,7 @@ import app.models.user_model  # noqa: F401
 import app.models.role_model  # noqa: F401
 import app.models.permission_model  # noqa: F401
 import app.models.refresh_token_model  # noqa: F401
+import app.models.user_security_settings  # noqa: F401
 import app.models.patient_model  # noqa: F401
 import app.models.doctor_model  # noqa: F401
 import app.models.department_model  # noqa: F401

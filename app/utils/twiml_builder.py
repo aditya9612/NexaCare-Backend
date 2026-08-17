@@ -108,10 +108,16 @@ def redirect(url: str) -> str:
     return f'<Redirect method="POST">{escape(url)}</Redirect>'
 
 
-def dial(number: str, action_url: str | None = None, timeout: int = 30) -> str:
+def dial(
+    number: str,
+    action_url: str | None = None,
+    timeout: int = 30,
+    caller_id: str | None = None,
+) -> str:
     action_attr = f' action="{escape(action_url)}" method="POST"' if action_url else ""
+    caller_attr = f' callerId="{escape(caller_id)}"' if caller_id else ""
     return (
-        f'<Dial timeout="{timeout}"{action_attr}>'
+        f'<Dial timeout="{timeout}"{caller_attr}{action_attr}>'
         f"<Number>{escape(number)}</Number>"
         "</Dial>"
     )

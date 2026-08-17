@@ -1,7 +1,7 @@
 """
 app/agent/state.py
 ------------------
-Single TypedDict that flows through every LangGraph node.
+Single TypedDict that flows through every voice agent node.
 Each field is populated progressively as the call advances.
 """
 
@@ -18,9 +18,18 @@ class BookingCallState(TypedDict):
     # ── Language ───────────────────────────────────────────────────────────
     language: str                        # "en" | "hi" | "mr"  (default "en")
     twilio_language: str                 # "en-IN" | "hi-IN" | "mr-IN"
+    language_locked: bool                # True after resolver / DTMF
+    language_source: Optional[str]       # preferred | temp_store | dtmf | ai_fallback | ...
+
+    # ── Hospital / production config (from HospitalVoiceConfigService) ─────
+    hospital_id: Optional[int]
+    voice_profile: Optional[str]
+    voice_gender: Optional[str]
+    reception_number: Optional[str]
+    patient_id: Optional[int]
 
     # ── Service selection ──────────────────────────────────────────────────
-    service: Optional[str]               # "book" | "reschedule" | "cancel"
+    service: Optional[str]               # "book" | "reschedule" | "cancel" | "faq"
 
     # ── Patient info (collected via STT) ──────────────────────────────────
     patient_name: Optional[str]
@@ -45,6 +54,24 @@ class BookingCallState(TypedDict):
     appointment_id: Optional[int]
     appointment_number: Optional[str]
 
+    # ── Phase 6 conversation memory ────────────────────────────────────────
+    current_topic: Optional[str]
+    last_question: Optional[str]
+    last_answer: Optional[str]
+    current_intent: Optional[str]
+    question_count: int
+    current_language: Optional[str]
+    call_started_at: Optional[str]       # ISO timestamp UTC
+    return_step: Optional[str]           # booking resume point after FAQ detour
+    return_service: Optional[str]
+
+    # ── Phase 6 analytics counters (session-scoped) ────────────────────────
+    faq_count: int
+    booking_count: int
+    transfer_count: int
+    unknown_count: int
+    faq_topics: Optional[list]
+
     # ── Flow control ───────────────────────────────────────────────────────
     retry_count: int                     # retries within current step
     error_message: Optional[str]
@@ -55,3 +82,4 @@ class BookingCallState(TypedDict):
     # ── Gemini Live API fields ─────────────────────────────────────────────
     audio_stream_sid: Optional[str]      # Twilio Media Stream SID
     conversation_history: Optional[list] # Multi-turn context from live session
+    conversation_analytics: Optional[list]  # lightweight event log (capped)

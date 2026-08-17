@@ -20,6 +20,12 @@ from app.schemas.hospital_voice_schema import (
     HospitalVoiceDocumentUpdate,
 )
 from app.services.faq_retrieval_service import FaqRetrievalService
+from app.services.knowledge_embedding_sync import (
+    deactivate_kb_embedding,
+    sync_document_embedding,
+    sync_faq_embedding,
+    sync_policy_embedding,
+)
 from app.utils.helpers import utc_now
 
 
@@ -35,6 +41,7 @@ class HospitalKnowledgeService:
     async def create_faq(self, data: HospitalFaqCreate) -> HospitalFaqResponse:
         faq = HospitalFaq(**data.model_dump())
         faq = await self.faq_repo.create(faq)
+        await sync_faq_embedding(self.db, faq)
         await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
         return HospitalFaqResponse.model_validate(faq)
 
@@ -51,6 +58,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(faq, k, v)
         faq = await self.faq_repo.update(faq)
+        await sync_faq_embedding(self.db, faq)
         await FaqRetrievalService(self.db).invalidate_cache(faq.hospital_id)
         return HospitalFaqResponse.model_validate(faq)
 
@@ -65,11 +73,13 @@ class HospitalKnowledgeService:
         faq.is_deleted = True
         faq.deleted_at = utc_now()
         await self.faq_repo.update(faq)
+        await deactivate_kb_embedding(self.db, "faq", faq.id, faq.hospital_id)
         await FaqRetrievalService(self.db).invalidate_cache(faq.hospital_id)
 
     async def create_policy(self, data: HospitalPolicyCreate) -> HospitalPolicyResponse:
         policy = HospitalPolicy(**data.model_dump())
         policy = await self.policy_repo.create(policy)
+        await sync_policy_embedding(self.db, policy)
         await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
         return HospitalPolicyResponse.model_validate(policy)
 
@@ -86,6 +96,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(policy, k, v)
         policy = await self.policy_repo.update(policy)
+        await sync_policy_embedding(self.db, policy)
         await FaqRetrievalService(self.db).invalidate_cache(policy.hospital_id)
         return HospitalPolicyResponse.model_validate(policy)
 
@@ -100,6 +111,7 @@ class HospitalKnowledgeService:
     ) -> HospitalVoiceDocumentResponse:
         doc = HospitalVoiceDocument(**data.model_dump())
         doc = await self.doc_repo.create(doc)
+        await sync_document_embedding(self.db, doc)
         await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
         return HospitalVoiceDocumentResponse.model_validate(doc)
 
@@ -118,6 +130,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(doc, k, v)
         doc = await self.doc_repo.update(doc)
+        await sync_document_embedding(self.db, doc)
         await FaqRetrievalService(self.db).invalidate_cache(doc.hospital_id)
         return HospitalVoiceDocumentResponse.model_validate(doc)
 

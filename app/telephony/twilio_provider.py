@@ -73,4 +73,6 @@ class TwilioProvider(TelephonyProvider):
         return xml_or_body
 
     def dial_number(self, number: str, action_url: Optional[str] = None) -> str:
-        return twiml_dial(number, action_url=action_url)
+        # For reception transfer, Twilio defaults callerId to the inbound caller's callerId
+        # when omitted. We must explicitly set callerId to the hospital's Twilio number.
+        return twiml_dial(number, action_url=action_url, caller_id=self.from_number)

@@ -1,0 +1,23 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\Admin\Desktop\NexaCareBackend\NexaCare-Backend\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Admin\Desktop\NexaCareBackend\NexaCare-Backend
+configfile: pytest.ini
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 13 items
+
+app/tests/test_voice_phase1.py::test_provider_factory_defaults_to_twilio PASSED [  7%]
+app/tests/test_voice_phase1.py::test_provider_factory_exotel PASSED      [ 15%]
+app/tests/test_voice_phase1.py::test_twilio_webhook_normalize PASSED     [ 23%]
+app/tests/test_voice_phase1.py::test_exotel_webhook_normalize PASSED     [ 30%]
+app/tests/test_voice_phase1.py::test_language_dtmf_map PASSED            [ 38%]
+app/tests/test_voice_phase1.py::test_detect_language_is_fallback_only_helper PASSED [ 46%]
+app/tests/test_voice_phase1.py::test_language_select_prompt_mentions_dtmf PASSED [ 53%]
+app/tests/test_voice_phase1.py::test_medical_safety_blocks_medicine PASSED [ 61%]
+app/tests/test_voice_phase1.py::test_medical_safety_allows_hours_question PASSED [ 69%]
+app/tests/test_voice_phase1.py::test_indian_phone_last10_formats PASSED  [ 76%]
+app/tests/test_voice_phase1.py::test_credential_crypto_roundtrip PASSED  [ 84%]
+app/tests/test_voice_phase1.py::test_twilio_signature_validation_helper PASSED [ 92%]
+app/tests/test_voice_phase1.py::test_assistant_url_provider_paths PASSED [100%]
+
+============================= 13 passed in 0.06s ==============================

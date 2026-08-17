@@ -84,6 +84,7 @@ async def init_db():
         user_model,
         voice_model,
         hospital_voice_model,
+        knowledge_embedding_model,
         whatsapp_model,
         expense_model,
         vendor_model,
@@ -98,6 +99,7 @@ async def init_db():
 
             print("Running lab...")
             await _seed_lab_technician_permissions(session)
+            await _seed_doctor_and_pharmacist_lab_permissions(session)
 
             await session.commit()
         except Exception as e:
@@ -652,3 +654,40 @@ async def _seed_lab_technician_permissions(session: AsyncSession) -> None:
         )
         if not rp.scalar_one_or_none():
             session.add(RolePermission(role_id=tech_role.id, permission_id=perm.id))
+
+
+async def _seed_doctor_and_pharmacist_lab_permissions(session: AsyncSession) -> None:
+    """Grant Doctor and Pharmacist role permissions for lab report create, read, and delete operations."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    target_roles = [UserRole.DOCTOR, UserRole.PHARMACIST]
+    lab_grants = [
+        ("lab", PermissionAction.CREATE),
+        ("lab", PermissionAction.READ),
+        ("lab", PermissionAction.DELETE),
+    ]
+
+    for role_name in target_roles:
+        result = await session.execute(select(Role).where(Role.name == role_name))
+        role = result.scalar_one_or_none()
+        if not role:
+            continue
+
+        for resource, action in lab_grants:
+            action_value = action.value if hasattr(action, "value") else action
+            perm_name = f"{resource}:{action_value}"
+            result = await session.execute(select(Permission).where(Permission.name == perm_name))
+            perm = result.scalar_one_or_none()
+            if not perm:
+                continue
+
+            rp = await session.execute(
+                select(RolePermission).where(
+                    RolePermission.role_id == role.id,
+                    RolePermission.permission_id == perm.id,
+                )
+            )
+            if not rp.scalar_one_or_none():
+                session.add(RolePermission(role_id=role.id, permission_id=perm.id))

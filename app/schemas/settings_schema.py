@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import EmailStr, Field, field_validator
+import zoneinfo
 
 from app.schemas.common_schema import BaseSchema
 from app.utils.phone_utils import validate_phone_field
@@ -16,9 +17,9 @@ class HospitalSettingResponse(BaseSchema):
     timezone: str
     currency: str
     gst_number: Optional[str] = None
-    working_hours: str
+    working_hours: Optional[str] = None
     contact_email: Optional[EmailStr] = None
-    contact_phone: str
+    contact_phone: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +31,15 @@ class HospitalSettingUpdate(BaseSchema):
     working_hours: Optional[str] = Field(None, description="Hospital working hours string")
     contact_email: Optional[EmailStr] = Field(None, description="Primary contact email")
     contact_phone: Optional[str] = Field(None, description="Primary contact phone number")
+
+    @field_validator("timezone", mode="after")
+    @classmethod
+    def check_timezone(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if v not in zoneinfo.available_timezones():
+            raise ValueError(f"Invalid timezone: {v}")
+        return v
 
     @field_validator("contact_phone", mode="after")
     @classmethod
@@ -70,6 +80,9 @@ class UserPreferenceResponse(BaseSchema):
     language: str
     email_notifications: bool
     sms_notifications: bool
+    compact_mode: bool
+    push_notifications: bool
+    critical_emergency_alerts: bool
     created_at: datetime
     updated_at: datetime
 
@@ -79,3 +92,15 @@ class UserPreferenceUpdate(BaseSchema):
     language: Optional[str] = Field(None, description="Language code, e.g., 'en'")
     email_notifications: Optional[bool] = None
     sms_notifications: Optional[bool] = None
+    compact_mode: Optional[bool] = None
+    push_notifications: Optional[bool] = None
+    critical_emergency_alerts: Optional[bool] = None
+
+# ---------------------------------------------------------
+# SYSTEM CONFIGURATION SCHEMAS (READ-ONLY)
+# ---------------------------------------------------------
+class SystemConfigResponse(BaseSchema):
+    facility_name: Optional[str] = None
+    network_node: Optional[str] = None
+    platform_version: Optional[str] = None
+    hipaa_enforced: Optional[bool] = None

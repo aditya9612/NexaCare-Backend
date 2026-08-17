@@ -891,7 +891,6 @@ class LabService:
 
             department_id = staff.department_id
             generated_by = current_user.id
-            generated_by = current_user.id
         elif role_name == "doctor":
             from app.models.doctor_model import Doctor
             doctor_res = await self.db.execute(
@@ -901,8 +900,10 @@ class LabService:
             if not doctor:
                 raise ForbiddenException("Doctor profile not found")
             doctor_id = doctor.id
+        elif role_name == "pharmacist" or role_name in [r.lower() for r in UserRole.ADMIN_ROLES]:
+            # Pharmacists and Admins can view all lab reports (no filter applied)
+            pass
         else:
-            generated_by = current_user.id
             generated_by = current_user.id
 
         items = await self.report_repo.list_all(
@@ -928,11 +929,13 @@ class LabService:
             size,
         )
     
-    async def get_report(self, report_id: int) -> LabReportResponse:
+    async def get_report(self, report_id: int, current_user) -> LabReportResponse:
         report = await self.report_repo.get_by_id(report_id)
 
         if not report:
            raise NotFoundException("Lab report not found")
+
+        await self._validate_lab_report_access(report, current_user, "read")
 
         return LabReportResponse.model_validate(report)
 
@@ -1087,13 +1090,15 @@ class LabService:
 
         return LabReportResponse.model_validate(report)
 
-    async def delete_report(self, report_id: int, user_id: int) -> None:
+    async def delete_report(self, report_id: int, current_user) -> None:
         report = await self.report_repo.get_by_id(report_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
+        await self._validate_lab_report_access(report, current_user, "delete")
+
         await self.report_repo.delete(report)
-        await self.audit_repo.create("delete", "lab_report", user_id=user_id, resource_id=str(report_id))
+        await self.audit_repo.create("delete", "lab_report", user_id=current_user.id, resource_id=str(report_id))
 
     async def process_report_ocr(self, order_id: int, file: UploadFile, current_user) -> dict:
         import os

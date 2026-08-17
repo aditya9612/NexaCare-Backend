@@ -630,18 +630,40 @@ class BillingService:
         if not billing:
             raise NotFoundException("Billing record not found")
         patient = await self.patient_repo.get_by_id(billing.patient_id)
-        patient_name = f"{patient.first_name} {patient.last_name}" if patient else "N/A"
+        patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+        patient_phone = patient.phone if patient else "-"
+        patient_email = patient.email if patient else "-"
+
         items = [
-            {"description": i.description, "amount": f"{i.line_total:.2f}"}
+            {
+                "description": i.description,
+                "quantity": i.quantity,
+                "unit_price": f"{i.unit_price:.2f}",
+                "gst_rate": f"{i.gst_rate:.1f}",
+                "line_total": f"{i.line_total:.2f}",
+            }
             for i in billing.items
         ]
+
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
                 "patient_name": patient_name,
+                "patient_phone": patient_phone,
+                "patient_email": patient_email,
                 "date": utc_now().strftime("%Y-%m-%d"),
                 "items": items,
+                "subtotal": f"{billing.subtotal:.2f}",
+                "discount_percent": f"{billing.discount_percent:.1f}",
+                "discount_amount": f"{billing.discount_amount:.2f}",
+                "gst_rate": f"{billing.gst_rate:.1f}",
+                "gst_amount": f"{billing.gst_amount:.2f}",
+                "tax_amount": f"{billing.tax_amount:.2f}",
                 "total_amount": f"{billing.total_amount:.2f}",
+                "paid_amount": f"{billing.paid_amount:.2f}",
+                "balance_amount": f"{billing.balance_amount:.2f}",
+                "status": billing.status.title(),
+                "notes": billing.notes or "",
             },
         )
         billing.invoice_path = path

@@ -385,40 +385,70 @@ class PharmacyInvoiceRepository:
         # Query top selling medicines
         top_meds_query = (
             select(
-                Medicine.id.label("medicine_id"),
-                Medicine.name.label("name"),
-                Medicine.generic_name.label("generic_name"),
-                Medicine.sku.label("sku"),
-                func.sum(PharmacyInvoiceItem.quantity).label("total_sold_quantity")
+                PharmacyInvoiceItem.medicine_id.label("medicine_id"),
+                func.coalesce(Medicine.name, "Unknown Medicine").label("name"),
+                func.coalesce(Medicine.generic_name, "").label("generic_name"),
+                func.coalesce(Medicine.sku, "").label("sku"),
+                func.coalesce(
+                    func.sum(PharmacyInvoiceItem.quantity), 0
+                ).label("total_sold_quantity"),
             )
-            .join(PharmacyInvoiceItem, Medicine.id == PharmacyInvoiceItem.medicine_id)
-            .join(PharmacyInvoice, PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id)
+            .select_from(PharmacyInvoiceItem)
+            .join(
+                PharmacyInvoice,
+                PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id,
+            )
+            .outerjoin(
+                Medicine,
+                Medicine.id == PharmacyInvoiceItem.medicine_id,
+            )
             .where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+                # Include active invoices and legacy invoices where is_deleted is NULL
+                or_(
+                    PharmacyInvoice.is_deleted.is_(False),
+                    PharmacyInvoice.is_deleted.is_(None),
+                ),
+
+                # Exclude only cancelled invoices.
+                # NULL status is also considered valid.
+                or_(
+                    PharmacyInvoice.status.is_(None),
+                    PharmacyInvoice.status != "cancelled",
+                ),
+
+                # Apply selected report period
                 PharmacyInvoice.created_at >= start,
-                PharmacyInvoice.created_at <= end
+                PharmacyInvoice.created_at <= end,
             )
-            .group_by(Medicine.id, Medicine.name, Medicine.generic_name, Medicine.sku)
-            .order_by(func.sum(PharmacyInvoiceItem.quantity).desc())
+            .group_by(
+                PharmacyInvoiceItem.medicine_id,
+                Medicine.name,
+                Medicine.generic_name,
+                Medicine.sku,
+            )
+            .order_by(
+                func.sum(PharmacyInvoiceItem.quantity).desc()
+            )
             .limit(5)
         )
+
         top_meds_res = await self.db.execute(top_meds_query)
+
         top_medicines = [
             {
                 "medicine_id": row.medicine_id,
                 "name": row.name,
                 "generic_name": row.generic_name,
                 "sku": row.sku,
-                "total_sold_quantity": int(row.total_sold_quantity)
+                "total_sold_quantity": int(row.total_sold_quantity or 0),
             }
             for row in top_meds_res.all()
         ]
-        
+
         return {
-            "total_sales": float(total or 0), 
+            "total_sales": float(total or 0),
             "invoice_count": count or 0,
-            "top_medicines": top_medicines
+            "top_medicines": top_medicines,
         }
 
     async def get_dashboard_sales(self) -> dict:

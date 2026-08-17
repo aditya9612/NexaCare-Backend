@@ -203,7 +203,7 @@ class InventoryService:
             if item.quantity < data.quantity:
                 raise BadRequestException("Insufficient stock for transfer")
             delta = -data.quantity
-        elif data.transaction_type == StockTransactionType.INWARD:
+        elif data.transaction_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             delta = data.quantity
         elif data.transaction_type == StockTransactionType.ADJUSTMENT:
             delta = data.quantity - item.quantity
@@ -241,19 +241,38 @@ class InventoryService:
         if not transaction:
             raise NotFoundException("Stock transaction not found")
 
-        # If transaction type is adjustment and quantity is being updated, raise error
-        if transaction.transaction_type == StockTransactionType.ADJUSTMENT and data.quantity is not None:
-            raise BadRequestException("Adjustment transactions cannot have their quantity updated")
+        old_type = transaction.transaction_type
+        new_type = data.transaction_type if data.transaction_type is not None else old_type
 
-        item = await self.item_repo.get_by_id(transaction.item_id)
-        if not item:
+        # If old or new type is adjustment and quantity/type is being updated, raise error
+        if (old_type == StockTransactionType.ADJUSTMENT or new_type == StockTransactionType.ADJUSTMENT):
+            if (data.quantity is not None and data.quantity != transaction.quantity) or (data.transaction_type is not None and data.transaction_type != old_type):
+                raise BadRequestException("Adjustment transactions cannot have their quantity or transaction type updated")
+
+        old_item_id = transaction.item_id
+        new_item_id = data.item_id if data.item_id is not None else old_item_id
+
+        old_item = await self.item_repo.get_by_id(old_item_id)
+        if not old_item:
             raise NotFoundException("Inventory item associated with transaction not found")
+
+        # If item_id is changing, validate new item exists
+        if new_item_id != old_item_id:
+            new_item = await self.item_repo.get_by_id(new_item_id)
+            if not new_item:
+                raise NotFoundException("New inventory item not found")
+        else:
+            new_item = old_item
+
+        # Validate warehouses if provided
+        if data.warehouse_id is not None:
+            await self._validate_warehouse(data.warehouse_id)
 
         # Reverse the old transaction impact:
         reverse_delta = 0
-        if transaction.transaction_type == StockTransactionType.INWARD:
+        if old_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             reverse_delta = -transaction.quantity
-        elif transaction.transaction_type in (
+        elif old_type in (
             StockTransactionType.OUTWARD,
             StockTransactionType.CONSUMPTION,
             StockTransactionType.TRANSFER,
@@ -261,32 +280,43 @@ class InventoryService:
             reverse_delta = transaction.quantity
 
         # Validate that reversing the old impact does not make inventory negative
-        if item.quantity + reverse_delta < 0:
-            raise BadRequestException("Insufficient stock to reverse previous transaction impact")
+        if old_item.quantity + reverse_delta < 0:
+            raise BadRequestException("Insufficient stock to reverse previous transaction impact on the original item")
 
         # New impact:
         new_quantity = data.quantity if data.quantity is not None else transaction.quantity
         new_delta = 0
-        if transaction.transaction_type == StockTransactionType.INWARD:
+        if new_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             new_delta = new_quantity
-        elif transaction.transaction_type in (
+        elif new_type in (
             StockTransactionType.OUTWARD,
             StockTransactionType.CONSUMPTION,
             StockTransactionType.TRANSFER,
         ):
             new_delta = -new_quantity
+        elif new_type == StockTransactionType.ADJUSTMENT:
+            new_delta = new_quantity - new_item.quantity
 
-        # Validate that the new quantity and the final resulting inventory doesn't drop below 0
-        if item.quantity + reverse_delta + new_delta < 0:
-            raise BadRequestException("Insufficient stock for transaction update")
-
-        # Apply net delta to the item
-        net_delta = reverse_delta + new_delta
-        if net_delta != 0:
-            await self.item_repo.update_quantity(item.id, net_delta)
+        # Calculate final stock for new item after reversal and new delta
+        if old_item_id == new_item_id:
+            if old_item.quantity + reverse_delta + new_delta < 0:
+                raise BadRequestException("Insufficient stock for transaction update")
+            net_delta = reverse_delta + new_delta
+            if net_delta != 0:
+                await self.item_repo.update_quantity(old_item.id, net_delta)
+        else:
+            if new_item.quantity + new_delta < 0:
+                raise BadRequestException("Insufficient stock on the new item for transaction update")
+            if reverse_delta != 0:
+                await self.item_repo.update_quantity(old_item.id, reverse_delta)
+            if new_delta != 0:
+                await self.item_repo.update_quantity(new_item.id, new_delta)
 
         # Build details for audit logging before modifying the record
         old_values = {
+            "item_id": transaction.item_id,
+            "warehouse_id": transaction.warehouse_id,
+            "transaction_type": transaction.transaction_type,
             "quantity": transaction.quantity,
             "unit_cost": transaction.unit_cost,
             "reference_type": transaction.reference_type,
@@ -295,6 +325,12 @@ class InventoryService:
         }
 
         # Update fields on the transaction record
+        if data.item_id is not None:
+            transaction.item_id = data.item_id
+        if data.warehouse_id is not None:
+            transaction.warehouse_id = data.warehouse_id
+        if data.transaction_type is not None:
+            transaction.transaction_type = data.transaction_type
         if data.quantity is not None:
             transaction.quantity = data.quantity
         if data.unit_cost is not None:
@@ -323,12 +359,19 @@ class InventoryService:
         transaction = await self.transaction_repo.update(transaction)
 
         # Re-evaluate reorder alerts
-        refreshed_item = await self.item_repo.get_by_id(item.id)
-        if refreshed_item:
-            await self._check_reorder_alert(refreshed_item)
+        refreshed_old_item = await self.item_repo.get_by_id(old_item.id)
+        if refreshed_old_item:
+            await self._check_reorder_alert(refreshed_old_item)
+        if old_item_id != new_item_id:
+            refreshed_new_item = await self.item_repo.get_by_id(new_item.id)
+            if refreshed_new_item:
+                await self._check_reorder_alert(refreshed_new_item)
 
         # Audit log
         new_values = {
+            "item_id": transaction.item_id,
+            "warehouse_id": transaction.warehouse_id,
+            "transaction_type": transaction.transaction_type,
             "quantity": transaction.quantity,
             "unit_cost": transaction.unit_cost,
             "reference_type": transaction.reference_type,
@@ -360,7 +403,7 @@ class InventoryService:
 
         # Reverse the old transaction impact:
         reverse_delta = 0
-        if transaction.transaction_type == StockTransactionType.INWARD:
+        if transaction.transaction_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             reverse_delta = -transaction.quantity
         elif transaction.transaction_type in (
             StockTransactionType.OUTWARD,

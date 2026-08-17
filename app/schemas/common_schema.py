@@ -40,8 +40,12 @@ class BaseSchema(BaseModel):
     @field_validator("*", mode="after")
     @classmethod
     def localize_datetime(cls, v: any) -> any:
-        if isinstance(v, datetime) and v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                v = v.replace(tzinfo=timezone.utc)
+            from datetime import timedelta, timezone as datetime_timezone
+            ist_tz = datetime_timezone(timedelta(hours=5, minutes=30))
+            return v.astimezone(ist_tz)
         return v
 
 

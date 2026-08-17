@@ -27,3 +27,6 @@ Thumbs.db
 # Docker local overrides (keep Dockerfile & docker-compose.yml tracked)
 docker-compose.override.yml
 docker-compose.*.local.yml
+
+# Local / personal docs (not part of the codebase)
+AI_ARCHITECTURE_INTERVIEW.md

@@ -84,6 +84,7 @@ async def init_db():
         user_model,
         voice_model,
         hospital_voice_model,
+        knowledge_embedding_model,
         whatsapp_model,
         expense_model,
         vendor_model,

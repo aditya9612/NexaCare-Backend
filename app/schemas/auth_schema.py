@@ -241,7 +241,7 @@ class ProfileUpdateRequest(BaseModel):
     @classmethod
     def dob_in_past(cls, value: date | None) -> date | None:
         return validate_not_future_date(value, "date_of_birth")
-    
+
     @field_validator("phone")
     @classmethod
     def validate_phone_number(cls, value: str | None) -> str | None:
@@ -267,3 +267,24 @@ class UserProfileResponse(BaseSchema):
     last_login: datetime | None
     created_at: datetime
     updated_at: datetime
+
+class TOTPSetupResponse(BaseSchema):
+    secret: str
+    provisioning_uri: str
+
+class TOTPEnableResponse(BaseSchema):
+    recovery_codes: list[str]
+
+class TOTPEnableRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6)
+
+class TwoFAChallengeResponse(BaseSchema):
+    challenge_token: str
+
+class TOTPLoginRequest(BaseModel):
+    challenge_token: str
+    code: str = Field(..., min_length=6, max_length=10)
+
+class Disable2FARequest(BaseModel):
+    password: str = Field(..., min_length=8)
+    code: str = Field(..., min_length=6, max_length=6)

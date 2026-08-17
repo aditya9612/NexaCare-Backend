@@ -9,6 +9,8 @@ Stores the choice in state and advances to the greeting node.
 import logging
 from xml.sax.saxutils import escape
 
+from app.services.sarvam_tts import speak
+
 logger = logging.getLogger("nexacare.agent.nodes.language")
 
 # Language config — extend here when adding more languages
@@ -35,15 +37,15 @@ def build_language_select_twiml(base_url: str) -> str:
     Uses raw XML (not twilio SDK) to keep it dependency-light.
     """
     action = escape(f"{base_url}/agent/v1/voice/lang")
-    prompt = escape(LANGUAGE_PROMPT)
+    timeout_msg = "We did not receive your selection. Please call again."
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Gather numDigits="1" action="{action}" method="POST" timeout="10">'
-        f'<Say language="en-IN">{prompt}</Say>'
+        f'{speak(LANGUAGE_PROMPT, "en-IN", base_url)}'
         "</Gather>"
-        '<Say language="en-IN">We did not receive your selection. Please call again.</Say>'
+        f'{speak(timeout_msg, "en-IN", base_url)}'
         "<Hangup/>"
         "</Response>"
     )

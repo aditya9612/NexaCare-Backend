@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
 
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
     Path(settings.UPLOAD_DIR + "/doctors").mkdir(parents=True, exist_ok=True)
+    Path(settings.SARVAM_TTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
 

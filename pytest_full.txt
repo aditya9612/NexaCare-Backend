@@ -1,0 +1,1250 @@
+﻿..................................................FFFF......F........... [ 25%]
+.......................F................................................ [ 50%]
+..................F.....F....F....F.........FF.FFF....FFF.F..F......F..F [ 76%]
+FFFFFFFFFFFFFFFFFFFFFFFF.....F....................F.................     [100%]
+================================== FAILURES ===================================
+_ TestPipelineRegexShortCircuit.test_regex_short_circuit[Mr. Suresh Kumar-Mr. Suresh Kumar] _
+
+self = <test_name_extraction.TestPipelineRegexShortCircuit object at 0x000002597A528160>
+transcript = 'Mr. Suresh Kumar', expected_name = 'Mr. Suresh Kumar'
+
+    @pytest.mark.parametrize("transcript,expected_name", [
+        ("my name is Rahul Sharma", "Rahul Sharma"),
+        ("I'm Priya Patel", "Priya Patel"),
+        ("I am Ananya Desai", "Ananya Desai"),
+        ("this is Vikram Singh speaking", "Vikram Singh"),
+        ("call me Rohan", "Rohan"),
+        ("hello this side Arjun Mehta", "Arjun Mehta"),
+        ("Mr. Suresh Kumar", "Mr. Suresh Kumar"),
+        ("Dr. Meera Joshi", "Dr. Meera Joshi"),
+        ("Shri Rajesh Patil", "Shri Rajesh Patil"),
+        ("Smt. Lakshmi Iyer", "Smt. Lakshmi Iyer"),
+        ("mera naam hai Amit Verma", "Amit Verma"),
+        ("majhe naav aahe Sanjay Jadhav", "Sanjay Jadhav"),
+        ("\u092e\u0947\u0930\u093e \u0928\u093e\u092e \u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e \u0939\u0948", "\u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e"),
+        ("\u092e\u093e\u091d\u0947 \u0928\u093e\u0935 \u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916 \u0906\u0939\u0947", "\u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916"),
+        ("\u092e\u0940 \u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940", "\u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940"),
+    ])
+    def test_regex_short_circuit(self, transcript, expected_name):
+        with patch("app.agent.name_extraction.pipeline.call_gemini") as mock_gemini:
+>           result = pipeline_run(transcript)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+app\tests\test_name_extraction.py:212: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\agent\name_extraction\pipeline.py:104: in run
+    resolved = resolve_from_gemini(gemini_output, twilio_confidence, regex_score)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app\agent\name_extraction\fallback.py:115: in resolve_from_gemini
+    return _build_result(
+app\agent\name_extraction\fallback.py:45: in _build_result
+    processed = postprocess_name(name)
+                ^^^^^^^^^^^^^^^^^^^^^^
+app\agent\name_extraction\postprocess.py:116: in postprocess_name
+    text = _strip_residual_cues(text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = <MagicMock name='call_gemini().get().strip().strip().strip()' id='2583376007520'>
+
+    def _strip_residual_cues(name: str) -> str:
+        """Remove leading cue phrases if model leaked them."""
+        text = name.strip()
+        changed = True
+        while changed:
+            changed = False
+            for pattern in _RESIDUAL_CUE_PATTERNS:
+>               match = pattern.match(text)
+                        ^^^^^^^^^^^^^^^^^^^
+E               TypeError: expected string or bytes-like object, got 'MagicMock'
+
+app\agent\name_extraction\postprocess.py:54: TypeError
+_ TestPipelineRegexShortCircuit.test_regex_short_circuit[Dr. Meera Joshi-Dr. Meera Joshi] _
+
+self = <test_name_extraction.TestPipelineRegexShortCircuit object at 0x000002597A52C150>
+transcript = 'Dr. Meera Joshi', expected_name = 'Dr. Meera Joshi'
+
+    @pytest.mark.parametrize("transcript,expected_name", [
+        ("my name is Rahul Sharma", "Rahul Sharma"),
+        ("I'm Priya Patel", "Priya Patel"),
+        ("I am Ananya Desai", "Ananya Desai"),
+        ("this is Vikram Singh speaking", "Vikram Singh"),
+        ("call me Rohan", "Rohan"),
+        ("hello this side Arjun Mehta", "Arjun Mehta"),
+        ("Mr. Suresh Kumar", "Mr. Suresh Kumar"),
+        ("Dr. Meera Joshi", "Dr. Meera Joshi"),
+        ("Shri Rajesh Patil", "Shri Rajesh Patil"),
+        ("Smt. Lakshmi Iyer", "Smt. Lakshmi Iyer"),
+        ("mera naam hai Amit Verma", "Amit Verma"),
+        ("majhe naav aahe Sanjay Jadhav", "Sanjay Jadhav"),
+        ("\u092e\u0947\u0930\u093e \u0928\u093e\u092e \u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e \u0939\u0948", "\u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e"),
+        ("\u092e\u093e\u091d\u0947 \u0928\u093e\u0935 \u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916 \u0906\u0939\u0947", "\u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916"),
+        ("\u092e\u0940 \u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940", "\u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940"),
+    ])
+    def test_regex_short_circuit(self, transcript, expected_name):
+        with patch("app.agent.name_extraction.pipeline.call_gemini") as mock_gemini:
+>           result = pipeline_run(transcript)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+app\tests\test_name_extraction.py:212: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\agent\name_extraction\pipeline.py:104: in run
+    resolved = resolve_from_gemini(gemini_output, twilio_confidence, regex_score)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app\agent\name_extraction\fallback.py:115: in resolve_from_gemini
+    return _build_result(
+app\agent\name_extraction\fallback.py:45: in _build_result
+    processed = postprocess_name(name)
+                ^^^^^^^^^^^^^^^^^^^^^^
+app\agent\name_extraction\postprocess.py:116: in postprocess_name
+    text = _strip_residual_cues(text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = <MagicMock name='call_gemini().get().strip().strip().strip()' id='2583382475168'>
+
+    def _strip_residual_cues(name: str) -> str:
+        """Remove leading cue phrases if model leaked them."""
+        text = name.strip()
+        changed = True
+        while changed:
+            changed = False
+            for pattern in _RESIDUAL_CUE_PATTERNS:
+>               match = pattern.match(text)
+                        ^^^^^^^^^^^^^^^^^^^
+E               TypeError: expected string or bytes-like object, got 'MagicMock'
+
+app\agent\name_extraction\postprocess.py:54: TypeError
+_ TestPipelineRegexShortCircuit.test_regex_short_circuit[Shri Rajesh Patil-Shri Rajesh Patil] _
+
+self = <test_name_extraction.TestPipelineRegexShortCircuit object at 0x000002597A52C350>
+transcript = 'Shri Rajesh Patil', expected_name = 'Shri Rajesh Patil'
+
+    @pytest.mark.parametrize("transcript,expected_name", [
+        ("my name is Rahul Sharma", "Rahul Sharma"),
+        ("I'm Priya Patel", "Priya Patel"),
+        ("I am Ananya Desai", "Ananya Desai"),
+        ("this is Vikram Singh speaking", "Vikram Singh"),
+        ("call me Rohan", "Rohan"),
+        ("hello this side Arjun Mehta", "Arjun Mehta"),
+        ("Mr. Suresh Kumar", "Mr. Suresh Kumar"),
+        ("Dr. Meera Joshi", "Dr. Meera Joshi"),
+        ("Shri Rajesh Patil", "Shri Rajesh Patil"),
+        ("Smt. Lakshmi Iyer", "Smt. Lakshmi Iyer"),
+        ("mera naam hai Amit Verma", "Amit Verma"),
+        ("majhe naav aahe Sanjay Jadhav", "Sanjay Jadhav"),
+        ("\u092e\u0947\u0930\u093e \u0928\u093e\u092e \u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e \u0939\u0948", "\u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e"),
+        ("\u092e\u093e\u091d\u0947 \u0928\u093e\u0935 \u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916 \u0906\u0939\u0947", "\u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916"),
+        ("\u092e\u0940 \u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940", "\u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940"),
+    ])
+    def test_regex_short_circuit(self, transcript, expected_name):
+        with patch("app.agent.name_extraction.pipeline.call_gemini") as mock_gemini:
+>           result = pipeline_run(transcript)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+app\tests\test_name_extraction.py:212: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\agent\name_extraction\pipeline.py:104: in run
+    resolved = resolve_from_gemini(gemini_output, twilio_confidence, regex_score)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app\agent\name_extraction\fallback.py:115: in resolve_from_gemini
+    return _build_result(
+app\agent\name_extraction\fallback.py:45: in _build_result
+    processed = postprocess_name(name)
+                ^^^^^^^^^^^^^^^^^^^^^^
+app\agent\name_extraction\postprocess.py:116: in postprocess_name
+    text = _strip_residual_cues(text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = <MagicMock name='call_gemini().get().strip().strip().strip()' id='2583382483232'>
+
+    def _strip_residual_cues(name: str) -> str:
+        """Remove leading cue phrases if model leaked them."""
+        text = name.strip()
+        changed = True
+        while changed:
+            changed = False
+            for pattern in _RESIDUAL_CUE_PATTERNS:
+>               match = pattern.match(text)
+                        ^^^^^^^^^^^^^^^^^^^
+E               TypeError: expected string or bytes-like object, got 'MagicMock'
+
+app\agent\name_extraction\postprocess.py:54: TypeError
+_ TestPipelineRegexShortCircuit.test_regex_short_circuit[Smt. Lakshmi Iyer-Smt. Lakshmi Iyer] _
+
+self = <test_name_extraction.TestPipelineRegexShortCircuit object at 0x000002597A48EC60>
+transcript = 'Smt. Lakshmi Iyer', expected_name = 'Smt. Lakshmi Iyer'
+
+    @pytest.mark.parametrize("transcript,expected_name", [
+        ("my name is Rahul Sharma", "Rahul Sharma"),
+        ("I'm Priya Patel", "Priya Patel"),
+        ("I am Ananya Desai", "Ananya Desai"),
+        ("this is Vikram Singh speaking", "Vikram Singh"),
+        ("call me Rohan", "Rohan"),
+        ("hello this side Arjun Mehta", "Arjun Mehta"),
+        ("Mr. Suresh Kumar", "Mr. Suresh Kumar"),
+        ("Dr. Meera Joshi", "Dr. Meera Joshi"),
+        ("Shri Rajesh Patil", "Shri Rajesh Patil"),
+        ("Smt. Lakshmi Iyer", "Smt. Lakshmi Iyer"),
+        ("mera naam hai Amit Verma", "Amit Verma"),
+        ("majhe naav aahe Sanjay Jadhav", "Sanjay Jadhav"),
+        ("\u092e\u0947\u0930\u093e \u0928\u093e\u092e \u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e \u0939\u0948", "\u0930\u093e\u0939\u0941\u0932 \u0936\u0930\u094d\u092e\u093e"),
+        ("\u092e\u093e\u091d\u0947 \u0928\u093e\u0935 \u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916 \u0906\u0939\u0947", "\u0905\u091c\u092f \u0926\u0947\u0936\u092e\u0941\u0916"),
+        ("\u092e\u0940 \u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940", "\u0938\u094b\u0928\u093e\u0932\u0940 \u0915\u0941\u0932\u0915\u0930\u094d\u0923\u0940"),
+    ])
+    def test_regex_short_circuit(self, transcript, expected_name):
+        with patch("app.agent.name_extraction.pipeline.call_gemini") as mock_gemini:
+            result = pipeline_run(transcript)
+            # Should not need Gemini for high-confidence regex matches.
+            mock_gemini.assert_not_called()
+            assert result["found"] is True
+>           assert expected_name in result["name"] or result["name"] == expected_name
+E           AssertionError: assert ('Smt. Lakshmi Iyer' in 'Iyer' or 'Iyer' == 'Smt. Lakshmi Iyer'
+E             
+E             - Smt. Lakshmi Iyer
+E             + Iyer)
+
+app\tests\test_name_extraction.py:216: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:42,773 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "Smt. Lakshmi Iyer", "clean_transcript": "Smt. Lakshmi Iyer", "language_hint": "en", "regex_candidate": "Iyer", "regex_score": 0.93, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Iyer", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:majhe?\\s+naav(?:\\s+aahe)?|m)."}, "elapsed_ms": 0.17660000048635993, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "Smt. Lakshmi Iyer", "clean_transcript": "Smt. Lakshmi Iyer", "language_hint": "en", "regex_candidate": "Iyer", "regex_score": 0.93, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Iyer", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:majhe?\\s+naav(?:\\s+aahe)?|m)."}, "elapsed_ms": 0.17660000048635993, "path_used": "regex_short_circuit"}
+_ TestPipelineWithMockedGemini.test_gemini_extraction[my name is rahul kumr-Rahul Kumar-Rahul Kumar] _
+
+self = <test_name_extraction.TestPipelineWithMockedGemini object at 0x000002597A3D7D90>
+transcript = 'my name is rahul kumr', gemini_name = 'Rahul Kumar'
+expected = 'Rahul Kumar'
+
+    @pytest.mark.parametrize("transcript,gemini_name,expected", [
+        ("uh hello um my name is uh Neha", "Neha", "Neha"),
+        ("my name is rahul kumr", "Rahul Kumar", "Rahul Kumar"),
+        ("priya patel", "Priya Patel", "Priya Patel"),
+        ("Kavya Shrikrishna Deshpande", "Kavya Shrikrishna Deshpande", "Kavya Shrikrishna Deshpande"),
+        ("Aarav", "Aarav", "Aarav"),
+    ])
+    def test_gemini_extraction(self, transcript, gemini_name, expected):
+        result = _run_with_mock(transcript, gemini_found=True, gemini_name=gemini_name)
+        assert result["found"] is True
+>       assert expected in result["name"]
+E       AssertionError: assert 'Rahul Kumar' in 'Rahul Kumr'
+
+app\tests\test_name_extraction.py:232: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:42,799 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "my name is rahul kumr", "clean_transcript": "my name is rahul kumr", "language_hint": "en", "regex_candidate": "rahul kumr", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Rahul Kumr", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.12679999963438604, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "my name is rahul kumr", "clean_transcript": "my name is rahul kumr", "language_hint": "en", "regex_candidate": "rahul kumr", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Rahul Kumr", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.12679999963438604, "path_used": "regex_short_circuit"}
+____ test_positive_extraction_cases[Smt. Lakshmi Iyer-Lakshmi Iyer-False] _____
+
+transcript = 'Smt. Lakshmi Iyer', expected = 'Lakshmi Iyer', skip_gemini = False
+
+    @pytest.mark.parametrize("transcript,expected,skip_gemini", POSITIVE_CASES)
+    def test_positive_extraction_cases(transcript, expected, skip_gemini):
+        """100+ positive name extraction scenarios."""
+        if skip_gemini:
+            with patch("app.agent.name_extraction.pipeline.call_gemini") as mock_g:
+                result = pipeline_run(transcript)
+                mock_g.assert_not_called()
+        else:
+            # Mock Gemini returning expected name, or None to exercise regex/heuristic fallback.
+            with patch(
+                "app.agent.name_extraction.pipeline.call_gemini",
+                return_value={"found": True, "name": expected, "confidence": "high", "reason": "Mock."},
+            ):
+                result = pipeline_run(transcript)
+    
+        assert result["found"] is True, f"Expected found for {transcript!r}, got {result}"
+>       assert expected.lower() in result["name"].lower() or result["name"] == expected
+E       AssertionError: assert ('lakshmi iyer' in 'iyer' or 'Iyer' == 'Lakshmi Iyer'
+E        +  where 'lakshmi iyer' = <built-in method lower of str object at 0x000002597A472470>()
+E        +    where <built-in method lower of str object at 0x000002597A472470> = 'Lakshmi Iyer'.lower
+E        +  and   'iyer' = <built-in method lower of str object at 0x000002597D95BC00>()
+E        +    where <built-in method lower of str object at 0x000002597D95BC00> = 'Iyer'.lower
+E         
+E         - Lakshmi Iyer
+E         + Iyer)
+
+app\tests\test_name_extraction.py:462: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:42,913 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "Smt. Lakshmi Iyer", "clean_transcript": "Smt. Lakshmi Iyer", "language_hint": "en", "regex_candidate": "Iyer", "regex_score": 0.93, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Iyer", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:majhe?\\s+naav(?:\\s+aahe)?|m)."}, "elapsed_ms": 0.17049999951268546, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "Smt. Lakshmi Iyer", "clean_transcript": "Smt. Lakshmi Iyer", "language_hint": "en", "regex_candidate": "Iyer", "regex_score": 0.93, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Iyer", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:majhe?\\s+naav(?:\\s+aahe)?|m)."}, "elapsed_ms": 0.17049999951268546, "path_used": "regex_short_circuit"}
+_____________ test_negative_extraction_cases[City Hospital Pune] ______________
+
+transcript = 'City Hospital Pune'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'City Hospital Pune', got {'found': True, 'name': 'City', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,527 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "City Hospital Pune", "clean_transcript": "City Hospital Pune", "language_hint": "en", "regex_candidate": "City Hospital Pune", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "City", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22600000011152588, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "City Hospital Pune", "clean_transcript": "City Hospital Pune", "language_hint": "en", "regex_candidate": "City Hospital Pune", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "City", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22600000011152588, "path_used": "regex_fallback"}
+__________________ test_negative_extraction_cases[I am male] __________________
+
+transcript = 'I am male'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'I am male', got {'found': True, 'name': 'Male', 'confidence': 'medium', 'reason': "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,578 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "I am male", "clean_transcript": "I am male", "language_hint": "en", "regex_candidate": "male", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Male", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.3691000001708744, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "I am male", "clean_transcript": "I am male", "language_hint": "en", "regex_candidate": "male", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Male", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.3691000001708744, "path_used": "regex_short_circuit"}
+________________ test_negative_extraction_cases[Doctor Sharma] ________________
+
+transcript = 'Doctor Sharma'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'Doctor Sharma', got {'found': True, 'name': 'Doctor Sharma', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,609 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "Doctor Sharma", "clean_transcript": "Doctor Sharma", "language_hint": "en", "regex_candidate": "Doctor Sharma", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Doctor Sharma", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.23550000150862616, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "Doctor Sharma", "clean_transcript": "Doctor Sharma", "language_hint": "en", "regex_candidate": "Doctor Sharma", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Doctor Sharma", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.23550000150862616, "path_used": "regex_fallback"}
+_______________ test_negative_extraction_cases[I am from Delhi] _______________
+
+transcript = 'I am from Delhi'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'I am from Delhi', got {'found': True, 'name': 'From', 'confidence': 'medium', 'reason': "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,639 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "I am from Delhi", "clean_transcript": "I am from Delhi", "language_hint": "en", "regex_candidate": "from Delhi", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "From", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.18590000036056153, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "I am from Delhi", "clean_transcript": "I am from Delhi", "language_hint": "en", "regex_candidate": "from Delhi", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "From", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.18590000036056153, "path_used": "regex_short_circuit"}
+_____________ test_negative_extraction_cases[thank you very much] _____________
+
+transcript = 'thank you very much'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'thank you very much', got {'found': True, 'name': 'Very Much', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,686 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "thank you very much", "clean_transcript": "very much", "language_hint": "en", "regex_candidate": "very much", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Very Much", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.25859999914246146, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "thank you very much", "clean_transcript": "very much", "language_hint": "en", "regex_candidate": "very much", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Very Much", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.25859999914246146, "path_used": "regex_fallback"}
+___________________ test_negative_extraction_cases[ji haan] ___________________
+
+transcript = 'ji haan'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'ji haan', got {'found': True, 'name': 'Haan', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,710 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "ji haan", "clean_transcript": "haan", "language_hint": "en", "regex_candidate": "haan", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Haan", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.25290000121458434, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "ji haan", "clean_transcript": "haan", "language_hint": "en", "regex_candidate": "haan", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Haan", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.25290000121458434, "path_used": "regex_fallback"}
+__________ test_negative_extraction_cases[appointment for tomorrow] ___________
+
+transcript = 'appointment for tomorrow'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'appointment for tomorrow', got {'found': True, 'name': 'Appointment For Tomorrow', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,735 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "appointment for tomorrow", "clean_transcript": "appointment for tomorrow", "language_hint": "en", "regex_candidate": "appointment for tomorrow", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Appointment For Tomorrow", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.3423999987717252, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "appointment for tomorrow", "clean_transcript": "appointment for tomorrow", "language_hint": "en", "regex_candidate": "appointment for tomorrow", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Appointment For Tomorrow", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.3423999987717252, "path_used": "regex_fallback"}
+__________ test_negative_extraction_cases[I am calling from office] ___________
+
+transcript = 'I am calling from office'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'I am calling from office', got {'found': True, 'name': 'Calling', 'confidence': 'medium', 'reason': "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,751 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "I am calling from office", "clean_transcript": "I am calling from office", "language_hint": "en", "regex_candidate": "calling from office", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Calling", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.35709999974642415, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "I am calling from office", "clean_transcript": "I am calling from office", "language_hint": "en", "regex_candidate": "calling from office", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Calling", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.35709999974642415, "path_used": "regex_short_circuit"}
+__________ test_negative_extraction_cases[this is regarding billing] __________
+
+transcript = 'this is regarding billing'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'this is regarding billing', got {'found': True, 'name': 'Regarding Billing', 'confidence': 'medium', 'reason': "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,766 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "this is regarding billing", "clean_transcript": "this is regarding billing", "language_hint": "en", "regex_candidate": "regarding billing", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Regarding Billing", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.1950999994733138, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "this is regarding billing", "clean_transcript": "this is regarding billing", "language_hint": "en", "regex_candidate": "regarding billing", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Regarding Billing", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.1950999994733138, "path_used": "regex_short_circuit"}
+___________ test_negative_extraction_cases[email test@example.com] ____________
+
+transcript = 'email test@example.com'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'email test@example.com', got {'found': True, 'name': 'Email Testexample.com', 'confidence': 'low', 'reason': 'Heuristic: bare short utterance treated as name.'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,796 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "email test@example.com", "clean_transcript": "email test@example.com", "language_hint": "en", "regex_candidate": null, "regex_score": 0.0, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Email Testexample.com", "confidence": "low", "reason": "Heuristic: bare short utterance treated as name."}, "elapsed_ms": 0.2220999995188322, "path_used": "heuristic"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "email test@example.com", "clean_transcript": "email test@example.com", "language_hint": "en", "regex_candidate": null, "regex_score": 0.0, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Email Testexample.com", "confidence": "low", "reason": "Heuristic: bare short utterance treated as name."}, "elapsed_ms": 0.2220999995188322, "path_used": "heuristic"}
+______________ test_negative_extraction_cases[www hospital com] _______________
+
+transcript = 'www hospital com'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'www hospital com', got {'found': True, 'name': 'Www', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,811 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "www hospital com", "clean_transcript": "www hospital com", "language_hint": "en", "regex_candidate": "www hospital com", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Www", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22509999871545006, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "www hospital com", "clean_transcript": "www hospital com", "language_hint": "en", "regex_candidate": "www hospital com", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Www", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22509999871545006, "path_used": "regex_fallback"}
+_____________ test_negative_extraction_cases[AI voice assistant] ______________
+
+transcript = 'AI voice assistant'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'AI voice assistant', got {'found': True, 'name': 'Ai Voice Assistant', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,826 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "AI voice assistant", "clean_transcript": "AI voice assistant", "language_hint": "en", "regex_candidate": "AI voice assistant", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Ai Voice Assistant", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.32020000071497634, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "AI voice assistant", "clean_transcript": "AI voice assistant", "language_hint": "en", "regex_candidate": "AI voice assistant", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Ai Voice Assistant", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.32020000071497634, "path_used": "regex_fallback"}
+______________ test_negative_extraction_cases[transfer the call] ______________
+
+transcript = 'transfer the call'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'transfer the call', got {'found': True, 'name': 'Transfer The Call', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,845 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "transfer the call", "clean_transcript": "transfer the call", "language_hint": "en", "regex_candidate": "transfer the call", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Transfer The Call", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2390000008745119, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "transfer the call", "clean_transcript": "transfer the call", "language_hint": "en", "regex_candidate": "transfer the call", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Transfer The Call", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2390000008745119, "path_used": "regex_fallback"}
+_______________ test_negative_extraction_cases[is anyone there] _______________
+
+transcript = 'is anyone there'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'is anyone there', got {'found': True, 'name': 'Is Anyone There', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,866 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "is anyone there", "clean_transcript": "is anyone there", "language_hint": "en", "regex_candidate": "is anyone there", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Is Anyone There", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2886000002035871, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "is anyone there", "clean_transcript": "is anyone there", "language_hint": "en", "regex_candidate": "is anyone there", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Is Anyone There", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2886000002035871, "path_used": "regex_fallback"}
+______________ test_negative_extraction_cases[skin rash allergy] ______________
+
+transcript = 'skin rash allergy'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'skin rash allergy', got {'found': True, 'name': 'Skin Rash Allergy', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,902 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "skin rash allergy", "clean_transcript": "skin rash allergy", "language_hint": "en", "regex_candidate": "skin rash allergy", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Skin Rash Allergy", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.32779999855847564, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "skin rash allergy", "clean_transcript": "skin rash allergy", "language_hint": "en", "regex_candidate": "skin rash allergy", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Skin Rash Allergy", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.32779999855847564, "path_used": "regex_fallback"}
+___________ test_negative_extraction_cases[pregnancy related query] ___________
+
+transcript = 'pregnancy related query'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'pregnancy related query', got {'found': True, 'name': 'Pregnancy Related Query', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,929 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "pregnancy related query", "clean_transcript": "pregnancy related query", "language_hint": "en", "regex_candidate": "pregnancy related query", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Pregnancy Related Query", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.3357999994477723, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "pregnancy related query", "clean_transcript": "pregnancy related query", "language_hint": "en", "regex_candidate": "pregnancy related query", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Pregnancy Related Query", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.3357999994477723, "path_used": "regex_fallback"}
+_________ test_negative_extraction_cases[child vaccination schedule] __________
+
+transcript = 'child vaccination schedule'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'child vaccination schedule', got {'found': True, 'name': 'Child Vaccination Schedule', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,951 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "child vaccination schedule", "clean_transcript": "child vaccination schedule", "language_hint": "en", "regex_candidate": "child vaccination schedule", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Child Vaccination Schedule", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.46750000001338776, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "child vaccination schedule", "clean_transcript": "child vaccination schedule", "language_hint": "en", "regex_candidate": "child vaccination schedule", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Child Vaccination Schedule", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.46750000001338776, "path_used": "regex_fallback"}
+_____________ test_negative_extraction_cases[emergency ambulance] _____________
+
+transcript = 'emergency ambulance'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'emergency ambulance', got {'found': True, 'name': 'Emergency Ambulance', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,970 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "emergency ambulance", "clean_transcript": "emergency ambulance", "language_hint": "en", "regex_candidate": "emergency ambulance", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Emergency Ambulance", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.30309999965538736, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "emergency ambulance", "clean_transcript": "emergency ambulance", "language_hint": "en", "regex_candidate": "emergency ambulance", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Emergency Ambulance", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.30309999965538736, "path_used": "regex_fallback"}
+______________ test_negative_extraction_cases[ICU bed available] ______________
+
+transcript = 'ICU bed available'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'ICU bed available', got {'found': True, 'name': 'Icu Bed Available', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:43,987 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "ICU bed available", "clean_transcript": "ICU bed available", "language_hint": "en", "regex_candidate": "ICU bed available", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Icu Bed Available", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.39259999903151765, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "ICU bed available", "clean_transcript": "ICU bed available", "language_hint": "en", "regex_candidate": "ICU bed available", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Icu Bed Available", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.39259999903151765, "path_used": "regex_fallback"}
+___________ test_negative_extraction_cases[insurance claim status] ____________
+
+transcript = 'insurance claim status'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'insurance claim status', got {'found': True, 'name': 'Status', 'confidence': 'medium', 'reason': "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,004 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "insurance claim status", "clean_transcript": "insurance claim status", "language_hint": "en", "regex_candidate": "status", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Status", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.21949999973003287, "path_used": "regex_short_circuit"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "insurance claim status", "clean_transcript": "insurance claim status", "language_hint": "en", "regex_candidate": "status", "regex_score": 0.95, "gemini_output": null, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Status", "confidence": "medium", "reason": "High-confidence regex match (cue:(?:my\\s+name\\s+is|i\\s*'?m|i\\s+)."}, "elapsed_ms": 0.21949999973003287, "path_used": "regex_short_circuit"}
+____________ test_negative_extraction_cases[report upload pending] ____________
+
+transcript = 'report upload pending'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'report upload pending', got {'found': True, 'name': 'Report Upload Pending', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,020 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "report upload pending", "clean_transcript": "report upload pending", "language_hint": "en", "regex_candidate": "report upload pending", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Report Upload Pending", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.33369999982824083, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "report upload pending", "clean_transcript": "report upload pending", "language_hint": "en", "regex_candidate": "report upload pending", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Report Upload Pending", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.33369999982824083, "path_used": "regex_fallback"}
+______________ test_negative_extraction_cases[lab test results] _______________
+
+transcript = 'lab test results'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'lab test results', got {'found': True, 'name': 'Lab Test Results', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,035 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "lab test results", "clean_transcript": "lab test results", "language_hint": "en", "regex_candidate": "lab test results", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Lab Test Results", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.33600000097067095, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "lab test results", "clean_transcript": "lab test results", "language_hint": "en", "regex_candidate": "lab test results", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Lab Test Results", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.33600000097067095, "path_used": "regex_fallback"}
+________________ test_negative_extraction_cases[x-ray report] _________________
+
+transcript = 'x-ray report'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'x-ray report', got {'found': True, 'name': 'X-ray Report', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,051 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "x-ray report", "clean_transcript": "x-ray report", "language_hint": "en", "regex_candidate": "x-ray report", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "X-ray Report", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.29010000071139075, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "x-ray report", "clean_transcript": "x-ray report", "language_hint": "en", "regex_candidate": "x-ray report", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "X-ray Report", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.29010000071139075, "path_used": "regex_fallback"}
+____________ test_negative_extraction_cases[MRI scan appointment] _____________
+
+transcript = 'MRI scan appointment'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'MRI scan appointment', got {'found': True, 'name': 'Mri Scan', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,071 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "MRI scan appointment", "clean_transcript": "MRI scan appointment", "language_hint": "en", "regex_candidate": "MRI scan appointment", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Mri Scan", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.3285000002506422, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "MRI scan appointment", "clean_transcript": "MRI scan appointment", "language_hint": "en", "regex_candidate": "MRI scan appointment", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Mri Scan", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.3285000002506422, "path_used": "regex_fallback"}
+____________ test_negative_extraction_cases[physiotherapy session] ____________
+
+transcript = 'physiotherapy session'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'physiotherapy session', got {'found': True, 'name': 'Physiotherapy Session', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,089 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "physiotherapy session", "clean_transcript": "physiotherapy session", "language_hint": "en", "regex_candidate": "physiotherapy session", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Physiotherapy Session", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.5758000006608199, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "physiotherapy session", "clean_transcript": "physiotherapy session", "language_hint": "en", "regex_candidate": "physiotherapy session", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Physiotherapy Session", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.5758000006608199, "path_used": "regex_fallback"}
+_______________ test_negative_extraction_cases[dental checkup] ________________
+
+transcript = 'dental checkup'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'dental checkup', got {'found': True, 'name': 'Dental Checkup', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,103 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "dental checkup", "clean_transcript": "dental checkup", "language_hint": "en", "regex_candidate": "dental checkup", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Dental Checkup", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.38049999966460746, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "dental checkup", "clean_transcript": "dental checkup", "language_hint": "en", "regex_candidate": "dental checkup", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Dental Checkup", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.38049999966460746, "path_used": "regex_fallback"}
+_________ test_negative_extraction_cases[orthopedic surgeon referral] _________
+
+transcript = 'orthopedic surgeon referral'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'orthopedic surgeon referral', got {'found': True, 'name': 'Orthopedic Surgeon Referral', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,117 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "orthopedic surgeon referral", "clean_transcript": "orthopedic surgeon referral", "language_hint": "en", "regex_candidate": "orthopedic surgeon referral", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Orthopedic Surgeon Referral", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.27799999952549115, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "orthopedic surgeon referral", "clean_transcript": "orthopedic surgeon referral", "language_hint": "en", "regex_candidate": "orthopedic surgeon referral", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Orthopedic Surgeon Referral", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.27799999952549115, "path_used": "regex_fallback"}
+____________ test_negative_extraction_cases[cardiology department] ____________
+
+transcript = 'cardiology department'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'cardiology department', got {'found': True, 'name': 'Cardiology Department', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,132 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "cardiology department", "clean_transcript": "cardiology department", "language_hint": "en", "regex_candidate": "cardiology department", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Cardiology Department", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.279799998679664, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "cardiology department", "clean_transcript": "cardiology department", "language_hint": "en", "regex_candidate": "cardiology department", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Cardiology Department", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.279799998679664, "path_used": "regex_fallback"}
+____________ test_negative_extraction_cases[neurology specialist] _____________
+
+transcript = 'neurology specialist'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'neurology specialist', got {'found': True, 'name': 'Neurology Specialist', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,145 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "neurology specialist", "clean_transcript": "neurology specialist", "language_hint": "en", "regex_candidate": "neurology specialist", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Neurology Specialist", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2404000006208662, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "neurology specialist", "clean_transcript": "neurology specialist", "language_hint": "en", "regex_candidate": "neurology specialist", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Neurology Specialist", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2404000006208662, "path_used": "regex_fallback"}
+__________ test_negative_extraction_cases[psychiatrist consultation] __________
+
+transcript = 'psychiatrist consultation'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'psychiatrist consultation', got {'found': True, 'name': 'Psychiatrist Consultation', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,162 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "psychiatrist consultation", "clean_transcript": "psychiatrist consultation", "language_hint": "en", "regex_candidate": "psychiatrist consultation", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Psychiatrist Consultation", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2829999993991805, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "psychiatrist consultation", "clean_transcript": "psychiatrist consultation", "language_hint": "en", "regex_candidate": "psychiatrist consultation", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Psychiatrist Consultation", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2829999993991805, "path_used": "regex_fallback"}
+_____________ test_negative_extraction_cases[dermatology clinic] ______________
+
+transcript = 'dermatology clinic'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'dermatology clinic', got {'found': True, 'name': 'Dermatology', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,182 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "dermatology clinic", "clean_transcript": "dermatology clinic", "language_hint": "en", "regex_candidate": "dermatology clinic", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Dermatology", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.19950000023527537, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "dermatology clinic", "clean_transcript": "dermatology clinic", "language_hint": "en", "regex_candidate": "dermatology clinic", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Dermatology", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.19950000023527537, "path_used": "regex_fallback"}
+___________ test_negative_extraction_cases[gynecology appointment] ____________
+
+transcript = 'gynecology appointment'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'gynecology appointment', got {'found': True, 'name': 'Gynecology', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,195 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "gynecology appointment", "clean_transcript": "gynecology appointment", "language_hint": "en", "regex_candidate": "gynecology appointment", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Gynecology", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.19299999985378236, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "gynecology appointment", "clean_transcript": "gynecology appointment", "language_hint": "en", "regex_candidate": "gynecology appointment", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Gynecology", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.19299999985378236, "path_used": "regex_fallback"}
+___________ test_negative_extraction_cases[pediatrician for child] ____________
+
+transcript = 'pediatrician for child'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'pediatrician for child', got {'found': True, 'name': 'Pediatrician For Child', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,209 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "pediatrician for child", "clean_transcript": "pediatrician for child", "language_hint": "en", "regex_candidate": "pediatrician for child", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Pediatrician For Child", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22950000129640102, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "pediatrician for child", "clean_transcript": "pediatrician for child", "language_hint": "en", "regex_candidate": "pediatrician for child", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Pediatrician For Child", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22950000129640102, "path_used": "regex_fallback"}
+____________ test_negative_extraction_cases[urology kidney stone] _____________
+
+transcript = 'urology kidney stone'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'urology kidney stone', got {'found': True, 'name': 'Urology Kidney Stone', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,222 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "urology kidney stone", "clean_transcript": "urology kidney stone", "language_hint": "en", "regex_candidate": "urology kidney stone", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Urology Kidney Stone", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.27550000049814116, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "urology kidney stone", "clean_transcript": "urology kidney stone", "language_hint": "en", "regex_candidate": "urology kidney stone", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Urology Kidney Stone", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.27550000049814116, "path_used": "regex_fallback"}
+_____________ test_negative_extraction_cases[nephrology dialysis] _____________
+
+transcript = 'nephrology dialysis'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'nephrology dialysis', got {'found': True, 'name': 'Nephrology Dialysis', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,233 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "nephrology dialysis", "clean_transcript": "nephrology dialysis", "language_hint": "en", "regex_candidate": "nephrology dialysis", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Nephrology Dialysis", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.21299999934853986, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "nephrology dialysis", "clean_transcript": "nephrology dialysis", "language_hint": "en", "regex_candidate": "nephrology dialysis", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Nephrology Dialysis", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.21299999934853986, "path_used": "regex_fallback"}
+____________ test_negative_extraction_cases[endocrinology thyroid] ____________
+
+transcript = 'endocrinology thyroid'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'endocrinology thyroid', got {'found': True, 'name': 'Endocrinology Thyroid', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,246 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "endocrinology thyroid", "clean_transcript": "endocrinology thyroid", "language_hint": "en", "regex_candidate": "endocrinology thyroid", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Endocrinology Thyroid", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.25660000028437935, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "endocrinology thyroid", "clean_transcript": "endocrinology thyroid", "language_hint": "en", "regex_candidate": "endocrinology thyroid", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Endocrinology Thyroid", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.25660000028437935, "path_used": "regex_fallback"}
+_____________ test_negative_extraction_cases[pulmonology asthma] ______________
+
+transcript = 'pulmonology asthma'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'pulmonology asthma', got {'found': True, 'name': 'Pulmonology Asthma', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,259 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "pulmonology asthma", "clean_transcript": "pulmonology asthma", "language_hint": "en", "regex_candidate": "pulmonology asthma", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Pulmonology Asthma", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.21569999989878852, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "pulmonology asthma", "clean_transcript": "pulmonology asthma", "language_hint": "en", "regex_candidate": "pulmonology asthma", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Pulmonology Asthma", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.21569999989878852, "path_used": "regex_fallback"}
+__________ test_negative_extraction_cases[gastroenterology acidity] ___________
+
+transcript = 'gastroenterology acidity'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'gastroenterology acidity', got {'found': True, 'name': 'Gastroenterology Acidity', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,272 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "gastroenterology acidity", "clean_transcript": "gastroenterology acidity", "language_hint": "en", "regex_candidate": "gastroenterology acidity", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Gastroenterology Acidity", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.5559000001085224, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "gastroenterology acidity", "clean_transcript": "gastroenterology acidity", "language_hint": "en", "regex_candidate": "gastroenterology acidity", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Gastroenterology Acidity", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.5559000001085224, "path_used": "regex_fallback"}
+_____________ test_negative_extraction_cases[ent tonsil surgery] ______________
+
+transcript = 'ent tonsil surgery'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'ent tonsil surgery', got {'found': True, 'name': 'Ent Tonsil Surgery', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,283 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "ent tonsil surgery", "clean_transcript": "ent tonsil surgery", "language_hint": "en", "regex_candidate": "ent tonsil surgery", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Ent Tonsil Surgery", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22569999964616727, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "ent tonsil surgery", "clean_transcript": "ent tonsil surgery", "language_hint": "en", "regex_candidate": "ent tonsil surgery", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Ent Tonsil Surgery", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.22569999964616727, "path_used": "regex_fallback"}
+___________ test_negative_extraction_cases[ophthalmology cataract] ____________
+
+transcript = 'ophthalmology cataract'
+
+    @pytest.mark.parametrize("transcript", NEGATIVE_CASES)
+    def test_negative_extraction_cases(transcript):
+        """Negative cases must never hallucinate a name."""
+        with patch(
+            "app.agent.name_extraction.pipeline.call_gemini",
+            return_value={"found": False, "name": "", "confidence": "low", "reason": "No name."},
+        ):
+            result = pipeline_run(transcript)
+    
+>       assert result["found"] is False, f"Should reject {transcript!r}, got {result}"
+E       AssertionError: Should reject 'ophthalmology cataract', got {'found': True, 'name': 'Ophthalmology Cataract', 'confidence': 'low', 'reason': 'Regex fallback (bare).'}
+E       assert True is False
+
+app\tests\test_name_extraction.py:476: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,295 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "ophthalmology cataract", "clean_transcript": "ophthalmology cataract", "language_hint": "en", "regex_candidate": "ophthalmology cataract", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Ophthalmology Cataract", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2258000004076166, "path_used": "regex_fallback"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "ophthalmology cataract", "clean_transcript": "ophthalmology cataract", "language_hint": "en", "regex_candidate": "ophthalmology cataract", "regex_score": 0.62, "gemini_output": {"found": false, "name": "", "confidence": "low", "reason": "No name."}, "validation_ok": true, "validation_reason": "Valid Indian name.", "final_output": {"found": true, "name": "Ophthalmology Cataract", "confidence": "low", "reason": "Regex fallback (bare)."}, "elapsed_ms": 0.2258000004076166, "path_used": "regex_fallback"}
+______________ TestPublicAPI.test_twilio_confidence_passthrough _______________
+
+self = <test_name_extraction.TestPublicAPI object at 0x000002597A5150F0>
+
+    def test_twilio_confidence_passthrough(self):
+        """Pipeline accepts twilio_confidence without error."""
+        with patch("app.agent.name_extraction.pipeline.call_gemini") as mock_g:
+            mock_g.return_value = {"found": False, "name": "", "confidence": "low", "reason": "No."}
+            extract_patient_name("hello", twilio_confidence=0.92)
+>           mock_g.assert_called_once()
+
+app\tests\test_name_extraction.py:528: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <MagicMock name='call_gemini' id='2583382488272'>
+
+    def assert_called_once(self):
+        """assert that the mock was called only once.
+        """
+        if not self.call_count == 1:
+            msg = ("Expected '%s' to have been called once. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+>           raise AssertionError(msg)
+E           AssertionError: Expected 'call_gemini' to have been called once. Called 0 times.
+
+..\..\..\AppData\Local\Python\pythoncore-3.14-64\Lib\unittest\mock.py:965: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-07-28 05:07:44,316 | INFO | nexacare.agent.name_extraction | name_extraction | {"input_transcript": "hello", "clean_transcript": "", "language_hint": "unknown", "regex_candidate": null, "regex_score": 0.0, "gemini_output": null, "validation_ok": false, "validation_reason": "", "final_output": {"found": false, "name": "", "confidence": "low", "reason": "Empty after preprocessing."}, "elapsed_ms": 0.02300000051036477, "path_used": "none"}
+------------------------------ Captured log call ------------------------------
+INFO     nexacare.agent.name_extraction:logging_utils.py:41 name_extraction | {"input_transcript": "hello", "clean_transcript": "", "language_hint": "unknown", "regex_candidate": null, "regex_score": 0.0, "gemini_output": null, "validation_ok": false, "validation_reason": "", "final_output": {"found": false, "name": "", "confidence": "low", "reason": "Empty after preprocessing."}, "elapsed_ms": 0.02300000051036477, "path_used": "none"}
+__________________________ test_start_call_greeting ___________________________
+
+    def test_start_call_greeting():
+        assistant = VoiceAppointmentAssistant()
+        state = VoiceState(call_sid="CA1", language="hi")
+        turn = assistant.start_call(state)
+>       assert "\u0928\u0947\u0915\u094d\u0938\u093e" in turn.prompt or "Nexa" in turn.prompt
+E       AssertionError: assert ('\u0928\u0947\u0915\u094d\u0938\u093e' in '\u0905\u0902\u0917\u094d\u0930\u0947\u091c\u093c\u0940 \u0915\u0947 \u0932\u093f\u090f 1 \u0926\u092c\u093e\u090f\u0901\u0964 \u0939\u093f\u0902\u0926\u0940 \u0915\u0947 \u0932\u093f\u090f 2 \u0926\u092c\u093e\u090f\u0901\u0964 \u092e\u0930\u093e\u0920\u0940 \u0915\u0947 \u0932\u093f\u090f 3 \u0926\u092c\u093e\u090f\u0901\u0964' or 'Nexa' in '\u0905\u0902\u0917\u094d\u0930\u0947\u091c\u093c\u0940 \u0915\u0947 \u0932\u093f\u090f 1 \u0926\u092c\u093e\u090f\u0901\u0964 \u0939\u093f\u0902\u0926\u0940 \u0915\u0947 \u0932\u093f\u090f 2 \u0926\u092c\u093e\u090f\u0901\u0964 \u092e\u0930\u093e\u0920\u0940 \u0915\u0947 \u0932\u093f\u090f 3 \u0926\u092c\u093e\u090f\u0901\u0964')
+E        +  where '\u0905\u0902\u0917\u094d\u0930\u0947\u091c\u093c\u0940 \u0915\u0947 \u0932\u093f\u090f 1 \u0926\u092c\u093e\u090f\u0901\u0964 \u0939\u093f\u0902\u0926\u0940 \u0915\u0947 \u0932\u093f\u090f 2 \u0926\u092c\u093e\u090f\u0901\u0964 \u092e\u0930\u093e\u0920\u0940 \u0915\u0947 \u0932\u093f\u090f 3 \u0926\u092c\u093e\u090f\u0901\u0964' = VoiceTurnResult(prompt='\u0905\u0902\u0917\u094d\u0930\u0947\u091c\u093c\u0940 \u0915\u0947 \u0932\u093f\u090f 1 \u0926\u092c\u093e\u090f\u0901\u0964 \u0939\u093f\u0902\u0926\u0940 \u0915\u0947 \u0932\u093f\u090f 2 \u0926\u092c\u093e\u090f\u0901\u0964 \u092e\u0930\u093e\u0920\u0940 \u0915\u0947 \u0932\u093f\u090f 3 \u0926\u092c\u093e\u090f\u0901\u0964', state=VoiceState(call_... last_confidence=None, transfer_requested=False, faq_answer=None), hangup=False, use_dtmf_menu=True, booking_json=None).prompt
+E        +  and   '\u0905\u0902\u0917\u094d\u0930\u0947\u091c\u093c\u0940 \u0915\u0947 \u0932\u093f\u090f 1 \u0926\u092c\u093e\u090f\u0901\u0964 \u0939\u093f\u0902\u0926\u0940 \u0915\u0947 \u0932\u093f\u090f 2 \u0926\u092c\u093e\u090f\u0901\u0964 \u092e\u0930\u093e\u0920\u0940 \u0915\u0947 \u0932\u093f\u090f 3 \u0926\u092c\u093e\u090f\u0901\u0964' = VoiceTurnResult(prompt='\u0905\u0902\u0917\u094d\u0930\u0947\u091c\u093c\u0940 \u0915\u0947 \u0932\u093f\u090f 1 \u0926\u092c\u093e\u090f\u0901\u0964 \u0939\u093f\u0902\u0926\u0940 \u0915\u0947 \u0932\u093f\u090f 2 \u0926\u092c\u093e\u090f\u0901\u0964 \u092e\u0930\u093e\u0920\u0940 \u0915\u0947 \u0932\u093f\u090f 3 \u0926\u092c\u093e\u090f\u0901\u0964', state=VoiceState(call_... last_confidence=None, transfer_requested=False, faq_answer=None), hangup=False, use_dtmf_menu=True, booking_json=None).prompt
+
+app\tests\test_voice_assistant.py:151: AssertionError
+-------------------------- Captured stdout teardown ---------------------------
+2026-07-28 05:07:45,718 | DEBUG | httpcore.connection | close.started
+2026-07-28 05:07:45,719 | DEBUG | httpcore.connection | close.complete
+2026-07-28 05:07:45,719 | DEBUG | httpcore.connection | close.started
+2026-07-28 05:07:45,720 | DEBUG | httpcore.connection | close.complete
+=========================== short test summary info ===========================
+FAILED app/tests/test_name_extraction.py::TestPipelineRegexShortCircuit::test_regex_short_circuit[Mr. Suresh Kumar-Mr. Suresh Kumar]
+FAILED app/tests/test_name_extraction.py::TestPipelineRegexShortCircuit::test_regex_short_circuit[Dr. Meera Joshi-Dr. Meera Joshi]
+FAILED app/tests/test_name_extraction.py::TestPipelineRegexShortCircuit::test_regex_short_circuit[Shri Rajesh Patil-Shri Rajesh Patil]
+FAILED app/tests/test_name_extraction.py::TestPipelineRegexShortCircuit::test_regex_short_circuit[Smt. Lakshmi Iyer-Smt. Lakshmi Iyer]
+FAILED app/tests/test_name_extraction.py::TestPipelineWithMockedGemini::test_gemini_extraction[my name is rahul kumr-Rahul Kumar-Rahul Kumar]
+FAILED app/tests/test_name_extraction.py::test_positive_extraction_cases[Smt. Lakshmi Iyer-Lakshmi Iyer-False]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[City Hospital Pune]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[I am male]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[Doctor Sharma]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[I am from Delhi]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[thank you very much]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[ji haan]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[appointment for tomorrow]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[I am calling from office]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[this is regarding billing]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[email test@example.com]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[www hospital com]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[AI voice assistant]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[transfer the call]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[is anyone there]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[skin rash allergy]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[pregnancy related query]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[child vaccination schedule]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[emergency ambulance]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[ICU bed available]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[insurance claim status]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[report upload pending]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[lab test results]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[x-ray report]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[MRI scan appointment]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[physiotherapy session]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[dental checkup]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[orthopedic surgeon referral]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[cardiology department]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[neurology specialist]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[psychiatrist consultation]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[dermatology clinic]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[gynecology appointment]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[pediatrician for child]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[urology kidney stone]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[nephrology dialysis]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[endocrinology thyroid]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[pulmonology asthma]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[gastroenterology acidity]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[ent tonsil surgery]
+FAILED app/tests/test_name_extraction.py::test_negative_extraction_cases[ophthalmology cataract]
+FAILED app/tests/test_name_extraction.py::TestPublicAPI::test_twilio_confidence_passthrough
+FAILED app/tests/test_voice_assistant.py::test_start_call_greeting - Assertio...
+48 failed, 236 passed in 7.72s

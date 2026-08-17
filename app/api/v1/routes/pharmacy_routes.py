@@ -134,7 +134,7 @@ async def export_medicines_list(
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     data, media_type = await PharmacyService(db).export_medicines(format.value)
-    
+
     if format == MedicineExportFormat.EXCEL:
         return StreamingResponse(
             data,
@@ -234,11 +234,11 @@ async def list_prescriptions(
     from app.repositories.doctor_repository import DoctorRepository
 
     role_name = current_user.role.name if current_user.role else None
-    
+
     doctor_id = None
     department_id = None
     assigned_patient_ids = None
-    
+
     if role_name == UserRole.NURSE:
         nurse = await NurseRepository(db).get_by_user_id(current_user.id)
         if not nurse:
@@ -259,7 +259,7 @@ async def list_prescriptions(
     elif role_name == UserRole.DOCTOR:
         doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
         doctor_id = doctor.id if doctor else None
-        
+
     result = await PharmacyService(db).list_prescriptions(
         page=page,
         size=size,
@@ -304,7 +304,7 @@ async def update_prescription(
     doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
     if not doctor:
         raise ForbiddenException("Only registered doctors can modify prescriptions")
-    
+
     prescription = await PharmacyService(db).update_prescription(
         prescription_id=prescription_id,
         data=data,
@@ -344,7 +344,7 @@ async def delete_prescription(
     doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
     if not doctor:
         raise ForbiddenException("Only registered doctors can delete prescriptions")
-        
+
     await PharmacyService(db).delete_prescription(
         prescription_id=prescription_id,
         doctor_id=doctor.id,
@@ -353,7 +353,7 @@ async def delete_prescription(
     return APIResponse(message="Prescription deleted", data=MessageResponse(message="Deleted successfully"))
 
 
-# --- Invoices ---    
+# --- Invoices ---
 
 
 # --- Invoices ---
@@ -557,7 +557,7 @@ async def receive_purchase_order(
     return APIResponse(
         message="Purchase order received and stock updated",
         data=purchase,
-    )    
+    )
 
 
 # --- Alerts & Reports ---

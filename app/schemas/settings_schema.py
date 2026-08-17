@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import EmailStr, Field, field_validator
+import zoneinfo
 
 from app.schemas.common_schema import BaseSchema
 from app.utils.phone_utils import validate_phone_field
@@ -16,9 +17,9 @@ class HospitalSettingResponse(BaseSchema):
     timezone: str
     currency: str
     gst_number: Optional[str] = None
-    working_hours: str
+    working_hours: Optional[str] = None
     contact_email: Optional[EmailStr] = None
-    contact_phone: str
+    contact_phone: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +31,15 @@ class HospitalSettingUpdate(BaseSchema):
     working_hours: Optional[str] = Field(None, description="Hospital working hours string")
     contact_email: Optional[EmailStr] = Field(None, description="Primary contact email")
     contact_phone: Optional[str] = Field(None, description="Primary contact phone number")
+
+    @field_validator("timezone", mode="after")
+    @classmethod
+    def check_timezone(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if v not in zoneinfo.available_timezones():
+            raise ValueError(f"Invalid timezone: {v}")
+        return v
 
     @field_validator("contact_phone", mode="after")
     @classmethod

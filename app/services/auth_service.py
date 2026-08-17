@@ -491,7 +491,7 @@ class AuthService:
         uri = TOTPService.generate_provisioning_uri(secret, user.email)
         return TOTPSetupResponse(secret=secret, provisioning_uri=uri)
 
-    async def enable_totp(self, user: User, data: TOTPEnableRequest) -> None:
+    async def enable_totp(self, user: User, data: TOTPEnableRequest) -> list[str]:
         if not settings.ENABLE_2FA_FEATURE:
             raise NotFoundException("2FA feature is disabled")
 
@@ -520,6 +520,7 @@ class AuthService:
         security_settings.recovery_codes_hashed = hashed_codes
 
         await self.db.commit()
+        return plain_codes
 
     async def verify_totp_login(
         self,

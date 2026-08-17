@@ -61,6 +61,24 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
+    # Sarvam AI TTS / voice cloning (local + production voice agent prompts)
+    # Cloned voice (SHIRISH): set SARVAM_VOICE_ID to Studio voice UUID (voice_id).
+    # Built-in voice fallback: set SARVAM_SPEAKER to lowercase name (e.g. ratan).
+    # Prefer VOICE_ID when both are set.
+    VOICE_CLONE_ENABLED: bool = True
+    SARVAM_API_KEY: str = ""
+    SARVAM_VOICE_ID: str = ""  # Studio clone UUID, e.g. 27c4beed-27c5-4623-aabc-62339e9e40fa
+    SARVAM_SPEAKER: str = ""  # built-in speaker name for public /text-to-speech (lowercase)
+    # Optional browser session Cookie header if Studio synthesize requires login auth.
+    SARVAM_STUDIO_COOKIE: str = ""
+    SARVAM_TTS_MODEL: str = "bulbul:v3"
+    SARVAM_TTS_CODEC: str = "mp3"  # mp3 | wav (Twilio <Play> supports both)
+    SARVAM_TTS_SAMPLE_RATE: int = 16000  # telephony-friendly
+    SARVAM_TTS_PACE: float = 1.0
+    SARVAM_TTS_TIMEOUT_SECONDS: float = 30.0
+    SARVAM_TTS_CACHE_DIR: str = "app/uploads/voice-cache"
+    SARVAM_CLONE_MAX_CHARS: int = 1000  # Studio: cloned voices support up to 1000 chars/line
+
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = ""
@@ -94,6 +112,8 @@ class Settings(BaseSettings):
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600
     VOICE_AI_CONFIDENCE_THRESHOLD: float = 0.65
+    # Phase 6: multi-turn FAQ, FAQ↔Booking switching, goodbye flow (default OFF)
+    VOICE_PHASE6_ENABLED: bool = True
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
@@ -147,6 +167,8 @@ class Settings(BaseSettings):
     NETWORK_NODE: str | None = None
     PLATFORM_VERSION: str | None = None
     HIPAA_ENFORCED: bool | None = None
+    NGROK_AUTH_TOKEN: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

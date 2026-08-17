@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     WHATSAPP_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
@@ -111,7 +112,12 @@ class Settings(BaseSettings):
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600
+    VOICE_FAQ_QUERY_CACHE_TTL_SECONDS: int = 300
+    VOICE_FAQ_VECTOR_CACHE_TTL_SECONDS: int = 600
     VOICE_AI_CONFIDENCE_THRESHOLD: float = 0.65
+    # FAQ RAG confidence gates (FAQ path only — does not affect booking)
+    FAQ_CONFIDENCE_ANSWER: float = 0.90
+    FAQ_CONFIDENCE_CLARIFY: float = 0.70
     # Phase 6: multi-turn FAQ, FAQ↔Booking switching, goodbye flow (default OFF)
     VOICE_PHASE6_ENABLED: bool = True
 

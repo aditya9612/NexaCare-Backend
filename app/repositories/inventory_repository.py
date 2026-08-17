@@ -267,6 +267,14 @@ class WarehouseRepository:
             )
         )) or 0
 
+    async def count_inactive(self) -> int:
+        return (await self.db.scalar(
+            select(func.count()).select_from(Warehouse).where(
+                Warehouse.is_deleted.is_(False),
+                Warehouse.is_active.is_(False)
+            )
+        )) or 0
+
     async def get_by_id(self, warehouse_id: int) -> Warehouse | None:
         result = await self.db.execute(
             select(Warehouse).where(Warehouse.id == warehouse_id, Warehouse.is_deleted.is_(False))

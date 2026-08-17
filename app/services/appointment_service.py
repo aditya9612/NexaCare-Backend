@@ -189,10 +189,13 @@ class AppointmentService:
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
+        queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
         appointment_data = data.model_dump(exclude={"patient_name", "age"})
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
+            queue_token=queue_tok,
+            queue_status="WAITING",
             appointment_status=AppointmentStatus.PENDING,
             **appointment_data,
         )
@@ -286,6 +289,15 @@ class AppointmentService:
 
     async def get_today(self):
         appointments = await self.repo.get_today()
+        has_updated = False
+        for a in appointments:
+            if not a.queue_token:
+                a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
+                if not a.queue_status:
+                    a.queue_status = "WAITING"
+                has_updated = True
+        if has_updated:
+            await self.db.flush()
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
     async def get_upcoming(self, limit: int = 20):
@@ -305,6 +317,10 @@ class AppointmentService:
                 raise BadRequestException(f"Cannot check in appointment with status: {appointment.appointment_status}")
         appointment.appointment_status = "Checked-In"
         appointment.check_in_time = datetime.now()
+        if not appointment.queue_token:
+            appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date)
+        if not appointment.queue_status:
+            appointment.queue_status = "WAITING"
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Patient checked in for appointment {appointment.appointment_number}")
         return appointment
@@ -332,32 +348,13 @@ class AppointmentService:
         return appointment
 
     async def generate_queue_token(self, appointment_id: int, user_id: int) -> Appointment:
-        from sqlalchemy import select
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
         
-        # Calculate next token for today
-        from datetime import timezone, timedelta
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        today = datetime.now(ist_tz).date()
-        result = await self.db.execute(
-            select(Appointment.queue_token)
-            .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
-        )
-        tokens = result.scalars().all()
-        max_num = 0
-        for t in tokens:
-            if t.startswith("T-"):
-                try:
-                    num = int(t[2:])
-                    if num > max_num:
-                        max_num = num
-                except ValueError:
-                    pass
-        next_token = f"T-{max_num + 1}"
+        next_token = await self.repo.get_next_queue_token(appointment.appointment_date)
         
         appointment.queue_token = next_token
         appointment.queue_status = "WAITING"
@@ -366,16 +363,25 @@ class AppointmentService:
         return appointment
 
     async def get_today_queue(self) -> list[Appointment]:
-        from datetime import timezone, timedelta
+        from app.utils.helpers import get_today_ist
         from sqlalchemy import select
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        today = datetime.now(ist_tz).date()
+        today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.appointment_date == today)
             .order_by(Appointment.id.asc())
         )
-        return list(result.scalars().all())
+        appointments = list(result.scalars().all())
+        has_updated = False
+        for a in appointments:
+            if not a.queue_token:
+                a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
+                if not a.queue_status:
+                    a.queue_status = "WAITING"
+                has_updated = True
+        if has_updated:
+            await self.db.flush()
+        return appointments
 
     async def get_current_queue(self) -> Appointment | None:
         from datetime import timezone, timedelta

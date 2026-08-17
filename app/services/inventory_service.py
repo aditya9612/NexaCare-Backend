@@ -533,6 +533,7 @@ class InventoryService:
         data["total_registered_items"] = await self.item_repo.count_all()
         data["stock_alerts"] = await self.alert_repo.count_active()
         data["active_warehouse_units"] = await self.warehouse_repo.count_active()
+        data["inactive_warehouse_units"] = await self.warehouse_repo.count_inactive()
         data["total_vendors"] = await self.vendor_repo.count_all()
         return StockSummary(**data)
 

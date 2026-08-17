@@ -387,6 +387,7 @@ class StockSummary(BaseSchema):
     total_registered_items: int
     stock_alerts: int
     active_warehouse_units: int
+    inactive_warehouse_units: int
     total_vendors: int
 
 

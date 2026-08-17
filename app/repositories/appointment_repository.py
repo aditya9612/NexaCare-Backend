@@ -91,6 +91,32 @@ class AppointmentRepository:
         )
         return (result or 0) + 1
 
+    async def get_next_queue_token(self, appointment_date: date) -> str:
+        result = await self.db.execute(
+            select(Appointment.queue_token).where(
+                Appointment.appointment_date == appointment_date,
+                Appointment.queue_token.isnot(None)
+            )
+        )
+        tokens = []
+        if hasattr(result, "scalars"):
+            sc = result.scalars()
+            if hasattr(sc, "all") and not hasattr(sc.all, "__await__"):
+                tokens = list(sc.all())
+            elif hasattr(sc, "__iter__"):
+                tokens = list(sc)
+        
+        max_num = 0
+        for t in tokens:
+            if isinstance(t, str) and t.startswith("T-"):
+                try:
+                    num = int(t[2:])
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    pass
+        return f"T-{max_num + 1}"
+
     async def create(self, appointment: Appointment) -> Appointment:
         self.db.add(appointment)
         await self.db.flush()
@@ -137,7 +163,8 @@ class AppointmentRepository:
         return list(result.scalars().all())
 
     async def get_today(self) -> list[Appointment]:
-        today = date.today()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .options(joinedload(Appointment.patient))

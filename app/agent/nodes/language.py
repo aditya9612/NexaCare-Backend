@@ -43,9 +43,9 @@ def build_language_select_twiml(base_url: str) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Gather numDigits="1" action="{action}" method="POST" timeout="10">'
-        f'{speak(LANGUAGE_PROMPT, "en-IN", base_url)}'
+        f'{speak(LANGUAGE_PROMPT, "en-IN", base_url, allow_generate=False)}'
         "</Gather>"
-        f'{speak(timeout_msg, "en-IN", base_url)}'
+        f'{speak(timeout_msg, "en-IN", base_url, allow_generate=False)}'
         "<Hangup/>"
         "</Response>"
     )

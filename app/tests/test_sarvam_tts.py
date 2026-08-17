@@ -56,19 +56,50 @@ def test_speak_uses_play_when_voice_id_ready(tmp_path):
 
 
 def test_greeting_twiml_contains_play_when_clone_ready(tmp_path):
+    fake_audio = b"ID3fake-mp3-bytes"
+    base_url = "https://example.ngrok-free.app"
+
     with (
         patch.object(sarvam_tts.settings, "VOICE_CLONE_ENABLED", True),
         patch.object(sarvam_tts.settings, "SARVAM_API_KEY", "test-key"),
         patch.object(sarvam_tts.settings, "SARVAM_VOICE_ID", ""),
         patch.object(sarvam_tts.settings, "SARVAM_SPEAKER", "ratan"),
         patch.object(sarvam_tts.settings, "SARVAM_TTS_CACHE_DIR", str(tmp_path)),
-        patch.object(sarvam_tts, "synthesize_to_bytes", return_value=b"audio"),
+        patch.object(sarvam_tts, "synthesize_to_bytes", return_value=fake_audio) as synth,
     ):
-        xml = build_greeting_twiml("https://example.ngrok-free.app", "en", "en-IN")
+        from app.agent.nodes.greeting import GREETINGS, NO_INPUT, SERVICE_MENUS
+
+        for text in (GREETINGS["en"], SERVICE_MENUS["en"], NO_INPUT["en"]):
+            sarvam_tts.get_or_create_audio_file(text, "en-IN")
+        synth.reset_mock()
+        xml = build_greeting_twiml(base_url, "en", "en-IN")
 
     assert "<Play>" in xml
     assert "/agent/v1/voice/menu" in xml
     assert "<Gather" in xml
+    assert synth.call_count == 0
+
+
+def test_speak_cache_only_falls_back_without_generation(tmp_path):
+    with (
+        patch.object(sarvam_tts.settings, "VOICE_CLONE_ENABLED", True),
+        patch.object(sarvam_tts.settings, "SARVAM_API_KEY", "test-key"),
+        patch.object(sarvam_tts.settings, "SARVAM_VOICE_ID", ""),
+        patch.object(sarvam_tts.settings, "SARVAM_SPEAKER", "ratan"),
+        patch.object(sarvam_tts.settings, "SARVAM_TTS_CACHE_DIR", str(tmp_path)),
+        patch.object(sarvam_tts, "synthesize_to_bytes") as synth,
+    ):
+        xml = sarvam_tts.speak(
+            "Hello from NexaCare",
+            "en-IN",
+            "https://example.com",
+            allow_generate=False,
+        )
+
+    assert xml.startswith("<Say")
+    assert "Hello from NexaCare" in xml
+    assert "<Play>" not in xml
+    assert synth.call_count == 0
 
 
 def test_read_cached_audio_rejects_unsafe_names(tmp_path):

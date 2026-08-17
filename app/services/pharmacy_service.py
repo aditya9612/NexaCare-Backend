@@ -191,8 +191,9 @@ class PharmacyService:
         ]
 
     async def get_expiry_alerts(self, days: int = 30) -> list[ExpiryAlert]:
-        medicines = await self.medicine_repo.get_expiry_alerts(days=days)
-        today = date.today()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        medicines = await self.medicine_repo.get_expiry_alerts(reference_date=today, days=days)
         return [
             ExpiryAlert(
                 medicine_id=m.id, name=m.name, sku=m.sku,
@@ -1064,11 +1065,9 @@ class PharmacyService:
     ) -> PharmacyDashboardResponse:
         from datetime import timezone, timedelta, time, date as dt_date
         from sqlalchemy import select, func, or_, cast, Date
+        from app.utils.helpers import get_today_ist
 
-        # Indian Standard Time (UTC+5:30) or local date.today()
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        now_ist = datetime.now(ist_tz)
-        today_ist = now_ist.date()
+        today_ist = get_today_ist()
 
         # 1. Total Medicines (active, i.e., is_deleted=False and is_active=True)
         total_medicines = (await self.db.scalar(
@@ -1087,14 +1086,26 @@ class PharmacyService:
             )
         )) or 0
 
-        # 3. Expired Alerts (Near expiry and expired: Medicine.expiry_date <= today_ist + 30 days)
+        # 3. Expired Alerts (Near expiry and expired: Medicine.expiry_date <= today_ist + 30 days, stock_quantity > 0)
         threshold_date = today_ist + timedelta(days=30)
         expired_alerts = (await self.db.scalar(
             select(func.count(Medicine.id)).where(
                 Medicine.is_deleted.is_(False),
                 Medicine.is_active.is_(True),
+                Medicine.stock_quantity > 0,
                 Medicine.expiry_date.isnot(None),
                 Medicine.expiry_date <= threshold_date
+            )
+        )) or 0
+
+        # Expired medicines count (strictly expired: Medicine.expiry_date < today_ist, stock_quantity > 0)
+        expired_medicines_alerts = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.stock_quantity > 0,
+                Medicine.expiry_date.isnot(None),
+                Medicine.expiry_date < today_ist
             )
         )) or 0
 
@@ -1253,7 +1264,7 @@ class PharmacyService:
 
         today_sales = round(float(today_sales or 0.0), 2)
         monthly_sales = round(float(monthly_sales or 0.0), 2)
-        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix()
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(reference_date=today_ist)
         inventory_status_mix = InventoryStatusMix(**status_mix_raw)
 
         total_mix = (
@@ -1290,7 +1301,7 @@ class PharmacyService:
             total_suppliers=total_suppliers,
             prescriptions=prescriptions,
             prescriptions_count=prescriptions,
-            expired_medicines_alerts=expired_alerts,
+            expired_medicines_alerts=expired_medicines_alerts,
             daily_sales=today_sales,
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
@@ -1300,7 +1311,9 @@ class PharmacyService:
         )
 
     async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:
-        counts = await self.medicine_repo.get_inventory_counts()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        counts = await self.medicine_repo.get_inventory_counts(reference_date=today)
         daily_deductions = await self.invoice_repo.get_daily_stock_deductions()
         most_selling = await self.invoice_repo.get_most_selling_medicines()
         date_wise = await self.invoice_repo.get_date_wise_medicines()

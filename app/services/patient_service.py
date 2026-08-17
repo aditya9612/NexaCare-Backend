@@ -309,22 +309,9 @@ class PatientService:
     async def get_appointments(self, patient_id: int):
         await self.get_by_id(patient_id)
         from app.schemas.appointment_schema import AppointmentResponse
-        from fastapi import HTTPException
-        import traceback
 
-        try:
-            appointments = await self.repo.get_appointments(patient_id)
-            return [AppointmentResponse.model_validate(a) for a in appointments]
-        except Exception as e:
-            tb_str = "".join(traceback.format_exception(None, e, e.__traceback__))
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error_message": str(e),
-                    "error_type": type(e).__name__,
-                    "traceback": tb_str
-                }
-            )
+        appointments = await self.repo.get_appointments(patient_id)
+        return [AppointmentResponse.model_validate(a) for a in appointments]
 
     async def get_history(self, patient_id: int):
         return await self.get_appointments(patient_id)

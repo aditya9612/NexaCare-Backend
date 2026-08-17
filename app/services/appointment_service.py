@@ -208,6 +208,14 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
 
         update_data = data.model_dump(exclude_unset=True)
+
+        # Prevent updating status directly to Completed without Check-In and Check-Out
+        if update_data.get("appointment_status") == AppointmentStatus.COMPLETED:
+            if not appointment.check_in_time or not appointment.check_out_time:
+                raise BadRequestException(
+                    "Cannot set appointment status to Completed without both Check-In and Check-Out being marked."
+                )
+
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
         
@@ -307,6 +315,16 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
         if appointment.appointment_status != "Checked-In":
             raise BadRequestException("Appointment must be checked in first")
+
+        # Enforce that patient cannot check out before the appointment start time
+        if appointment.appointment_date and appointment.appointment_time:
+            from datetime import timezone, timedelta
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_tz).replace(tzinfo=None)
+            appt_start_datetime = datetime.combine(appointment.appointment_date, appointment.appointment_time)
+            if now_ist < appt_start_datetime:
+                raise BadRequestException("Patient cannot check out before the appointment start time")
+
         appointment.appointment_status = "Checked-Out"
         appointment.check_out_time = datetime.now()
         await self.db.flush()

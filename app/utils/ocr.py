@@ -5,20 +5,10 @@ from PIL import Image
 
 logger = logging.getLogger("nexacare.lab.ocr")
 
-# Lazy initialization of PaddleOCR
-_ocr_instance = None
-
 def get_ocr_engine():
-    global _ocr_instance
-    if _ocr_instance is None:
-        try:
-            from paddleocr import PaddleOCR
-            # Disable angle classifier for much faster CPU inference
-            _ocr_instance = PaddleOCR(use_angle_cls=False, lang="en", enable_mkldnn=False)
-        except Exception as e:
-            logger.error(f"Failed to initialize PaddleOCR: {e}")
-            raise RuntimeError(f"OCR engine initialization failed: {e}")
-    return _ocr_instance
+    """Noop / legacy helper for backward compatibility."""
+    return None
+
 
 def sort_ocr_results(ocr_result) -> str:
     """
@@ -95,15 +85,23 @@ def sort_ocr_results(ocr_result) -> str:
     return "\n".join(line_texts)
 
 def extract_text_from_image_bytes(img_bytes: bytes) -> str:
-    """Extract text from raw image bytes using PaddleOCR."""
-    import numpy as np
-    ocr = get_ocr_engine()
+    """Extract text from raw image bytes using Tesseract OCR."""
+    import pytesseract
+    import platform
+    from app.core.config import get_settings
+
+    settings = get_settings()
+
+    # Configure Tesseract path if on Windows and path exists
+    if platform.system() == "Windows":
+        if settings.TESSERACT_CMD:
+            pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_CMD
+
     try:
         img = Image.open(io.BytesIO(img_bytes))
-        img_np = np.array(img.convert("RGB"))
-        # Call ocr without cls parameter to prevent TypeError on newer versions
-        result = ocr.ocr(img_np)
-        return sort_ocr_results(result)
+        # Extract text directly using pytesseract
+        text = pytesseract.image_to_string(img)
+        return text
     except Exception as e:
         logger.error(f"OCR extraction from image bytes failed: {e}")
         raise RuntimeError(f"OCR failed on image page: {e}")

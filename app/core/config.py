@@ -186,7 +186,7 @@ class Settings(BaseSettings):
     NGROK_AUTH_TOKEN: str = ""
 
         # pyrefly: ignore [parse-error]
-    TESSERACT_CMD: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe" 
+    TESSERACT_CMD: str = r"" 
 
 
 

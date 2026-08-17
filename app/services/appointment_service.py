@@ -47,7 +47,7 @@ class AppointmentService:
                 appt_dt = dt_module.datetime.combine(appointment_date, appointment_time)
                 appt_dt_ist = appt_dt.astimezone(ist_tz)
                 appointment_date = appt_dt_ist.date()
-                appointment_time = appt_dt_ist.time()
+                appointment_time = appt_dt_ist.time().replace(tzinfo=None)
 
         if appointment_date < today_ist:
             raise BadRequestException("Cannot book or reschedule an appointment for a past date")
@@ -357,9 +357,7 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
             
-        if appointment.appointment_status == "Checked-In":
-            raise BadRequestException("Cannot confirm an appointment that is already checked in")
-        elif appointment.appointment_status == AppointmentStatus.COMPLETED:
+        if appointment.appointment_status == AppointmentStatus.COMPLETED:
             raise BadRequestException("Cannot confirm a completed appointment")
         elif appointment.appointment_status == "Checked-Out":
             raise BadRequestException("Cannot confirm a checked-out appointment")
@@ -378,9 +376,33 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(start_date, end_date, doctor_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self):
-        appointments = await self.repo.get_today()
-        return [AppointmentResponse.model_validate(a) for a in appointments]
+    async def get_today(self, on_date: date | None = None) -> dict[str, int]:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        if on_date is None:
+            on_date = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+        appointments = await self.repo.get_today(on_date)
+
+        pending_count = 0
+        completed_count = 0
+        cancelled_count = 0
+
+        for appt in appointments:
+            status = appt.appointment_status
+            if status == AppointmentStatus.PENDING or (isinstance(status, str) and status.lower() == AppointmentStatus.PENDING.lower()):
+                pending_count += 1
+            elif status == AppointmentStatus.COMPLETED or (isinstance(status, str) and status.lower() == AppointmentStatus.COMPLETED.lower()):
+                completed_count += 1
+            elif status == AppointmentStatus.CANCELLED or (isinstance(status, str) and status.lower() == AppointmentStatus.CANCELLED.lower()):
+                cancelled_count += 1
+
+        return {
+            "total_appointments": len(appointments),
+            "pending": pending_count,
+            "completed": completed_count,
+            "cancelled": cancelled_count,
+        }
 
     async def get_upcoming(self, limit: int = 20):
         appointments = await self.repo.get_upcoming(limit)
@@ -508,7 +530,9 @@ class AppointmentService:
             raise BadRequestException("Cannot complete token for a checked-out appointment")
         elif appointment.appointment_status == AppointmentStatus.COMPLETED or appointment.queue_status == "COMPLETED":
             raise BadRequestException("Cannot complete token for an already completed appointment")
-        elif appointment.appointment_status != "Checked-In":
+        elif appointment.appointment_status == "Checked-In":
+            raise BadRequestException("Appointment visit must be confirmed before completing the token")
+        elif appointment.appointment_status != AppointmentStatus.CONFIRMED or not appointment.check_in_time:
             raise BadRequestException("Appointment must be checked in first")
             
         appointment.queue_status = "COMPLETED"

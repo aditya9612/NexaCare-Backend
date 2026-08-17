@@ -366,7 +366,7 @@ class DashboardService:
         # 10. rescheduled_appointments
         try:
             rescheduled_appointments = await self.db.scalar(
-                select(func.count(AuditLog.id)).where(
+                select(func.count(func.distinct(AuditLog.resource_id))).where(
                     AuditLog.action == "reschedule",
                     AuditLog.resource == "appointments",
                     AuditLog.created_at >= start_of_day,

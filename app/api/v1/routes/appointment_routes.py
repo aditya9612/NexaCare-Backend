@@ -20,6 +20,7 @@ from app.schemas.appointment_schema import (
     QueueStatusResponse,
     ConfirmedVisitListResponse,
     AppointmentListWithCountsResponse,
+    TodayAppointmentsResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -76,7 +77,7 @@ async def calendar_view(
     return APIResponse(message="Calendar data", data=appointments)
 
 
-@router.get("/today", response_model=APIResponse[List[AppointmentResponse]])
+@router.get("/today", response_model=APIResponse[TodayAppointmentsResponse])
 async def today_appointments(
     db: DbSession,
     current_user: CurrentUser,

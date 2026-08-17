@@ -27,8 +27,6 @@ class AppointmentRepository:
         end_date: date | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
-        query = select(Appointment)
         query = self._apply_filters(
             query, patient_id, doctor_id, department_id, status, appointment_date, start_date, end_date
         )
@@ -153,12 +151,15 @@ class AppointmentRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_today(self) -> list[Appointment]:
-        today = date.today()
+    async def get_today(self, on_date: date | None = None) -> list[Appointment]:
+        if on_date is None:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime
+            on_date = datetime.now(ZoneInfo("Asia/Kolkata")).date()
         result = await self.db.execute(
             select(Appointment)
             .options(joinedload(Appointment.patient))
-            .where(Appointment.appointment_date == today)
+            .where(Appointment.appointment_date == on_date)
             .order_by(Appointment.appointment_time)
         )
         return list(result.scalars().all())

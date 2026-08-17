@@ -69,11 +69,6 @@ class ClinicalRecordService:
         record = ClinicalRecord(**data.model_dump())
         record = await self.record_repo.create(record)
         
-        if data.appointment_id:
-            appointment = await self.appointment_repo.get_by_id(data.appointment_id)
-            if appointment and appointment.queue_status == "COMPLETED":
-                appointment.appointment_status = AppointmentStatus.COMPLETED
-                await self.appointment_repo.update(appointment)
 
         await self.audit_repo.create("create", "clinical_records", user_id=user_id, resource_id=str(record.id))
         resp = self._to_response_schema(record)

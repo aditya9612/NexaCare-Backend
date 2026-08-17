@@ -218,6 +218,64 @@ async def _enter_booking_flow(call_sid: str, state: dict, resume: bool = False) 
     return book_node.build_collect_name_twiml(state)
 
 
+def _is_unclear_stt(transcript: str, confidence: float) -> bool:
+    """
+    Match Flow A VoiceAppointmentAssistant.process_turn STT gate.
+    Unknown Twilio confidence (-1.0) does not alone trigger retry.
+    """
+    if not (transcript or "").strip():
+        return True
+    if confidence >= 0.0 and confidence < 0.4:
+        return True
+    return False
+
+
+async def _handle_faq_stt_retry(
+    db,
+    call_sid: str,
+    state: dict,
+) -> str:
+    """Retry FAQ prompt on empty/low-confidence STT; transfer after existing limit."""
+    from app.ai.voice_appointment_assistant.prompts import could_not_hear
+
+    lang = state.get("language") or "en"
+    retry = state.get("retry_count", 0) + 1
+    logger.info(
+        "  ↳ [%s] FAQ STT unclear (retry %s/%s)",
+        call_sid,
+        retry,
+        book_node.MAX_RETRIES,
+    )
+
+    if retry > book_node.MAX_RETRIES:
+        bump_counter(state, "transfer_count")
+        record_analytics_event(state, "transfer", reason="stt_unclear")
+        twiml = await _do_reception_transfer(
+            db,
+            state,
+            reason="stt_unclear",
+            preface=could_not_hear(lang),
+        )
+        await session_store.delete_session(call_sid)
+        return twiml
+
+    await session_store.update_session(
+        call_sid,
+        {"retry_count": retry, "step": "faq_question"},
+    )
+    state = await session_store.get_session(call_sid)
+    twilio_lang = state.get("twilio_language") or "en-IN"
+    vp = state.get("voice_profile")
+    base_url = state.get("base_url", "")
+    say_xml = book_node._say(
+        could_not_hear(lang),
+        twilio_lang,
+        base_url=base_url,
+        voice_profile=vp,
+    )
+    return _prepend_say_to_twiml(greet_node.build_ask_faq_twiml(state), say_xml)
+
+
 async def _process_faq_transcript(
     db,
     call_sid: str,
@@ -225,11 +283,15 @@ async def _process_faq_transcript(
     transcript: str,
     *,
     phase6: bool,
+    confidence: float = -1.0,
 ) -> str:
     """Run FAQ retrieval pipeline; terminal or continue based on phase flag."""
     lang = state.get("language") or "en"
     vp = state.get("voice_profile")
     transcript = (transcript or "").strip()
+
+    if _is_unclear_stt(transcript, confidence):
+        return await _handle_faq_stt_retry(db, call_sid, state)
 
     safety = MedicalSafetyGuard.check(transcript, lang)
     if safety.is_medical_advice:
@@ -766,7 +828,14 @@ async def conversation_turn(
                 await session_store.update_session(call_sid, {"step": "faq_question"})
                 state = await session_store.get_session(call_sid)
                 return xml(
-                    await _process_faq_transcript(db, call_sid, state, transcript, phase6=True)
+                    await _process_faq_transcript(
+                        db,
+                        call_sid,
+                        state,
+                        transcript,
+                        phase6=True,
+                        confidence=confidence_float,
+                    )
                 )
 
             state = await session_store.get_session(call_sid)
@@ -792,7 +861,14 @@ async def conversation_turn(
                 state = await session_store.get_session(call_sid)
                 if transcript and routed_intent != ConversationIntent.BOOKING:
                     return xml(
-                        await _process_faq_transcript(db, call_sid, state, transcript, phase6=True)
+                        await _process_faq_transcript(
+                            db,
+                            call_sid,
+                            state,
+                            transcript,
+                            phase6=True,
+                            confidence=confidence_float,
+                        )
                     )
                 return xml(greet_node.build_ask_faq_twiml(state))
 
@@ -808,6 +884,7 @@ async def conversation_turn(
                     state,
                     transcript,
                     phase6=phase6,
+                    confidence=confidence_float,
                 )
             )
 

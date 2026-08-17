@@ -178,3 +178,121 @@ class TestRollbackCompatibility:
         state = _state(language="en")
         assert route_intent("parking", state) == ConversationIntent.FAQ
         assert goodbye_message("en")
+
+
+class TestFaqSttUnclear:
+    """STT unclear speech must not reach FAQ/RAG (Flow B agent router)."""
+
+    def test_is_unclear_stt_empty_transcript(self):
+        from app.agent.router import _is_unclear_stt
+
+        assert _is_unclear_stt("", -1.0) is True
+        assert _is_unclear_stt("   ", 0.9) is True
+
+    def test_is_unclear_stt_low_confidence(self):
+        from app.agent.router import _is_unclear_stt
+
+        assert _is_unclear_stt("आणि", 0.0) is True
+        assert _is_unclear_stt("आणि", 0.39) is True
+
+    def test_is_unclear_stt_valid_speech(self):
+        from app.agent.router import _is_unclear_stt
+
+        question = "आपल्या हॉस्पिटल किती वाजता उघडते?"
+        assert _is_unclear_stt(question, 0.85) is False
+        assert _is_unclear_stt(question, -1.0) is False
+
+    def test_is_unclear_stt_short_valid_answer_unknown_confidence(self):
+        from app.agent.router import _is_unclear_stt
+
+        # Short Marathi yes/no must not be blocked when confidence is unknown.
+        assert _is_unclear_stt("हो", -1.0) is False
+        assert _is_unclear_stt("नाही", -1.0) is False
+
+    @pytest.mark.asyncio
+    async def test_faq_stt_retry_does_not_call_retrieval(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent.router import _process_faq_transcript
+
+        state = _state(
+            language="mr",
+            twilio_language="mr-IN",
+            step="faq_question",
+            service="faq",
+            hospital_id=1,
+            retry_count=0,
+        )
+        db = AsyncMock()
+
+        with patch(
+            "app.agent.router.FaqRetrievalService"
+        ) as mock_faq_cls:
+            mock_faq_cls.return_value.answer = AsyncMock()
+            with patch(
+                "app.agent.router.session_store.update_session",
+                new=AsyncMock(),
+            ):
+                with patch(
+                    "app.agent.router.session_store.get_session",
+                    new=AsyncMock(return_value=state),
+                ):
+                    twiml = await _process_faq_transcript(
+                        db,
+                        "CA123",
+                        state,
+                        "आणि",
+                        phase6=False,
+                        confidence=0.0,
+                    )
+
+        mock_faq_cls.return_value.answer.assert_not_called()
+        assert "Gather" in twiml
+        assert "नीट ऐकू आले नाही" in twiml
+
+    @pytest.mark.asyncio
+    async def test_faq_stt_retry_limit_transfers(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent.router import _process_faq_transcript
+
+        state = _state(
+            language="mr",
+            twilio_language="mr-IN",
+            step="faq_question",
+            service="faq",
+            hospital_id=1,
+            retry_count=2,
+            reception_number="+911234567890",
+        )
+        db = AsyncMock()
+
+        with patch(
+            "app.agent.router.FaqRetrievalService"
+        ) as mock_faq_cls:
+            mock_faq_cls.return_value.answer = AsyncMock()
+            with patch(
+                "app.agent.router._do_reception_transfer",
+                new=AsyncMock(return_value="<Response><Dial>+911234567890</Dial></Response>"),
+            ) as mock_transfer:
+                with patch(
+                    "app.agent.router.session_store.delete_session",
+                    new=AsyncMock(),
+                ):
+                    with patch(
+                        "app.agent.router.session_store.update_session",
+                        new=AsyncMock(),
+                    ):
+                        twiml = await _process_faq_transcript(
+                            db,
+                            "CA123",
+                            state,
+                            "",
+                            phase6=False,
+                            confidence=-1.0,
+                        )
+
+        mock_faq_cls.return_value.answer.assert_not_called()
+        mock_transfer.assert_awaited_once()
+        assert mock_transfer.await_args.kwargs["reason"] == "stt_unclear"
+        assert "Dial" in twiml

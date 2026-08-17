@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.confidence.scorer import ConfidenceAction, ConfidenceScorer
+from app.ai.confidence.scorer import ConfidenceScorer
 from app.ai.memory.faq_memory import FaqMemory
 from app.ai.rag.analytics import RagAnalytics
 from app.ai.rag.openai_selector import OpenAITop5Selector
@@ -130,7 +130,7 @@ class RagFaqService:
         top_score = chunks[0].score if chunks else 0.0
         decision = self.scorer.score(top_score)
 
-        if decision.action == ConfidenceAction.TRANSFER or not chunks:
+        if not chunks:
             result = self._transfer(lang, decision.confidence)
             result.transfer_reason = "faq_low_confidence"
             await self._finalize(
@@ -143,21 +143,6 @@ class RagFaqService:
                 started=started,
                 outcome="transfer",
                 transfer_reason="faq_low_confidence",
-                cache_key=cache_key,
-            )
-            return result
-
-        if decision.action == ConfidenceAction.CLARIFY:
-            result = self._clarify(lang, chunks, decision.confidence)
-            await self._finalize(
-                session_id=session_id,
-                question=question,
-                language=lang,
-                result=result,
-                hospital_id=hospital_id,
-                chunks=chunks,
-                started=started,
-                outcome="clarify",
                 cache_key=cache_key,
             )
             return result

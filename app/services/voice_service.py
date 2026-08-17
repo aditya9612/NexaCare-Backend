@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from xml.sax.saxutils import escape
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +24,11 @@ from app.services.hospital_voice_config_service import HospitalVoiceConfigServic
 from app.telephony.factory import ProviderFactory
 from app.utils.helpers import utc_now
 from app.utils.pagination import build_paginated_result
-from app.utils.twiml_builder import gather, say, twiml_response
+from app.utils.twiml_builder import say, twilio_say_language, twiml_response
+
+_REMINDER_VOICE_BY_LANG = {
+    "mr-IN": "Google.mr-IN-Chirp3-HD-Aoede",
+}
 
 
 def call_provider_hint(payload: dict) -> str:
@@ -55,6 +60,29 @@ class VoiceService:
 
     def _twiml_url(self, path: str) -> str:
         return self._reminder_url(path, "twilio")
+
+    def _twilio_lang(self, lang_code: str) -> str:
+        return twilio_say_language(lang_code or "en")
+
+    def _reminder_speak(self, text: str, lang_code: str) -> str:
+        """Twilio <Say> for outbound reminder calls (no Sarvam)."""
+        twilio_lang = self._twilio_lang(lang_code)
+        voice = _REMINDER_VOICE_BY_LANG.get(twilio_lang)
+        return say(text, twilio_lang, voice=voice)
+
+    def _gather_reminder(
+        self,
+        gather_url: str,
+        prompt: str,
+        no_input: str,
+        lang_code: str,
+    ) -> str:
+        return (
+            f'<Gather numDigits="1" action="{escape(gather_url)}" method="POST" timeout="10">'
+            f"{self._reminder_speak(prompt, lang_code)}"
+            "</Gather>"
+            f"{self._reminder_speak(no_input, lang_code)}"
+        )
 
     async def _get_provider(self, hospital_id: int | None = None):
         hid = hospital_id or self.hospital_id
@@ -171,18 +199,20 @@ class VoiceService:
                     f" Your appointment is on {appt.appointment_date} "
                     f"at {appt.appointment_time}."
                 )
-        menu_data = await self.voice_handler.process_audio("")
-        prompt = f"{greeting}{appt_text} {menu_data.get('menu', '')}"
+        menu = self.voice_handler.menu_for_language(call.language)
+        prompt = f"{greeting}{appt_text} {menu}"
         gather_url = self._reminder_url(
             f"/twiml/{call.id}/gather", call.provider or settings.DEFAULT_TELEPHONY_PROVIDER
         )
-        lang = "en-US" if call.language == "en" else call.language
-        return twiml_response(gather(gather_url, prompt, num_digits=1, language=lang))
+        no_input = self.voice_handler.no_input_for_language(call.language)
+        return twiml_response(
+            self._gather_reminder(gather_url, prompt, no_input, call.language)
+        )
 
     async def handle_dtmf_gather(self, call_id: int, digits: str) -> str:
         call = await self._get_call(call_id)
         action = self.voice_handler.parse_dtmf(digits)
-        lang = "en-US" if call.language == "en" else call.language
+        lang = call.language or "en"
 
         if action == "confirm_appointment":
             await self._handle_appointment_action(
@@ -191,7 +221,7 @@ class VoiceService:
                 AppointmentStatus.CONFIRMED,
                 "1",
             )
-            text = "Thank you. Your appointment is confirmed. Goodbye."
+            text = self.voice_handler.dtmf_response("confirm", lang)
         elif action == "cancel_appointment":
             await self._handle_appointment_action(
                 CallActionRequest(call_id=call.id, response_value=digits),
@@ -199,7 +229,7 @@ class VoiceService:
                 AppointmentStatus.CANCELLED,
                 "2",
             )
-            text = "Your appointment has been cancelled. Goodbye."
+            text = self.voice_handler.dtmf_response("cancel", lang)
         elif action == "reschedule_appointment":
             await self.repo.add_response(
                 VoiceResponse(
@@ -216,19 +246,16 @@ class VoiceService:
                     event_data="Patient requested reschedule via phone",
                 )
             )
-            text = (
-                "We have noted your reschedule request. "
-                "Our team will contact you shortly. Goodbye."
-            )
+            text = self.voice_handler.dtmf_response("reschedule", lang)
         elif action == "repeat_menu":
             return await self.build_initial_twiml(call_id)
         else:
-            text = "Invalid option. Goodbye."
+            text = self.voice_handler.dtmf_response("invalid", lang)
 
         if call.call_status == VoiceCallStatus.CALLING:
             call.call_status = VoiceCallStatus.COMPLETED
         await self.repo.update_call(call)
-        return twiml_response(say(text, lang))
+        return twiml_response(self._reminder_speak(text, lang))
 
     async def handle_status_callback(self, payload: dict) -> None:
         provider_name = payload.get("_provider") or call_provider_hint(payload)

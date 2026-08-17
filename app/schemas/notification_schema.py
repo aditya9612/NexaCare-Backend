@@ -34,3 +34,11 @@ class CategoryCountsResponse(BaseModel):
     unread: int
     completed: int
 
+
+class PushSubscriptionCreate(BaseModel):
+    endpoint: str = Field(..., description="Browser Push endpoint URL")
+    p256dh: str = Field(..., description="Public key for encryption")
+    auth: str = Field(..., description="Auth secret for encryption")
+
+class PushSubscriptionDelete(BaseModel):
+    endpoint: str = Field(..., description="Browser Push endpoint URL to unsubscribe")

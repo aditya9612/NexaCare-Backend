@@ -1,5 +1,7 @@
 from datetime import date
-from fastapi import APIRouter, Depends, Query
+from enum import Enum
+from fastapi import APIRouter, Depends, Query, File, UploadFile, Response, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -9,6 +11,79 @@ from app.services.transaction_service import TransactionService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
+
+
+class TransactionExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
+
+
+@router.get("/bulk-template")
+async def download_transactions_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("billing", "read")),
+):
+    stream = await TransactionService(db).generate_transactions_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=transactions_bulk_template.xlsx"}
+    )
+
+
+@router.post("/bulk-upload", status_code=201)
+async def upload_transactions_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("billing", "update")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await TransactionService(db).import_transactions_from_excel(file, current_user.id)
+    return APIResponse(message="Transactions bulk upload processed", data=result)
+
+
+@router.get("/export")
+async def export_transactions(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: TransactionExportFormat = Query(TransactionExportFormat.EXCEL),
+    billing_id: int | None = Query(None),
+    payment_method: str | None = Query(None),
+    status: str | None = Query(None),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    q: str | None = Query(None),
+    _: User = Depends(require_permission("billing", "read")),
+):
+    data, media_type = await TransactionService(db).export_transactions(
+        format_type=format.value,
+        billing_id=billing_id,
+        payment_method=payment_method,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        q=q
+    )
+    
+    if format == TransactionExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=transactions_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=transactions_export.pdf"}
+        )
 
 
 @router.post("", response_model=APIResponse[TransactionResponse], status_code=201)

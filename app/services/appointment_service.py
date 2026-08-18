@@ -18,6 +18,7 @@ from app.schemas.appointment_schema import (
     RescheduleRequest,
     TokenResponse,    
     ConfirmedVisitResponse,
+    ScheduledDoctorResponse,
 )
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
@@ -778,3 +779,77 @@ class AppointmentService:
         pdf_bytes = buffer.getvalue()
         buffer.close()
         return pdf_bytes
+
+    async def search_scheduled_doctors(
+        self,
+        appointment_date: date,
+        appointment_time: time | None = None,
+        department_id: int | None = None,
+        specialization: str | None = None,
+    ) -> list[ScheduledDoctorResponse]:
+        from app.models.doctor_model import Doctor, DoctorSchedule
+        from sqlalchemy import select
+        from datetime import time as dt_time
+        
+        # 1. Convert appointment_date to weekday (0 = Monday, 6 = Sunday)
+        day_of_week = appointment_date.weekday()
+        
+        # 2. Base query: Join DoctorSchedule with Doctor
+        query = (
+            select(Doctor, DoctorSchedule)
+            .join(DoctorSchedule, DoctorSchedule.doctor_id == Doctor.id)
+            .where(
+                Doctor.is_deleted.is_(False),
+                DoctorSchedule.day_of_week == day_of_week,
+                DoctorSchedule.is_active.is_(True)
+            )
+        )
+        
+        # Apply filters
+        if department_id is not None:
+            query = query.where(Doctor.department_id == department_id)
+        if specialization is not None and specialization.strip() != "":
+            query = query.where(Doctor.specialization.ilike(f"%{specialization.strip()}%"))
+            
+        result = await self.db.execute(query)
+        rows = result.all()
+        
+        response_list = []
+        for doctor, sched in rows:
+            is_available = True
+            
+            # If appointment_time is provided, evaluate availability for the exact slot
+            if appointment_time is not None:
+                if doctor.availability_status in ("onleave", "on_leave"):
+                    is_available = False
+                else:
+                    try:
+                        from app.services.booking_validation_service import BookingValidationService
+                        val_service = BookingValidationService(self.db)
+                        await val_service.validate(
+                            doctor_id=doctor.id,
+                            appointment_date=appointment_date,
+                            appointment_time=appointment_time
+                        )
+                        is_available = True
+                    except Exception:
+                        is_available = False
+                        
+            response_list.append(
+                ScheduledDoctorResponse(
+                    doctor_id=doctor.id,
+                    first_name=doctor.first_name,
+                    last_name=doctor.last_name,
+                    specialization=doctor.specialization,
+                    department_id=doctor.department_id,
+                    consultation_fee=doctor.consultation_fee,
+                    day_of_week=sched.day_of_week,
+                    start_time=sched.start_time,
+                    end_time=sched.end_time,
+                    slot_duration_minutes=sched.slot_duration_minutes,
+                    is_available=is_available
+                )
+            )
+            
+        return response_list
+

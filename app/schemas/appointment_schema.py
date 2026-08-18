@@ -165,5 +165,20 @@ class ConfirmedVisitResponse(BaseSchema):
     queue_status: str | None = None
 
 
-ConfirmedVisitListResponse = PaginatedResponse[ConfirmedVisitResponse]  
+ConfirmedVisitListResponse = PaginatedResponse[ConfirmedVisitResponse]
+
+
+class ScheduledDoctorResponse(BaseSchema):
+    doctor_id: int
+    first_name: str
+    last_name: str
+    specialization: str | None = None
+    department_id: int | None = None
+    consultation_fee: float | None = None
+    day_of_week: int
+    start_time: time
+    end_time: time
+    slot_duration_minutes: int
+    is_available: bool
+
 

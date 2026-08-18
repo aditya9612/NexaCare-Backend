@@ -1,7 +1,7 @@
 from datetime import date
-
-from fastapi import APIRouter, Depends, Response, Query
-from fastapi.responses import FileResponse
+from enum import Enum
+from fastapi import APIRouter, Depends, Response, Query, File, UploadFile, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -21,6 +21,81 @@ from app.services.billing_service import BillingService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
+
+
+class BillingExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
+
+
+@router.get("/bulk-template")
+async def download_billing_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("billing", "read")),
+):
+    stream = await BillingService(db).generate_billing_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=billing_bulk_template.xlsx"}
+    )
+
+
+@router.post("/bulk-upload", status_code=201)
+async def upload_billing_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("billing", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await BillingService(db).import_billing_from_excel(file, current_user.id)
+    return APIResponse(message="Billings bulk upload processed", data=result)
+
+
+@router.get("/export")
+async def export_billings(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: BillingExportFormat = Query(BillingExportFormat.EXCEL),
+    status: str | None = Query(None),
+    patient_id: int | None = Query(None),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    q: str | None = Query(None),
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    _: User = Depends(require_permission("billing", "read")),
+):
+    data, media_type = await BillingService(db).export_billings(
+        format_type=format.value,
+        status=status,
+        patient_id=patient_id,
+        start_date=start_date,
+        end_date=end_date,
+        q=q,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
+    
+    if format == BillingExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=billings_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=billings_export.pdf"}
+        )
 
 
 @router.post("", response_model=APIResponse[BillingResponse], status_code=201)

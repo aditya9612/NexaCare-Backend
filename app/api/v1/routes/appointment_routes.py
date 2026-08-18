@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from typing import List
 
 from fastapi import APIRouter, Depends
@@ -20,6 +20,7 @@ from app.schemas.appointment_schema import (
     QueueStatusResponse,
     ConfirmedVisitListResponse,
     AppointmentListWithCountsResponse,
+    ScheduledDoctorResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -37,6 +38,25 @@ async def create_appointment(
 ):
     appointment = await AppointmentService(db).create(data, current_user.id)
     return APIResponse(message="Appointment booked", data=appointment)
+
+
+@router.get("/search-scheduled-doctor", response_model=APIResponse[List[ScheduledDoctorResponse]])
+async def search_scheduled_doctor(
+    appointment_date: date,
+    db: DbSession,
+    current_user: CurrentUser,
+    appointment_time: time | None = None,
+    department_id: int | None = None,
+    specialization: str | None = None,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    results = await AppointmentService(db).search_scheduled_doctors(
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+        department_id=department_id,
+        specialization=specialization
+    )
+    return APIResponse(message="Scheduled doctors retrieved successfully", data=results)
 
 
 @router.get("", response_model=APIResponse[AppointmentListWithCountsResponse])

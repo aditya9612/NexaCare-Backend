@@ -315,3 +315,13 @@ class PatientRepository:
     async def delete_document(self, document: PatientDocument) -> None:
         await self.db.delete(document)
         await self.db.flush()
+
+    async def get_family_member(self, member_id: int) -> FamilyMember | None:
+        result = await self.db.execute(
+            select(FamilyMember).where(FamilyMember.id == member_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def delete_family_member(self, member: FamilyMember) -> None:
+        await self.db.delete(member)
+        await self.db.flush()

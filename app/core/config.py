@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     FAQ_CONFIDENCE_ANSWER: float = 0.90
     FAQ_CONFIDENCE_CLARIFY: float = 0.70
     # Phase 6: multi-turn FAQ, FAQ↔Booking switching, goodbye flow (default OFF)
-    VOICE_PHASE6_ENABLED: bool = True
+    VOICE_PHASE6_ENABLED: bool = False
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"

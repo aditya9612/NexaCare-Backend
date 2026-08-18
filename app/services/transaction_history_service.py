@@ -194,13 +194,6 @@ class TransactionHistoryService:
         # await self._sync_pharmacy_transactions()
         stats = await self.repo.get_aggregated_stats()
 
-        totals = {
-            "EXPENSE_RECORDED": 0.0,
-            "INVOICE_CREATED": 0.0,
-            "PAYMENT_RECEIVED": 0.0,
-            "INSURANCE_CLAIM": 0.0,
-            "REFUND_ISSUED": 0.0,
-        }
         counts = {
             "EXPENSE_RECORDED": 0,
             "INVOICE_CREATED": 0,
@@ -209,22 +202,39 @@ class TransactionHistoryService:
             "REFUND_ISSUED": 0,
         }
 
+        from decimal import Decimal
+        total_income = Decimal("0.0")
+        total_expense = Decimal("0.0")
+        total_refunds = Decimal("0.0")
+        total_invoices = Decimal("0.0")
+
+        income_types = {"PAYMENT_RECEIVED", "PAYMENT RECEIVED", "PAYMENT"}
+        expense_types = {"EXPENSE_RECORDED", "EXPENSE"}
+        refund_types = {"REFUND_ISSUED", "REFUND_PROCESSED", "REFUND"}
+        invoice_types = {"INVOICE_CREATED", "INVOICE CREATED", "INVOICE"}
+
         for event_type, amt, count in stats:
-            upper_event = event_type.upper()
-            totals[upper_event] = amt
+            upper_event = event_type.upper().strip()
             counts[upper_event] = count
 
-        total_income = totals["PAYMENT_RECEIVED"]
-        total_expense = totals["EXPENSE_RECORDED"]
-        total_refunds = totals["REFUND_ISSUED"]
+            amt_dec = Decimal(str(amt))
+            if upper_event in income_types:
+                total_income += amt_dec
+            elif upper_event in expense_types:
+                total_expense += amt_dec
+            elif upper_event in refund_types:
+                total_refunds += amt_dec
+            elif upper_event in invoice_types:
+                total_invoices += amt_dec
+
+        total_receivables = max(Decimal("0.0"), total_invoices - total_income)
         net_cash_flow = total_income - total_expense - total_refunds
-        total_receivables = max(0.0, totals["INVOICE_CREATED"] - total_income)
 
         return DashboardSummaryResponse(
-            total_income=total_income,
-            total_expense=total_expense,
-            net_cash_flow=net_cash_flow,
-            total_refunds=total_refunds,
-            total_receivables=total_receivables,
+            total_income=float(round(total_income, 2)),
+            total_expense=float(round(total_expense, 2)),
+            net_cash_flow=float(round(net_cash_flow, 2)),
+            total_refunds=float(round(total_refunds, 2)),
+            total_receivables=float(round(total_receivables, 2)),
             event_counts=counts,
         )

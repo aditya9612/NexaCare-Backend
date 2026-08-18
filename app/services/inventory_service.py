@@ -1,3 +1,4 @@
+from io import BytesIO
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ReorderAlertStatus, StockTransactionType
@@ -203,7 +204,7 @@ class InventoryService:
             if item.quantity < data.quantity:
                 raise BadRequestException("Insufficient stock for transfer")
             delta = -data.quantity
-        elif data.transaction_type == StockTransactionType.INWARD:
+        elif data.transaction_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             delta = data.quantity
         elif data.transaction_type == StockTransactionType.ADJUSTMENT:
             delta = data.quantity - item.quantity
@@ -241,19 +242,38 @@ class InventoryService:
         if not transaction:
             raise NotFoundException("Stock transaction not found")
 
-        # If transaction type is adjustment and quantity is being updated, raise error
-        if transaction.transaction_type == StockTransactionType.ADJUSTMENT and data.quantity is not None:
-            raise BadRequestException("Adjustment transactions cannot have their quantity updated")
+        old_type = transaction.transaction_type
+        new_type = data.transaction_type if data.transaction_type is not None else old_type
 
-        item = await self.item_repo.get_by_id(transaction.item_id)
-        if not item:
+        # If old or new type is adjustment and quantity/type is being updated, raise error
+        if (old_type == StockTransactionType.ADJUSTMENT or new_type == StockTransactionType.ADJUSTMENT):
+            if (data.quantity is not None and data.quantity != transaction.quantity) or (data.transaction_type is not None and data.transaction_type != old_type):
+                raise BadRequestException("Adjustment transactions cannot have their quantity or transaction type updated")
+
+        old_item_id = transaction.item_id
+        new_item_id = data.item_id if data.item_id is not None else old_item_id
+
+        old_item = await self.item_repo.get_by_id(old_item_id)
+        if not old_item:
             raise NotFoundException("Inventory item associated with transaction not found")
+
+        # If item_id is changing, validate new item exists
+        if new_item_id != old_item_id:
+            new_item = await self.item_repo.get_by_id(new_item_id)
+            if not new_item:
+                raise NotFoundException("New inventory item not found")
+        else:
+            new_item = old_item
+
+        # Validate warehouses if provided
+        if data.warehouse_id is not None:
+            await self._validate_warehouse(data.warehouse_id)
 
         # Reverse the old transaction impact:
         reverse_delta = 0
-        if transaction.transaction_type == StockTransactionType.INWARD:
+        if old_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             reverse_delta = -transaction.quantity
-        elif transaction.transaction_type in (
+        elif old_type in (
             StockTransactionType.OUTWARD,
             StockTransactionType.CONSUMPTION,
             StockTransactionType.TRANSFER,
@@ -261,32 +281,43 @@ class InventoryService:
             reverse_delta = transaction.quantity
 
         # Validate that reversing the old impact does not make inventory negative
-        if item.quantity + reverse_delta < 0:
-            raise BadRequestException("Insufficient stock to reverse previous transaction impact")
+        if old_item.quantity + reverse_delta < 0:
+            raise BadRequestException("Insufficient stock to reverse previous transaction impact on the original item")
 
         # New impact:
         new_quantity = data.quantity if data.quantity is not None else transaction.quantity
         new_delta = 0
-        if transaction.transaction_type == StockTransactionType.INWARD:
+        if new_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             new_delta = new_quantity
-        elif transaction.transaction_type in (
+        elif new_type in (
             StockTransactionType.OUTWARD,
             StockTransactionType.CONSUMPTION,
             StockTransactionType.TRANSFER,
         ):
             new_delta = -new_quantity
+        elif new_type == StockTransactionType.ADJUSTMENT:
+            new_delta = new_quantity - new_item.quantity
 
-        # Validate that the new quantity and the final resulting inventory doesn't drop below 0
-        if item.quantity + reverse_delta + new_delta < 0:
-            raise BadRequestException("Insufficient stock for transaction update")
-
-        # Apply net delta to the item
-        net_delta = reverse_delta + new_delta
-        if net_delta != 0:
-            await self.item_repo.update_quantity(item.id, net_delta)
+        # Calculate final stock for new item after reversal and new delta
+        if old_item_id == new_item_id:
+            if old_item.quantity + reverse_delta + new_delta < 0:
+                raise BadRequestException("Insufficient stock for transaction update")
+            net_delta = reverse_delta + new_delta
+            if net_delta != 0:
+                await self.item_repo.update_quantity(old_item.id, net_delta)
+        else:
+            if new_item.quantity + new_delta < 0:
+                raise BadRequestException("Insufficient stock on the new item for transaction update")
+            if reverse_delta != 0:
+                await self.item_repo.update_quantity(old_item.id, reverse_delta)
+            if new_delta != 0:
+                await self.item_repo.update_quantity(new_item.id, new_delta)
 
         # Build details for audit logging before modifying the record
         old_values = {
+            "item_id": transaction.item_id,
+            "warehouse_id": transaction.warehouse_id,
+            "transaction_type": transaction.transaction_type,
             "quantity": transaction.quantity,
             "unit_cost": transaction.unit_cost,
             "reference_type": transaction.reference_type,
@@ -295,6 +326,12 @@ class InventoryService:
         }
 
         # Update fields on the transaction record
+        if data.item_id is not None:
+            transaction.item_id = data.item_id
+        if data.warehouse_id is not None:
+            transaction.warehouse_id = data.warehouse_id
+        if data.transaction_type is not None:
+            transaction.transaction_type = data.transaction_type
         if data.quantity is not None:
             transaction.quantity = data.quantity
         if data.unit_cost is not None:
@@ -323,12 +360,19 @@ class InventoryService:
         transaction = await self.transaction_repo.update(transaction)
 
         # Re-evaluate reorder alerts
-        refreshed_item = await self.item_repo.get_by_id(item.id)
-        if refreshed_item:
-            await self._check_reorder_alert(refreshed_item)
+        refreshed_old_item = await self.item_repo.get_by_id(old_item.id)
+        if refreshed_old_item:
+            await self._check_reorder_alert(refreshed_old_item)
+        if old_item_id != new_item_id:
+            refreshed_new_item = await self.item_repo.get_by_id(new_item.id)
+            if refreshed_new_item:
+                await self._check_reorder_alert(refreshed_new_item)
 
         # Audit log
         new_values = {
+            "item_id": transaction.item_id,
+            "warehouse_id": transaction.warehouse_id,
+            "transaction_type": transaction.transaction_type,
             "quantity": transaction.quantity,
             "unit_cost": transaction.unit_cost,
             "reference_type": transaction.reference_type,
@@ -360,7 +404,7 @@ class InventoryService:
 
         # Reverse the old transaction impact:
         reverse_delta = 0
-        if transaction.transaction_type == StockTransactionType.INWARD:
+        if transaction.transaction_type in (StockTransactionType.INWARD, StockTransactionType.RETURN):
             reverse_delta = -transaction.quantity
         elif transaction.transaction_type in (
             StockTransactionType.OUTWARD,
@@ -490,6 +534,7 @@ class InventoryService:
         data["total_registered_items"] = await self.item_repo.count_all()
         data["stock_alerts"] = await self.alert_repo.count_active()
         data["active_warehouse_units"] = await self.warehouse_repo.count_active()
+        data["inactive_warehouse_units"] = await self.warehouse_repo.count_inactive()
         data["total_vendors"] = await self.vendor_repo.count_all()
         return StockSummary(**data)
 
@@ -527,4 +572,322 @@ class InventoryService:
             active_warehouse_units=active_warehouse_units,
             total_vendors=total_vendors,
         )
+
+    async def generate_items_bulk_template(self) -> BytesIO:
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Inventory Items Bulk Import"
+        
+        headers = [
+            "name", "sku", "barcode", "category", "quantity", "unit",
+            "unit_cost", "reorder_level", "expiry_date", "warehouse_id",
+            "vendor_id", "department_id", "description"
+        ]
+        ws.append(headers)
+        
+        # Add sample row
+        sample_row = [
+            "Disposable Syringes 10ml",
+            "SKU-SYRINGE-10ML",
+            "8901234567890",
+            "Surgicals",
+            150,
+            "Box",
+            12.50,
+            20,
+            "2028-12-31",
+            1,
+            1,
+            1,
+            "10ml syringes box of 100 units"
+        ]
+        ws.append(sample_row)
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_items_from_excel(self, file, user_id: int) -> dict:
+        from pydantic import ValidationError
+        import openpyxl
+        from datetime import date, datetime
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        # Read headers
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"name", "category", "unit"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers. File must contain name, category, and unit headers.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        batch_skus = set()
+        batch_barcodes = set()
+        batch_names = set()
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+                    
+            try:
+                # Normalization
+                barcode_raw = row_dict.get("barcode")
+                if barcode_raw is not None:
+                    if isinstance(barcode_raw, float):
+                        barcode_raw = str(int(barcode_raw))
+                    else:
+                        barcode_raw = str(barcode_raw).strip()
+                    row_dict["barcode"] = barcode_raw
+                    
+                expiry_raw = row_dict.get("expiry_date")
+                if expiry_raw is not None:
+                    if isinstance(expiry_raw, (datetime, date)):
+                        row_dict["expiry_date"] = expiry_raw.strftime("%Y-%m-%d")
+                    else:
+                        row_dict["expiry_date"] = str(expiry_raw).strip()
+                        
+                cost_raw = row_dict.get("unit_cost")
+                if cost_raw is not None:
+                    try:
+                        row_dict["unit_cost"] = float(cost_raw)
+                    except ValueError:
+                        pass
+                        
+                qty_raw = row_dict.get("quantity")
+                if qty_raw is not None:
+                    try:
+                        row_dict["quantity"] = int(float(qty_raw))
+                    except ValueError:
+                        pass
+                        
+                reorder_raw = row_dict.get("reorder_level")
+                if reorder_raw is not None:
+                    try:
+                        row_dict["reorder_level"] = int(float(reorder_raw))
+                    except ValueError:
+                        pass
+                
+                wh_raw = row_dict.get("warehouse_id")
+                if wh_raw is not None:
+                    try:
+                        row_dict["warehouse_id"] = int(float(wh_raw))
+                    except ValueError:
+                        pass
+                        
+                vendor_raw = row_dict.get("vendor_id")
+                if vendor_raw is not None:
+                    try:
+                        row_dict["vendor_id"] = int(float(vendor_raw))
+                    except ValueError:
+                        pass
+                        
+                dept_raw = row_dict.get("department_id")
+                if dept_raw is not None:
+                    try:
+                        row_dict["department_id"] = int(float(dept_raw))
+                    except ValueError:
+                        pass
+                
+                # Validation using schema
+                validated_data = InventoryItemCreate(**row_dict)
+                
+                # Check entity existence (department, warehouse, vendor)
+                await self._validate_department(validated_data.department_id)
+                await self._validate_warehouse(validated_data.warehouse_id)
+                await self._validate_vendor(validated_data.vendor_id)
+                
+                # Name uniqueness
+                name_key = validated_data.name.strip().lower()
+                if name_key in batch_names:
+                    raise ConflictException("Duplicate name in the uploaded file")
+                existing_name = await self.item_repo.get_by_name(validated_data.name)
+                if existing_name:
+                    raise ConflictException("Inventory item with this name already exists")
+                batch_names.add(name_key)
+                
+                # SKU uniqueness
+                sku = validated_data.sku
+                if sku:
+                    sku_key = sku.strip().lower()
+                    if sku_key in batch_skus:
+                        raise ConflictException("Duplicate SKU in the uploaded file")
+                    existing_sku = await self.item_repo.get_by_sku(sku)
+                    if existing_sku:
+                        raise ConflictException("Inventory item with this SKU already exists")
+                    batch_skus.add(sku_key)
+                else:
+                    while True:
+                        sku = generate_code("SKU")
+                        existing_sku = await self.item_repo.get_by_sku(sku)
+                        if not existing_sku and sku.strip().lower() not in batch_skus:
+                            break
+                    batch_skus.add(sku.strip().lower())
+                
+                # Barcode uniqueness
+                barcode = validated_data.barcode
+                if barcode:
+                    barcode_key = barcode.strip().lower()
+                    if barcode_key in batch_barcodes:
+                        raise ConflictException("Duplicate barcode in the uploaded file")
+                    existing_barcode = await self.item_repo.get_by_barcode(barcode)
+                    if existing_barcode:
+                        raise ConflictException("Inventory item with this barcode already exists")
+                    batch_barcodes.add(barcode_key)
+                
+                # Insert item
+                item = InventoryItem(sku=sku, **validated_data.model_dump(exclude={"sku"}))
+                item = await self.item_repo.create(item)
+                await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({"row": row_idx, "error": err_msg})
+            except ConflictException as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e.detail)})
+            except NotFoundException as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e.detail)})
+            except Exception as e:
+                failed += 1
+                errors.append({"row": row_idx, "error": str(e)})
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors,
+        }
+
+    async def export_items(self, format_type: str) -> tuple[BytesIO | bytes, str]:
+        from datetime import date, datetime
+        
+        items = await self.item_repo.get_all_active()
+        
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Inventory Items"
+            
+            headers = [
+                "id", "name", "sku", "barcode", "category", "quantity", "unit",
+                "unit_cost", "reorder_level", "expiry_date", "warehouse_id",
+                "vendor_id", "department_id", "description", "is_active",
+                "created_at", "updated_at"
+            ]
+            ws.append(headers)
+            
+            for item in items:
+                row = [
+                    item.id,
+                    item.name,
+                    item.sku,
+                    item.barcode or "",
+                    item.category,
+                    int(item.quantity) if item.quantity is not None else 0,
+                    item.unit,
+                    float(item.unit_cost) if item.unit_cost is not None else 0.0,
+                    int(item.reorder_level) if item.reorder_level is not None else 0,
+                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
+                    int(item.warehouse_id) if item.warehouse_id is not None else "",
+                    int(item.vendor_id) if item.vendor_id is not None else "",
+                    int(item.department_id) if item.department_id is not None else "",
+                    item.description or "",
+                    bool(item.is_active),
+                    item.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.created_at, datetime) else str(item.created_at),
+                    item.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.updated_at, datetime) else (str(item.updated_at) if item.updated_at else "")
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("inventory_items_export_template.html")
+            
+            formatted_items = []
+            for item in items:
+                expiry_str = "-"
+                if item.expiry_date:
+                    if isinstance(item.expiry_date, (date, datetime)):
+                        expiry_str = item.expiry_date.strftime("%Y-%m-%d")
+                    else:
+                        expiry_str = str(item.expiry_date)
+                        
+                created_str = "-"
+                if item.created_at:
+                    if isinstance(item.created_at, datetime):
+                        created_str = item.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        created_str = str(item.created_at)
+
+                updated_str = "-"
+                if item.updated_at:
+                    if isinstance(item.updated_at, datetime):
+                        updated_str = item.updated_at.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        updated_str = str(item.updated_at)
+                        
+                formatted_items.append({
+                    "id": item.id,
+                    "name": item.name,
+                    "sku": item.sku,
+                    "barcode": item.barcode,
+                    "category": item.category,
+                    "quantity": int(item.quantity) if item.quantity is not None else 0,
+                    "unit": item.unit,
+                    "unit_cost": float(item.unit_cost) if item.unit_cost is not None else 0.0,
+                    "reorder_level": int(item.reorder_level) if item.reorder_level is not None else 0,
+                    "expiry_date": expiry_str,
+                    "warehouse_id": item.warehouse_id,
+                    "vendor_id": item.vendor_id,
+                    "department_id": item.department_id,
+                    "description": item.description or "",
+                    "is_active": "Yes" if item.is_active else "No",
+                    "created_at": created_str,
+                    "updated_at": updated_str,
+                })
+                
+            html = template.render(
+                items=formatted_items,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_bytes = html_to_pdf(html)
+            return pdf_bytes, "application/pdf"
+            
+        else:
+            raise BadRequestException("Invalid format specified for export")
+
+
 

@@ -109,6 +109,12 @@ class InventoryRepository:
         item.deleted_at = utc_now()
         await self.db.flush()
 
+    async def get_all_active(self) -> list[InventoryItem]:
+        query = self._base_query().order_by(InventoryItem.name.asc())
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+
     async def update_quantity(self, item_id: int, delta: int) -> InventoryItem | None:
         item = await self.get_by_id(item_id)
         if item:
@@ -264,6 +270,14 @@ class WarehouseRepository:
             select(func.count()).select_from(Warehouse).where(
                 Warehouse.is_deleted.is_(False),
                 Warehouse.is_active.is_(True)
+            )
+        )) or 0
+
+    async def count_inactive(self) -> int:
+        return (await self.db.scalar(
+            select(func.count()).select_from(Warehouse).where(
+                Warehouse.is_deleted.is_(False),
+                Warehouse.is_active.is_(False)
             )
         )) or 0
 

@@ -140,7 +140,15 @@ async def test_rag_service_clarify_band():
             )
         ]
     )
-    svc = RagFaqService(db, retriever=retriever, selector=MagicMock(), memory=MagicMock())
+    selector = MagicMock()
+    selector.select = AsyncMock(
+        return_value=MagicMock(
+            kind="clarify",
+            clarify_question="Are you asking about visiting hours?",
+            text="",
+        )
+    )
+    svc = RagFaqService(db, retriever=retriever, selector=selector, memory=MagicMock())
     svc.memory.update = AsyncMock()
 
     with patch("app.ai.rag.rag_service.cache_get", new=AsyncMock(return_value=None)):
@@ -150,7 +158,8 @@ async def test_rag_service_clarify_band():
     assert result.needs_clarification is True
     assert result.should_transfer is False
     assert result.found is True
-    assert "Visiting hours" in result.answer or "hours" in result.answer.lower()
+    assert "visiting hours" in result.answer.lower()
+    selector.select.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -168,7 +177,9 @@ async def test_rag_service_transfer_band():
             )
         ]
     )
-    svc = RagFaqService(db, retriever=retriever, memory=MagicMock())
+    selector = MagicMock()
+    selector.select = AsyncMock(return_value=MagicMock(kind="no_answer", text=""))
+    svc = RagFaqService(db, retriever=retriever, selector=selector, memory=MagicMock())
     svc.memory.update = AsyncMock()
 
     with patch("app.ai.rag.rag_service.cache_get", new=AsyncMock(return_value=None)):
@@ -177,6 +188,49 @@ async def test_rag_service_transfer_band():
 
     assert result.should_transfer is True
     assert result.found is False
+    assert result.transfer_reason == "faq_no_match"
+    selector.select.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rag_service_low_confidence_relevant_uses_selector():
+    """Medium/low similarity with valid candidates must reach OpenAITop5Selector."""
+    db = MagicMock()
+    retriever = MagicMock()
+    chunks = [
+        RetrievedChunk(
+            source="faq",
+            id=2,
+            text="आमचे रुग्णालय सोमवार ते शनिवार, सकाळी 8 ते रात्री 8 वाजेपर्यंत उघडे असते.",
+            label="[faq:2] Q: हॉस्पिटल किती वाजता उघडते?\nA: आमचे रुग्णालय सोमवार ते शनिवार, सकाळी 8 ते रात्री 8 वाजेपर्यंत उघडे असते.",
+            score=0.548,
+        )
+    ]
+    retriever.retrieve = AsyncMock(return_value=chunks)
+    selector = MagicMock()
+    selector.select = AsyncMock(
+        return_value=MagicMock(
+            kind="match",
+            source="faq",
+            entry_id=2,
+            text=chunks[0].text,
+            clarify_question="",
+        )
+    )
+    svc = RagFaqService(db, retriever=retriever, selector=selector, memory=MagicMock())
+    svc.memory.update = AsyncMock()
+
+    with patch("app.ai.rag.rag_service.cache_get", new=AsyncMock(return_value=None)):
+        with patch("app.ai.rag.rag_service.cache_set", new=AsyncMock(return_value=True)):
+            result = await svc.answer(
+                1, "आपल्या हॉस्पिटल किती वाजता उघडते?", "mr"
+            )
+
+    assert result.found is True
+    assert result.should_transfer is False
+    assert result.answer == chunks[0].text
+    assert result.faq_hit is True
+    selector.select.assert_awaited_once()
 
 
 @pytest.mark.asyncio

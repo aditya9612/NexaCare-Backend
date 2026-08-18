@@ -127,6 +127,7 @@ class StockTransactionType:
     TRANSFER = "transfer"
     ADJUSTMENT = "adjustment"
     CONSUMPTION = "consumption"
+    RETURN = "return"
 
 
 class ReorderAlertStatus:

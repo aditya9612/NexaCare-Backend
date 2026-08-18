@@ -58,6 +58,23 @@ class TransactionService:
 
         payment = await self.repo.create(payment)
 
+        # Create corresponding transaction history event
+        from app.services.transaction_history_service import TransactionHistoryService
+        event_type = "REFUND_ISSUED" if is_refund else "PAYMENT_RECEIVED"
+        ref_prefix = "REF" if is_refund else "PAY"
+        desc_action = "Refund Issued" if is_refund else "Payment Received"
+        
+        await TransactionHistoryService(self.db).create_event(
+            event_type=event_type,
+            reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
+            description=f"{desc_action} on bill {billing.bill_number or ''} via {payment.payment_method}",
+            amount=payment.amount,
+            source_module="refunds" if is_refund else "payments",
+            source_id=payment.id,
+            status=payment.status,
+            user_id=user_id
+        )
+
         if is_completed:
             await BillingService(self.db)._recalculate_billing(billing)
 
@@ -115,6 +132,42 @@ class TransactionService:
             await BillingService(self.db)._recalculate_billing(billing)
 
         payment = await self.repo.update(payment)
+
+        # Update corresponding transaction history entry
+        from app.models.transaction_history_model import TransactionHistory
+        from sqlalchemy import select
+        
+        source_module = "refunds" if payment.is_refund else "payments"
+        hist_res = await self.db.execute(
+            select(TransactionHistory).where(
+                TransactionHistory.source_module == source_module,
+                TransactionHistory.source_id == payment.id,
+                TransactionHistory.is_deleted == False
+            )
+        )
+        hist = hist_res.scalar_one_or_none()
+        if hist:
+            hist.amount = payment.amount
+            hist.status = payment.status
+            hist.event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
+            if payment.transaction_ref:
+                hist.reference_no = payment.transaction_ref
+        else:
+            from app.services.transaction_history_service import TransactionHistoryService
+            event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
+            ref_prefix = "REF" if payment.is_refund else "PAY"
+            desc_action = "Refund Issued" if payment.is_refund else "Payment Received"
+            await TransactionHistoryService(self.db).create_event(
+                event_type=event_type,
+                reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
+                description=f"{desc_action} on bill {billing.bill_number or ''} via {payment.payment_method}",
+                amount=payment.amount,
+                source_module=source_module,
+                source_id=payment.id,
+                status=payment.status,
+                user_id=user_id
+            )
+
         await self.audit_repo.create("update", "transaction", user_id=user_id, resource_id=str(payment.id))
         return TransactionResponse.model_validate(payment)
 
@@ -139,6 +192,19 @@ class TransactionService:
             await BillingService(self.db)._recalculate_billing(billing)
 
         await self.repo.delete(payment)
+
+        # Soft delete corresponding transaction history entry
+        from app.models.transaction_history_model import TransactionHistory
+        from sqlalchemy import update
+        
+        source_module = "refunds" if payment.is_refund else "payments"
+        stmt = update(TransactionHistory).where(
+            TransactionHistory.source_module == source_module,
+            TransactionHistory.source_id == payment.id,
+            TransactionHistory.is_deleted == False
+        ).values(is_deleted=True, deleted_at=utc_now())
+        await self.db.execute(stmt)
+
         await self.audit_repo.create("delete", "transaction", user_id=user_id, resource_id=str(transaction_id))
 
     async def list_transactions(

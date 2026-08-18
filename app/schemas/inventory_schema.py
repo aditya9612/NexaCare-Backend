@@ -162,7 +162,7 @@ class StockTransactionCreate(BaseSchema):
     @classmethod
     def validate_transaction_type(cls, v: str) -> str:
         v_lower = v.lower()
-        allowed = {"inward", "outward", "transfer", "adjustment", "consumption"}
+        allowed = {"inward", "outward", "transfer", "adjustment", "return"}
         if v_lower not in allowed:
             raise ValueError(f"transaction_type must be one of {allowed}")
         return v_lower
@@ -206,11 +206,25 @@ class StockTransactionResponse(BaseSchema):
 
 
 class StockTransactionUpdate(BaseSchema):
+    item_id: Optional[int] = Field(None, gt=0)
+    warehouse_id: Optional[int] = Field(None, gt=0)
+    transaction_type: Optional[str] = None
     quantity: Optional[int] = Field(None, ge=1)
     unit_cost: Optional[float] = Field(None, ge=0)
     reference_type: Optional[str] = None
     reference_id: Optional[int] = Field(None, gt=0)
     notes: Optional[str] = None
+
+    @field_validator("transaction_type")
+    @classmethod
+    def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v_lower = v.lower()
+            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            if v_lower not in allowed:
+                raise ValueError(f"transaction_type must be one of {allowed}")
+            return v_lower
+        return v
 
     @field_validator("reference_type")
     @classmethod
@@ -373,6 +387,7 @@ class StockSummary(BaseSchema):
     total_registered_items: int
     stock_alerts: int
     active_warehouse_units: int
+    inactive_warehouse_units: int
     total_vendors: int
 
 

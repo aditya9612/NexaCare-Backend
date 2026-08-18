@@ -189,10 +189,14 @@ class AppointmentService:
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
+        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
+        queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
         appointment_data = data.model_dump(exclude={"patient_name", "age"})
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
+            queue_token=queue_tok,
+            queue_status="WAITING",
             appointment_status=AppointmentStatus.PENDING,
             **appointment_data,
         )
@@ -208,6 +212,14 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
 
         update_data = data.model_dump(exclude_unset=True)
+
+        # Prevent updating status directly to Completed without Check-In and Check-Out
+        if update_data.get("appointment_status") == AppointmentStatus.COMPLETED:
+            if not appointment.check_in_time or not appointment.check_out_time:
+                raise BadRequestException(
+                    "Cannot set appointment status to Completed without both Check-In and Check-Out being marked."
+                )
+
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
         
@@ -278,6 +290,15 @@ class AppointmentService:
 
     async def get_today(self):
         appointments = await self.repo.get_today()
+        has_updated = False
+        for a in appointments:
+            if not a.queue_token:
+                a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
+                if not a.queue_status:
+                    a.queue_status = "WAITING"
+                has_updated = True
+        if has_updated:
+            await self.db.flush()
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
     async def get_upcoming(self, limit: int = 20):
@@ -297,6 +318,10 @@ class AppointmentService:
                 raise BadRequestException(f"Cannot check in appointment with status: {appointment.appointment_status}")
         appointment.appointment_status = "Checked-In"
         appointment.check_in_time = datetime.now()
+        if not appointment.queue_token:
+            appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date)
+        if not appointment.queue_status:
+            appointment.queue_status = "WAITING"
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Patient checked in for appointment {appointment.appointment_number}")
         return appointment
@@ -307,6 +332,16 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
         if appointment.appointment_status != "Checked-In":
             raise BadRequestException("Appointment must be checked in first")
+
+        # Enforce that patient cannot check out before the appointment start time
+        if appointment.appointment_date and appointment.appointment_time:
+            from datetime import timezone, timedelta
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_tz).replace(tzinfo=None)
+            appt_start_datetime = datetime.combine(appointment.appointment_date, appointment.appointment_time)
+            if now_ist < appt_start_datetime:
+                raise BadRequestException("Patient cannot check out before the appointment start time")
+
         appointment.appointment_status = "Checked-Out"
         appointment.check_out_time = datetime.now()
         await self.db.flush()
@@ -314,32 +349,13 @@ class AppointmentService:
         return appointment
 
     async def generate_queue_token(self, appointment_id: int, user_id: int) -> Appointment:
-        from sqlalchemy import select
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
         
-        # Calculate next token for today
-        from datetime import timezone, timedelta
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        today = datetime.now(ist_tz).date()
-        result = await self.db.execute(
-            select(Appointment.queue_token)
-            .where(Appointment.appointment_date == today, Appointment.queue_token.isnot(None))
-        )
-        tokens = result.scalars().all()
-        max_num = 0
-        for t in tokens:
-            if t.startswith("T-"):
-                try:
-                    num = int(t[2:])
-                    if num > max_num:
-                        max_num = num
-                except ValueError:
-                    pass
-        next_token = f"T-{max_num + 1}"
+        next_token = await self.repo.get_next_queue_token(appointment.appointment_date)
         
         appointment.queue_token = next_token
         appointment.queue_status = "WAITING"
@@ -348,16 +364,25 @@ class AppointmentService:
         return appointment
 
     async def get_today_queue(self) -> list[Appointment]:
-        from datetime import timezone, timedelta
+        from app.utils.helpers import get_today_ist
         from sqlalchemy import select
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        today = datetime.now(ist_tz).date()
+        today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.appointment_date == today)
             .order_by(Appointment.id.asc())
         )
-        return list(result.scalars().all())
+        appointments = list(result.scalars().all())
+        has_updated = False
+        for a in appointments:
+            if not a.queue_token:
+                a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
+                if not a.queue_status:
+                    a.queue_status = "WAITING"
+                has_updated = True
+        if has_updated:
+            await self.db.flush()
+        return appointments
 
     async def get_current_queue(self) -> Appointment | None:
         from datetime import timezone, timedelta
@@ -486,3 +511,270 @@ class AppointmentService:
                 )
                 
             return build_paginated_result(responses, total, page, limit)
+
+    async def download_appointment_pdf(self, appointment_id: int) -> bytes:
+        import io
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.clinical_record_model import ClinicalRecord
+        from app.models.pharmacy_model import Prescription, PrescriptionItem
+
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+
+        status_lower = appointment.appointment_status.lower().strip() if appointment.appointment_status else ""
+        if status_lower not in ("completed", "checked-out"):
+            raise BadRequestException("Only completed appointments can be downloaded")
+
+        # Explicitly fetch related entities to avoid lazy-loading on async SQLAlchemy session
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.department_model import Department
+
+        patient = None
+        if appointment.patient_id:
+            try:
+                p_res = await self.db.execute(select(Patient).where(Patient.id == appointment.patient_id))
+                patient = p_res.scalar_one_or_none()
+            except Exception:
+                pass
+            if not patient:
+                patient = getattr(appointment, "patient", None)
+
+        doctor = None
+        if appointment.doctor_id:
+            try:
+                d_res = await self.db.execute(select(Doctor).where(Doctor.id == appointment.doctor_id))
+                doctor = d_res.scalar_one_or_none()
+            except Exception:
+                pass
+            if not doctor:
+                doctor = getattr(appointment, "doctor", None)
+
+        department = None
+        if appointment.department_id:
+            try:
+                dp_res = await self.db.execute(select(Department).where(Department.department_id == appointment.department_id))
+                department = dp_res.scalar_one_or_none()
+            except Exception:
+                pass
+            if not department:
+                department = getattr(appointment, "department", None)
+
+        # Fetch clinical record
+        cr_stmt = select(ClinicalRecord).where(
+            ClinicalRecord.appointment_id == appointment_id,
+            ClinicalRecord.is_deleted == False
+        )
+        cr_res = await self.db.execute(cr_stmt)
+        clinical_record = cr_res.scalar_one_or_none()
+
+        # Fetch prescription with items and medicines
+        pr_stmt = select(Prescription).where(
+            Prescription.appointment_id == appointment_id,
+            Prescription.is_deleted == False
+        ).options(
+            selectinload(Prescription.items).selectinload(PrescriptionItem.medicine)
+        )
+        pr_res = await self.db.execute(pr_stmt)
+        prescription = pr_res.scalar_one_or_none()
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=letter,
+            rightMargin=40,
+            leftMargin=40,
+            topMargin=40,
+            bottomMargin=40
+        )
+        elements = []
+
+        styles = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            'DocTitle',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=20,
+            leading=24,
+            textColor=colors.HexColor('#2C3E50'),
+            spaceAfter=15,
+            alignment=1
+        )
+
+        section_heading = ParagraphStyle(
+            'SectionHeading',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=14,
+            leading=18,
+            textColor=colors.HexColor('#2C3E50'),
+            spaceBefore=15,
+            spaceAfter=8,
+            keepWithNext=True
+        )
+
+        label_style = ParagraphStyle(
+            'LabelStyle',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=10,
+            leading=12,
+            textColor=colors.HexColor('#34495E')
+        )
+
+        value_style = ParagraphStyle(
+            'ValueStyle',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=10,
+            leading=12,
+            textColor=colors.HexColor('#2C3E50')
+        )
+
+        rx_header_style = ParagraphStyle(
+            'RxHeader',
+            parent=label_style,
+            textColor=colors.whitesmoke
+        )
+
+        header_table_style = TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#ECF0F1')),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('LEFTPADDING', (0,0), (-1,-1), 10),
+            ('RIGHTPADDING', (0,0), (-1,-1), 10),
+            ('LINEBELOW', (0,-1), (-1,-1), 2, colors.HexColor('#BDC3C7')),
+        ])
+
+        # Header branding
+        branding = Paragraph("<b>NexaCare Hospital</b>", ParagraphStyle('HospBranding', parent=title_style, fontSize=24, leading=28, textColor=colors.HexColor('#16A085')))
+        elements.append(branding)
+        elements.append(Paragraph("Visit Summary & Consultation Report", title_style))
+        elements.append(Spacer(1, 10))
+
+        # Metadata Table formatting
+        p_name = f"{patient.first_name} {patient.last_name}" if patient else "N/A"
+        gender = patient.gender if patient else "N/A"
+        age_str = "N/A"
+        if patient and patient.dob:
+            today = date.today()
+            dob = patient.dob
+            calc_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            age_str = f"{calc_age}"
+
+        doc_name = f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "N/A"
+        dept_name = department.department_name if department else "N/A"
+
+        meta_data = [
+            [
+                Paragraph("Appointment No:", label_style), Paragraph(appointment.appointment_number, value_style),
+                Paragraph("Visit Date:", label_style), Paragraph(str(appointment.appointment_date), value_style)
+            ],
+            [
+                Paragraph("Patient Name:", label_style), Paragraph(p_name, value_style),
+                Paragraph("Gender / Age:", label_style), Paragraph(f"{gender} / {age_str} yrs", value_style)
+            ],
+            [
+                Paragraph("Doctor:", label_style), Paragraph(doc_name, value_style),
+                Paragraph("Department:", label_style), Paragraph(dept_name, value_style)
+            ]
+        ]
+        meta_table = Table(meta_data, colWidths=[100, 160, 100, 160])
+        meta_table.setStyle(header_table_style)
+        elements.append(meta_table)
+        elements.append(Spacer(1, 15))
+
+        # Clinical Findings
+        elements.append(Paragraph("Clinical Findings", section_heading))
+        findings_data = []
+
+        symptoms_text = clinical_record.symptoms if clinical_record else appointment.symptoms
+        findings_data.append([Paragraph("Symptoms:", label_style), Paragraph(symptoms_text or "No symptoms recorded", value_style)])
+
+        diagnosis_text = clinical_record.diagnosis if clinical_record else None
+        findings_data.append([Paragraph("Diagnosis:", label_style), Paragraph(diagnosis_text or "No diagnosis recorded", value_style)])
+
+        plan_text = clinical_record.treatment_plan if clinical_record else None
+        findings_data.append([Paragraph("Treatment Plan:", label_style), Paragraph(plan_text or "No treatment plan recorded", value_style)])
+
+        notes_text = clinical_record.notes if clinical_record else appointment.notes
+        findings_data.append([Paragraph("Doctor Notes:", label_style), Paragraph(notes_text or "No additional notes", value_style)])
+
+        findings_table = Table(findings_data, colWidths=[100, 420])
+        findings_table.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('LINEBELOW', (0,0), (-1,-1), 0.5, colors.HexColor('#BDC3C7')),
+        ]))
+        elements.append(findings_table)
+
+        # Prescription (Rx) if exists
+        if prescription:
+            elements.append(Spacer(1, 15))
+            elements.append(Paragraph("Rx (Prescribed Medicines)", section_heading))
+
+            rx_data = [[
+                Paragraph("<b>Medicine Name</b>", rx_header_style),
+                Paragraph("<b>Dosage</b>", rx_header_style),
+                Paragraph("<b>Frequency</b>", rx_header_style),
+                Paragraph("<b>Duration</b>", rx_header_style),
+                Paragraph("<b>Instructions</b>", rx_header_style)
+            ]]
+
+            for item in prescription.items:
+                med_name = item.medicine.name if item.medicine else "N/A"
+                rx_data.append([
+                    Paragraph(med_name, value_style),
+                    Paragraph(item.dosage, value_style),
+                    Paragraph(item.frequency, value_style),
+                    Paragraph(f"{item.duration_days} days", value_style),
+                    Paragraph(item.instructions or "-", value_style)
+                ])
+
+            rx_table = Table(rx_data, colWidths=[130, 80, 80, 70, 160])
+            rx_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2C3E50')),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 6),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('RIGHTPADDING', (0,0), (-1,-1), 6),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#BDC3C7')),
+            ]))
+            elements.append(rx_table)
+
+        # Signatures
+        elements.append(Spacer(1, 40))
+        sig_data = [
+            [Paragraph("____________________________", value_style), Paragraph("____________________________", value_style)],
+            [Paragraph("Patient Signature", label_style), Paragraph("Doctor's Signature / Seal", label_style)]
+        ]
+        sig_table = Table(sig_data, colWidths=[260, 260])
+        sig_table.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        elements.append(sig_table)
+
+        # Disclaimer
+        elements.append(Spacer(1, 25))
+        disclaimer = Paragraph(
+            "<i>This is a computer-generated document. For any queries or emergencies, please contact NexaCare Hospital.</i>",
+            ParagraphStyle('Disclaimer', parent=styles['Normal'], fontSize=8, alignment=1, textColor=colors.HexColor('#7F8C8D'))
+        )
+        elements.append(disclaimer)
+
+        doc.build(elements)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return pdf_bytes

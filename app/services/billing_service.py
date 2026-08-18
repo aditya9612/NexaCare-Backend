@@ -140,8 +140,14 @@ class BillingService:
 
         billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
+        
+        # Check if there are any completed refund payments
+        has_refund = any(p.is_refund and p.status == "completed" for p in billing.payments) if billing.payments else False
+
         if billing.balance_amount <= 0:
             billing.status = BillingStatus.PAID
+        elif has_refund and billing.paid_amount <= 0:
+            billing.status = BillingStatus.REFUNDED
         elif billing.paid_amount > 0:
             billing.status = BillingStatus.PARTIAL
         elif due_date_naive and due_date_naive < utc_now():
@@ -602,7 +608,7 @@ class BillingService:
         billing.paid_amount = round(billing.paid_amount - data.amount, 2)
         billing = await self._recalculate_billing(billing)
         if billing.paid_amount == 0 and billing.balance_amount > 0:
-            billing.status = BillingStatus.PENDING
+            billing.status = BillingStatus.REFUNDED
         await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
 
         from app.services.transaction_history_service import TransactionHistoryService
@@ -624,18 +630,40 @@ class BillingService:
         if not billing:
             raise NotFoundException("Billing record not found")
         patient = await self.patient_repo.get_by_id(billing.patient_id)
-        patient_name = f"{patient.first_name} {patient.last_name}" if patient else "N/A"
+        patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+        patient_phone = patient.phone if patient else "-"
+        patient_email = patient.email if patient else "-"
+
         items = [
-            {"description": i.description, "amount": f"{i.line_total:.2f}"}
+            {
+                "description": i.description,
+                "quantity": i.quantity,
+                "unit_price": f"{i.unit_price:.2f}",
+                "gst_rate": f"{i.gst_rate:.1f}",
+                "line_total": f"{i.line_total:.2f}",
+            }
             for i in billing.items
         ]
+
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
                 "patient_name": patient_name,
+                "patient_phone": patient_phone,
+                "patient_email": patient_email,
                 "date": utc_now().strftime("%Y-%m-%d"),
                 "items": items,
+                "subtotal": f"{billing.subtotal:.2f}",
+                "discount_percent": f"{billing.discount_percent:.1f}",
+                "discount_amount": f"{billing.discount_amount:.2f}",
+                "gst_rate": f"{billing.gst_rate:.1f}",
+                "gst_amount": f"{billing.gst_amount:.2f}",
+                "tax_amount": f"{billing.tax_amount:.2f}",
                 "total_amount": f"{billing.total_amount:.2f}",
+                "paid_amount": f"{billing.paid_amount:.2f}",
+                "balance_amount": f"{billing.balance_amount:.2f}",
+                "status": billing.status.title(),
+                "notes": billing.notes or "",
             },
         )
         billing.invoice_path = path

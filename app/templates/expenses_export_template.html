@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Expenses Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 15px;
+    }
+    body { font-family: 'DejaVuSans', sans-serif; font-size: 7px; line-height: 1.3; color: #333333; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
+    .meta { margin-bottom: 10px; font-size: 9px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 3px 2px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
+    tr:nth-child(even) { background-color: #fafafa; }
+  </style>
+</head>
+<body>
+  <h1>Expenses Report</h1>
+  <div class="meta">
+    <strong>Total Records:</strong> {{ expenses|length }} | <strong>Generated At:</strong> {{ generated_at }}
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 5%;">ID</th>
+        <th style="width: 12%;">Category</th>
+        <th style="width: 12%;">Vendor</th>
+        <th style="width: 10%;">Amount</th>
+        <th style="width: 25%;">Description</th>
+        <th style="width: 10%;">Expense Date</th>
+        <th style="width: 8%;">Status</th>
+        <th style="width: 10%;">Created At</th>
+        <th style="width: 8%;">Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in expenses %}
+      <tr>
+        <td>{{ item.id }}</td>
+        <td>{{ item.category_name }}</td>
+        <td>{{ item.vendor_name }}</td>
+        <td>{{ item.amount }}</td>
+        <td>{{ item.description }}</td>
+        <td>{{ item.expense_date }}</td>
+        <td>{{ item.status }}</td>
+        <td>{{ item.created_at }}</td>
+        <td>{{ item.source }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

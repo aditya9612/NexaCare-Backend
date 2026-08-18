@@ -327,12 +327,28 @@ async def get_test_result(
 @router.put("/results/{result_id}", response_model=APIResponse[TestResultResponse])
 async def update_test_result(
     result_id: int,
-    data: TestResultUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    remark: str = Form(...),
+    parameter_name: str | None = Form(None),
+    result_value: str | None = Form(None),
+    unit: str | None = Form(None),
+    normal_range: str | None = Form(None),
+    is_critical: bool | None = Form(None),
+    status: str | None = Form(None),
+    document: UploadFile | None = File(None),
     _: User = Depends(require_permission("lab", "update")),
 ):
-    result = await LabService(db).update_result(result_id, data, current_user.id)
+    data = TestResultUpdate(
+        remark=remark,
+        parameter_name=parameter_name,
+        result_value=result_value,
+        unit=unit,
+        normal_range=normal_range,
+        is_critical=is_critical,
+        status=status,
+    )
+    result = await LabService(db).update_result(result_id, data, current_user.id, document)
     return APIResponse(message="Test result updated", data=result)
 
 

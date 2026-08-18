@@ -746,11 +746,29 @@ class LabService:
         result_id: int,
         data,
         user_id: int,
+        document=None,
     ) -> TestResultResponse:
         result = await self.result_repo.get_by_id(result_id)
 
         if not result:
             raise NotFoundException("Test result not found")
+
+        if document:
+            from uuid import uuid4
+            import aiofiles
+            import os
+            upload_dir = "uploads/lab_results"
+            os.makedirs(upload_dir, exist_ok=True)
+
+            file_ext = os.path.splitext(document.filename)[1]
+            file_name = f"{uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, file_name)
+
+            async with aiofiles.open(file_path, "wb") as f:
+                while content := await document.read(1024 * 1024):
+                    await f.write(content)
+
+            result.document_url = file_path
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(result, key, value)

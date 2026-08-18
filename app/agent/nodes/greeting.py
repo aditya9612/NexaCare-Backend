@@ -69,11 +69,11 @@ def build_greeting_twiml(
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
-        f"{speak(greeting, twilio_language, base_url)}"
+        f"{speak(greeting, twilio_language, base_url, allow_generate=False)}"
         f'<Gather numDigits="1" action="{action}" method="POST" timeout="10">'
-        f"{speak(menu, twilio_language, base_url)}"
+        f"{speak(menu, twilio_language, base_url, allow_generate=False)}"
         "</Gather>"
-        f"{speak(no_input, twilio_language, base_url)}"
+        f"{speak(no_input, twilio_language, base_url, allow_generate=False)}"
         "<Hangup/>"
         "</Response>"
     )

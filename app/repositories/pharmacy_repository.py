@@ -118,15 +118,18 @@ class MedicineRepository:
         return medicine
 
     async def get_low_stock(self, skip: int = 0, limit: int = 50) -> list[Medicine]:
-        query = self._base_query().where(
-            Medicine.stock_quantity <= Medicine.reorder_level, Medicine.is_active.is_(True)
+        query = (
+            self._base_query()
+            .where(Medicine.stock_quantity <= Medicine.reorder_level, Medicine.is_active.is_(True))
+            .order_by(Medicine.updated_at.desc())
         )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def get_expiry_alerts(self, days: int = 30, skip: int = 0, limit: int = 50) -> list[Medicine]:
-        threshold = date.today() + timedelta(days=days)
+    async def get_expiry_alerts(self, reference_date: date, days: int = 30, skip: int = 0, limit: int = 50) -> list[Medicine]:
+        threshold = reference_date + timedelta(days=days)
         query = self._base_query().where(
+            Medicine.is_active.is_(True),
             Medicine.expiry_date.isnot(None),
             Medicine.expiry_date <= threshold,
             Medicine.stock_quantity > 0,
@@ -134,7 +137,7 @@ class MedicineRepository:
         result = await self.db.execute(query.order_by(Medicine.expiry_date.asc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def get_dashboard_counts(self) -> dict:
+    async def get_dashboard_counts(self, reference_date: date) -> dict:
         total_medicines = (await self.db.scalar(
             select(func.count(Medicine.id)).where(
                 Medicine.is_deleted.is_(False),
@@ -150,24 +153,36 @@ class MedicineRepository:
             )
         )) or 0
         
-        expired = (await self.db.scalar(
+        threshold = reference_date + timedelta(days=30)
+        expired_alerts = (await self.db.scalar(
             select(func.count(Medicine.id)).where(
                 Medicine.is_deleted.is_(False),
                 Medicine.is_active.is_(True),
+                Medicine.stock_quantity > 0,
                 Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date < utc_now().date()
+                Medicine.expiry_date <= threshold
+            )
+        )) or 0
+        
+        expired_strict = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.stock_quantity > 0,
+                Medicine.expiry_date.isnot(None),
+                Medicine.expiry_date < reference_date
             )
         )) or 0
         
         return {
             "total_medicines": total_medicines,
             "low_stock_alerts": low_stock,
-            "expired_medicines_alerts": expired
+            "expired_medicines_alerts": expired_strict,
+            "expired_alerts": expired_alerts
         }
 
-    async def get_inventory_counts(self) -> dict:
-        today = utc_now().date()
-        thirty_days_later = today + timedelta(days=30)
+    async def get_inventory_counts(self, reference_date: date) -> dict:
+        thirty_days_later = reference_date + timedelta(days=30)
 
         in_stock = (await self.db.scalar(
             select(func.count(Medicine.id)).where(
@@ -199,7 +214,7 @@ class MedicineRepository:
                 Medicine.is_deleted.is_(False),
                 Medicine.is_active.is_(True),
                 Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date >= today,
+                Medicine.expiry_date >= reference_date,
                 Medicine.expiry_date <= thirty_days_later
             )
         )) or 0
@@ -367,13 +382,21 @@ class PharmacyInvoiceRepository:
         await self.db.flush()
 
     async def get_sales_report(self, start, end) -> dict:
-        total = await self.db.scalar(
-            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.created_at >= start,
-                PharmacyInvoice.created_at <= end,
-            )
+        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.created_at <= end,
         )
+        stmt_count = select(func.count()).select_from(PharmacyInvoice).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.created_at <= end,
+        )
+        if start is not None:
+            stmt_total = stmt_total.where(PharmacyInvoice.created_at >= start)
+            stmt_count = stmt_count.where(PharmacyInvoice.created_at >= start)
+            
+        total = await self.db.scalar(stmt_total)
+        count = await self.db.scalar(stmt_count)
+        return {"total_sales": float(total or 0), "invoice_count": count or 0}
         count = await self.db.scalar(
             select(func.count()).select_from(PharmacyInvoice).where(
                 PharmacyInvoice.is_deleted.is_(False),
@@ -381,7 +404,75 @@ class PharmacyInvoiceRepository:
                 PharmacyInvoice.created_at <= end,
             )
         )
-        return {"total_sales": float(total or 0), "invoice_count": count or 0}
+        
+        # Query top selling medicines
+        top_meds_query = (
+            select(
+                PharmacyInvoiceItem.medicine_id.label("medicine_id"),
+                func.coalesce(Medicine.name, "Unknown Medicine").label("name"),
+                func.coalesce(Medicine.generic_name, "").label("generic_name"),
+                func.coalesce(Medicine.sku, "").label("sku"),
+                func.coalesce(
+                    func.sum(PharmacyInvoiceItem.quantity), 0
+                ).label("total_sold_quantity"),
+            )
+            .select_from(PharmacyInvoiceItem)
+            .join(
+                PharmacyInvoice,
+                PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id,
+            )
+            .outerjoin(
+                Medicine,
+                Medicine.id == PharmacyInvoiceItem.medicine_id,
+            )
+            .where(
+                # Include active invoices and legacy invoices where is_deleted is NULL
+                or_(
+                    PharmacyInvoice.is_deleted.is_(False),
+                    PharmacyInvoice.is_deleted.is_(None),
+                ),
+
+                # Exclude only cancelled invoices.
+                # NULL status is also considered valid.
+                or_(
+                    PharmacyInvoice.status.is_(None),
+                    PharmacyInvoice.status != "cancelled",
+                ),
+
+                # Apply selected report period
+                PharmacyInvoice.created_at >= start,
+                PharmacyInvoice.created_at <= end,
+            )
+            .group_by(
+                PharmacyInvoiceItem.medicine_id,
+                Medicine.name,
+                Medicine.generic_name,
+                Medicine.sku,
+            )
+            .order_by(
+                func.sum(PharmacyInvoiceItem.quantity).desc()
+            )
+            .limit(5)
+        )
+
+        top_meds_res = await self.db.execute(top_meds_query)
+
+        top_medicines = [
+            {
+                "medicine_id": row.medicine_id,
+                "name": row.name,
+                "generic_name": row.generic_name,
+                "sku": row.sku,
+                "total_sold_quantity": int(row.total_sold_quantity or 0),
+            }
+            for row in top_meds_res.all()
+        ]
+
+        return {
+            "total_sales": float(total or 0),
+            "invoice_count": count or 0,
+            "top_medicines": top_medicines,
+        }
 
     async def get_dashboard_sales(self) -> dict:
         now = utc_now()
@@ -505,7 +596,11 @@ class SupplierRepository:
 
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[Supplier]:
         result = await self.db.execute(
-            select(Supplier).where(Supplier.is_deleted.is_(False)).offset(skip).limit(limit)
+            select(Supplier)
+            .where(Supplier.is_deleted.is_(False))
+            .order_by(Supplier.created_at.desc(), Supplier.id.desc())
+            .offset(skip)
+            .limit(limit)
         )
         return list(result.scalars().all())
 
@@ -565,6 +660,14 @@ class SupplierRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_all_active(self) -> list[Supplier]:
+        result = await self.db.execute(
+            select(Supplier)
+            .where(Supplier.is_deleted.is_(False))
+            .order_by(Supplier.created_at.desc(), Supplier.id.desc())
+        )
+        return list(result.scalars().all())
 
 class PurchaseRepository:
     def __init__(self, db: AsyncSession):
@@ -764,15 +867,14 @@ class PharmacyDashboardRepository:
         ]
         return weeks
 
-    async def get_inventory_status_mix(self) -> dict:
-        today = date.today()
-        thirty_days_later = today + timedelta(days=30)
+    async def get_inventory_status_mix(self, reference_date: date) -> dict:
+        thirty_days_later = reference_date + timedelta(days=30)
 
         query = select(
-            func.sum(case(((Medicine.expiry_date != None) & (Medicine.expiry_date >= today) & (Medicine.expiry_date <= thirty_days_later) & (Medicine.stock_quantity > 0) & (Medicine.is_active == True), 1), else_=0)).label("expiring_soon"),
+            func.sum(case(((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later) & (Medicine.stock_quantity > 0) & (Medicine.is_active == True), 1), else_=0)).label("expiring_soon"),
             func.sum(case(((Medicine.stock_quantity <= 0) & (Medicine.is_active == True), 1), else_=0)).label("out_of_stock"),
-            func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= today) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
-            func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= today) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
+            func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
+            func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
         ).where(Medicine.is_deleted.is_(False))
 
         res = await self.db.execute(query)

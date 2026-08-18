@@ -416,7 +416,7 @@ class LabReportRepository:
                 TestOrder.doctor_id == doctor_id,
                 TestOrder.is_deleted.is_(False),
                 Patient.is_deleted.is_(False),
-                LabReport.status != LabReportStatus.APPROVED
+                LabReport.status == LabReportStatus.PENDING_APPROVAL
             )
             .order_by(LabReport.created_at.desc())
             .limit(limit)

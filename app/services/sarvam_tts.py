@@ -538,21 +538,31 @@ def synthesize_to_bytes(text: str, language_code: str) -> bytes:
     return _synthesize_builtin(clean, language_code)
 
 
-def get_or_create_audio_file(text: str, language_code: str) -> Path:
-    """Return cached audio path, generating via Sarvam on miss."""
+def get_cached_audio_file(text: str, language_code: str) -> Optional[Path]:
+    """Return cached audio path when present; never calls Sarvam."""
     voice_key = _active_voice_key()
     key = _cache_key(text, _normalize_language(language_code), voice_key)
     directory = cache_dir()
 
-    # Prefer any existing cache for this key (wav or mp3), repairing mislabeled files.
     for ext in ("wav", "mp3"):
         candidate = directory / f"{key}.{ext}"
         if candidate.exists() and candidate.stat().st_size > 0:
             path = _repair_cache_path(candidate)
             logger.debug("Sarvam TTS cache hit %s", path.name)
             return path
+    return None
+
+
+def get_or_create_audio_file(text: str, language_code: str) -> Path:
+    """Return cached audio path, generating via Sarvam on miss."""
+    cached = get_cached_audio_file(text, language_code)
+    if cached:
+        return cached
 
     audio = synthesize_to_bytes(text, language_code)
+    voice_key = _active_voice_key()
+    key = _cache_key(text, _normalize_language(language_code), voice_key)
+    directory = cache_dir()
     ext = _detect_audio_ext(audio)
     path = directory / f"{key}.{ext}"
     path.write_bytes(audio)
@@ -569,10 +579,18 @@ def public_audio_url(base_url: str, filename: str) -> str:
     return f"{base_url.rstrip('/')}/agent/v1/voice/audio/{filename}"
 
 
-def resolve_play_url(text: str, language_code: str, base_url: str) -> Optional[str]:
+def resolve_play_url(
+    text: str,
+    language_code: str,
+    base_url: str,
+    *,
+    allow_generate: bool = True,
+) -> Optional[str]:
     """
-    Generate (or reuse) cloned-voice audio and return a public Play URL.
-    Returns None when clone is disabled or generation fails.
+    Return a public Play URL for cloned-voice audio.
+
+    When allow_generate is False (webhook fast path), only cached audio is used
+    so Twilio gets TwiML immediately without waiting on Sarvam.
     """
     if not voice_clone_ready():
         return None
@@ -580,7 +598,13 @@ def resolve_play_url(text: str, language_code: str, base_url: str) -> Optional[s
         logger.warning("Sarvam TTS skipped: missing base_url")
         return None
     try:
-        path = get_or_create_audio_file(text, language_code)
+        if allow_generate:
+            path = get_or_create_audio_file(text, language_code)
+        else:
+            path = get_cached_audio_file(text, language_code)
+            if not path:
+                logger.debug("Sarvam TTS cache miss (allow_generate=False)")
+                return None
         return public_audio_url(base_url, path.name)
     except Exception as exc:
         logger.warning("Sarvam TTS failed, will fallback to <Say>: %s", exc)
@@ -594,12 +618,26 @@ def twilio_say(text: str, twilio_lang: str) -> str:
     return f'<Say language="{escape(twilio_lang)}"{voice_attr}>{escape(text)}</Say>'
 
 
-def speak(text: str, twilio_lang: str, base_url: str = "") -> str:
+def speak(
+    text: str,
+    twilio_lang: str,
+    base_url: str = "",
+    *,
+    allow_generate: bool = True,
+) -> str:
     """
     Preferred prompt element for the voice agent.
     Uses <Play> with Sarvam cloned audio when available; otherwise <Say>.
+
+    Pass allow_generate=False on latency-sensitive webhooks (incoming call,
+    language select) to avoid blocking on live Sarvam synthesis.
     """
-    play_url = resolve_play_url(text, twilio_lang, base_url)
+    play_url = resolve_play_url(
+        text,
+        twilio_lang,
+        base_url,
+        allow_generate=allow_generate,
+    )
     if play_url:
         return f'<Play>{escape(play_url)}</Play>'
     return twilio_say(text, twilio_lang)

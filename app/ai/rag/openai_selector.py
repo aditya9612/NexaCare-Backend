@@ -81,8 +81,7 @@ class OpenAITop5Selector:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                temperature=0.0,
-                max_tokens=80,
+                max_completion_tokens=200,
             )
             text = (response.choices[0].message.content or "").strip()
         except Exception as exc:

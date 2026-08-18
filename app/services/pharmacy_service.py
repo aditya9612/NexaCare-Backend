@@ -1076,14 +1076,29 @@ class PharmacyService:
         await self.db.flush()
         return self._purchase_response(purchase)
 
-    async def get_sales_report(self, period: str = "monthly") -> SalesReport:
+    async def get_sales_report(self, period: str = "all") -> SalesReport:
+        from datetime import timedelta
+        from app.core.exceptions import BadRequestException
+
+        valid_periods = {"daily", "weekly", "monthly", "yearly", "all", "overall"}
+        if period not in valid_periods:
+            raise BadRequestException(
+                f"Invalid period parameter. Allowed values: {', '.join(sorted(valid_periods))}"
+            )
+
         now = utc_now()
+        start = None
         if period == "daily":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "weekly":
+            start = now - timedelta(days=7)
+        elif period == "monthly":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         elif period == "yearly":
             start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif period in ("all", "overall"):
+            start = None
+
         data = await self.invoice_repo.get_sales_report(start, now)
         return SalesReport(period=period, top_medicines=[], **data)
 
@@ -1564,5 +1579,242 @@ class PharmacyService:
             pdf_bytes = html_to_pdf(html)
             return pdf_bytes, "application/pdf"
 
+        else:
+            raise BadRequestException("Invalid format specified for export")
+
+    async def generate_supplier_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Suppliers Bulk Import"
+        
+        headers = [
+            "name", "contact_person", "phone", "email", "address", "gst_number"
+        ]
+        ws.append(headers)
+        
+        # One valid sample row
+        ws.append([
+            "Alpha Pharma Distributors",
+            "Jane Doe",
+            "9876543211",
+            "janedoe@alphapharma.com",
+            "456 Medical Park, Sector 4",
+            "27AAAAA1111A1Z1"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_suppliers_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"name"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        seen_phones = set()
+        seen_emails = set()
+        seen_gsts = set()
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = str(val).strip()
+                    
+            try:
+                name_raw = row_dict.get("name")
+                if not name_raw:
+                    raise BadRequestException("name is required.")
+                name = str(name_raw).strip()
+                
+                phone_raw = row_dict.get("phone")
+                email_raw = row_dict.get("email")
+                gst_raw = row_dict.get("gst_number")
+                
+                # Check duplicate in file
+                if phone_raw:
+                    norm_phone = phone_raw.strip()
+                    if norm_phone.startswith("+91"):
+                        raw_ph = norm_phone[3:]
+                    elif norm_phone.startswith("91") and len(norm_phone) == 12:
+                        raw_ph = norm_phone[2:]
+                    else:
+                        raw_ph = norm_phone
+                    if raw_ph in seen_phones:
+                        raise BadRequestException(f"Duplicate phone number '{phone_raw}' found in upload file.")
+                    seen_phones.add(raw_ph)
+                    
+                if email_raw:
+                    norm_email = email_raw.strip().lower()
+                    if norm_email in seen_emails:
+                        raise BadRequestException(f"Duplicate email '{email_raw}' found in upload file.")
+                    seen_emails.add(norm_email)
+                    
+                if gst_raw:
+                    norm_gst = gst_raw.strip().upper()
+                    if norm_gst in seen_gsts:
+                        raise BadRequestException(f"Duplicate GST number '{gst_raw}' found in upload file.")
+                    seen_gsts.add(norm_gst)
+                
+                # Build SupplierCreate model to run validations
+                supplier_create = SupplierCreate(
+                    name=name,
+                    contact_person=row_dict.get("contact_person"),
+                    phone=phone_raw,
+                    email=email_raw,
+                    address=row_dict.get("address"),
+                    gst_number=gst_raw
+                )
+                
+                await self.create_supplier(supplier_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_suppliers(self, format_type: str):
+        from io import BytesIO
+        from datetime import datetime, date
+        
+        suppliers = await self.supplier_repo.get_all_active()
+        
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Suppliers Export"
+            
+            headers = [
+                "id", "name", "contact_person", "phone", "email",
+                "address", "gst_number", "is_active", "created_at"
+            ]
+            ws.append(headers)
+            
+            for s in suppliers:
+                row = [
+                    s.id,
+                    s.name,
+                    s.contact_person or "",
+                    s.phone or "",
+                    s.email or "",
+                    s.address or "",
+                    s.gst_number or "",
+                    "Active" if s.is_active else "Inactive",
+                    s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("suppliers_export_template.html")
+            
+            formatted_suppliers = []
+            for s in suppliers:
+                formatted_suppliers.append({
+                    "id": s.id,
+                    "name": s.name,
+                    "contact_person": s.contact_person,
+                    "phone": s.phone,
+                    "email": s.email,
+                    "address": s.address,
+                    "gst_number": s.gst_number,
+                    "is_active": s.is_active,
+                    "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
+                })
+                
+            html_content = template.render(
+                suppliers=formatted_suppliers,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
         else:
             raise BadRequestException("Invalid format specified for export")

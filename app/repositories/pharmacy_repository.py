@@ -382,13 +382,21 @@ class PharmacyInvoiceRepository:
         await self.db.flush()
 
     async def get_sales_report(self, start, end) -> dict:
-        total = await self.db.scalar(
-            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.created_at >= start,
-                PharmacyInvoice.created_at <= end,
-            )
+        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.created_at <= end,
         )
+        stmt_count = select(func.count()).select_from(PharmacyInvoice).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.created_at <= end,
+        )
+        if start is not None:
+            stmt_total = stmt_total.where(PharmacyInvoice.created_at >= start)
+            stmt_count = stmt_count.where(PharmacyInvoice.created_at >= start)
+            
+        total = await self.db.scalar(stmt_total)
+        count = await self.db.scalar(stmt_count)
+        return {"total_sales": float(total or 0), "invoice_count": count or 0}
         count = await self.db.scalar(
             select(func.count()).select_from(PharmacyInvoice).where(
                 PharmacyInvoice.is_deleted.is_(False),
@@ -588,7 +596,11 @@ class SupplierRepository:
 
     async def list_all(self, skip: int = 0, limit: int = 20) -> list[Supplier]:
         result = await self.db.execute(
-            select(Supplier).where(Supplier.is_deleted.is_(False)).offset(skip).limit(limit)
+            select(Supplier)
+            .where(Supplier.is_deleted.is_(False))
+            .order_by(Supplier.created_at.desc(), Supplier.id.desc())
+            .offset(skip)
+            .limit(limit)
         )
         return list(result.scalars().all())
 
@@ -648,6 +660,14 @@ class SupplierRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_all_active(self) -> list[Supplier]:
+        result = await self.db.execute(
+            select(Supplier)
+            .where(Supplier.is_deleted.is_(False))
+            .order_by(Supplier.created_at.desc(), Supplier.id.desc())
+        )
+        return list(result.scalars().all())
 
 class PurchaseRepository:
     def __init__(self, db: AsyncSession):

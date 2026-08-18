@@ -1,5 +1,11 @@
 from datetime import date
-from fastapi import APIRouter, Depends, Query
+from enum import Enum
+from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException
+from fastapi.responses import Response, StreamingResponse
+
+class ExpenseExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -155,6 +161,60 @@ async def get_expenses_summary(
 ):
     summary = await ExpenseService(db).get_expense_summary(start_date, end_date)
     return APIResponse(message="Expenses summary retrieved", data=summary)
+
+
+@router.get("/bulk-template")
+async def download_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("expense", "create")),
+):
+    stream = await ExpenseService(db).generate_expense_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=expenses_bulk_template.xlsx"}
+    )
+
+
+@router.post("/bulk-upload", status_code=201)
+async def upload_expenses_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("expense", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await ExpenseService(db).import_expenses_from_excel(file, current_user.id)
+    return APIResponse(message="Expenses bulk upload processed", data=result)
+
+
+@router.get("/export")
+async def export_expenses(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ExpenseExportFormat = Query(ExpenseExportFormat.EXCEL),
+    _: User = Depends(require_permission("expense", "read")),
+):
+    data, media_type = await ExpenseService(db).export_expenses(format.value)
+    
+    if format == ExpenseExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=expenses_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=expenses_export.pdf"}
+        )
 
 
 # --- Expenses ---

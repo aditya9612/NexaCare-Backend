@@ -23,6 +23,8 @@ from app.schemas.lab_schema import (
     TestResultUpdate,
     TestResultResponse,
     DoctorRemarkUpdate,
+    LabOcrExtractionDetailResponse,
+    LabOcrApproveRequest,
 )
 from app.services.lab_service import LabService
 from app.utils.pagination import PaginatedResult
@@ -591,4 +593,28 @@ async def process_report_ocr(
 ):
     result = await LabService(db).process_report_ocr(order_id, file, current_user)
     return APIResponse(message="Lab report OCR extraction successful", data=result)
+
+
+@router.get("/ocr/{extraction_id}", response_model=APIResponse[LabOcrExtractionDetailResponse])
+async def get_ocr_extraction(
+    extraction_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    result = await LabService(db).get_ocr_extraction(extraction_id)
+    return APIResponse(message="OCR extraction details retrieved", data=result)
+
+
+@router.post("/ocr/{extraction_id}/approve", response_model=APIResponse[dict])
+async def approve_ocr_extraction(
+    extraction_id: int,
+    data: LabOcrApproveRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "create")),
+):
+    result = await LabService(db).approve_ocr_extraction(extraction_id, data, current_user)
+    return APIResponse(message="OCR extraction approved and saved to test results", data=result)
+
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -50,6 +50,7 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     samples: Mapped[list["Sample"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     results: Mapped[list["TestResult"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     reports: Mapped[list["LabReport"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
+    ocr_extractions: Mapped[list["LabOcrExtraction"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     department = relationship("Department", back_populates="test_orders")
 
 
@@ -105,3 +106,50 @@ class LabReport(Base, TimestampMixin):
     generated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="reports")
+    ocr_extraction: Mapped[list["LabOcrExtraction"]] = relationship(back_populates="report")
+
+
+class LabOcrExtraction(Base, TimestampMixin):
+    __tablename__ = "lab_ocr_extractions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    test_order_id: Mapped[int] = mapped_column(ForeignKey("test_orders.id", ondelete="CASCADE"), index=True)
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id", ondelete="SET NULL"), nullable=True, index=True)
+    report_id: Mapped[int | None] = mapped_column(ForeignKey("lab_reports.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Extracted Patient Identifiers
+    extracted_patient_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    extracted_first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    extracted_last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # File data
+    file_path: Mapped[str] = mapped_column(String(500))
+
+    # Processing metadata
+    status: Mapped[str] = mapped_column(String(50), default="pending_review", index=True)  # pending_review, approved, rejected
+    model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    extracted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # Relationships
+    test_order: Mapped["TestOrder"] = relationship(back_populates="ocr_extractions")
+    report: Mapped["LabReport"] = relationship(back_populates="ocr_extraction")
+    patient = relationship("Patient")
+    items: Mapped[list["LabOcrExtractionItem"]] = relationship(back_populates="extraction", cascade="all, delete-orphan")
+
+
+class LabOcrExtractionItem(Base, TimestampMixin):
+    __tablename__ = "lab_ocr_extraction_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    ocr_extraction_id: Mapped[int] = mapped_column(ForeignKey("lab_ocr_extractions.id", ondelete="CASCADE"), index=True)
+    parameter_name: Mapped[str] = mapped_column(String(255), index=True)
+    result_value: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    normal_range: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    remarks: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_matched_catalog: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)  # pending, completed
+
+    extraction: Mapped["LabOcrExtraction"] = relationship(back_populates="items")
+
+

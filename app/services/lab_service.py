@@ -1239,20 +1239,27 @@ class LabService:
         if not api_key:
             raise BadRequestException("GEMINI_API_KEY environment variable is not set.")
         
+        from app.models.lab_model import LabReport, TestResult, LabTest, LabOcrExtraction
+        from app.models.patient_model import Patient
+
         try:
             client = genai.Client(api_key=api_key)
             model = settings.GEMINI_MODEL or "gemini-2.5-flash"
             
             system_prompt = (
                 "You are an expert AI clinical data extractor.\n"
-                "Analyze the provided document file and raw OCR text from a laboratory report and extract the test results into the required structured JSON format.\n"
-                "Each extracted test result must conform to this schema:\n"
-                "- test_name: The name of the test parameter (e.g. Hemoglobin, WBC, Platelets, TSH)\n"
-                "- result_value: The numeric or text value of the test result (e.g. '13.5', 'Positive')\n"
-                "- normal_range: The normal reference range if listed (e.g. '13-17', 'Negative')\n"
-                "- remarks: Any remarks, flags or notes specifically linked to this parameter (e.g. 'High', 'Low')\n\n"
+                "Analyze the provided document file and raw OCR text from a laboratory report and extract both the patient details and test results into the required structured JSON format.\n\n"
+                "Schema fields to extract:\n"
+                "- patient_code: The Patient ID / UHID / Patient Code / Reg No / MRN if present on the report (e.g. 'PAT-2026081800A1FE', '127', 'UHID-9812'). Otherwise null.\n"
+                "- first_name: The patient's first name if clearly stated (e.g. 'Tom'). Otherwise null.\n"
+                "- last_name: The patient's last name / surname if clearly stated (e.g. 'Patient'). Otherwise null.\n"
+                "- test_results: List of extracted test parameters and results. Each item must have:\n"
+                "  * test_name: The name of the test parameter/analyte (e.g. Hemoglobin, WBC, Platelets, TSH)\n"
+                "  * result_value: The numeric or text value of the test result (e.g. '13.5', 'Positive')\n"
+                "  * normal_range: The normal reference range if listed (e.g. '13-17', 'Negative')\n"
+                "  * remarks: Any remarks, flags or notes specifically linked to this parameter (e.g. 'High', 'Low')\n\n"
                 "CRITICAL RULES:\n"
-                "1. Never invent or guess medical values. If a value is missing or unclear, return null/empty according to the schema.\n"
+                "1. Never invent or guess medical or patient values. If a value is missing or unclear, return null/empty according to the schema.\n"
                 "2. Preserve the value exactly as extracted where possible (no rounding or conversions).\n"
                 "3. Do not provide any medical diagnosis or interpretation. Only extract structured data.\n"
                 "4. Extract multiple test results/parameters from the same report if present."
@@ -1271,19 +1278,42 @@ class LabService:
                 
             contents = [
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                f"Raw OCR Text:\n{raw_text}\n\nAnalyze both the provided document file and the raw OCR text above to extract all parameters accurately."
+                f"Raw OCR Text:\n{raw_text}\n\nAnalyze both the provided document file and the raw OCR text above to extract patient details and all parameters accurately."
             ]
             
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.0,
-                    response_mime_type="application/json",
-                    response_schema=ExtractedLabReport,
-                ),
-            )
+            # List of models to try in case of 503 High Demand or transient unavailability
+            models_to_try = [model]
+            for fallback in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+                if fallback not in models_to_try:
+                    models_to_try.append(fallback)
+
+            response = None
+            last_error = None
+            for candidate_model in models_to_try:
+                try:
+                    logger.info(f"Attempting Gemini LLM extraction with model: {candidate_model}")
+                    response = client.models.generate_content(
+                        model=candidate_model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            temperature=0.0,
+                            response_mime_type="application/json",
+                            response_schema=ExtractedLabReport,
+                        ),
+                    )
+                    model = candidate_model  # update to the successfully used model
+                    break
+                except Exception as ex:
+                    last_error = ex
+                    err_str = str(ex)
+                    logger.warning(f"Model {candidate_model} failed with: {err_str}. Trying next fallback if available.")
+                    # Continue trying next model if 503/429 or transient error
+                    continue
+
+            if response is None:
+                raise last_error or Exception("All Gemini model attempts failed.")
+
             extracted_json = json.loads(response.text)
             report_data = ExtractedLabReport.model_validate(extracted_json)
         except Exception as e:
@@ -1297,13 +1327,48 @@ class LabService:
         created_results = []
         unmatched_params = []
         
+        from app.models.lab_model import LabReport, TestResult, LabTest, LabOcrExtraction, LabOcrExtractionItem
+        from app.models.patient_model import Patient
+
+        # 7. Match or Link Patient ID & Create LabOcrExtraction Record
+        patient_id_for_extraction = order.patient_id
+        if report_data.patient_code:
+            matched_patient = await self.db.scalar(
+                select(Patient).where(
+                    (Patient.patient_code == report_data.patient_code.strip()) |
+                    (Patient.id == (int(report_data.patient_code.strip()) if report_data.patient_code.strip().isdigit() else -1)),
+                    Patient.is_deleted == False
+                )
+            )
+            if matched_patient:
+                patient_id_for_extraction = matched_patient.id
+
+        ocr_extraction_record = LabOcrExtraction(
+            test_order_id=order.id,
+            patient_id=patient_id_for_extraction,
+            report_id=None,
+            extracted_patient_code=report_data.patient_code,
+            extracted_first_name=report_data.first_name,
+            extracted_last_name=report_data.last_name,
+            file_path=file_path,
+            status="pending_review",
+            model_used=model,
+            extracted_by=current_user.id
+        )
+        self.db.add(ocr_extraction_record)
+        await self.db.flush()
+
+        # 8. Insert Extracted Items into lab_ocr_extraction_items
+        created_items = []
+        unmatched_count = 0
+        ordered_test_name = order.lab_test.test_name if order.lab_test else ""
+
         for param in report_data.test_results:
             if not param.test_name or not param.test_name.strip():
                 continue
-                
+
             # Matching validation against test catalog
             is_matched = False
-            ordered_test_name = order.lab_test.test_name if order.lab_test else ""
             if ordered_test_name.lower().strip() == param.test_name.lower().strip():
                 is_matched = True
             else:
@@ -1316,78 +1381,211 @@ class LabService:
                 )
                 if catalog_test_res.scalar_one_or_none():
                     is_matched = True
-            
-            # Map unmatched parameters as pending human-review items
-            result_status = "completed" if is_matched else "pending"
+
             if not is_matched:
-                unmatched_params.append(param.test_name)
-                
-            # Create TestResult record
+                unmatched_count += 1
+
+            extraction_item = LabOcrExtractionItem(
+                ocr_extraction_id=ocr_extraction_record.id,
+                parameter_name=param.test_name.strip(),
+                result_value=param.result_value or "",
+                normal_range=param.normal_range or None,
+                unit=param.unit or None,
+                remarks=param.remarks or "",
+                is_matched_catalog=is_matched,
+                status="completed" if is_matched else "pending"
+            )
+            self.db.add(extraction_item)
+            created_items.append(extraction_item)
+
+        await self.db.flush()
+
+        # Update TestOrder status to in_progress
+        order.status = LabOrderStatus.IN_PROGRESS
+        await self.order_repo.update(order)
+
+        # Create audit log
+        await self.audit_repo.create(
+            action="create",
+            resource="lab_ocr_extraction",
+            user_id=current_user.id,
+            resource_id=str(ocr_extraction_record.id),
+            details=f"OCR extracted {len(created_items)} items for review. File saved to {file_path}"
+        )
+
+        return {
+            "ocr_extraction_id": ocr_extraction_record.id,
+            "test_order_id": order.id,
+            "test_order_number": order.order_number,
+            "status": ocr_extraction_record.status,
+            "file_path": file_path,
+            "patient_info": {
+                "patient_id": patient_id_for_extraction,
+                "extracted_patient_code": report_data.patient_code,
+                "extracted_first_name": report_data.first_name,
+                "extracted_last_name": report_data.last_name,
+            },
+            "items": [
+                {
+                    "id": item.id,
+                    "parameter_name": item.parameter_name,
+                    "result_value": item.result_value,
+                    "normal_range": item.normal_range,
+                    "unit": item.unit,
+                    "remarks": item.remarks,
+                    "is_matched_catalog": item.is_matched_catalog,
+                    "status": item.status,
+                }
+                for item in created_items
+            ]
+        }
+
+    async def get_ocr_extraction(self, extraction_id: int) -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.lab_model import LabOcrExtraction
+        from app.core.exceptions import NotFoundException
+
+        query = (
+            select(LabOcrExtraction)
+            .where(LabOcrExtraction.id == extraction_id)
+            .options(selectinload(LabOcrExtraction.items))
+        )
+        res = await self.db.execute(query)
+        extraction = res.scalar_one_or_none()
+        if not extraction:
+            raise NotFoundException("OCR Extraction record not found")
+
+        return {
+            "id": extraction.id,
+            "test_order_id": extraction.test_order_id,
+            "patient_id": extraction.patient_id,
+            "report_id": extraction.report_id,
+            "extracted_patient_code": extraction.extracted_patient_code,
+            "extracted_first_name": extraction.extracted_first_name,
+            "extracted_last_name": extraction.extracted_last_name,
+            "file_path": extraction.file_path,
+            "status": extraction.status,
+            "model_used": extraction.model_used,
+            "extracted_by": extraction.extracted_by,
+            "created_at": extraction.created_at,
+            "items": [
+                {
+                    "id": item.id,
+                    "ocr_extraction_id": item.ocr_extraction_id,
+                    "parameter_name": item.parameter_name,
+                    "result_value": item.result_value,
+                    "normal_range": item.normal_range,
+                    "unit": item.unit,
+                    "remarks": item.remarks,
+                    "is_matched_catalog": item.is_matched_catalog,
+                    "status": item.status,
+                    "created_at": item.created_at,
+                }
+                for item in extraction.items
+            ]
+        }
+
+    async def approve_ocr_extraction(
+        self,
+        extraction_id: int,
+        data,
+        current_user
+    ) -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.lab_model import LabOcrExtraction, LabReport, TestResult
+        from app.core.constants import LabReportStatus, LabOrderStatus
+        from app.core.exceptions import BadRequestException, NotFoundException
+
+        query = (
+            select(LabOcrExtraction)
+            .where(LabOcrExtraction.id == extraction_id)
+            .options(selectinload(LabOcrExtraction.items))
+        )
+        res = await self.db.execute(query)
+        extraction = res.scalar_one_or_none()
+        if not extraction:
+            raise NotFoundException("OCR Extraction record not found")
+
+        if extraction.status == "approved":
+            raise BadRequestException("This OCR extraction has already been approved.")
+
+        order = await self.order_repo.get_by_id(extraction.test_order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        # 1. Insert approved items into test_results table
+        created_results = []
+        for item in data.items:
             test_result = TestResult(
                 test_order_id=order.id,
-                parameter_name=param.test_name,
-                result_value=param.result_value or "",
-                unit=None,
-                normal_range=param.normal_range,
-                is_critical=False,
-                status=result_status,
+                parameter_name=item.parameter_name.strip(),
+                result_value=item.result_value or "",
+                unit=item.unit,
+                normal_range=item.normal_range,
+                is_critical=item.is_critical,
+                status="completed",
                 entered_by=current_user.id,
                 entered_at=utc_now(),
-                document_url=file_path,
-                remark=param.remarks or ""
+                document_url=extraction.file_path,
+                remark=item.remarks or ""
             )
             self.db.add(test_result)
             created_results.append(test_result)
 
-        # 8. Create LabReport in draft status
-        report_remarks = "AI OCR extraction complete."
-        if unmatched_params:
-            report_remarks += f" Parameters requiring manual review (not found in catalog): {', '.join(unmatched_params)}."
-            
+        # 2. Create official LabReport in draft status
         report = LabReport(
             test_order_id=order.id,
             report_number=generate_lab_report_number(),
             status=LabReportStatus.DRAFT,
-            summary="AI OCR Extracted report.",
-            remarks=report_remarks,
-            report_path=file_path,
+            summary="Lab report generated from approved AI OCR extraction.",
+            remarks=data.report_remarks or "AI OCR extraction verified and approved by laboratory staff.",
+            report_path=extraction.file_path,
             generated_by=current_user.id,
             generated_at=utc_now()
         )
         self.db.add(report)
-        
-        # Flush to populate IDs
         await self.db.flush()
-        
-        # Update TestOrder status to in_progress
+
+        # 3. Update extraction status to approved and link report_id
+        extraction.status = "approved"
+        extraction.report_id = report.id
+        await self.db.flush()
+
+        # 4. Update TestOrder status
         order.status = LabOrderStatus.IN_PROGRESS
         await self.order_repo.update(order)
-        
-        # Create audit log
+
+        # 5. Audit Log
         await self.audit_repo.create(
-            action="create",
-            resource="lab_report",
+            action="approve",
+            resource="lab_ocr_extraction",
             user_id=current_user.id,
-            resource_id=str(report.id),
-            details=f"OCR extracted {len(created_results)} parameters. Saved original to {file_path}"
+            resource_id=str(extraction.id),
+            details=f"Approved OCR extraction ID {extraction.id}. Generated {len(created_results)} test_results and Report ID {report.id}."
         )
-        
+
         return {
+            "message": "OCR extraction approved and results successfully transferred to test_results",
+            "extraction_id": extraction.id,
+            "status": extraction.status,
             "report_id": report.id,
             "report_number": report.report_number,
-            "status": report.status,
-            "remarks": report.remarks,
-            "test_order_number": order.order_number,
+            "test_order_id": order.id,
+            "test_results_count": len(created_results),
             "test_results": [
                 {
                     "result_id": r.id,
                     "parameter_name": r.parameter_name,
                     "result_value": r.result_value,
+                    "unit": r.unit,
                     "normal_range": r.normal_range,
-                    "status": r.status,
-                    "remarks": r.remark
+                    "is_critical": r.is_critical,
+                    "status": r.status
                 }
                 for r in created_results
             ]
         }
+
 

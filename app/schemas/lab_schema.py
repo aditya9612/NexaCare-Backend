@@ -200,7 +200,72 @@ class ExtractedTestResult(BaseModel):
     test_name: str = Field(..., description="The name of the test parameter/analyte (e.g. Hemoglobin, WBC)")
     result_value: str | None = Field(default=None, description="The extracted numeric or text value of the result")
     normal_range: str | None = Field(default=None, description="The normal reference range if listed")
+    unit: str | None = Field(default=None, description="Unit of measurement if listed (e.g. g/dL, mg/dL)")
     remarks: str | None = Field(default="", description="Any flags or remarks (e.g. High, Low, Critical)")
 
 class ExtractedLabReport(BaseModel):
-    test_results: list[ExtractedTestResult]
+    patient_code: str | None = Field(default=None, description="Patient ID / Patient Code / UHID / Reg No if present in report")
+    first_name: str | None = Field(default=None, description="Patient first name if present in report")
+    last_name: str | None = Field(default=None, description="Patient last name if present in report")
+    test_results: list[ExtractedTestResult] = Field(default_factory=list, description="List of extracted test parameters and results")
+
+
+class LabOcrExtractionItemResponse(BaseSchema):
+    id: int
+    ocr_extraction_id: int
+    parameter_name: str
+    result_value: str | None = None
+    normal_range: str | None = None
+    unit: str | None = None
+    remarks: str | None = None
+    is_matched_catalog: bool = False
+    status: str
+    created_at: datetime
+
+
+class LabOcrExtractionResponse(BaseSchema):
+    id: int
+    test_order_id: int
+    patient_id: int | None = None
+    report_id: int | None = None
+    extracted_patient_code: str | None = None
+    extracted_first_name: str | None = None
+    extracted_last_name: str | None = None
+    file_path: str
+    status: str
+    model_used: str | None = None
+    extracted_by: int | None = None
+    created_at: datetime
+
+
+class LabOcrExtractionDetailResponse(BaseSchema):
+    id: int
+    test_order_id: int
+    patient_id: int | None = None
+    report_id: int | None = None
+    extracted_patient_code: str | None = None
+    extracted_first_name: str | None = None
+    extracted_last_name: str | None = None
+    file_path: str
+    status: str
+    model_used: str | None = None
+    extracted_by: int | None = None
+    items: list[LabOcrExtractionItemResponse] = []
+    created_at: datetime
+
+
+class LabOcrApproveItemRequest(BaseSchema):
+    id: int | None = None  # Existing item ID or None for newly added parameter
+    parameter_name: str
+    result_value: str
+    unit: str | None = None
+    normal_range: str | None = None
+    remarks: str | None = None
+    is_critical: bool = False
+
+
+class LabOcrApproveRequest(BaseSchema):
+    report_remarks: str | None = None
+    items: list[LabOcrApproveItemRequest] = Field(..., min_length=1, description="List of approved test items to insert into test_results")
+
+

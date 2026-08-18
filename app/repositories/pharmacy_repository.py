@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, or_, select, case
+from sqlalchemy import func, or_, select, case, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -319,12 +319,15 @@ class PrescriptionRepository:
     async def update(self, prescription: Prescription, items: list[PrescriptionItem] | None = None) -> Prescription:
         await self.db.flush()
         if items is not None:
-            prescription.items.clear()
+            # Delete existing items using explicit query to avoid collection orphan/refresh conflicts
+            await self.db.execute(
+                delete(PrescriptionItem).where(PrescriptionItem.prescription_id == prescription.id)
+            )
+            await self.db.flush()
             for item in items:
                 item.prescription_id = prescription.id
                 self.db.add(item)
             await self.db.flush()
-        await self.db.refresh(prescription)
         return prescription
 
     async def soft_delete(self, prescription: Prescription) -> None:

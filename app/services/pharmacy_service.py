@@ -355,7 +355,11 @@ class PharmacyService:
                     raise BadRequestException("Doctors can only update prescription status to 'pending' or 'sent_to_pharmacy'.")
 
         if data.patient_id is not None:
+            patient = await self.patient_repo.get_by_id(data.patient_id)
+            if not patient:
+                raise NotFoundException("Patient not found")
             prescription.patient_id = data.patient_id
+
         if data.instructions is not None:
             prescription.instructions = data.instructions
         if data.status is not None:
@@ -363,6 +367,10 @@ class PharmacyService:
 
         items = None
         if data.items is not None:
+            for item_data in data.items:
+                medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+                if not medicine:
+                    raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
             items = [PrescriptionItem(**item.model_dump()) for item in data.items]
 
         prescription = await self.prescription_repo.update(prescription, items)

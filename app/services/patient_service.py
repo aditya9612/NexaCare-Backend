@@ -368,3 +368,13 @@ class PatientService:
                 pass
         await self.repo.delete_document(doc)
         await self.audit_repo.create("delete", "patient_documents", user_id=user_id, resource_id=str(document_id))
+
+    async def delete_family_member(self, patient_id: int, member_id: int, user_id: int) -> None:
+        await self.get_by_id(patient_id)
+        member = await self.repo.get_family_member(member_id)
+        if not member:
+            raise NotFoundException("Family member not found")
+        if member.patient_id != patient_id:
+            raise BadRequestException("Family member does not belong to this patient")
+        await self.repo.delete_family_member(member)
+        await self.audit_repo.create("delete", "family_members", user_id=user_id, resource_id=str(member_id))

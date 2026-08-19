@@ -23,6 +23,15 @@ class TransactionHistoryService:
     async def create_transaction_history(
         self, data: TransactionHistoryCreate, user_id: int
     ) -> TransactionHistoryResponse:
+        if data.transaction_id is not None:
+            from sqlalchemy import select
+            from app.models.billing_model import Payment
+            stmt = select(Payment).where(Payment.id == data.transaction_id)
+            res = await self.db.execute(stmt)
+            payment = res.scalar_one_or_none()
+            if not payment:
+                raise NotFoundException("Transaction not found")
+
         tx_history = TransactionHistory(
             event_type=data.event_type.strip().upper(),
             reference_no=data.reference_no.strip(),

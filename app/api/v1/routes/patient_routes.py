@@ -393,6 +393,18 @@ async def list_family_members(
     return APIResponse(message="Family members retrieved", data=members)
 
 
+@router.delete("/{patient_id}/family-members/{member_id}", response_model=APIResponse[MessageResponse])
+async def delete_family_member(
+    patient_id: int,
+    member_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "update")),
+):
+    await PatientService(db).delete_family_member(patient_id, member_id, current_user.id)
+    return APIResponse(message="Family member deleted successfully", data=MessageResponse(message="Deleted"))
+
+
 @router.get("/{patient_id}/clinical-records", response_model=APIResponse[PaginatedResult[ClinicalRecordResponse]])
 async def list_patient_clinical_records(
     patient_id: int,

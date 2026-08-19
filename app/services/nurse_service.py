@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -218,9 +218,15 @@ class NurseService:
 
         await self._get_nurse_or_raise(nurse_id)
 
+        # Normalize start_time and end_time to be timezone-naive
+        if data.start_time.tzinfo is not None:
+            data.start_time = data.start_time.replace(tzinfo=None)
+        if data.end_time.tzinfo is not None:
+            data.end_time = data.end_time.replace(tzinfo=None)
+
         # 2. Start Time Should not be Greater Than End Time
-        if data.start_time >= data.end_time:
-            raise BadRequestException("Start time must be before end time")
+        if data.start_time == data.end_time:
+            raise BadRequestException("Start time cannot be equal to end time")
 
         # 3. It Should be Possible to Create Shift Schedule For Particular Date Range.
         target_dates = []
@@ -240,6 +246,14 @@ class NurseService:
 
         created_shifts = []
 
+        def get_shift_interval(s_date, s_time, e_time):
+            start_dt = datetime.combine(s_date, s_time)
+            if s_time < e_time:
+                end_dt = datetime.combine(s_date, e_time)
+            else:
+                end_dt = datetime.combine(s_date + timedelta(days=1), e_time)
+            return start_dt, end_dt
+
         # Validate all dates and check overlaps before inserting any records
         for target_date in target_dates:
             # 1. It Should Not be Possible to Create Nurse Shift For Past Dates.
@@ -249,30 +263,34 @@ class NurseService:
             # 4. It Should not be Possible to Create Shift For Same Time Slot Twice.
             overlap_query = select(NurseShift).where(
                 NurseShift.nurse_id == nurse_id,
-                NurseShift.shift_date == target_date
+                NurseShift.shift_date.in_([
+                    target_date - timedelta(days=1),
+                    target_date,
+                    target_date + timedelta(days=1)
+                ])
             )
             res = await self.db.execute(overlap_query)
             existing_shifts = res.scalars().all()
+            
+            new_start_dt, new_end_dt = get_shift_interval(target_date, data.start_time, data.end_time)
+            
             for existing in existing_shifts:
-                if existing.start_time < data.end_time and data.start_time < existing.end_time:
+                ex_start_dt, ex_end_dt = get_shift_interval(existing.shift_date, existing.start_time, existing.end_time)
+                if new_start_dt < ex_end_dt and ex_start_dt < new_end_dt:
                     raise BadRequestException(
                         f"Shift overlaps with an existing shift on {target_date}"
                     )
 
         # Create all shifts
         for target_date in target_dates:
-            # Calculate dynamic status
-            # 5. Remove Status Filed, Status need To Change Automatically
-            if target_date > date.today():
+            # Calculate dynamic status automatically using datetime comparison
+            now_dt = datetime.now()
+            shift_start_dt, shift_end_dt = get_shift_interval(target_date, data.start_time, data.end_time)
+            
+            if now_dt < shift_start_dt:
                 status = "Scheduled"
-            elif target_date == date.today():
-                current_time = datetime.now().time()
-                if current_time < data.start_time:
-                    status = "Scheduled"
-                elif data.start_time <= current_time <= data.end_time:
-                    status = "Active"
-                else:
-                    status = "Completed"
+            elif shift_start_dt <= now_dt <= shift_end_dt:
+                status = "Active"
             else:
                 status = "Completed"
 
@@ -311,30 +329,58 @@ class NurseService:
         if not shift:
             raise NotFoundException("Shift not found")
 
+        # Normalize start_time and end_time to be timezone-naive
+        if data.start_time is not None and data.start_time.tzinfo is not None:
+            data.start_time = data.start_time.replace(tzinfo=None)
+        if data.end_time is not None and data.end_time.tzinfo is not None:
+            data.end_time = data.end_time.replace(tzinfo=None)
+
         # Create copies of values to check updated constraints
         dump = data.model_dump(exclude_unset=True)
         new_start_time = dump.get("start_time", shift.start_time)
         new_end_time = dump.get("end_time", shift.end_time)
         new_shift_date = dump.get("shift_date", shift.shift_date)
 
+        # Ensure any retrieved existing database/model times are also naive
+        if hasattr(new_start_time, "tzinfo") and new_start_time.tzinfo is not None:
+            new_start_time = new_start_time.replace(tzinfo=None)
+        if hasattr(new_end_time, "tzinfo") and new_end_time.tzinfo is not None:
+            new_end_time = new_end_time.replace(tzinfo=None)
+
         # 1. Past Date Validation
         if new_shift_date < date.today():
             raise BadRequestException("Cannot update shift to a past date")
 
         # 2. Time Ordering
-        if new_start_time >= new_end_time:
-            raise BadRequestException("Start time must be before end time")
+        if new_start_time == new_end_time:
+            raise BadRequestException("Start time cannot be equal to end time")
 
         # 4. Overlap Check
         overlap_query = select(NurseShift).where(
             NurseShift.nurse_id == nurse_id,
-            NurseShift.shift_date == new_shift_date,
+            NurseShift.shift_date.in_([
+                new_shift_date - timedelta(days=1),
+                new_shift_date,
+                new_shift_date + timedelta(days=1)
+            ]),
             NurseShift.id != shift_id
         )
         res = await self.db.execute(overlap_query)
         existing_shifts = res.scalars().all()
+
+        def get_shift_interval(s_date, s_time, e_time):
+            start_dt = datetime.combine(s_date, s_time)
+            if s_time < e_time:
+                end_dt = datetime.combine(s_date, e_time)
+            else:
+                end_dt = datetime.combine(s_date + timedelta(days=1), e_time)
+            return start_dt, end_dt
+
+        new_start_dt, new_end_dt = get_shift_interval(new_shift_date, new_start_time, new_end_time)
+
         for existing in existing_shifts:
-            if existing.start_time < new_end_time and new_start_time < existing.end_time:
+            ex_start_dt, ex_end_dt = get_shift_interval(existing.shift_date, existing.start_time, existing.end_time)
+            if new_start_dt < ex_end_dt and ex_start_dt < new_end_dt:
                 raise BadRequestException("Shift overlaps with another existing shift")
 
         # Apply update
@@ -342,16 +388,13 @@ class NurseService:
             setattr(shift, key, value)
 
         # 5. Status updates automatically
-        if new_shift_date > date.today():
+        now_dt = datetime.now()
+        shift_start_dt, shift_end_dt = get_shift_interval(new_shift_date, new_start_time, new_end_time)
+
+        if now_dt < shift_start_dt:
             shift.status = "Scheduled"
-        elif new_shift_date == date.today():
-            current_time = datetime.now().time()
-            if current_time < new_start_time:
-                shift.status = "Scheduled"
-            elif new_start_time <= current_time <= new_end_time:
-                shift.status = "Active"
-            else:
-                shift.status = "Completed"
+        elif shift_start_dt <= now_dt <= shift_end_dt:
+            shift.status = "Active"
         else:
             shift.status = "Completed"
 
@@ -1563,6 +1606,16 @@ class NurseService:
         patient = await self.db.get(Patient, data.patient_id)
         if not patient or patient.is_deleted:
             raise NotFoundException("Patient not found")
+
+        # Check if patient currently has an active bed allocation
+        from sqlalchemy import select
+        from app.models.bed_allocation_model import Bed
+
+        bed_stmt = select(Bed).where(Bed.patient_id == data.patient_id, Bed.status == "Occupied")
+        bed_result = await self.db.execute(bed_stmt)
+        active_bed = bed_result.scalar_one_or_none()
+        if not active_bed:
+            raise BadRequestException("Patient does not have an active bed allocation")
 
         # Check if already assigned actively
         existing = await self.assignment_repo.get_active_assignment(nurse_id, data.patient_id)

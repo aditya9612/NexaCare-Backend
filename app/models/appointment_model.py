@@ -56,3 +56,10 @@ class Appointment(Base, TimestampMixin):
             - ((today.month, today.day) < (dob.month, dob.day))
         )
 
+    @property
+    def patient_mobile_number(self) -> str | None:
+        if not self.patient:
+            return None
+        return self.patient.phone
+
+

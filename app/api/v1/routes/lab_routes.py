@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import FileResponse
+from enum import Enum
+from fastapi import APIRouter, Depends, File, Form, UploadFile, Query, Response, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -128,6 +129,74 @@ async def delete_lab_test(
 
 
 # --- Test Orders ---
+class LabOrderExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
+
+
+@router.get("/orders/bulk-template")
+async def download_orders_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    stream = await LabService(db).generate_orders_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=lab_test_orders_bulk_template.xlsx"}
+    )
+
+
+@router.post("/orders/bulk-upload", status_code=201)
+async def upload_orders_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("lab", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await LabService(db).import_orders_from_excel(file, current_user.id)
+    return APIResponse(message="Lab test orders bulk upload processed", data=result)
+
+
+@router.get("/orders/export")
+async def export_lab_orders(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: LabOrderExportFormat = Query(LabOrderExportFormat.EXCEL),
+    status: str | None = None,
+    patient_id: int | None = None,
+    doctor_id: int | None = None,
+    _: User = Depends(require_permission("lab", "read")),
+):
+    data, media_type = await LabService(db).export_orders(
+        format_type=format.value,
+        status=status,
+        patient_id=patient_id,
+        doctor_id=doctor_id,
+        current_user=current_user
+    )
+    
+    if format == LabOrderExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=lab_test_orders_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=lab_test_orders_export.pdf"}
+        )
+
+
 @router.post("/orders", response_model=APIResponse[TestOrderResponse], status_code=201)
 async def create_test_order(
     data: TestOrderCreate,
@@ -327,12 +396,28 @@ async def get_test_result(
 @router.put("/results/{result_id}", response_model=APIResponse[TestResultResponse])
 async def update_test_result(
     result_id: int,
-    data: TestResultUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    remark: str = Form(...),
+    parameter_name: str | None = Form(None),
+    result_value: str | None = Form(None),
+    unit: str | None = Form(None),
+    normal_range: str | None = Form(None),
+    is_critical: bool | None = Form(None),
+    status: str | None = Form(None),
+    document: UploadFile | None = File(None),
     _: User = Depends(require_permission("lab", "update")),
 ):
-    result = await LabService(db).update_result(result_id, data, current_user.id)
+    data = TestResultUpdate(
+        remark=remark,
+        parameter_name=parameter_name,
+        result_value=result_value,
+        unit=unit,
+        normal_range=normal_range,
+        is_critical=is_critical,
+        status=status,
+    )
+    result = await LabService(db).update_result(result_id, data, current_user.id, document)
     return APIResponse(message="Test result updated", data=result)
 
 

@@ -746,11 +746,29 @@ class LabService:
         result_id: int,
         data,
         user_id: int,
+        document=None,
     ) -> TestResultResponse:
         result = await self.result_repo.get_by_id(result_id)
 
         if not result:
             raise NotFoundException("Test result not found")
+
+        if document:
+            from uuid import uuid4
+            import aiofiles
+            import os
+            upload_dir = "uploads/lab_results"
+            os.makedirs(upload_dir, exist_ok=True)
+
+            file_ext = os.path.splitext(document.filename)[1]
+            file_name = f"{uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, file_name)
+
+            async with aiofiles.open(file_path, "wb") as f:
+                while content := await document.read(1024 * 1024):
+                    await f.write(content)
+
+            result.document_url = file_path
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(result, key, value)
@@ -1099,4 +1117,363 @@ class LabService:
 
         await self.report_repo.delete(report)
         await self.audit_repo.create("delete", "lab_report", user_id=current_user.id, resource_id=str(report_id))
+
+    async def generate_orders_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lab Orders Bulk Import"
+        
+        headers = [
+            "patient_id", "doctor_id", "lab_test_id", "appointment_id", "priority", "notes"
+        ]
+        ws.append(headers)
+        
+        # One valid sample row
+        ws.append([
+            1,
+            2,
+            5,
+            10,
+            "normal",
+            "Routine blood sugar test"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_orders_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"patient_id", "lab_test_id"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        seen_keys = set()
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+                    
+            try:
+                # Helper function to normalize Excel numeric IDs safely
+                def normalize_id(val, field_name):
+                    if val is None:
+                        return None
+                    try:
+                        f_val = float(val)
+                        if not f_val.is_integer():
+                            raise ValueError()
+                        return int(f_val)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid integer value for {field_name}: {val}")
+
+                patient_id = normalize_id(row_dict.get("patient_id"), "patient_id")
+                if patient_id is None:
+                    raise BadRequestException("patient_id is required.")
+                    
+                lab_test_id = normalize_id(row_dict.get("lab_test_id"), "lab_test_id")
+                if lab_test_id is None:
+                    raise BadRequestException("lab_test_id is required.")
+                    
+                doctor_id = normalize_id(row_dict.get("doctor_id"), "doctor_id")
+                appointment_id = normalize_id(row_dict.get("appointment_id"), "appointment_id")
+                
+                priority = "normal"
+                priority_raw = row_dict.get("priority")
+                if priority_raw is not None:
+                    priority = str(priority_raw).strip()
+                    
+                notes = None
+                notes_raw = row_dict.get("notes")
+                if notes_raw is not None:
+                    notes = str(notes_raw).strip()
+
+                # Duplicate detection in sheet: (patient_id, lab_test_id, appointment_id)
+                dup_key = (patient_id, lab_test_id, appointment_id)
+                if dup_key in seen_keys:
+                    raise BadRequestException("Duplicate test order found in upload file.")
+                seen_keys.add(dup_key)
+
+                # Validate with TestOrderCreate
+                order_create = TestOrderCreate(
+                    patient_id=patient_id,
+                    doctor_id=doctor_id,
+                    lab_test_id=lab_test_id,
+                    appointment_id=appointment_id,
+                    priority=priority,
+                    notes=notes
+                )
+                
+                await self.create_order(order_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_orders(
+        self,
+        format_type: str,
+        status: str | None = None,
+        patient_id: int | None = None,
+        doctor_id: int | None = None,
+        current_user = None
+    ):
+        from io import BytesIO
+        from datetime import datetime, date
+        from sqlalchemy import select
+        
+        patient_ids = patient_id
+        resolved_doctor_id = doctor_id
+        department_id = None
+
+        if current_user:
+            role_name = current_user.role.name.lower() if current_user.role else ""
+            if role_name == "doctor":
+                from app.repositories.doctor_repository import DoctorRepository
+                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
+                if doctor:
+                    resolved_doctor_id = doctor.id
+            elif role_name == "patient":
+                from app.models.patient_model import Patient
+                result = await self.db.execute(
+                    select(Patient).where(Patient.user_id == current_user.id, Patient.is_deleted == False)
+                )
+                patient = result.scalar_one_or_none()
+                if patient:
+                    patient_ids = patient.id
+            elif role_name in ["lab technician", "lab_technician"]:
+                from app.models.staff_model import Staff
+                result = await self.db.execute(
+                    select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
+                )
+                staff = result.scalar_one_or_none()
+                department_id = staff.department_id if staff else None
+            elif role_name == "nurse":
+                from app.models.nurse_model import Nurse, NursePatientAssignment
+                res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+                nurse = res.scalar_one_or_none()
+                if not nurse:
+                    return b"", "application/pdf"
+                
+                # Fetch active assigned patient IDs
+                assignment_res = await self.db.execute(
+                    select(NursePatientAssignment.patient_id)
+                    .where(
+                        NursePatientAssignment.nurse_id == nurse.id,
+                        NursePatientAssignment.status == "Active"
+                    )
+                )
+                assigned_patient_ids = [row[0] for row in assignment_res.all()]
+                if not assigned_patient_ids:
+                    return b"", "application/pdf"
+                
+                if patient_id is not None:
+                    if patient_id not in assigned_patient_ids:
+                        return b"", "application/pdf"
+                    patient_ids = patient_id
+                else:
+                    patient_ids = assigned_patient_ids
+
+        # Fetch active test orders
+        orders = await self.order_repo.get_all_active(
+            status=status,
+            patient_id=patient_ids,
+            doctor_id=resolved_doctor_id,
+            department_id=department_id
+        )
+
+        # Map patient details
+        from app.models.patient_model import Patient
+        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
+        p_res = await self.db.execute(p_stmt)
+        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
+
+        # Map doctor details
+        from app.models.doctor_model import Doctor
+        d_stmt = select(Doctor.id, Doctor.first_name, Doctor.last_name).where(Doctor.is_deleted == False)
+        d_res = await self.db.execute(d_stmt)
+        doctors_map = {row[0]: f"Dr. {row[1]} {row[2]}" for row in d_res.all()}
+
+        # Map appointment numbers
+        from app.models.appointment_model import Appointment
+        a_stmt = select(Appointment.id, Appointment.appointment_number)
+        a_res = await self.db.execute(a_stmt)
+        appointments_map = {row[0]: row[1] for row in a_res.all()}
+
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Lab Test Orders"
+            
+            headers = [
+                "id", "order_number", "patient_id", "patient_name", "doctor_id", "doctor_name",
+                "lab_test_id", "department_id", "appointment_id", "appointment_number", "status", "priority", "notes",
+                "ordered_at", "completed_at", "created_at",
+                "lab_test_test_code", "lab_test_test_name", "lab_test_category",
+                "lab_test_description", "lab_test_price", "lab_test_sample_type",
+                "lab_test_turnaround_hours", "lab_test_normal_range",
+                "lab_test_is_active", "lab_test_department_id", "lab_test_doctor_id"
+            ]
+            ws.append(headers)
+            
+            for o in orders:
+                med = o.lab_test
+                row = [
+                    o.id,
+                    o.order_number,
+                    o.patient_id,
+                    patients_map.get(o.patient_id, ""),
+                    o.doctor_id,
+                    doctors_map.get(o.doctor_id, "") if o.doctor_id else "",
+                    o.lab_test_id,
+                    o.department_id,
+                    o.appointment_id,
+                    appointments_map.get(o.appointment_id, "") if o.appointment_id else "",
+                    o.status,
+                    o.priority,
+                    o.notes or "",
+                    o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
+                    o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
+                    o.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.created_at, datetime) else str(o.created_at),
+                    med.test_code if med else "",
+                    med.test_name if med else "",
+                    med.category if med else "",
+                    med.description or "" if med else "",
+                    f"₹{med.price:.2f}" if med and med.price is not None else "",
+                    med.sample_type if med else "",
+                    med.turnaround_hours if med else "",
+                    med.normal_range or "" if med else "",
+                    "Active" if med and med.is_active else "Inactive" if med else "",
+                    med.department_id if med else "",
+                    med.doctor_id if med else ""
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("lab_orders_export_template.html")
+            
+            formatted_orders = []
+            for o in orders:
+                med = o.lab_test
+                formatted_orders.append({
+                    "id": o.id,
+                    "order_number": o.order_number,
+                    "patient_id": o.patient_id,
+                    "patient_name": patients_map.get(o.patient_id, ""),
+                    "doctor_id": o.doctor_id,
+                    "doctor_name": doctors_map.get(o.doctor_id, "") if o.doctor_id else "",
+                    "appointment_id": o.appointment_id,
+                    "appointment_number": appointments_map.get(o.appointment_id, "") if o.appointment_id else "",
+                    "department_id": o.department_id,
+                    "status": o.status,
+                    "priority": o.priority,
+                    "notes": o.notes,
+                    "ordered_at": o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
+                    "completed_at": o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
+                    "lab_test_test_code": med.test_code if med else "",
+                    "lab_test_test_name": med.test_name if med else "",
+                    "lab_test_category": med.category if med else "",
+                    "lab_test_sample_type": med.sample_type if med else "",
+                    "lab_test_price": med.price if med else 0.0
+                })
+                
+            html_content = template.render(
+                orders=formatted_orders,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
+        else:
+            raise BadRequestException("Invalid format specified for export")
 

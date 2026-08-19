@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
+from fastapi.responses import Response, StreamingResponse
+from enum import Enum
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -8,6 +10,65 @@ from app.services.vendor_service import VendorService
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
+
+
+class VendorExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
+
+
+@router.get("/bulk-template")
+async def download_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("vendor", "read")),
+):
+    stream = await VendorService(db).generate_vendor_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=vendors_bulk_template.xlsx"}
+    )
+
+
+@router.post("/bulk-upload", status_code=201)
+async def upload_vendors_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("vendor", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await VendorService(db).import_vendors_from_excel(file, current_user.id)
+    return APIResponse(message="Vendors bulk upload processed", data=result)
+
+
+@router.get("/export")
+async def export_vendors(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: VendorExportFormat = Query(VendorExportFormat.EXCEL),
+    _: User = Depends(require_permission("vendor", "read")),
+):
+    data, media_type = await VendorService(db).export_vendors(format.value)
+    
+    if format == VendorExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=vendors_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=vendors_export.pdf"}
+        )
 
 
 @router.post("", response_model=APIResponse[VendorResponse], status_code=201)

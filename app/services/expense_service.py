@@ -1,3 +1,4 @@
+from io import BytesIO
 from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -732,3 +733,369 @@ class ExpenseService:
         if expense.status != new_status:
             expense.status = new_status
             await self.expense_repo.update(expense)
+
+    async def generate_expense_bulk_template(self) -> BytesIO:
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Expenses Bulk Import"
+        
+        headers = [
+            "category_id", "vendor_id", "amount", "description", "expense_date", "status"
+        ]
+        ws.append(headers)
+        
+        # Add one valid sample row
+        ws.append([
+            1,
+            2,
+            1500.50,
+            "Office utilities payment",
+            "2026-08-15",
+            "Paid"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_expenses_from_excel(self, file, user_id: int) -> dict:
+        from pydantic import ValidationError
+        import openpyxl
+        from datetime import date, datetime
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        # Read headers
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"category_id", "amount", "description", "expense_date"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+                    
+            try:
+                category_id_raw = row_dict.get("category_id")
+                if category_id_raw is None:
+                    raise BadRequestException("category_id is required.")
+                try:
+                    category_id = int(float(category_id_raw))
+                except ValueError:
+                    raise BadRequestException(f"Invalid category_id value: {category_id_raw}")
+                    
+                vendor_id = None
+                vendor_id_raw = row_dict.get("vendor_id")
+                if vendor_id_raw is not None:
+                    try:
+                        vendor_id = int(float(vendor_id_raw))
+                    except ValueError:
+                        raise BadRequestException(f"Invalid vendor_id value: {vendor_id_raw}")
+                        
+                amount_raw = row_dict.get("amount")
+                if amount_raw is None:
+                    raise BadRequestException("amount is required.")
+                try:
+                    amount = float(amount_raw)
+                except ValueError:
+                    raise BadRequestException(f"Invalid amount value: {amount_raw}")
+                    
+                desc_raw = row_dict.get("description")
+                if not desc_raw:
+                    raise BadRequestException("description is required.")
+                description = str(desc_raw).strip()
+                
+                expense_date = None
+                date_raw = row_dict.get("expense_date")
+                if date_raw is None:
+                    raise BadRequestException("expense_date is required.")
+                if isinstance(date_raw, (datetime, date)):
+                    expense_date = date_raw if isinstance(date_raw, date) else date_raw.date()
+                else:
+                    try:
+                        expense_date = datetime.strptime(str(date_raw).strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        try:
+                            expense_date = datetime.fromisoformat(str(date_raw).strip()).date()
+                        except ValueError:
+                            raise BadRequestException(f"Invalid expense_date format: {date_raw}. Use YYYY-MM-DD.")
+                            
+                status = "Pending"
+                status_raw = row_dict.get("status")
+                if status_raw is not None:
+                    status = str(status_raw).strip()
+                    
+                # 2. Build ExpenseCreate schema
+                expense_create = ExpenseCreate(
+                    category_id=category_id,
+                    vendor_id=vendor_id,
+                    amount=amount,
+                    description=description,
+                    expense_date=expense_date,
+                    status=status
+                )
+                
+                # 3. Call service creation method
+                await self.create_expense(expense_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def _get_all_combined_expenses(self) -> list[ExpenseResponse]:
+        from app.models.expense_model import ExpenseCategory
+        from sqlalchemy import select, func, or_
+        from sqlalchemy.orm import selectinload
+        from app.utils.helpers import utc_now
+
+        # Resolve pharmacy category ID
+        cat_stmt = select(ExpenseCategory.id, ExpenseCategory.name).where(
+            func.lower(ExpenseCategory.name) == "pharmacy"
+        )
+        cat_res = await self.db.execute(cat_stmt)
+        cat_row = cat_res.first()
+        if cat_row:
+            pharm_cat_id = cat_row[0]
+            pharm_cat_name = cat_row[1]
+        else:
+            pharm_cat_id = 999
+            pharm_cat_name = "Pharmacy"
+
+        # Fetch all general expenses
+        expenses_list = await self.expense_repo.list_all(
+            skip=0,
+            limit=1000000,
+            sort_by="created_at",
+            sort_order="desc"
+        )
+
+        # Fetch all pharmacy purchases
+        from app.models.pharmacy_model import Purchase, Supplier
+        purchase_stmt = select(Purchase).options(
+            selectinload(Purchase.supplier)
+        ).where(Purchase.is_deleted == False)
+        purch_res = await self.db.execute(purchase_stmt)
+        purchases_list = list(purch_res.scalars().unique().all())
+
+        all_items = []
+        for e in expenses_list:
+            resp = ExpenseResponse.model_validate(e)
+            resp.source = "expense"
+            all_items.append(resp)
+
+        from app.schemas.expense_schema import ExpenseCategoryResponse
+        from app.schemas.vendor_schema import VendorResponse
+        for p in purchases_list:
+            vendor_data = None
+            if p.supplier:
+                vendor_data = VendorResponse(
+                    id=p.supplier.id,
+                    name=p.supplier.name,
+                    vendor_type="supplier",
+                    contact_person=p.supplier.contact_person,
+                    phone=p.supplier.phone,
+                    email=p.supplier.email,
+                    address=p.supplier.address,
+                    is_active=p.supplier.is_active if p.supplier.is_active is not None else True,
+                    created_at=p.supplier.created_at or p.created_at or utc_now(),
+                    updated_at=p.supplier.updated_at or p.created_at or utc_now()
+                )
+
+            cat_data = ExpenseCategoryResponse(
+                id=pharm_cat_id,
+                name=pharm_cat_name,
+                description="Pharmacy Inventory and Supplies Purchases",
+                is_active=True,
+                created_at=p.created_at or utc_now(),
+                updated_at=p.created_at or utc_now()
+            )
+
+            status_val = p.status.capitalize() if p.status else "Pending"
+            if status_val == "Received":
+                status_val = "Paid"
+
+            desc_val = f"Pharmacy Purchase {p.purchase_number or ''}"
+            if p.notes:
+                desc_val += f". Notes: {p.notes}"
+
+            resp = ExpenseResponse(
+                id=p.id,
+                category_id=pharm_cat_id,
+                vendor_id=p.supplier_id,
+                amount=p.total_amount or 0.0,
+                description=desc_val,
+                expense_date=p.ordered_at.date() if p.ordered_at else (p.created_at.date() if p.created_at else utc_now().date()),
+                status=status_val,
+                category=cat_data,
+                vendor=vendor_data,
+                created_at=p.created_at or utc_now(),
+                updated_at=p.created_at or utc_now(),
+                source="pharmacy"
+            )
+            all_items.append(resp)
+
+        # Sort chronologically DESC by created_at or fallback expense_date
+        def get_date_sort(item: ExpenseResponse):
+            return item.created_at or utc_now()
+
+        all_items.sort(key=get_date_sort, reverse=True)
+        return all_items
+
+    async def export_expenses(self, format_type: str) -> tuple[BytesIO | bytes, str]:
+        from datetime import date, datetime
+        
+        expenses = await self._get_all_combined_expenses()
+        
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Expenses Export"
+            
+            headers = [
+                "id", "category_id", "vendor_id", "amount", "description",
+                "expense_date", "status", "category_name", "vendor_name",
+                "created_at", "updated_at", "source"
+            ]
+            ws.append(headers)
+            
+            for exp in expenses:
+                cat_name = exp.category.name if exp.category else ""
+                vendor_name = exp.vendor.name if exp.vendor else ""
+                
+                row = [
+                    exp.id,
+                    exp.category_id,
+                    exp.vendor_id,
+                    f"₹{exp.amount:.2f}",
+                    exp.description or "",
+                    exp.expense_date.strftime("%Y-%m-%d") if isinstance(exp.expense_date, (date, datetime)) else str(exp.expense_date),
+                    exp.status,
+                    cat_name,
+                    vendor_name,
+                    exp.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.created_at, datetime) else str(exp.created_at),
+                    exp.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.updated_at, datetime) else str(exp.updated_at),
+                    exp.source
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+            
+            # Map dejavusans variants in xhtml2pdf fontList registry
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("expenses_export_template.html")
+            
+            formatted_expenses = []
+            for exp in expenses:
+                cat_name = exp.category.name if exp.category else "-"
+                vendor_name = exp.vendor.name if exp.vendor else "-"
+                
+                exp_date_str = exp.expense_date.strftime("%Y-%m-%d") if isinstance(exp.expense_date, (date, datetime)) else str(exp.expense_date)
+                created_str = exp.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.created_at, datetime) else str(exp.created_at)
+                updated_str = exp.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.updated_at, datetime) else str(exp.updated_at)
+                
+                formatted_expenses.append({
+                    "id": exp.id,
+                    "category_id": exp.category_id,
+                    "vendor_id": exp.vendor_id if exp.vendor_id else "-",
+                    "amount": f"₹{exp.amount:.2f}",
+                    "description": exp.description or "-",
+                    "expense_date": exp_date_str,
+                    "status": exp.status,
+                    "category_name": cat_name,
+                    "vendor_name": vendor_name,
+                    "created_at": created_str,
+                    "updated_at": updated_str,
+                    "source": exp.source
+                })
+                
+            html = template.render(
+                expenses=formatted_expenses,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_bytes = html_to_pdf(html)
+            return pdf_bytes, "application/pdf"
+            
+        else:
+            raise BadRequestException("Invalid format specified for export")

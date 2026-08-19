@@ -196,7 +196,11 @@ class BillingRepository:
             )
             .group_by(Payment.payment_method)
         )
-        by_method = {row[0]: float(row[1]) for row in result.all()}
+        by_method = {
+            str(row[0]): round(float(row[1]), 2)
+            for row in result.all()
+            if row[0] and str(row[0]).lower() != "pharmacy"
+        }
         
         refunds_result = await self.db.scalar(
             select(func.coalesce(func.sum(Payment.amount), 0.0))
@@ -209,7 +213,7 @@ class BillingRepository:
         )
         refund_total = float(refunds_result or 0.0)
         if refund_total > 0:
-            by_method["refund"] = -refund_total
+            by_method["refund"] = -round(refund_total, 2)
 
         total = sum(by_method.values())
         count = await self.db.scalar(
@@ -258,10 +262,10 @@ class BillingRepository:
             .where(Payment.payment_date >= start, Payment.payment_date <= end)
         )
         return {
-            "total_billed": float(billed or 0),
-            "total_collected": float(collected or 0),
-            "total_pending": float((billed or 0) - (collected or 0)),
-            "total_refunded": float(refunded or 0),
+            "total_billed": round(float(billed or 0), 2),
+            "total_collected": round(float(collected or 0), 2),
+            "total_pending": round(float((billed or 0) - (collected or 0)), 2),
+            "total_refunded": round(float(refunded or 0), 2),
             "bill_count": bill_count or 0,
             "payment_count": payment_count or 0,
         }

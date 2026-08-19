@@ -743,9 +743,13 @@ class BillingService:
         if pharm_collected > 0:
             data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
             data["payment_count"] = data["payment_count"] + pharm_count
-            by_method = dict(data.get("by_method", {}))
-            by_method["pharmacy"] = round(by_method.get("pharmacy", 0.0) + pharm_collected, 2)
-            data["by_method"] = by_method
+
+        # Ensure by_method contains only rounded non-pharmacy payment methods
+        by_method = {}
+        for k, v in data.get("by_method", {}).items():
+            if k and str(k).lower() != "pharmacy":
+                by_method[str(k)] = round(float(v), 2)
+        data["by_method"] = by_method
 
         return DailyCollectionSummary(date=str(target), **data)
 
@@ -789,6 +793,7 @@ class BillingService:
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
         data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
         data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
         data["bill_count"] = data["bill_count"] + pharm_bill_count
         data["payment_count"] = data["payment_count"] + pharm_payment_count
 
@@ -865,6 +870,7 @@ class BillingService:
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
         data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
         data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
         data["bill_count"] = data["bill_count"] + pharm_bill_count
         data["payment_count"] = data["payment_count"] + pharm_payment_count
 

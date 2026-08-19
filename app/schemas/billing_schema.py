@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -182,12 +182,29 @@ class RevenueReport(BaseSchema):
     bill_count: int
     payment_count: int
 
+    @field_validator("total_billed", "total_collected", "total_pending", "total_refunded", mode="after")
+    @classmethod
+    def round_money_fields(cls, v: float) -> float:
+        return round(float(v), 2)
+
+
 
 class DailyCollectionSummary(BaseSchema):
     date: str
     total_collected: float
     payment_count: int
     by_method: dict[str, float]
+
+    @field_validator("total_collected", mode="after")
+    @classmethod
+    def round_total_collected(cls, v: float) -> float:
+        return round(float(v), 2)
+
+    @field_validator("by_method", mode="after")
+    @classmethod
+    def round_by_method_values(cls, v: dict[str, float]) -> dict[str, float]:
+        return {str(k): round(float(val), 2) for k, val in v.items() if str(k).lower() != "pharmacy"}
+
 
 
 class BillingSummary(BaseSchema):

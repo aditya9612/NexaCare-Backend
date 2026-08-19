@@ -174,6 +174,33 @@ class ExpenseRepository:
         total_amount = float(total_row[0]) if total_row and total_row[0] is not None else 0.0
         total_count = int(total_row[1]) if total_row and total_row[1] is not None else 0
 
+        # Paid Amount and Count
+        paid_query = select(
+            func.coalesce(func.sum(Expense.amount), 0.0).label("paid_amount"),
+            func.count(Expense.id).label("paid_count")
+        ).where(*base_filter, func.lower(Expense.status) == "paid")
+        paid_res = await self.db.execute(paid_query)
+        paid_row = paid_res.fetchone()
+        paid_amount = float(paid_row[0]) if paid_row and paid_row[0] is not None else 0.0
+        paid_count = int(paid_row[1]) if paid_row and paid_row[1] is not None else 0
+
+        # Pending Amount and Count
+        pending_query = select(
+            func.coalesce(func.sum(Expense.amount), 0.0).label("pending_amount"),
+            func.count(Expense.id).label("pending_count")
+        ).where(*base_filter, func.lower(Expense.status) == "pending")
+        pending_res = await self.db.execute(pending_query)
+        pending_row = pending_res.fetchone()
+        pending_amount = float(pending_row[0]) if pending_row and pending_row[0] is not None else 0.0
+        pending_count = int(pending_row[1]) if pending_row and pending_row[1] is not None else 0
+
+        # Total Distinct Vendors from Expense module
+        vendor_count_query = select(
+            func.count(func.distinct(Expense.vendor_id))
+        ).where(*base_filter, Expense.vendor_id.isnot(None))
+        total_vendors_res = await self.db.execute(vendor_count_query)
+        total_vendors = int(total_vendors_res.scalar() or 0)
+
         # Category aggregates
         cat_query = select(
             Expense.category_id.label("category_id"),
@@ -271,6 +298,11 @@ class ExpenseRepository:
         return {
             "total_amount": total_amount,
             "total_count": total_count,
+            "paid_amount": paid_amount,
+            "paid_count": paid_count,
+            "pending_amount": pending_amount,
+            "pending_count": pending_count,
+            "total_vendors": total_vendors,
             "by_category": by_category,
             "by_vendor": by_vendor,
             "by_status": by_status,

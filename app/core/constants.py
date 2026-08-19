@@ -94,6 +94,13 @@ class PharmacyStatus:
     CANCELLED = "cancelled"
 
 
+class PharmacyPaymentStatus(str, Enum):
+    PAID = "paid"
+    PENDING = "pending"
+    CANCELLED = "cancelled"
+
+
+
 class PurchaseStatus:
     ORDERED = "ordered"
     RECEIVED = "received"

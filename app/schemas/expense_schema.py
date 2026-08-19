@@ -243,7 +243,13 @@ class MonthlySummary(BaseModel):
 class ExpenseSummaryResponse(BaseModel):
     total_amount: float
     total_count: int
-    by_category: List[CategorySummary]
-    by_vendor: List[VendorSummary]
-    by_status: List[StatusSummary]
-    monthly_summary: List[MonthlySummary]
+    paid_amount: float = 0.0
+    paid_count: int = 0
+    pending_amount: float = 0.0
+    pending_count: int = 0
+    total_vendors: int = 0
+    by_category: List[CategorySummary] = []
+    by_vendor: Optional[List[VendorSummary]] = None
+    by_status: Optional[List[StatusSummary]] = None
+    monthly_summary: Optional[List[MonthlySummary]] = None
+

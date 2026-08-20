@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-east-1"
     AWS_STORAGE_BUCKET_NAME: str = ""  
 
+    
+    TESSERACT_CMD: str = r""   
+
 
     # Sarvam AI TTS / voice cloning (local + production voice agent prompts)
     # Cloned voice (SHIRISH): set SARVAM_VOICE_ID to Studio voice UUID (voice_id).

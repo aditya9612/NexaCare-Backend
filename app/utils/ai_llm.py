@@ -5,6 +5,21 @@ from app.core.config import settings
 from app.core.logger import logger
 
 
+def openai_sampling_kwargs(model: str | None, temperature: float | None = None) -> Dict[str, Any]:
+    """
+    Build temperature kwargs compatible with the configured OpenAI model.
+
+    GPT-5 and o-series models only allow the default temperature (1). Passing
+    any other value returns HTTP 400 unsupported_value.
+    """
+    if temperature is None:
+        return {}
+    name = (model or "").strip().lower()
+    if name.startswith("gpt-5") or name.startswith(("o1", "o3", "o4")):
+        return {}
+    return {"temperature": temperature}
+
+
 class LLMService:
     """OpenAI-ready LLM integration with graceful fallback."""
 
@@ -81,8 +96,9 @@ class LLMService:
             from openai import AsyncOpenAI
 
             client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            model = settings.OPENAI_MODEL
             response = await client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
+                model=model,
                 messages=[
                     {
                         "role": "system",
@@ -96,9 +112,9 @@ class LLMService:
                     },
                     {"role": "user", "content": f"[{language}] {message}"},
                 ],
-                temperature=0,
                 max_completion_tokens=120,
                 response_format={"type": "json_object"},
+                **openai_sampling_kwargs(model, temperature=0),
             )
             raw = response.choices[0].message.content or "{}"
             data = json.loads(raw)
@@ -114,8 +130,9 @@ class LLMService:
             from openai import AsyncOpenAI
 
             client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            model = settings.OPENAI_MODEL
             response = await client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
+                model=model,
                 messages=[
                     {
                         "role": "system",
@@ -128,9 +145,9 @@ class LLMService:
                     },
                     {"role": "user", "content": f"[{language}] {message}"},
                 ],
-                temperature=0,
                 max_completion_tokens=200,
                 response_format={"type": "json_object"},
+                **openai_sampling_kwargs(model, temperature=0),
             )
             raw = response.choices[0].message.content or "{}"
             data = json.loads(raw)
@@ -165,11 +182,12 @@ class LLMService:
                 messages.extend(context)
             messages.append({"role": "user", "content": message})
 
+            model = settings.OPENAI_MODEL
             response = await client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
+                model=model,
                 messages=messages,
-                temperature=0.4,
                 max_completion_tokens=500,
+                **openai_sampling_kwargs(model, temperature=0.4),
             )
             text = response.choices[0].message.content or ""
             return {

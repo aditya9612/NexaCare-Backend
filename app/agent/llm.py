@@ -99,6 +99,8 @@ def openai_json_completion(
     """
     from openai import OpenAI
 
+    from app.utils.ai_llm import openai_sampling_kwargs
+
     api_key = _openai_api_key()
     if not api_key:
         raise ValueError("OPENAI_API_KEY not set. Add it to .env or settings.")
@@ -110,16 +112,17 @@ def openai_json_completion(
         f"{schema_hint}"
     )
 
+    model = _get_openai_model()
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
-        model=_get_openai_model(),
+        model=model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
         max_completion_tokens=max_completion_tokens,
         response_format={"type": "json_object"},
+        **openai_sampling_kwargs(model, temperature=temperature),
     )
     raw = response.choices[0].message.content or "{}"
     return json.loads(raw)

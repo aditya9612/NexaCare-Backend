@@ -148,6 +148,11 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     total_scheduled: int
     completed: int
     cancelled: int
+    pending: int = 0
+    confirmed: int = 0
+    in_progress: int = 0
+    checked_in: int = 0
+    checked_out: int = 0
 
 class ConfirmedVisitResponse(BaseSchema):
     appointment_id: int

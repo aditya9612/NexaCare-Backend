@@ -273,9 +273,12 @@ class BillingRepository:
         )
         refund_total = float(refunds_result or 0.0)
         if refund_total > 0:
-            by_method["refund"] = -round(refund_total, 2)
+            by_method["refund"] = round(refund_total, 2)
 
-        total = sum(by_method.values())
+        gross_collected = sum(v for k, v in by_method.items() if k != "refund")
+        net_collected = max(0.0, gross_collected - refund_total)
+        total = round(net_collected, 2)
+
         count = await self.db.scalar(
             select(func.count())
             .select_from(Payment)
@@ -286,7 +289,7 @@ class BillingRepository:
                 Payment.payment_date <= end,
             )
         )
-        return {"total_collected": round(total, 2), "payment_count": count or 0, "by_method": by_method}
+        return {"total_collected": total, "payment_count": count or 0, "by_method": by_method}
 
 
     async def get_period_report(self, start: datetime, end: datetime) -> dict:

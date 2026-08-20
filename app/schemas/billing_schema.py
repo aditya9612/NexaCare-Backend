@@ -205,12 +205,12 @@ class DailyCollectionSummary(BaseSchema):
     @field_validator("total_collected", mode="after")
     @classmethod
     def round_total_collected(cls, v: float) -> float:
-        return round(float(v), 2)
+        return max(0.0, round(float(v), 2))
 
     @field_validator("by_method", mode="after")
     @classmethod
     def round_by_method_values(cls, v: dict[str, float]) -> dict[str, float]:
-        return {str(k): round(float(val), 2) for k, val in v.items() if str(k).lower() != "pharmacy"}
+        return {str(k): round(abs(float(val)), 2) for k, val in v.items() if str(k).lower() != "pharmacy"}
 
 
 

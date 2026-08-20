@@ -51,7 +51,40 @@ class AppointmentRepository:
         if department_id:
             query = query.where(Appointment.department_id == department_id)
         if status:
-            query = query.where(Appointment.appointment_status == status)
+            if isinstance(status, (list, tuple, set)):
+                query = query.where(Appointment.appointment_status.in_(status))
+            else:
+                s_lower = str(status).strip().lower().replace("_", "-")
+                if s_lower in ("check-in", "checked-in"):
+                    query = query.where(
+                        or_(
+                            Appointment.appointment_status.in_(["Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"]),
+                            Appointment.check_in_time.isnot(None),
+                        )
+                    )
+                elif s_lower in ("check-out", "checked-out"):
+                    query = query.where(
+                        Appointment.appointment_status.in_(["Checked-Out", "Checked-out", "checked-out", "Check-out", "Check-Out"])
+                    )
+                elif s_lower in ("in-progress", "in-consultation", "in_consultation"):
+                    query = query.where(
+                        or_(
+                            Appointment.appointment_status.in_(["In-Progress", "in-progress", "In-progress", "in_progress", "In_Progress"]),
+                            Appointment.queue_status.in_(["IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"]),
+                        )
+                    )
+                elif s_lower == "pending":
+                    query = query.where(Appointment.appointment_status.in_(["Pending", "pending", "PENDING"]))
+                elif s_lower == "confirmed":
+                    query = query.where(Appointment.appointment_status.in_(["Confirmed", "confirmed", "CONFIRMED"]))
+                elif s_lower == "completed":
+                    query = query.where(Appointment.appointment_status.in_(["Completed", "completed", "COMPLETED"]))
+                elif s_lower in ("cancelled", "canceled"):
+                    query = query.where(Appointment.appointment_status.in_(["Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled"]))
+                elif s_lower in ("no-show", "no show"):
+                    query = query.where(Appointment.appointment_status.in_(["No Show", "no show", "NO SHOW", "No-Show", "no-show"]))
+                else:
+                    query = query.where(func.lower(Appointment.appointment_status) == func.lower(status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
         return query

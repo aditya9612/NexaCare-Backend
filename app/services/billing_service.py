@@ -774,11 +774,14 @@ class BillingService:
             data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
             data["payment_count"] = data["payment_count"] + pharm_count
 
-        # Ensure by_method contains only rounded non-pharmacy payment methods
+        # Ensure total_collected cannot be negative
+        data["total_collected"] = max(0.0, round(float(data.get("total_collected", 0.0)), 2))
+
+        # Ensure by_method contains only rounded non-pharmacy payment methods with positive amounts
         by_method = {}
         for k, v in data.get("by_method", {}).items():
             if k and str(k).lower() != "pharmacy":
-                by_method[str(k)] = round(float(v), 2)
+                by_method[str(k)] = round(abs(float(v)), 2)
         data["by_method"] = by_method
 
         return DailyCollectionSummary(date=str(target), **data)

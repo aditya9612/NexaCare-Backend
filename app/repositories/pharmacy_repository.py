@@ -134,7 +134,13 @@ class MedicineRepository:
             Medicine.expiry_date <= threshold,
             Medicine.stock_quantity > 0,
         )
-        result = await self.db.execute(query.order_by(Medicine.expiry_date.asc()).offset(skip).limit(limit))
+        result = await self.db.execute(
+            query.order_by(
+                Medicine.expiry_date.asc(),
+                Medicine.created_at.desc(),
+                Medicine.id.desc(),
+            ).offset(skip).limit(limit)
+        )
         return list(result.scalars().all())
 
     async def get_dashboard_counts(self, reference_date: date) -> dict:
@@ -393,41 +399,41 @@ class PharmacyInvoiceRepository:
         if start is not None:
             filters.append(PharmacyInvoice.created_at >= start)
 
-        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(*filters)
-        stmt_count = select(func.count()).select_from(PharmacyInvoice).where(*filters)
+        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).select_from(PharmacyInvoice).where(*filters)
+        stmt_count = select(func.count(PharmacyInvoice.id)).select_from(PharmacyInvoice).where(*filters)
 
         total = await self.db.scalar(stmt_total)
         count = await self.db.scalar(stmt_count)
 
-        # Query top selling medicines
+        # Query top selling medicines compatible with MySQL ONLY_FULL_GROUP_BY
+        total_qty_col = func.sum(PharmacyInvoiceItem.quantity).label("total_sold_quantity")
         top_meds_query = (
             select(
                 PharmacyInvoiceItem.medicine_id.label("medicine_id"),
-                func.coalesce(Medicine.name, "Unknown Medicine").label("name"),
-                func.coalesce(Medicine.generic_name, "").label("generic_name"),
-                func.coalesce(Medicine.sku, "").label("sku"),
-                func.coalesce(
-                    func.sum(PharmacyInvoiceItem.quantity), 0
-                ).label("total_sold_quantity"),
+                Medicine.name.label("name"),
+                Medicine.generic_name.label("generic_name"),
+                Medicine.sku.label("sku"),
+                total_qty_col,
             )
             .select_from(PharmacyInvoiceItem)
             .join(
                 PharmacyInvoice,
                 PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id,
             )
-            .outerjoin(
+            .join(
                 Medicine,
                 Medicine.id == PharmacyInvoiceItem.medicine_id,
             )
             .where(*filters)
             .group_by(
                 PharmacyInvoiceItem.medicine_id,
+                Medicine.id,
                 Medicine.name,
                 Medicine.generic_name,
                 Medicine.sku,
             )
             .order_by(
-                func.sum(PharmacyInvoiceItem.quantity).desc()
+                total_qty_col.desc()
             )
             .limit(5)
         )
@@ -437,9 +443,9 @@ class PharmacyInvoiceRepository:
         top_medicines = [
             {
                 "medicine_id": row.medicine_id,
-                "name": row.name,
-                "generic_name": row.generic_name,
-                "sku": row.sku,
+                "name": row.name or "Unknown Medicine",
+                "generic_name": row.generic_name or "",
+                "sku": row.sku or "",
                 "total_sold_quantity": int(row.total_sold_quantity or 0),
             }
             for row in top_meds_res.all()
@@ -447,7 +453,7 @@ class PharmacyInvoiceRepository:
 
         return {
             "total_sales": float(total or 0),
-            "invoice_count": count or 0,
+            "invoice_count": int(count or 0),
             "top_medicines": top_medicines,
         }
 

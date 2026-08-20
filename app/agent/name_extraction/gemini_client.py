@@ -95,7 +95,7 @@ def call_gemini(
             user_prompt=user_prompt,
             schema=NameExtractionResult,
             temperature=0.0,
-            max_tokens=80,
+            max_completion_tokens=80,
         )
         logger.info("Name extraction succeeded via OpenAI fallback")
         return _normalise_name_result(result)

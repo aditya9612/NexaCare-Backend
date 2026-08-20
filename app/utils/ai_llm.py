@@ -97,7 +97,7 @@ class LLMService:
                     {"role": "user", "content": f"[{language}] {message}"},
                 ],
                 temperature=0,
-                max_tokens=120,
+                max_completion_tokens=120,
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content or "{}"
@@ -129,7 +129,7 @@ class LLMService:
                     {"role": "user", "content": f"[{language}] {message}"},
                 ],
                 temperature=0,
-                max_tokens=200,
+                max_completion_tokens=200,
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content or "{}"
@@ -169,7 +169,7 @@ class LLMService:
                 model=settings.OPENAI_MODEL,
                 messages=messages,
                 temperature=0.4,
-                max_tokens=500,
+                max_completion_tokens=500,
             )
             text = response.choices[0].message.content or ""
             return {

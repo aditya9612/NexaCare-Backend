@@ -1041,6 +1041,9 @@ class PharmacyService:
         from datetime import timedelta
         from app.core.exceptions import BadRequestException
 
+        if not period or period.strip() == "":
+            period = "all"
+
         valid_periods = {"daily", "weekly", "monthly", "yearly", "all", "overall"}
         if period not in valid_periods:
             raise BadRequestException(
@@ -1543,7 +1546,20 @@ class PharmacyService:
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
-
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("medicines_export_template.html")
 
@@ -1558,6 +1574,7 @@ class PharmacyService:
                         expiry_str = str(item.expiry_date)
 
                 formatted_medicines.append({
+                    "id": item.id,
                     "sku": item.sku,
                     "name": item.name,
                     "generic_name": item.generic_name,
@@ -1569,7 +1586,13 @@ class PharmacyService:
                     "unit_price": float(item.unit_price) if item.unit_price is not None else 0.0,
                     "stock_quantity": int(item.stock_quantity) if item.stock_quantity is not None else 0,
                     "reorder_level": int(item.reorder_level) if item.reorder_level is not None else 0,
+                    "manufacturer": item.manufacturer or "-",
+                    "description": item.description or "-",
+                    "is_active": "Yes" if item.is_active else "No",
+                    "created_at": item.created_at.strftime("%Y-%m-%d %H:%M:%S") if item.created_at else "-",
+                    "updated_at": item.updated_at.strftime("%Y-%m-%d %H:%M:%S") if item.updated_at else "-",
                 })
+
 
             html = template.render(
                 medicines=formatted_medicines,
@@ -1750,14 +1773,14 @@ class PharmacyService:
             ws.title = "Suppliers Export"
             
             headers = [
-                "id", "name", "contact_person", "phone", "email",
+                "Sr. No.", "name", "contact_person", "phone", "email",
                 "address", "gst_number", "is_active", "created_at"
             ]
             ws.append(headers)
             
-            for s in suppliers:
+            for sr_no, s in enumerate(suppliers, start=1):
                 row = [
-                    s.id,
+                    sr_no,
                     s.name,
                     s.contact_person or "",
                     s.phone or "",

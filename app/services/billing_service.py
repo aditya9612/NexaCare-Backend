@@ -1296,7 +1296,7 @@ class BillingService:
             ws.title = "Billings Report"
             
             headers = [
-                "id", "patient_id", "patient_name", "bill_number", "subtotal", "discount_percent",
+                "Sr. No.", "patient_id", "patient_name", "bill_number", "subtotal", "discount_percent",
                 "discount_amount", "gst_rate", "gst_amount", "tax_amount", "total_amount",
                 "paid_amount", "balance_amount", "status", "due_date", "notes", "invoice_path",
                 "appointment_id", "created_at", "updated_at", "source",
@@ -1305,13 +1305,13 @@ class BillingService:
             ]
             ws.append(headers)
             
-            for b in ordered_items:
+            for sr_no, b in enumerate(ordered_items, start=1):
                 p_name = patients_map.get(b.patient_id, "")
                 
                 # Check if there are items to export. If not, output one row with empty item columns
                 if not b.items:
                     row = [
-                        b.id, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
+                        sr_no, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
                         f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
                         f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
                         b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
@@ -1325,7 +1325,7 @@ class BillingService:
                 else:
                     for item in b.items:
                         row = [
-                            b.id, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
+                            sr_no, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
                             f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
                             f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
                             b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),

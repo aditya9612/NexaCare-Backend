@@ -346,6 +346,7 @@ async def upload_report(
 @router.get(
     "/medical-records",
     response_model=APIResponse[PaginatedResult[MedicalRecordResponse]],
+    summary="List of Medical Records",
 )
 async def view_reports(
     db: DbSession,
@@ -374,6 +375,25 @@ async def download_report(
         path=record.file_path,
         filename=record.file_name,
         media_type=record.file_type or "application/octet-stream",
+    )
+
+
+@router.get(
+    "/medical-records/{record_id}/view",
+    summary="View Report",
+)
+async def view_report(
+    record_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id)
+    return FileResponse(
+        path=record.file_path,
+        filename=record.file_name,
+        media_type=record.file_type or "application/octet-stream",
+        content_disposition_type="inline",
     )
 
 

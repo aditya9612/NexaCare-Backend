@@ -1373,7 +1373,7 @@ class LabService:
             ws.title = "Lab Test Orders"
             
             headers = [
-                "id", "order_number", "patient_id", "patient_name", "doctor_id", "doctor_name",
+                "Sr. No.", "order_number", "patient_id", "patient_name", "doctor_id", "doctor_name",
                 "lab_test_id", "department_id", "appointment_id", "appointment_number", "status", "priority", "notes",
                 "ordered_at", "completed_at", "created_at",
                 "lab_test_test_code", "lab_test_test_name", "lab_test_category",
@@ -1383,10 +1383,10 @@ class LabService:
             ]
             ws.append(headers)
             
-            for o in orders:
+            for sr_no, o in enumerate(orders, start=1):
                 med = o.lab_test
                 row = [
-                    o.id,
+                    sr_no,
                     o.order_number,
                     o.patient_id,
                     patients_map.get(o.patient_id, ""),

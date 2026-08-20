@@ -491,18 +491,18 @@ class TransactionService:
             ws.title = "Transactions Report"
             
             headers = [
-                "id", "billing_id", "bill_number", "patient_name", "amount", "payment_method",
+                "Sr. No.", "billing_id", "bill_number", "patient_name", "amount", "payment_method",
                 "transaction_ref", "payment_date", "status", "is_refund", "refund_reason",
                 "created_at", "updated_at"
             ]
             ws.append(headers)
             
-            for p in payments:
+            for sr_no, p in enumerate(payments, start=1):
                 bill_number, p_id = billing_map.get(p.billing_id, ("", None))
                 pat_name = patients_map.get(p_id, "") if p_id else ""
                 
                 row = [
-                    p.id,
+                    sr_no,
                     p.billing_id,
                     bill_number,
                     pat_name,

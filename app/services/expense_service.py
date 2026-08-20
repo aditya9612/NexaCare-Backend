@@ -994,18 +994,18 @@ class ExpenseService:
             ws.title = "Expenses Export"
             
             headers = [
-                "id", "category_id", "vendor_id", "amount", "description",
+                "Sr. No.", "category_id", "vendor_id", "amount", "description",
                 "expense_date", "status", "category_name", "vendor_name",
                 "created_at", "updated_at", "source"
             ]
             ws.append(headers)
             
-            for exp in expenses:
+            for sr_no, exp in enumerate(expenses, start=1):
                 cat_name = exp.category.name if exp.category else ""
                 vendor_name = exp.vendor.name if exp.vendor else ""
                 
                 row = [
-                    exp.id,
+                    sr_no,
                     exp.category_id,
                     exp.vendor_id,
                     f"₹{exp.amount:.2f}",

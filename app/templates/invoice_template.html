@@ -173,6 +173,18 @@
       font-size: 8pt;
       color: #94a3b8;
     }
+
+    .status-text {
+      font-weight: bold;
+    }
+
+    .status-paid {
+      color: #16a34a;
+    }
+
+    .status-unpaid {
+      color: #dc2626;
+    }
   </style>
 </head>
 
@@ -228,7 +240,7 @@
             <tr>
               <td style="border: none; padding: 2px 0; color: #64748b;">Payment Status:</td>
               <td style="border: none; padding: 2px 0;">
-                <span style="font-weight: bold; color: {% if status == 'Paid' %}#16a34a{% else %}#dc2626{% endif %};">{{
+                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{
                   status }}</span>
               </td>
             </tr>

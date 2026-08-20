@@ -396,14 +396,6 @@ class PharmacyInvoiceRepository:
             
         total = await self.db.scalar(stmt_total)
         count = await self.db.scalar(stmt_count)
-        return {"total_sales": float(total or 0), "invoice_count": count or 0}
-        count = await self.db.scalar(
-            select(func.count()).select_from(PharmacyInvoice).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.created_at >= start,
-                PharmacyInvoice.created_at <= end,
-            )
-        )
         
         # Query top selling medicines
         top_meds_query = (
@@ -439,11 +431,15 @@ class PharmacyInvoiceRepository:
                     PharmacyInvoice.status != "cancelled",
                 ),
 
-                # Apply selected report period
-                PharmacyInvoice.created_at >= start,
+                # Apply selected report period end
                 PharmacyInvoice.created_at <= end,
             )
-            .group_by(
+        )
+        if start is not None:
+            top_meds_query = top_meds_query.where(PharmacyInvoice.created_at >= start)
+            
+        top_meds_query = (
+            top_meds_query.group_by(
                 PharmacyInvoiceItem.medicine_id,
                 Medicine.name,
                 Medicine.generic_name,

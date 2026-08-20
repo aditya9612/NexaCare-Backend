@@ -12,7 +12,7 @@
     h1 { color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
     .meta { margin-bottom: 10px; font-size: 9px; }
     table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
-    th, td { border: 0.5px solid #e5e7eb; padding: 4px 3px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 4px 3px; text-align: left; overflow: hidden; }
     th { background: #f3f4f6; font-weight: bold; color: #1e3a8a; }
     tr:nth-child(even) { background-color: #fafafa; }
     .badge { padding: 1px 3px; border-radius: 3px; font-weight: bold; font-size: 7px; text-align: center; }
@@ -21,6 +21,19 @@
     .status-pending { background-color: #fee2e2; color: #991b1b; }
     .source-clinical { background-color: #dbeafe; color: #1e40af; }
     .source-pharmacy { background-color: #f3e8ff; color: #6b21a8; }
+    .wrap-col {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      word-wrap: break-word;
+    }
+    .nowrap-col {
+      white-space: nowrap;
+    }
+    .short-col {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -32,21 +45,21 @@
   <table>
     <thead>
       <tr>
-        <th style="width: 4%;">ID</th>
-        <th style="width: 12%;">Bill Number</th>
-        <th style="width: 13%;">Patient</th>
-        <th style="width: 14%;">Financials</th>
-        <th style="width: 11%;">Status / Bal</th>
-        <th style="width: 24%;">Items Details</th>
-        <th style="width: 11%;">Notes / Dates</th>
-        <th style="width: 11%;">Created At</th>
+        <th class="short-col" style="width: 4%;">Sr. No.</th>
+        <th class="wrap-col" style="width: 12%;">Bill Number</th>
+        <th class="wrap-col" style="width: 13%;">Patient</th>
+        <th class="wrap-col" style="width: 14%;">Financials</th>
+        <th class="wrap-col" style="width: 11%;">Status / Bal</th>
+        <th class="wrap-col" style="width: 27%;">Items Details</th>
+        <th class="wrap-col" style="width: 11%;">Notes / Dates</th>
+        <th class="nowrap-col" style="width: 8%;">Created At</th>
       </tr>
     </thead>
     <tbody>
       {% for item in billings %}
       <tr>
-        <td>{{ item.id }}</td>
-        <td>
+        <td class="short-col">{{ loop.index }}</td>
+        <td class="wrap-col">
           No: {{ item.bill_number }}<br/>
           Source: 
           {% if item.source == "pharmacy" %}
@@ -55,17 +68,17 @@
             <span class="badge source-clinical">Clinical</span>
           {% endif %}
         </td>
-        <td>
+        <td class="wrap-col">
           ID: {{ item.patient_id }}<br/>
           {{ item.patient_name or "" }}
         </td>
-        <td>
+        <td class="wrap-col">
           Subtotal: ₹{{ "%.2f"|format(item.subtotal) }}<br/>
           Discount: {{ item.discount_percent }}% (₹{{ "%.2f"|format(item.discount_amount) }})<br/>
           GST: {{ item.gst_rate }}% (₹{{ "%.2f"|format(item.gst_amount) }})<br/>
           Total: <strong>₹{{ "%.2f"|format(item.total_amount) }}</strong>
         </td>
-        <td>
+        <td class="wrap-col">
           Paid: ₹{{ "%.2f"|format(item.paid_amount) }}<br/>
           Balance: ₹{{ "%.2f"|format(item.balance_amount) }}<br/>
           Status: 
@@ -77,18 +90,24 @@
             <span class="badge status-pending">{{ item.status|upper }}</span>
           {% endif %}
         </td>
-        <td>
+        <td class="wrap-col">
           {% for sub in item.bill_items %}
             • {{ sub.description }} x{{ sub.quantity }} @ ₹{{ "%.2f"|format(sub.unit_price) }} (GST: {{ sub.gst_rate }}%, Total: ₹{{ "%.2f"|format(sub.line_total) }})<br/>
           {% else %}
             -
           {% endfor %}
         </td>
-        <td>
+        <td class="wrap-col">
           Notes: {{ item.notes or "-" }}<br/>
           Due: {{ item.due_date or "-" }}
         </td>
-        <td>{{ item.created_at }}</td>
+        <td class="nowrap-col">
+          {% if item.created_at and item.created_at != '-' %}
+            {{ item.created_at.split(' ')[0] }}<br/>{{ item.created_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

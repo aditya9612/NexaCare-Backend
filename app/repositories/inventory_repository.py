@@ -110,7 +110,11 @@ class InventoryRepository:
         await self.db.flush()
 
     async def get_all_active(self) -> list[InventoryItem]:
-        query = self._base_query().order_by(InventoryItem.name.asc())
+        query = self._base_query().options(
+            selectinload(InventoryItem.warehouse),
+            selectinload(InventoryItem.vendor),
+            selectinload(InventoryItem.department)
+        ).order_by(InventoryItem.name.asc())
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

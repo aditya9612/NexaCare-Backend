@@ -190,9 +190,8 @@ class AppointmentService:
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
-        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
         queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
-        appointment_data = data.model_dump(exclude={"patient_name", "age"})
+        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,

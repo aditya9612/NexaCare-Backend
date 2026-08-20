@@ -385,29 +385,20 @@ class PharmacyInvoiceRepository:
         await self.db.flush()
 
     async def get_sales_report(self, start, end) -> dict:
-        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(
+        filters = [
             PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.status != "cancelled",
             PharmacyInvoice.created_at <= end,
-        )
-        stmt_count = select(func.count()).select_from(PharmacyInvoice).where(
-            PharmacyInvoice.is_deleted.is_(False),
-            PharmacyInvoice.created_at <= end,
-        )
+        ]
         if start is not None:
-            stmt_total = stmt_total.where(PharmacyInvoice.created_at >= start)
-            stmt_count = stmt_count.where(PharmacyInvoice.created_at >= start)
-            
+            filters.append(PharmacyInvoice.created_at >= start)
+
+        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(*filters)
+        stmt_count = select(func.count()).select_from(PharmacyInvoice).where(*filters)
+
         total = await self.db.scalar(stmt_total)
         count = await self.db.scalar(stmt_count)
-        return {"total_sales": float(total or 0), "invoice_count": count or 0}
-        count = await self.db.scalar(
-            select(func.count()).select_from(PharmacyInvoice).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.created_at >= start,
-                PharmacyInvoice.created_at <= end,
-            )
-        )
-        
+
         # Query top selling medicines
         top_meds_query = (
             select(
@@ -428,24 +419,7 @@ class PharmacyInvoiceRepository:
                 Medicine,
                 Medicine.id == PharmacyInvoiceItem.medicine_id,
             )
-            .where(
-                # Include active invoices and legacy invoices where is_deleted is NULL
-                or_(
-                    PharmacyInvoice.is_deleted.is_(False),
-                    PharmacyInvoice.is_deleted.is_(None),
-                ),
-
-                # Exclude only cancelled invoices.
-                # NULL status is also considered valid.
-                or_(
-                    PharmacyInvoice.status.is_(None),
-                    PharmacyInvoice.status != "cancelled",
-                ),
-
-                # Apply selected report period
-                PharmacyInvoice.created_at >= start,
-                PharmacyInvoice.created_at <= end,
-            )
+            .where(*filters)
             .group_by(
                 PharmacyInvoiceItem.medicine_id,
                 Medicine.name,

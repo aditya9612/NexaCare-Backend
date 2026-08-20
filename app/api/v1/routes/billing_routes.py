@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.schemas.billing_schema import (
+    BillType,
     BillingCreate,
     BillingResponse,
     BillingSummary,
@@ -122,6 +123,7 @@ async def list_billings(
     sort_order: str = "desc",
     status: str | None = None,
     patient_id: int | None = None,
+    bill_type: BillType | None = Query(None, description="Filter by bill type ('pharmacy' or 'consultation')"),
     q: str | None = None,
     start_date: date | None = Query(None, description="Start date filter (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="End date filter (YYYY-MM-DD)"),
@@ -134,13 +136,15 @@ async def list_billings(
     if q:
         result = await service.search(
             q, page=page, size=size, status=status,
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date,
+            bill_type=bill_type,
         )
     else:
         result = await service.list_billings(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
             status=status, patient_id=patient_id,
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date,
+            bill_type=bill_type,
         )
     return APIResponse(message="Bills retrieved", data=result)
 

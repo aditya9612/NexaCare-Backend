@@ -1,9 +1,15 @@
 from datetime import date, datetime
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
+
+
+class BillType(str, Enum):
+    PHARMACY = "pharmacy"
+    CONSULTATION = "consultation"
 
 
 class BillItemCreate(BaseSchema):
@@ -70,6 +76,7 @@ class BillingResponse(BaseSchema):
     created_at: datetime
     updated_at: datetime
     source: Optional[str] = "billing"
+    bill_type: Optional[str] = "consultation"
 
 
 from pydantic import model_validator

@@ -27,28 +27,61 @@ class BillingRepository:
         sort_order: str = "desc",
         status: str | None = None,
         patient_id: int | None = None,
+        bill_type: str | None = None,
     ) -> list[Billing]:
         query = self._base_query()
         if status:
             query = query.where(Billing.status == status)
         if patient_id:
             query = query.where(Billing.patient_id == patient_id)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         column = getattr(Billing, sort_by, Billing.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None, patient_id: int | None = None) -> int:
+    async def count_all(
+        self,
+        status: str | None = None,
+        patient_id: int | None = None,
+        bill_type: str | None = None,
+    ) -> int:
         query = select(func.count()).select_from(Billing).where(Billing.is_deleted.is_(False))
         if status:
             query = query.where(Billing.status == status)
         if patient_id:
             query = query.where(Billing.patient_id == patient_id)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         result = await self.db.scalar(query)
         return result or 0
 
     async def search(
-        self, q: str, skip: int = 0, limit: int = 20, status: str | None = None
+        self,
+        q: str,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        bill_type: str | None = None,
     ) -> list[Billing]:
         pattern = f"%{q.lower()}%"
         query = self._base_query().where(
@@ -59,10 +92,26 @@ class BillingRepository:
         )
         if status:
             query = query.where(Billing.status == status)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_search(self, q: str, status: str | None = None) -> int:
+    async def count_search(
+        self,
+        q: str,
+        status: str | None = None,
+        bill_type: str | None = None,
+    ) -> int:
         pattern = f"%{q.lower()}%"
         query = (
             select(func.count())
@@ -77,6 +126,17 @@ class BillingRepository:
         )
         if status:
             query = query.where(Billing.status == status)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         result = await self.db.scalar(query)
         return result or 0
 

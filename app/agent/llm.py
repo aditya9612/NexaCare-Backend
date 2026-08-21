@@ -376,7 +376,8 @@ def detect_specialty(problem_description: str, keywords: list[str] | None = None
     """
     Detect medical specialty from patient's cleaned problem description.
 
-    Tries Gemini first, then OpenAI, then keyword hint.
+    Fast path: keyword hint (problem text + English keywords) skips LLM to keep
+    Twilio voice webhooks under timeout. Otherwise tries Gemini, then OpenAI.
 
     Args:
         problem_description: The cleaned problem text (in patient's language)
@@ -393,11 +394,21 @@ def detect_specialty(problem_description: str, keywords: list[str] | None = None
             if hint:
                 break
 
+    # Voice webhook latency: skip LLM when specialty is already clear from keywords
+    if hint:
+        result = {
+            "specialty": hint,
+            "confidence": "high",
+            "reasoning": f"Keyword match — routing to {hint} without LLM.",
+        }
+        logger.info(
+            f"Specialty: {result['specialty']} ({result['confidence']}) | {result['reasoning']}"
+        )
+        return result
+
     user_prompt = f'Patient problem: "{problem_description}"'
     if keywords:
         user_prompt += f'\nMedical keywords: {", ".join(keywords)}'
-    if hint:
-        user_prompt += f'\nKeyword analysis suggests: "{hint}". Confirm or override based on full context.'
 
     if _gemini_configured():
         try:

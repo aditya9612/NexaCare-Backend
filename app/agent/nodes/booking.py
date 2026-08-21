@@ -231,10 +231,12 @@ def _say(
     lang: str,
     base_url: str = "",
     voice_profile: str | None = None,
+    *,
+    allow_generate: bool = True,
 ) -> str:
     # voice_profile kept for Phase 6 call sites; Sarvam <Play> / Speak path ignores it.
     _ = voice_profile
-    return speak(text, lang, base_url)
+    return speak(text, lang, base_url, allow_generate=allow_generate)
 
 
 # Domain hints to bias Twilio's speech recognition toward booking/medical
@@ -289,10 +291,18 @@ def _gather_speech(
     )
 
 
-def _gather_dtmf(action: str, prompt: str, lang: str, num_digits: int = 1, base_url: str = "") -> str:
+def _gather_dtmf(
+    action: str,
+    prompt: str,
+    lang: str,
+    num_digits: int = 1,
+    base_url: str = "",
+    *,
+    allow_generate: bool = True,
+) -> str:
     return (
         f'<Gather numDigits="{num_digits}" action="{escape(action)}" method="POST" timeout="10">'
-        f'{_say(prompt, lang, base_url)}'
+        f'{_say(prompt, lang, base_url, allow_generate=allow_generate)}'
         f'</Gather>'
         f'<Redirect method="POST">{escape(action)}</Redirect>'
     )
@@ -553,6 +563,13 @@ def build_suggest_doctors_twiml(
     doctors: list[dict],
     confirm_problem_tts: str = "",
 ) -> str:
+    """
+    Build doctor-list TwiML after problem collection.
+
+    Uses allow_generate=False so this webhook never blocks on live Sarvam
+    synthesis (Twilio ~15s limit). Cached <Play> still used when available;
+    otherwise Twilio <Say>.
+    """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
     base_url = state.get("base_url", "")
@@ -570,10 +587,16 @@ def build_suggest_doctors_twiml(
     prompt = intro + options
 
     elements = []
-    # Prepend problem confirmation TTS if present
+    # Prepend problem confirmation; no live Sarvam on this latency-critical path
     if confirm_problem_tts:
-        elements.append(_say(confirm_problem_tts, twilio_lang, base_url))
-    elements.append(_gather_dtmf(action, prompt, twilio_lang, base_url=base_url))
+        elements.append(
+            _say(confirm_problem_tts, twilio_lang, base_url, allow_generate=False)
+        )
+    elements.append(
+        _gather_dtmf(
+            action, prompt, twilio_lang, base_url=base_url, allow_generate=False
+        )
+    )
 
     return _twiml(*elements)
 

@@ -1,5 +1,7 @@
 """
-Stage 4 — Deterministic Gemini call for name extraction.
+Stage 4 — Deterministic LLM call for name extraction.
+
+Primary: Gemini. Fallback: OpenAI when Gemini fails or is not configured.
 """
 
 from __future__ import annotations
@@ -10,10 +12,31 @@ from typing import Any
 
 from google.genai import types
 
-from app.agent.llm import NameExtractionResult, _get_client, _get_model
+from app.agent.llm import (
+    NameExtractionResult,
+    _gemini_configured,
+    _get_client,
+    _get_model,
+    openai_json_completion,
+)
 from app.agent.name_extraction.prompt import NAME_SYSTEM_PROMPT, build_user_prompt
 
 logger = logging.getLogger("nexacare.agent.name_extraction.gemini")
+
+
+def _normalise_name_result(result: dict[str, Any]) -> dict[str, Any]:
+    conf = result.get("confidence", "low")
+    if hasattr(conf, "value"):
+        conf = conf.value
+    result["confidence"] = str(conf).lower()
+
+    if not isinstance(result.get("found"), bool):
+        result["found"] = bool(result.get("name", "").strip())
+    if not result.get("name", "").strip():
+        result["found"] = False
+        result["name"] = ""
+
+    return result
 
 
 def call_gemini(
@@ -23,7 +46,7 @@ def call_gemini(
     twilio_confidence: float = -1.0,
 ) -> dict[str, Any] | None:
     """
-    Call Gemini with deterministic settings for name extraction.
+    Call Gemini (then OpenAI fallback) for name extraction.
 
     Returns parsed dict matching NameExtractionResult, or None on failure.
     """
@@ -37,44 +60,45 @@ def call_gemini(
         twilio_confidence=twilio_confidence,
     )
 
+    if _gemini_configured():
+        try:
+            client = _get_client()
+            model = _get_model()
+
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=NAME_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    top_p=0.1,
+                    top_k=1,
+                    max_output_tokens=80,
+                    response_mime_type="application/json",
+                    response_schema=NameExtractionResult,
+                ),
+            )
+
+            if not response.text:
+                logger.warning("Gemini returned empty response for name extraction")
+            else:
+                return _normalise_name_result(json.loads(response.text))
+
+        except Exception as exc:
+            logger.warning("Gemini name extraction failed: %s — trying OpenAI", exc)
+    else:
+        logger.info("Name extraction: Gemini not configured — trying OpenAI")
+
     try:
-        client = _get_client()
-        model = _get_model()
-
-        response = client.models.generate_content(
-            model=model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=NAME_SYSTEM_PROMPT,
-                temperature=0.0,
-                top_p=0.1,
-                top_k=1,
-                max_output_tokens=80,
-                response_mime_type="application/json",
-                response_schema=NameExtractionResult,
-            ),
+        result = openai_json_completion(
+            system_prompt=NAME_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            schema=NameExtractionResult,
+            temperature=0.0,
+            max_completion_tokens=80,
         )
-
-        if not response.text:
-            logger.warning("Gemini returned empty response for name extraction")
-            return None
-
-        result = json.loads(response.text)
-
-        # Normalise confidence to string enum value.
-        conf = result.get("confidence", "low")
-        if hasattr(conf, "value"):
-            conf = conf.value
-        result["confidence"] = str(conf).lower()
-
-        if not isinstance(result.get("found"), bool):
-            result["found"] = bool(result.get("name", "").strip())
-        if not result.get("name", "").strip():
-            result["found"] = False
-            result["name"] = ""
-
-        return result
-
+        logger.info("Name extraction succeeded via OpenAI fallback")
+        return _normalise_name_result(result)
     except Exception as exc:
-        logger.warning("Gemini name extraction failed: %s", exc)
+        logger.warning("OpenAI name extraction failed: %s", exc)
         return None

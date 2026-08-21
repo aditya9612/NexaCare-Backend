@@ -37,15 +37,16 @@ def _require_admin(user: User) -> User:
         raise ForbiddenException("Requires Hospital Admin or Super Admin")
     return user
 
-
 def _hospital_scope(user: User, hospital_id: int) -> int:
     if user.role and user.role.name == UserRole.SUPER_ADMIN:
         return hospital_id
+    if user.role and user.role.name == UserRole.HOSPITAL_ADMIN:
+        # Return the admin's assigned hospital_id (or requested hospital_id if matched)
+        return user.hospital_id or hospital_id
     if user.hospital_id and user.hospital_id == hospital_id:
         return hospital_id
-    if user.role and user.role.name == UserRole.HOSPITAL_ADMIN and user.hospital_id:
-        return user.hospital_id
     raise ForbiddenException("Hospital scope mismatch")
+
 
 
 @router.get(

@@ -12,6 +12,7 @@ class AppointmentCreate(BaseSchema):
     appointment_date: date
     appointment_time: time
     appointment_type: str | None = None
+    booking_source: str | None = None
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
@@ -25,6 +26,7 @@ class AppointmentUpdate(BaseSchema):
     appointment_date: date | None = None
     appointment_time: time | None = None
     appointment_type: str | None = None
+    booking_source: str | None = None
     appointment_status: str | None = None
     symptoms: str | None = None
     notes: str | None = None
@@ -47,6 +49,7 @@ class AppointmentResponse(BaseSchema):
     appointment_date: date
     appointment_time: time
     appointment_type: str | None
+    booking_source: str | None = None
     appointment_status: str
     symptoms: str | None
     notes: str | None

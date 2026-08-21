@@ -748,7 +748,7 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
 
         appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-        from app.core.constants import AppointmentType
+        from app.core.constants import BookingSource
 
         appt = Appointment(
             appointment_number=appt_no,
@@ -758,7 +758,7 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             appointment_date=slot["date"],
             appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
             appointment_status="scheduled",
-            appointment_type=AppointmentType.AI_VOICE,
+            booking_source=BookingSource.AI_VOICE,
             symptoms=state.get("problem_description"),
             notes=(
                 f"Booked via AI Voice Agent. "

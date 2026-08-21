@@ -58,9 +58,17 @@ class AppointmentStatus:
 
 
 class AppointmentType:
-    """Canonical appointment_type string values (free-text column; keep consistent in code)."""
-    AI_VOICE = "ai_voice"
+    """Canonical appointment_type string values (visit modality; free-text column)."""
     WALK_IN = "walk-in"
+    SCHEDULED = "scheduled"
+
+
+class BookingSource:
+    """How the appointment was booked (channel), distinct from appointment_type."""
+    STAFF = "staff"
+    PATIENT_PORTAL = "patient_portal"
+    AI_CHAT = "ai_chat"
+    AI_VOICE = "ai_voice"
 
 
 class PatientStatus:

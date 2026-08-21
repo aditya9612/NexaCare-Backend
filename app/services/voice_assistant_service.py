@@ -15,7 +15,7 @@ from app.ai.voice_appointment_assistant.schemas import (
 from app.core.config import settings
 from app.core.constants import (
     AppointmentStatus,
-    AppointmentType,
+    BookingSource,
     TelephonyProviderType,
     TransferStatus,
     VoiceCallStatus,
@@ -602,7 +602,7 @@ class VoiceAssistantService:
             doctor_id=doctor.id,
             appointment_date=appt_date,
             appointment_time=appt_time,
-            appointment_type=AppointmentType.AI_VOICE,
+            booking_source=BookingSource.AI_VOICE,
             symptoms=state.symptoms,
             consultation_type="in_person",
             notes=(

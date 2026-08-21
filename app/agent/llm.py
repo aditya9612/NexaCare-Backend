@@ -90,7 +90,7 @@ def openai_json_completion(
     user_prompt: str,
     schema: Type[_SchemaT],
     temperature: float = 0.0,
-    max_completion_tokens: int = 250,
+    max_completion_tokens: int = 2000,
 ) -> dict:
     """
     Call OpenAI chat completions and parse a JSON object matching ``schema``.
@@ -313,7 +313,7 @@ def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
             user_prompt=user_content,
             schema=ProblemExtractionResult,
             temperature=0.0,
-            max_completion_tokens=250,
+            max_completion_tokens=2000,
         )
         logger.info("Problem extraction succeeded via OpenAI fallback")
         return _normalise_problem_result(result)
@@ -430,7 +430,7 @@ def detect_specialty(problem_description: str, keywords: list[str] | None = None
             user_prompt=user_prompt,
             schema=SpecialtyDetectionResult,
             temperature=0.1,
-            max_completion_tokens=150,
+            max_completion_tokens=1500,
         )
         logger.info("Specialty detection succeeded via OpenAI fallback")
         return _normalise_specialty_result(result, hint)

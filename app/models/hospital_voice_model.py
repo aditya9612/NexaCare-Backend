@@ -44,7 +44,7 @@ class HospitalFaq(Base, TimestampMixin, SoftDeleteMixin):
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
     language: Mapped[str] = mapped_column(String(10), default=VoiceLanguage.EN, index=True)
-    tags: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 

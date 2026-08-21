@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.embeddings.store import EmbeddingStore
+from app.ai.rag.kb_cache import bump_kb_version
 from app.ai.rag.rag_service import TRANSFER_PHRASES, RagFaqService
 from app.core.logger import logger
 from app.services.medical_safety_guard import MedicalSafetyGuard
@@ -107,6 +108,7 @@ class FaqRetrievalService:
 
     async def invalidate_cache(self, hospital_id: int) -> None:
         """Clear KB snapshot, query-answer, and vector caches for a hospital."""
+        await bump_kb_version(hospital_id)
         for lang in ("en", "hi", "mr"):
             await cache_delete(self._cache_key(hospital_id, lang))
             await cache_delete(f"voice:faq:vectors:{hospital_id}:{lang}")

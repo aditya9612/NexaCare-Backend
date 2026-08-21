@@ -3,7 +3,6 @@ OpenAITop5Selector — grounded KB selector over retrieved Top-5 entries only.
 
 Reply formats:
 - MATCH:faq|policy|document:<id>
-- CLARIFY:<short question>
 - NO_ANSWER
 
 Never invent fees, timings, or clinical advice. Spoken answers are resolved
@@ -26,12 +25,11 @@ _MATCH_PREFIX = re.compile(
     r"^MATCH:(faq|policy|document):(\d+)\s*$",
     re.IGNORECASE,
 )
-_CLARIFY_PREFIX = re.compile(r"^CLARIFY:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass
 class SelectorResult:
-    kind: str  # match | clarify | no_answer | error
+    kind: str  # match | no_answer | invalid_id | error
     source: Optional[str] = None
     entry_id: Optional[int] = None
     text: str = ""
@@ -46,6 +44,7 @@ class OpenAITop5Selector:
         question: str,
         chunks: list[RetrievedChunk],
         language: str = "en",
+        normalized_question: str | None = None,
     ) -> SelectorResult:
         if not chunks:
             return SelectorResult(kind="no_answer")
@@ -62,14 +61,14 @@ class OpenAITop5Selector:
             "MATCH:faq:<id>\n"
             "MATCH:policy:<id>\n"
             "MATCH:document:<id>\n"
-            "CLARIFY:<short clarification question in the patient's language>\n"
             "NO_ANSWER\n"
             "Do not include any other text."
         )
         user = (
             f"Retrieved knowledge (Top-5 only):\n{catalog}\n\n"
             f"Patient language: {language}\n"
-            f"Patient question: {question}"
+            f"Patient question: {question}\n"
+            f"Normalized question (retrieval): {normalized_question or question}"
         )
         try:
             from openai import AsyncOpenAI
@@ -96,7 +95,7 @@ class OpenAITop5Selector:
             source = match.group(1).lower()
             entry_id = int(match.group(2))
             if (source, entry_id) not in allowed:
-                return SelectorResult(kind="no_answer")
+                return SelectorResult(kind="invalid_id", source=source, entry_id=entry_id)
             for chunk in chunks:
                 if chunk.source == source and chunk.id == entry_id:
                     return SelectorResult(
@@ -105,13 +104,6 @@ class OpenAITop5Selector:
                         entry_id=entry_id,
                         text=chunk.text,
                     )
-            return SelectorResult(kind="no_answer")
-
-        clarify = _CLARIFY_PREFIX.match(text)
-        if clarify:
-            return SelectorResult(
-                kind="clarify",
-                clarify_question=clarify.group(1).strip()[:300],
-            )
+            return SelectorResult(kind="invalid_id", source=source, entry_id=entry_id)
 
         return SelectorResult(kind="no_answer")

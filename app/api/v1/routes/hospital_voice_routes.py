@@ -152,7 +152,11 @@ async def seed_faqs(hospital_id: int, db: DbSession, current_user: CurrentUser):
     _require_admin(current_user)
     hospital_id = _hospital_scope(current_user, hospital_id)
     count = await HospitalKnowledgeService(db).seed_from_env(hospital_id)
-    return APIResponse(message="FAQ seed complete", data={"created": count})
+    priority = await HospitalKnowledgeService(db).ensure_priority_faqs(hospital_id)
+    return APIResponse(
+        message="FAQ seed complete",
+        data={"created": count, "priority_created": priority},
+    )
 
 
 @router.get(

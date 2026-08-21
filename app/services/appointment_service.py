@@ -91,15 +91,18 @@ class AppointmentService:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
     ):
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            appointment_type=appointment_type,
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            appointment_type=appointment_type,
         )
 
         # Calculate summary counts independently of pagination and status/date filters where appropriate

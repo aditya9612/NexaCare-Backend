@@ -57,6 +57,12 @@ class AppointmentStatus:
     TERMINAL = {COMPLETED, CANCELLED, NO_SHOW}
 
 
+class AppointmentType:
+    """Canonical appointment_type string values (free-text column; keep consistent in code)."""
+    AI_VOICE = "ai_voice"
+    WALK_IN = "walk-in"
+
+
 class PatientStatus:
     ACTIVE = "active"
     INACTIVE = "inactive"

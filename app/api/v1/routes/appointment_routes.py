@@ -70,11 +70,13 @@ async def list_appointments(
     department_id: int | None = None,
     status: str | None = None,
     appointment_date: date | None = None,
+    appointment_type: str | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
+        appointment_type=appointment_type,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 

@@ -21,11 +21,14 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
+        query = self._apply_filters(
+            query, patient_id, doctor_id, department_id, status, appointment_date, appointment_type
+        )
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -38,12 +41,24 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
+        query = self._apply_filters(
+            query, patient_id, doctor_id, department_id, status, appointment_date, appointment_type
+        )
         return await self.db.scalar(query) or 0
 
-    def _apply_filters(self, query, patient_id, doctor_id, department_id, status, appointment_date):
+    def _apply_filters(
+        self,
+        query,
+        patient_id,
+        doctor_id,
+        department_id,
+        status,
+        appointment_date,
+        appointment_type=None,
+    ):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
         if doctor_id:
@@ -87,6 +102,10 @@ class AppointmentRepository:
                     query = query.where(func.lower(Appointment.appointment_status) == func.lower(status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
+        if appointment_type:
+            query = query.where(
+                func.lower(Appointment.appointment_type) == func.lower(appointment_type.strip())
+            )
         return query
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:

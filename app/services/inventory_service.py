@@ -213,7 +213,7 @@ class InventoryService:
             transaction_number=generate_stock_transaction_number(),
             transaction_date=utc_now(),
             performed_by=user_id,
-            **data.model_dump(exclude={"target_warehouse_id"}),
+            **data.model_dump(exclude={"target_warehouse_id", "type"}),
         )
         transaction = await self.transaction_repo.create(transaction)
         await self.item_repo.update_quantity(data.item_id, delta)
@@ -221,7 +221,18 @@ class InventoryService:
         if item:
             await self._check_reorder_alert(item)
         await self.audit_repo.create("create", "inventory_transaction", user_id=user_id, resource_id=str(transaction.id))
-        return StockTransactionResponse.model_validate(transaction)
+        transaction = await self.transaction_repo.get_by_id(transaction.id) or transaction
+        return self._to_transaction_response(transaction)
+
+    def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:
+        data = StockTransactionResponse.model_validate(transaction)
+        data.type = transaction.transaction_type
+        if hasattr(transaction, "item") and transaction.item:
+            data.item_name = transaction.item.name
+        if hasattr(transaction, "warehouse") and transaction.warehouse:
+            data.warehouse_name = transaction.warehouse.name
+        data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
+        return data
 
     async def list_transactions(
         self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None
@@ -232,8 +243,14 @@ class InventoryService:
         )
         total = await self.transaction_repo.count_all(item_id=item_id, transaction_type=transaction_type)
         return build_paginated_result(
-            [StockTransactionResponse.model_validate(t) for t in items], total, page, size
+            [self._to_transaction_response(t) for t in items], total, page, size
         )
+
+    async def get_transaction(self, transaction_id: int) -> StockTransactionResponse:
+        transaction = await self.transaction_repo.get_by_id(transaction_id)
+        if not transaction:
+            raise NotFoundException("Stock transaction not found")
+        return self._to_transaction_response(transaction)
 
     async def update_transaction(
         self, transaction_id: int, data: StockTransactionUpdate, user_id: int
@@ -387,7 +404,7 @@ class InventoryService:
             details=f"Updated stock transaction fields. Old: {old_values}, New: {new_values}",
         )
 
-        return StockTransactionResponse.model_validate(transaction)
+        return self._to_transaction_response(transaction)
 
     async def delete_stock_transaction(self, transaction_id: int, user_id: int) -> None:
         transaction = await self.transaction_repo.get_by_id(transaction_id)

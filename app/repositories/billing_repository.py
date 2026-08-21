@@ -27,28 +27,61 @@ class BillingRepository:
         sort_order: str = "desc",
         status: str | None = None,
         patient_id: int | None = None,
+        bill_type: str | None = None,
     ) -> list[Billing]:
         query = self._base_query()
         if status:
             query = query.where(Billing.status == status)
         if patient_id:
             query = query.where(Billing.patient_id == patient_id)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         column = getattr(Billing, sort_by, Billing.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None, patient_id: int | None = None) -> int:
+    async def count_all(
+        self,
+        status: str | None = None,
+        patient_id: int | None = None,
+        bill_type: str | None = None,
+    ) -> int:
         query = select(func.count()).select_from(Billing).where(Billing.is_deleted.is_(False))
         if status:
             query = query.where(Billing.status == status)
         if patient_id:
             query = query.where(Billing.patient_id == patient_id)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         result = await self.db.scalar(query)
         return result or 0
 
     async def search(
-        self, q: str, skip: int = 0, limit: int = 20, status: str | None = None
+        self,
+        q: str,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        bill_type: str | None = None,
     ) -> list[Billing]:
         pattern = f"%{q.lower()}%"
         query = self._base_query().where(
@@ -59,10 +92,26 @@ class BillingRepository:
         )
         if status:
             query = query.where(Billing.status == status)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
-    async def count_search(self, q: str, status: str | None = None) -> int:
+    async def count_search(
+        self,
+        q: str,
+        status: str | None = None,
+        bill_type: str | None = None,
+    ) -> int:
         pattern = f"%{q.lower()}%"
         query = (
             select(func.count())
@@ -77,6 +126,17 @@ class BillingRepository:
         )
         if status:
             query = query.where(Billing.status == status)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                query = query.where(func.lower(Billing.bill_number).like("rec%"))
+            elif bt_val == "consultation":
+                query = query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
         result = await self.db.scalar(query)
         return result or 0
 
@@ -196,7 +256,11 @@ class BillingRepository:
             )
             .group_by(Payment.payment_method)
         )
-        by_method = {row[0]: float(row[1]) for row in result.all()}
+        by_method = {
+            str(row[0]): round(float(row[1]), 2)
+            for row in result.all()
+            if row[0] and str(row[0]).lower() != "pharmacy"
+        }
         
         refunds_result = await self.db.scalar(
             select(func.coalesce(func.sum(Payment.amount), 0.0))
@@ -209,9 +273,12 @@ class BillingRepository:
         )
         refund_total = float(refunds_result or 0.0)
         if refund_total > 0:
-            by_method["refund"] = -refund_total
+            by_method["refund"] = round(refund_total, 2)
 
-        total = sum(by_method.values())
+        gross_collected = sum(v for k, v in by_method.items() if k != "refund")
+        net_collected = max(0.0, gross_collected - refund_total)
+        total = round(net_collected, 2)
+
         count = await self.db.scalar(
             select(func.count())
             .select_from(Payment)
@@ -222,7 +289,7 @@ class BillingRepository:
                 Payment.payment_date <= end,
             )
         )
-        return {"total_collected": round(total, 2), "payment_count": count or 0, "by_method": by_method}
+        return {"total_collected": total, "payment_count": count or 0, "by_method": by_method}
 
 
     async def get_period_report(self, start: datetime, end: datetime) -> dict:
@@ -258,10 +325,10 @@ class BillingRepository:
             .where(Payment.payment_date >= start, Payment.payment_date <= end)
         )
         return {
-            "total_billed": float(billed or 0),
-            "total_collected": float(collected or 0),
-            "total_pending": float((billed or 0) - (collected or 0)),
-            "total_refunded": float(refunded or 0),
+            "total_billed": round(float(billed or 0), 2),
+            "total_collected": round(float(collected or 0), 2),
+            "total_pending": round(float((billed or 0) - (collected or 0)), 2),
+            "total_refunded": round(float(refunded or 0), 2),
             "bill_count": bill_count or 0,
             "payment_count": payment_count or 0,
         }

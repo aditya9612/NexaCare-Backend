@@ -555,7 +555,7 @@ class ExpenseService:
                 })
             summary["by_vendor"] = by_vendor
 
-            # 3. Status aggregate
+            # 3. Status aggregate (and update paid/pending totals)
             by_status = list(summary.get("by_status", []))
             status_stmt = select(
                 Purchase.status.label("status"),
@@ -568,23 +568,41 @@ class ExpenseService:
             )
             status_res = await self.db.execute(status_stmt)
             for r in status_res.all():
-                status_key = (r.status or "").capitalize()
-                if status_key == "Received":
-                    status_key = "Paid"
+                raw_status = (r.status or "").lower().strip()
+                status_key = "Paid" if raw_status == "received" else ("Pending" if raw_status == "pending" else (r.status or "").capitalize())
+                
+                amt = float(r.total_amount)
+                cnt = int(r.count)
+
+                if status_key.lower() == "paid":
+                    summary["paid_amount"] = round(summary.get("paid_amount", 0.0) + amt, 2)
+                    summary["paid_count"] = summary.get("paid_count", 0) + cnt
+                elif status_key.lower() == "pending":
+                    summary["pending_amount"] = round(summary.get("pending_amount", 0.0) + amt, 2)
+                    summary["pending_count"] = summary.get("pending_count", 0) + cnt
+
                 found_status = False
                 for item in by_status:
                     if (item.get("status") or "").capitalize() == status_key:
-                        item["total_amount"] = round(item["total_amount"] + float(r.total_amount), 2)
-                        item["count"] = item["count"] + int(r.count)
+                        item["total_amount"] = round(item["total_amount"] + amt, 2)
+                        item["count"] = item["count"] + cnt
                         found_status = True
                         break
                 if not found_status:
                     by_status.append({
                         "status": status_key,
-                        "total_amount": float(r.total_amount),
-                        "count": int(r.count)
+                        "total_amount": amt,
+                        "count": cnt
                     })
             summary["by_status"] = by_status
+
+            # Count distinct suppliers from purchases in addition to general vendors
+            distinct_supplier_stmt = select(
+                func.count(func.distinct(Purchase.supplier_id))
+            ).where(*purchase_filter, Purchase.supplier_id.isnot(None))
+            distinct_supp_res = await self.db.execute(distinct_supplier_stmt)
+            pharm_vendors_count = int(distinct_supp_res.scalar() or 0)
+            summary["total_vendors"] = summary.get("total_vendors", 0) + pharm_vendors_count
 
             # 4. Monthly summary
             monthly_summary = list(summary.get("monthly_summary", []))

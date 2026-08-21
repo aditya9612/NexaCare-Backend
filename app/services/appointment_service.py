@@ -115,7 +115,7 @@ class AppointmentService:
         )
         total_scheduled = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
+            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date
         )
         completed = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
@@ -123,7 +123,28 @@ class AppointmentService:
         )
         cancelled = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CANCELLED, appointment_date=appointment_date
+            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date
+        )
+        pending = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.PENDING, appointment_date=appointment_date
+        )
+        confirmed = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
+        )
+
+        in_progress = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="In-Progress", appointment_date=appointment_date
+        )
+        checked_in = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="Check-in", appointment_date=appointment_date
+        )
+        checked_out = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="Checked-Out", appointment_date=appointment_date
         )
 
         paginated = build_paginated_result(
@@ -140,6 +161,11 @@ class AppointmentService:
             "total_scheduled": total_scheduled,
             "completed": completed,
             "cancelled": cancelled,
+            "pending": pending,
+            "confirmed": confirmed,
+            "in_progress": in_progress,
+            "checked_in": checked_in,
+            "checked_out": checked_out,
         }
 
     async def get_by_id(self, appointment_id: int) -> AppointmentResponse:
@@ -190,9 +216,8 @@ class AppointmentService:
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
-        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
         queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
-        appointment_data = data.model_dump(exclude={"patient_name", "age"})
+        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,

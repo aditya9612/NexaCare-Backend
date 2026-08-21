@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, or_, select, case
+from sqlalchemy import func, or_, select, case, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -134,7 +134,13 @@ class MedicineRepository:
             Medicine.expiry_date <= threshold,
             Medicine.stock_quantity > 0,
         )
-        result = await self.db.execute(query.order_by(Medicine.expiry_date.asc()).offset(skip).limit(limit))
+        result = await self.db.execute(
+            query.order_by(
+                Medicine.expiry_date.asc(),
+                Medicine.created_at.desc(),
+                Medicine.id.desc(),
+            ).offset(skip).limit(limit)
+        )
         return list(result.scalars().all())
 
     async def get_dashboard_counts(self, reference_date: date) -> dict:
@@ -319,12 +325,15 @@ class PrescriptionRepository:
     async def update(self, prescription: Prescription, items: list[PrescriptionItem] | None = None) -> Prescription:
         await self.db.flush()
         if items is not None:
-            prescription.items.clear()
+            # Delete existing items using explicit query to avoid collection orphan/refresh conflicts
+            await self.db.execute(
+                delete(PrescriptionItem).where(PrescriptionItem.prescription_id == prescription.id)
+            )
+            await self.db.flush()
             for item in items:
                 item.prescription_id = prescription.id
                 self.db.add(item)
             await self.db.flush()
-        await self.db.refresh(prescription)
         return prescription
 
     async def soft_delete(self, prescription: Prescription) -> None:
@@ -382,71 +391,57 @@ class PharmacyInvoiceRepository:
         await self.db.flush()
 
     async def get_sales_report(self, start, end) -> dict:
-        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).where(
-            PharmacyInvoice.is_deleted.is_(False),
+        filters = [
+            or_(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.is_deleted.is_(None),
+            ),
+            or_(
+                PharmacyInvoice.status.is_(None),
+                PharmacyInvoice.status != "cancelled",
+            ),
             PharmacyInvoice.created_at <= end,
-        )
-        stmt_count = select(func.count()).select_from(PharmacyInvoice).where(
-            PharmacyInvoice.is_deleted.is_(False),
-            PharmacyInvoice.created_at <= end,
-        )
+        ]
         if start is not None:
-            stmt_total = stmt_total.where(PharmacyInvoice.created_at >= start)
-            stmt_count = stmt_count.where(PharmacyInvoice.created_at >= start)
-            
+            filters.append(PharmacyInvoice.created_at >= start)
+
+        stmt_total = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0)).select_from(PharmacyInvoice).where(*filters)
+        stmt_count = select(func.count(PharmacyInvoice.id)).select_from(PharmacyInvoice).where(*filters)
+
         total = await self.db.scalar(stmt_total)
         count = await self.db.scalar(stmt_count)
+
+        # Query top selling medicines compatible with MySQL ONLY_FULL_GROUP_BY
+        total_qty_col = func.sum(PharmacyInvoiceItem.quantity).label("total_sold_quantity")
         
         # Query top selling medicines
         top_meds_query = (
             select(
                 PharmacyInvoiceItem.medicine_id.label("medicine_id"),
-                func.coalesce(Medicine.name, "Unknown Medicine").label("name"),
-                func.coalesce(Medicine.generic_name, "").label("generic_name"),
-                func.coalesce(Medicine.sku, "").label("sku"),
-                func.coalesce(
-                    func.sum(PharmacyInvoiceItem.quantity), 0
-                ).label("total_sold_quantity"),
+                Medicine.name.label("name"),
+                Medicine.generic_name.label("generic_name"),
+                Medicine.sku.label("sku"),
+                total_qty_col,
             )
             .select_from(PharmacyInvoiceItem)
             .join(
                 PharmacyInvoice,
                 PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id,
             )
-            .outerjoin(
+            .join(
                 Medicine,
                 Medicine.id == PharmacyInvoiceItem.medicine_id,
             )
-            .where(
-                # Include active invoices and legacy invoices where is_deleted is NULL
-                or_(
-                    PharmacyInvoice.is_deleted.is_(False),
-                    PharmacyInvoice.is_deleted.is_(None),
-                ),
-
-                # Exclude only cancelled invoices.
-                # NULL status is also considered valid.
-                or_(
-                    PharmacyInvoice.status.is_(None),
-                    PharmacyInvoice.status != "cancelled",
-                ),
-
-                # Apply selected report period end
-                PharmacyInvoice.created_at <= end,
-            )
-        )
-        if start is not None:
-            top_meds_query = top_meds_query.where(PharmacyInvoice.created_at >= start)
-            
-        top_meds_query = (
-            top_meds_query.group_by(
+            .where(*filters)
+            .group_by(
                 PharmacyInvoiceItem.medicine_id,
+                Medicine.id,
                 Medicine.name,
                 Medicine.generic_name,
                 Medicine.sku,
             )
             .order_by(
-                func.sum(PharmacyInvoiceItem.quantity).desc()
+                total_qty_col.desc()
             )
             .limit(5)
         )
@@ -456,9 +451,9 @@ class PharmacyInvoiceRepository:
         top_medicines = [
             {
                 "medicine_id": row.medicine_id,
-                "name": row.name,
-                "generic_name": row.generic_name,
-                "sku": row.sku,
+                "name": row.name or "Unknown Medicine",
+                "generic_name": row.generic_name or "",
+                "sku": row.sku or "",
                 "total_sold_quantity": int(row.total_sold_quantity or 0),
             }
             for row in top_meds_res.all()
@@ -466,7 +461,7 @@ class PharmacyInvoiceRepository:
 
         return {
             "total_sales": float(total or 0),
-            "invoice_count": count or 0,
+            "invoice_count": int(count or 0),
             "top_medicines": top_medicines,
         }
 

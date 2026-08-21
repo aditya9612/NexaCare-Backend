@@ -61,6 +61,18 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    # GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    AWS_STORAGE_BUCKET_NAME: str = ""  
+
+    
+    TESSERACT_CMD: str = r""   
+
 
     # Sarvam AI TTS / voice cloning (local + production voice agent prompts)
     # Cloned voice (SHIRISH): set SARVAM_VOICE_ID to Studio voice UUID (voice_id).
@@ -123,6 +135,7 @@ class Settings(BaseSettings):
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+    NGROK_AUTH_TOKEN: str | None = None
 
     # Hospital info surfaced in FAQ / chatbot prompts
     HOSPITAL_NAME: str = "NesaCare Hospital"
@@ -174,6 +187,10 @@ class Settings(BaseSettings):
     PLATFORM_VERSION: str | None = None
     HIPAA_ENFORCED: bool | None = None
     NGROK_AUTH_TOKEN: str = ""
+
+        # pyrefly: ignore [parse-error]
+    TESSERACT_CMD: str = r"" 
+
 
 
 @lru_cache

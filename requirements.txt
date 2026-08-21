@@ -30,3 +30,5 @@ langgraph
 pywebpush>=1.14.0
 openpyxl
 pyotp>=2.9.0
+pytesseract>=0.3.10
+PyMuPDF>=1.23.0

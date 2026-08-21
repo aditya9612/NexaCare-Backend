@@ -1,16 +1,18 @@
-from datetime import datetime
+from datetime import date, datetime
+from typing import List, Dict, Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.billing_model import Billing, Payment, InsuranceClaim
+from app.models.expense_model import Expense
 
 
 class AccountantRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_dashboard_stats(self):
+    async def get_dashboard_stats(self) -> Dict[str, Any]:
         total_bills = await self.db.scalar(
             select(func.count()).select_from(Billing)
         ) or 0
@@ -64,7 +66,7 @@ class AccountantRepository:
         pending_claims = await self.db.scalar(
             select(func.count())
             .select_from(InsuranceClaim)
-            .where(InsuranceClaim.status == "submitted")
+            .where(InsuranceClaim.status.in_(["submitted", "pending"]))
         ) or 0
 
         approved_claims = await self.db.scalar(
@@ -73,8 +75,9 @@ class AccountantRepository:
             .where(InsuranceClaim.status == "approved")
         ) or 0
 
-        current_month = datetime.now().month
-        current_year = datetime.now().year
+        now = datetime.now()
+        current_month = now.month
+        current_year = now.year
 
         monthly_revenue = await self.db.scalar(
             select(func.coalesce(func.sum(Payment.amount), 0))
@@ -96,7 +99,7 @@ class AccountantRepository:
         today_collection = await self.db.scalar(
             select(func.coalesce(func.sum(Payment.amount), 0))
             .where(
-                func.date(Payment.payment_date) == datetime.now().date(),
+                func.date(Payment.payment_date) == now.date(),
                 Payment.is_refund.is_(False)
             )
         ) or 0
@@ -118,3 +121,55 @@ class AccountantRepository:
             "pending_claims": pending_claims,
             "approved_claims": approved_claims,
         }
+
+    async def get_monthly_revenue_history(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        query = (
+            select(
+                func.year(Payment.payment_date).label("year"),
+                func.month(Payment.payment_date).label("month"),
+                func.coalesce(func.sum(Payment.amount), 0.0).label("revenue"),
+            )
+            .where(
+                Payment.payment_date >= start_date,
+                Payment.payment_date <= end_date,
+                Payment.is_refund.is_(False),
+            )
+            .group_by(func.year(Payment.payment_date), func.month(Payment.payment_date))
+            .order_by(func.year(Payment.payment_date), func.month(Payment.payment_date))
+        )
+        result = await self.db.execute(query)
+        return [
+            {"year": row.year, "month": row.month, "revenue": float(row.revenue)}
+            for row in result.all()
+        ]
+
+    async def get_monthly_expense_history(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        query = (
+            select(
+                func.year(Expense.expense_date).label("year"),
+                func.month(Expense.expense_date).label("month"),
+                func.coalesce(func.sum(Expense.amount), 0.0).label("expense"),
+            )
+            .where(
+                Expense.is_deleted.is_(False),
+                Expense.expense_date >= start_date,
+                Expense.expense_date <= end_date,
+            )
+            .group_by(func.year(Expense.expense_date), func.month(Expense.expense_date))
+            .order_by(func.year(Expense.expense_date), func.month(Expense.expense_date))
+        )
+        result = await self.db.execute(query)
+        return [
+            {"year": row.year, "month": row.month, "expense": float(row.expense)}
+            for row in result.all()
+        ]
+
+    async def get_month_revenue(self, year: int, month: int) -> float:
+        val = await self.db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
+                func.year(Payment.payment_date) == year,
+                func.month(Payment.payment_date) == month,
+                Payment.is_refund.is_(False),
+            )
+        )
+        return float(val or 0.0)

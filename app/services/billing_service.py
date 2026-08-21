@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +10,7 @@ from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.billing_schema import (
+    BillType,
     BillingCreate,
     BillingResponse,
     BillingSummary,
@@ -46,6 +48,10 @@ class BillingService:
         data = BillingResponse.model_validate(billing)
         data.items = [BillItemResponse.model_validate(i) for i in billing.items]
         data.source = "billing"
+        if billing.bill_number and str(billing.bill_number).upper().startswith("REC"):
+            data.bill_type = "pharmacy"
+        else:
+            data.bill_type = "consultation"
         return data
 
     def _pharmacy_invoice_to_billing_response(self, invoice) -> BillingResponse:
@@ -88,7 +94,8 @@ class BillingService:
             items=bill_items,
             created_at=invoice.created_at or utc_now(),
             updated_at=invoice.updated_at or utc_now(),
-            source="pharmacy"
+            source="pharmacy",
+            bill_type="pharmacy",
         )
 
     async def _recalculate_billing(self, billing: Billing) -> Billing:
@@ -268,6 +275,7 @@ class BillingService:
         q: str | None,
         start_date: date | None = None,
         end_date: date | None = None,
+        bill_type: Any | None = None,
     ):
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
@@ -316,6 +324,24 @@ class BillingService:
             end_datetime = datetime.combine(end_date, datetime.max.time())
             b_query = b_query.where(Billing.created_at <= end_datetime)
             p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                b_query = b_query.where(func.lower(Billing.bill_number).like("rec%"))
+                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("rec%"))
+            elif bt_val == "consultation":
+                b_query = b_query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
+                p_query = p_query.where(
+                    or_(
+                        func.lower(PharmacyInvoice.invoice_number).like("bill%"),
+                        func.lower(PharmacyInvoice.invoice_number).like("bil%"),
+                    )
+                )
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -380,21 +406,25 @@ class BillingService:
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
         start_date: date | None = None, end_date: date | None = None,
+        bill_type: Any | None = None,
     ):
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
             status=status, patient_id=patient_id, q=None,
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date,
+            bill_type=bill_type,
         )
 
     async def search(
         self, q: str, page: int = 1, size: int = 20, status: str | None = None,
         start_date: date | None = None, end_date: date | None = None,
+        bill_type: Any | None = None,
     ):
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by="created_at", sort_order="desc",
             status=status, patient_id=None, q=q,
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date,
+            bill_type=bill_type,
         )
 
     async def get_by_id(self, billing_id: int) -> BillingResponse:
@@ -743,9 +773,16 @@ class BillingService:
         if pharm_collected > 0:
             data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
             data["payment_count"] = data["payment_count"] + pharm_count
-            by_method = dict(data.get("by_method", {}))
-            by_method["pharmacy"] = round(by_method.get("pharmacy", 0.0) + pharm_collected, 2)
-            data["by_method"] = by_method
+
+        # Ensure total_collected cannot be negative
+        data["total_collected"] = max(0.0, round(float(data.get("total_collected", 0.0)), 2))
+
+        # Ensure by_method contains only rounded non-pharmacy payment methods with positive amounts
+        by_method = {}
+        for k, v in data.get("by_method", {}).items():
+            if k and str(k).lower() != "pharmacy":
+                by_method[str(k)] = round(abs(float(v)), 2)
+        data["by_method"] = by_method
 
         return DailyCollectionSummary(date=str(target), **data)
 
@@ -789,6 +826,7 @@ class BillingService:
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
         data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
         data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
         data["bill_count"] = data["bill_count"] + pharm_bill_count
         data["payment_count"] = data["payment_count"] + pharm_payment_count
 
@@ -862,6 +900,11 @@ class BillingService:
         )
         pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
 
+        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
+        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
+        data["bill_count"] = data["bill_count"] + pharm_bill_count
         data["payment_count"] = data["payment_count"] + pharm_payment_count
 
         return RevenueReport(period=label, **data)

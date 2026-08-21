@@ -355,7 +355,11 @@ class PharmacyService:
                     raise BadRequestException("Doctors can only update prescription status to 'pending' or 'sent_to_pharmacy'.")
 
         if data.patient_id is not None:
+            patient = await self.patient_repo.get_by_id(data.patient_id)
+            if not patient:
+                raise NotFoundException("Patient not found")
             prescription.patient_id = data.patient_id
+
         if data.instructions is not None:
             prescription.instructions = data.instructions
         if data.status is not None:
@@ -363,6 +367,10 @@ class PharmacyService:
 
         items = None
         if data.items is not None:
+            for item_data in data.items:
+                medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+                if not medicine:
+                    raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
             items = [PrescriptionItem(**item.model_dump()) for item in data.items]
 
         prescription = await self.prescription_repo.update(prescription, items)
@@ -472,6 +480,10 @@ class PharmacyService:
         tax_amount = round((subtotal - discount_amount) * tax_percentage_val / 100, 2)
         gst_amount = tax_amount
         total = round(subtotal - discount_amount + tax_amount, 2)
+        
+        status_val = data.payment_status.value if hasattr(data.payment_status, "value") else str(data.payment_status)
+        paid_amount_val = total if status_val == "paid" else 0.0
+
         invoice = PharmacyInvoice(
             invoice_number=generate_code(billing_settings.get("receipt_prefix", "PHR")),
             patient_id=data.patient_id,
@@ -484,8 +496,8 @@ class PharmacyService:
             tax_amount=tax_amount,
             gst_amount=gst_amount,
             total_amount=total,
-            paid_amount=total,
-            status="paid",
+            paid_amount=paid_amount_val,
+            status=status_val,
             created_by=user_id,
         )
         invoice = await self.invoice_repo.create(invoice, invoice_items)
@@ -504,19 +516,20 @@ class PharmacyService:
             amount=invoice.total_amount,
             source_module="pharmacy_billing",
             source_id=invoice.id,
-            status="completed",
+            status="completed" if status_val == "paid" else status_val,
             user_id=user_id
         )
-        await tx_service.create_event(
-            event_type="PAYMENT_RECEIVED",
-            reference_no=invoice.invoice_number,
-            description=f"Pharmacy Invoice Paid: {invoice.invoice_number}",
-            amount=invoice.total_amount,
-            source_module="pharmacy_billing",
-            source_id=invoice.id,
-            status="completed",
-            user_id=user_id
-        )
+        if status_val == "paid":
+            await tx_service.create_event(
+                event_type="PAYMENT_RECEIVED",
+                reference_no=invoice.invoice_number,
+                description=f"Pharmacy Invoice Paid: {invoice.invoice_number}",
+                amount=invoice.total_amount,
+                source_module="pharmacy_billing",
+                source_id=invoice.id,
+                status="completed",
+                user_id=user_id
+            )
 
         return self._invoice_response(invoice)
 
@@ -544,7 +557,9 @@ class PharmacyService:
 
         if data.payment_mode is not None:
             invoice.payment_mode = data.payment_mode
-        if data.status is not None:
+        if data.payment_status is not None:
+            invoice.status = data.payment_status.value if hasattr(data.payment_status, "value") else str(data.payment_status)
+        elif data.status is not None:
             invoice.status = data.status
         if data.discount_percentage is not None:
             invoice.discount_percentage = data.discount_percentage
@@ -558,7 +573,7 @@ class PharmacyService:
         invoice.tax_amount = tax_amount
         invoice.gst_amount = tax_amount
         invoice.total_amount = round(invoice.subtotal - discount_amount + tax_amount, 2)
-        invoice.paid_amount = invoice.total_amount
+        invoice.paid_amount = invoice.total_amount if invoice.status == "paid" else 0.0
 
         invoice = await self.invoice_repo.update(invoice)
 

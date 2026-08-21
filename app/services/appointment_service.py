@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AppointmentStatus
+from app.core.constants import AppointmentStatus, BookingSource
 from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.repositories.appointment_repository import AppointmentRepository
@@ -91,15 +91,20 @@ class AppointmentService:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: BookingSource | str | None = None,
     ):
         skip = (page - 1) * size
+        source = booking_source.value if isinstance(booking_source, BookingSource) else booking_source
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            appointment_type=appointment_type, booking_source=source,
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            appointment_type=appointment_type, booking_source=source,
         )
 
         # Calculate summary counts independently of pagination and status/date filters where appropriate
@@ -218,6 +223,8 @@ class AppointmentService:
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
         queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
         appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
+        if not appointment_data.get("booking_source"):
+            appointment_data["booking_source"] = BookingSource.STAFF
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,

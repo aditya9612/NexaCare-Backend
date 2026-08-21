@@ -231,10 +231,12 @@ def _say(
     lang: str,
     base_url: str = "",
     voice_profile: str | None = None,
+    *,
+    allow_generate: bool = True,
 ) -> str:
     # voice_profile kept for Phase 6 call sites; Sarvam <Play> / Speak path ignores it.
     _ = voice_profile
-    return speak(text, lang, base_url)
+    return speak(text, lang, base_url, allow_generate=allow_generate)
 
 
 # Domain hints to bias Twilio's speech recognition toward booking/medical
@@ -289,10 +291,18 @@ def _gather_speech(
     )
 
 
-def _gather_dtmf(action: str, prompt: str, lang: str, num_digits: int = 1, base_url: str = "") -> str:
+def _gather_dtmf(
+    action: str,
+    prompt: str,
+    lang: str,
+    num_digits: int = 1,
+    base_url: str = "",
+    *,
+    allow_generate: bool = True,
+) -> str:
     return (
         f'<Gather numDigits="{num_digits}" action="{escape(action)}" method="POST" timeout="10">'
-        f'{_say(prompt, lang, base_url)}'
+        f'{_say(prompt, lang, base_url, allow_generate=allow_generate)}'
         f'</Gather>'
         f'<Redirect method="POST">{escape(action)}</Redirect>'
     )
@@ -553,6 +563,13 @@ def build_suggest_doctors_twiml(
     doctors: list[dict],
     confirm_problem_tts: str = "",
 ) -> str:
+    """
+    Build doctor-list TwiML after problem collection.
+
+    Uses allow_generate=False so this webhook never blocks on live Sarvam
+    synthesis (Twilio ~15s limit). Cached <Play> still used when available;
+    otherwise Twilio <Say>.
+    """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
     base_url = state.get("base_url", "")
@@ -570,10 +587,16 @@ def build_suggest_doctors_twiml(
     prompt = intro + options
 
     elements = []
-    # Prepend problem confirmation TTS if present
+    # Prepend problem confirmation; no live Sarvam on this latency-critical path
     if confirm_problem_tts:
-        elements.append(_say(confirm_problem_tts, twilio_lang, base_url))
-    elements.append(_gather_dtmf(action, prompt, twilio_lang, base_url=base_url))
+        elements.append(
+            _say(confirm_problem_tts, twilio_lang, base_url, allow_generate=False)
+        )
+    elements.append(
+        _gather_dtmf(
+            action, prompt, twilio_lang, base_url=base_url, allow_generate=False
+        )
+    )
 
     return _twiml(*elements)
 
@@ -648,6 +671,12 @@ async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
 
 
 def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
+    """
+    Build slot-list TwiML after doctor selection.
+
+    Uses allow_generate=False so this webhook never blocks on live Sarvam
+    (slot prompts include unique doctor/date/time and always cache-miss).
+    """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
     base_url = state.get("base_url", "")
@@ -659,7 +688,11 @@ def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
         _s("press_for_slot", lang, n=i + 1, date=s["date"], time=_format_time_for_tts(s["time"]))
         for i, s in enumerate(slots)
     )
-    return _twiml(_gather_dtmf(action, intro + options, twilio_lang, base_url=base_url))
+    return _twiml(
+        _gather_dtmf(
+            action, intro + options, twilio_lang, base_url=base_url, allow_generate=False
+        )
+    )
 
 
 def process_select_slot(state: BookingCallState, digit: str) -> dict:
@@ -715,6 +748,8 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
 
         appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
+        from app.core.constants import BookingSource
+
         appt = Appointment(
             appointment_number=appt_no,
             patient_id=attendee.id,
@@ -723,6 +758,7 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             appointment_date=slot["date"],
             appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
             appointment_status="scheduled",
+            booking_source=BookingSource.AI_VOICE,
             symptoms=state.get("problem_description"),
             notes=(
                 f"Booked via AI Voice Agent. "
@@ -769,7 +805,10 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             "step": "booked",
             "appointment_id": appt.id,
             "appointment_number": appt_no,
-            "_twiml": _twiml(_say(confirm_text, twilio_lang, base_url), "<Hangup/>"),
+            "_twiml": _twiml(
+                _say(confirm_text, twilio_lang, base_url, allow_generate=False),
+                "<Hangup/>",
+            ),
         }
 
     except Exception as e:

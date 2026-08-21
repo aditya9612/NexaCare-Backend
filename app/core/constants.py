@@ -63,7 +63,7 @@ class AppointmentType:
     SCHEDULED = "scheduled"
 
 
-class BookingSource:
+class BookingSource(str, Enum):
     """How the appointment was booked (channel), distinct from appointment_type."""
     STAFF = "staff"
     PATIENT_PORTAL = "patient_portal"

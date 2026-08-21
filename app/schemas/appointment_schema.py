@@ -2,6 +2,7 @@ from datetime import date, datetime, time
 
 from pydantic import Field, field_validator, model_validator
 
+from app.core.constants import BookingSource
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 
 
@@ -12,7 +13,10 @@ class AppointmentCreate(BaseSchema):
     appointment_date: date
     appointment_time: time
     appointment_type: str | None = None
-    booking_source: str | None = None
+    booking_source: BookingSource | None = Field(
+        default=None,
+        description="Booking channel: staff, patient_portal, ai_chat, or ai_voice",
+    )
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
@@ -20,17 +24,38 @@ class AppointmentCreate(BaseSchema):
     age: int | None = None
     patient_mobile_number: str | None = None
 
+    @field_validator("booking_source", mode="before")
+    @classmethod
+    def normalize_booking_source(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
 
 class AppointmentUpdate(BaseSchema):
     department_id: int | None = None
     appointment_date: date | None = None
     appointment_time: time | None = None
     appointment_type: str | None = None
-    booking_source: str | None = None
+    booking_source: BookingSource | None = Field(
+        default=None,
+        description="Booking channel: staff, patient_portal, ai_chat, or ai_voice",
+    )
     appointment_status: str | None = None
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
+
+    @field_validator("booking_source", mode="before")
+    @classmethod
+    def normalize_booking_source(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
     @field_validator("appointment_time")
     @classmethod

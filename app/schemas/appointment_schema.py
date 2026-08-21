@@ -163,6 +163,8 @@ class AppointmentFilterQuery(BaseSchema):
     department_id: int | None = None
     status: str | None = None
     appointment_date: date | None = None
+    appointment_type: str | None = None
+    booking_source: BookingSource | None = None
     page: int = 1
     size: int = 20
 

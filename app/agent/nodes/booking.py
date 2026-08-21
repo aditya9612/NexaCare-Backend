@@ -671,6 +671,12 @@ async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
 
 
 def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
+    """
+    Build slot-list TwiML after doctor selection.
+
+    Uses allow_generate=False so this webhook never blocks on live Sarvam
+    (slot prompts include unique doctor/date/time and always cache-miss).
+    """
     lang = state["language"]
     twilio_lang = state["twilio_language"]
     base_url = state.get("base_url", "")
@@ -682,7 +688,11 @@ def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
         _s("press_for_slot", lang, n=i + 1, date=s["date"], time=_format_time_for_tts(s["time"]))
         for i, s in enumerate(slots)
     )
-    return _twiml(_gather_dtmf(action, intro + options, twilio_lang, base_url=base_url))
+    return _twiml(
+        _gather_dtmf(
+            action, intro + options, twilio_lang, base_url=base_url, allow_generate=False
+        )
+    )
 
 
 def process_select_slot(state: BookingCallState, digit: str) -> dict:
@@ -795,7 +805,10 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             "step": "booked",
             "appointment_id": appt.id,
             "appointment_number": appt_no,
-            "_twiml": _twiml(_say(confirm_text, twilio_lang, base_url), "<Hangup/>"),
+            "_twiml": _twiml(
+                _say(confirm_text, twilio_lang, base_url, allow_generate=False),
+                "<Hangup/>",
+            ),
         }
 
     except Exception as e:

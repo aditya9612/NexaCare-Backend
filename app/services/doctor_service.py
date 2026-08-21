@@ -14,7 +14,7 @@ from app.repositories.auth_repository import AuthRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.doctor_repository import DoctorRepository
 from app.repositories.rbac_repository import RBACRepository
-from app.schemas.appointment_schema import AppointmentResponse
+from app.schemas.appointment_schema import AppointmentResponse, DoctorAppointmentListResponse
 from app.schemas.doctor_schema import (
     DoctorCreate,
     DoctorOnboardCreate,
@@ -404,10 +404,11 @@ class DoctorService:
         doctors = await self.repo.list_available()
         return [DoctorResponse.model_validate(d) for d in doctors]
 
-    async def get_appointments(self, doctor_id: int) -> list[AppointmentResponse]:
+    async def get_appointments(self, doctor_id: int) -> DoctorAppointmentListResponse:
         await self.get_by_id(doctor_id)
         appointments = await self.repo.get_appointments(doctor_id)
-        return [AppointmentResponse.model_validate(a) for a in appointments]
+        items = [AppointmentResponse.model_validate(a) for a in appointments]
+        return DoctorAppointmentListResponse(items=items, total=len(items))
 
     async def get_schedule(self, doctor_id: int) -> list[DoctorScheduleResponse]:
         await self.get_by_id(doctor_id)

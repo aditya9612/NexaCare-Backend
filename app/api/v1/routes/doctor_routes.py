@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
-from app.schemas.appointment_schema import AppointmentResponse
+from app.schemas.appointment_schema import AppointmentResponse, DoctorAppointmentListResponse
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.doctor_schema import (
     DoctorCreate,
@@ -379,15 +379,17 @@ async def download_report(
 
 
 @router.get(
-    "/medical-records/{record_id}/view",
+    "/medical-records/view",
     summary="View Report",
 )
 async def view_report(
-    record_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    record_id: Optional[int] = None,
     _: User = Depends(require_permission("doctors", "read")),
 ):
+    if record_id is None:
+        return APIResponse(message="No report record_id provided", data=None)
     record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id)
     return FileResponse(
         path=record.file_path,
@@ -626,7 +628,7 @@ async def delete_doctor(
     return APIResponse(message="Doctor deleted", data=MessageResponse(message="Soft deleted"))
 
 
-@router.get("/{doctor_id}/appointments", response_model=APIResponse[List[AppointmentResponse]])
+@router.get("/{doctor_id}/appointments", response_model=APIResponse[DoctorAppointmentListResponse])
 async def doctor_appointments(
     doctor_id: int,
     db: DbSession,

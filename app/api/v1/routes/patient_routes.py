@@ -306,18 +306,25 @@ async def list_documents(
     return APIResponse(message="Documents retrieved", data=docs)
 
 
-@router.get("/{patient_id}/documents/{document_id}/download")
+@router.get("/documents/download")
 async def download_document(
-    patient_id: int,
-    document_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    patient_id: Optional[int] = None,
+    document_id: Optional[int] = None,
     _: User = Depends(require_permission("patients", "read")),
 ):
     import os
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
+    if patient_id is None or document_id is None:
+        return APIResponse(
+            success=True,
+            message="No document identifiers provided",
+            data=None
+        )
+        
     doc = await PatientService(db).get_document(patient_id, document_id)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")
@@ -329,12 +336,12 @@ async def download_document(
     )
 
 
-@router.get("/{patient_id}/documents/{document_id}/view")
+@router.get("/documents/view")
 async def view_document(
-    patient_id: int,
-    document_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    patient_id: Optional[int] = None,
+    document_id: Optional[int] = None,
     _: User = Depends(require_permission("patients", "read")),
 ):
     import os
@@ -342,6 +349,13 @@ async def view_document(
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
+    if patient_id is None or document_id is None:
+        return APIResponse(
+            success=True,
+            message="No document identifiers provided",
+            data=None
+        )
+        
     doc = await PatientService(db).get_document(patient_id, document_id)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +10,7 @@ from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.billing_schema import (
+    BillType,
     BillingCreate,
     BillingResponse,
     BillingSummary,
@@ -46,6 +48,10 @@ class BillingService:
         data = BillingResponse.model_validate(billing)
         data.items = [BillItemResponse.model_validate(i) for i in billing.items]
         data.source = "billing"
+        if billing.bill_number and str(billing.bill_number).upper().startswith("REC"):
+            data.bill_type = "pharmacy"
+        else:
+            data.bill_type = "consultation"
         return data
 
     def _pharmacy_invoice_to_billing_response(self, invoice) -> BillingResponse:
@@ -88,7 +94,8 @@ class BillingService:
             items=bill_items,
             created_at=invoice.created_at or utc_now(),
             updated_at=invoice.updated_at or utc_now(),
-            source="pharmacy"
+            source="pharmacy",
+            bill_type="pharmacy",
         )
 
     async def _recalculate_billing(self, billing: Billing) -> Billing:
@@ -140,8 +147,14 @@ class BillingService:
 
         billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
+        
+        # Check if there are any completed refund payments
+        has_refund = any(p.is_refund and p.status == "completed" for p in billing.payments) if billing.payments else False
+
         if billing.balance_amount <= 0:
             billing.status = BillingStatus.PAID
+        elif has_refund and billing.paid_amount <= 0:
+            billing.status = BillingStatus.REFUNDED
         elif billing.paid_amount > 0:
             billing.status = BillingStatus.PARTIAL
         elif due_date_naive and due_date_naive < utc_now():
@@ -262,6 +275,7 @@ class BillingService:
         q: str | None,
         start_date: date | None = None,
         end_date: date | None = None,
+        bill_type: Any | None = None,
     ):
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
@@ -310,6 +324,24 @@ class BillingService:
             end_datetime = datetime.combine(end_date, datetime.max.time())
             b_query = b_query.where(Billing.created_at <= end_datetime)
             p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                b_query = b_query.where(func.lower(Billing.bill_number).like("rec%"))
+                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("rec%"))
+            elif bt_val == "consultation":
+                b_query = b_query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("bill%"),
+                        func.lower(Billing.bill_number).like("bil%"),
+                    )
+                )
+                p_query = p_query.where(
+                    or_(
+                        func.lower(PharmacyInvoice.invoice_number).like("bill%"),
+                        func.lower(PharmacyInvoice.invoice_number).like("bil%"),
+                    )
+                )
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -374,21 +406,25 @@ class BillingService:
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
         start_date: date | None = None, end_date: date | None = None,
+        bill_type: Any | None = None,
     ):
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
             status=status, patient_id=patient_id, q=None,
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date,
+            bill_type=bill_type,
         )
 
     async def search(
         self, q: str, page: int = 1, size: int = 20, status: str | None = None,
         start_date: date | None = None, end_date: date | None = None,
+        bill_type: Any | None = None,
     ):
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by="created_at", sort_order="desc",
             status=status, patient_id=None, q=q,
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date,
+            bill_type=bill_type,
         )
 
     async def get_by_id(self, billing_id: int) -> BillingResponse:
@@ -602,7 +638,7 @@ class BillingService:
         billing.paid_amount = round(billing.paid_amount - data.amount, 2)
         billing = await self._recalculate_billing(billing)
         if billing.paid_amount == 0 and billing.balance_amount > 0:
-            billing.status = BillingStatus.PENDING
+            billing.status = BillingStatus.REFUNDED
         await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
 
         from app.services.transaction_history_service import TransactionHistoryService
@@ -624,18 +660,40 @@ class BillingService:
         if not billing:
             raise NotFoundException("Billing record not found")
         patient = await self.patient_repo.get_by_id(billing.patient_id)
-        patient_name = f"{patient.first_name} {patient.last_name}" if patient else "N/A"
+        patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+        patient_phone = patient.phone if patient else "-"
+        patient_email = patient.email if patient else "-"
+
         items = [
-            {"description": i.description, "amount": f"{i.line_total:.2f}"}
+            {
+                "description": i.description,
+                "quantity": i.quantity,
+                "unit_price": f"{i.unit_price:.2f}",
+                "gst_rate": f"{i.gst_rate:.1f}",
+                "line_total": f"{i.line_total:.2f}",
+            }
             for i in billing.items
         ]
+
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
                 "patient_name": patient_name,
+                "patient_phone": patient_phone,
+                "patient_email": patient_email,
                 "date": utc_now().strftime("%Y-%m-%d"),
                 "items": items,
+                "subtotal": f"{billing.subtotal:.2f}",
+                "discount_percent": f"{billing.discount_percent:.1f}",
+                "discount_amount": f"{billing.discount_amount:.2f}",
+                "gst_rate": f"{billing.gst_rate:.1f}",
+                "gst_amount": f"{billing.gst_amount:.2f}",
+                "tax_amount": f"{billing.tax_amount:.2f}",
                 "total_amount": f"{billing.total_amount:.2f}",
+                "paid_amount": f"{billing.paid_amount:.2f}",
+                "balance_amount": f"{billing.balance_amount:.2f}",
+                "status": billing.status.title(),
+                "notes": billing.notes or "",
             },
         )
         billing.invoice_path = path
@@ -715,9 +773,16 @@ class BillingService:
         if pharm_collected > 0:
             data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
             data["payment_count"] = data["payment_count"] + pharm_count
-            by_method = dict(data.get("by_method", {}))
-            by_method["pharmacy"] = round(by_method.get("pharmacy", 0.0) + pharm_collected, 2)
-            data["by_method"] = by_method
+
+        # Ensure total_collected cannot be negative
+        data["total_collected"] = max(0.0, round(float(data.get("total_collected", 0.0)), 2))
+
+        # Ensure by_method contains only rounded non-pharmacy payment methods with positive amounts
+        by_method = {}
+        for k, v in data.get("by_method", {}).items():
+            if k and str(k).lower() != "pharmacy":
+                by_method[str(k)] = round(abs(float(v)), 2)
+        data["by_method"] = by_method
 
         return DailyCollectionSummary(date=str(target), **data)
 
@@ -761,6 +826,7 @@ class BillingService:
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
         data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
         data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
         data["bill_count"] = data["bill_count"] + pharm_bill_count
         data["payment_count"] = data["payment_count"] + pharm_payment_count
 
@@ -837,10 +903,564 @@ class BillingService:
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
         data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
         data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
         data["bill_count"] = data["bill_count"] + pharm_bill_count
         data["payment_count"] = data["payment_count"] + pharm_payment_count
 
         return RevenueReport(period=label, **data)
+
+    async def generate_billing_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Billings Bulk Import"
+        
+        headers = [
+            "group_key", "patient_id", "discount_percent", "discount_amount", "due_date", "notes",
+            "appointment_id", "item_description", "item_quantity", "item_unit_price", "item_gst_rate", "item_type"
+        ]
+        ws.append(headers)
+        
+        # One valid sample billing with 2 items sharing group_key=1
+        ws.append([
+            1,
+            1,
+            10.0,
+            0.0,
+            "2026-08-30 12:00:00",
+            "Routine clinic visit",
+            2,
+            "Consultation Fee",
+            1,
+            500.00,
+            18.0,
+            "service"
+        ])
+        ws.append([
+            1,
+            1,
+            10.0,
+            0.0,
+            "2026-08-30 12:00:00",
+            "Routine clinic visit",
+            2,
+            "Disposable Syringe",
+            2,
+            25.00,
+            12.0,
+            "pharmacy_item"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_billing_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"group_key", "patient_id", "item_description", "item_unit_price"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        groups = {}
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+                    
+            gk = row_dict.get("group_key")
+            if gk is None or str(gk).strip() == "":
+                errors.append({"group_key": "N/A", "row": row_idx, "error": "Missing group_key in row."})
+                failed += 1
+                continue
+                
+            gk_str = str(gk).strip()
+            if gk_str not in groups:
+                groups[gk_str] = []
+            groups[gk_str].append((row_idx, row_dict))
+            
+        total_bills = len(groups)
+        
+        for gk_str, rows in groups.items():
+            # Check consistency of billing-level parameters
+            first_idx, first_row = rows[0]
+            
+            patient_id_raw = first_row.get("patient_id")
+            discount_percent_raw = first_row.get("discount_percent")
+            discount_amount_raw = first_row.get("discount_amount")
+            due_date_raw = first_row.get("due_date")
+            notes_raw = first_row.get("notes")
+            appointment_id_raw = first_row.get("appointment_id")
+            
+            def val_to_str(val):
+                if val is None:
+                    return ""
+                return str(val).strip().lower()
+                
+            conflict_found = False
+            for idx, r in rows[1:]:
+                if (val_to_str(r.get("patient_id")) != val_to_str(patient_id_raw) or
+                    val_to_str(r.get("discount_percent")) != val_to_str(discount_percent_raw) or
+                    val_to_str(r.get("discount_amount")) != val_to_str(discount_amount_raw) or
+                    val_to_str(r.get("due_date")) != val_to_str(due_date_raw) or
+                    val_to_str(r.get("notes")) != val_to_str(notes_raw) or
+                    val_to_str(r.get("appointment_id")) != val_to_str(appointment_id_raw)):
+                    conflict_found = True
+                    conflict_idx = idx
+                    break
+                    
+            if conflict_found:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": conflict_idx,
+                    "error": "Conflict in billing-level fields within the same group_key."
+                })
+                continue
+                
+            try:
+                # 1. patient_id parsing
+                def normalize_id(val, name):
+                    if val is None:
+                        return None
+                    try:
+                        f_val = float(val)
+                        if not f_val.is_integer():
+                            raise ValueError()
+                        return int(f_val)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid integer value for {name}: {val}")
+                        
+                patient_id = normalize_id(patient_id_raw, "patient_id")
+                if patient_id is None:
+                    raise BadRequestException("patient_id is required.")
+                    
+                appointment_id = normalize_id(appointment_id_raw, "appointment_id")
+                
+                # 2. discount_percent
+                discount_percent = 0.0
+                if discount_percent_raw is not None:
+                    try:
+                        discount_percent = float(discount_percent_raw)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid discount_percent: {discount_percent_raw}")
+                        
+                # 3. discount_amount
+                discount_amount = 0.0
+                if discount_amount_raw is not None:
+                    try:
+                        discount_amount = float(discount_amount_raw)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid discount_amount: {discount_amount_raw}")
+                        
+                # 4. due_date parsing
+                due_date = None
+                if due_date_raw is not None:
+                    if isinstance(due_date_raw, datetime):
+                        due_date = due_date_raw
+                    elif isinstance(due_date_raw, date) and not isinstance(due_date_raw, datetime):
+                        due_date = datetime.combine(due_date_raw, datetime.min.time())
+                    else:
+                        try:
+                            p_str = str(due_date_raw).strip()
+                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+                                try:
+                                    due_date = datetime.strptime(p_str, fmt)
+                                    break
+                                except ValueError:
+                                    continue
+                            if due_date is None:
+                                due_date = datetime.fromisoformat(p_str)
+                        except Exception:
+                            raise BadRequestException(f"Invalid datetime format for due_date: {due_date_raw}")
+                            
+                notes = str(notes_raw).strip() if notes_raw is not None else None
+                
+                # 5. Build nested items
+                items = []
+                for idx, r in rows:
+                    desc_raw = r.get("item_description")
+                    if desc_raw is None:
+                        raise BadRequestException("item_description is required.")
+                    description = str(desc_raw).strip()
+                    
+                    qty_raw = r.get("item_quantity")
+                    quantity = 1
+                    if qty_raw is not None:
+                        try:
+                            f_qty = float(qty_raw)
+                            if not f_qty.is_integer() or f_qty < 1:
+                                raise ValueError()
+                            quantity = int(f_qty)
+                        except (ValueError, TypeError):
+                            raise BadRequestException(f"Invalid quantity: {qty_raw} at row {idx}")
+                            
+                    up_raw = r.get("item_unit_price")
+                    if up_raw is None:
+                        raise BadRequestException("item_unit_price is required.")
+                    try:
+                        unit_price = float(up_raw)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid unit_price: {up_raw} at row {idx}")
+                        
+                    gst_raw = r.get("item_gst_rate")
+                    gst_rate = 18.0
+                    if gst_raw is not None:
+                        try:
+                            gst_rate = float(gst_raw)
+                        except (ValueError, TypeError):
+                            raise BadRequestException(f"Invalid gst_rate: {gst_raw} at row {idx}")
+                            
+                    type_raw = r.get("item_type")
+                    item_type = str(type_raw).strip() if type_raw is not None else "service"
+                    
+                    from app.schemas.billing_schema import BillItemCreate
+                    items.append(
+                        BillItemCreate(
+                            description=description,
+                            quantity=quantity,
+                            unit_price=unit_price,
+                            gst_rate=gst_rate,
+                            item_type=item_type
+                        )
+                    )
+                    
+                # Validate the entire BillingCreate object before creation
+                from app.schemas.billing_schema import BillingCreate
+                bill_create = BillingCreate(
+                    patient_id=patient_id,
+                    discount_percent=discount_percent,
+                    discount_amount=discount_amount,
+                    due_date=due_date,
+                    notes=notes,
+                    appointment_id=appointment_id,
+                    items=items
+                )
+                
+                # Call billing create service method
+                await self.create(bill_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": err_msg
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e.detail)
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "total_bills": total_bills,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_billings(
+        self,
+        format_type: str,
+        status: str | None = None,
+        patient_id: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        q: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc"
+    ):
+        from app.models.billing_model import Billing
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        from sqlalchemy import select, or_, func, union_all
+        from sqlalchemy.sql.expression import literal
+        from sqlalchemy.orm import selectinload
+        from datetime import datetime, date
+        from io import BytesIO
+
+        sort_field_b = None
+        sort_field_p = None
+        
+        if sort_by in ["created_at", "status", "total_amount"]:
+            sort_field_b = getattr(Billing, sort_by)
+            sort_field_p = getattr(PharmacyInvoice, sort_by)
+        elif sort_by == "bill_number":
+            sort_field_b = Billing.bill_number
+            sort_field_p = PharmacyInvoice.invoice_number
+        else:
+            sort_field_b = Billing.created_at
+            sort_field_p = PharmacyInvoice.created_at
+
+        b_query = select(
+            Billing.id.label("id"),
+            literal("billing").label("source"),
+            sort_field_b.label("sort_val"),
+            Billing.id.label("tie_breaker")
+        ).where(Billing.is_deleted == False)
+
+        p_query = select(
+            PharmacyInvoice.id.label("id"),
+            literal("pharmacy").label("source"),
+            sort_field_p.label("sort_val"),
+            PharmacyInvoice.id.label("tie_breaker")
+        ).where(PharmacyInvoice.is_deleted == False)
+
+        if status:
+            b_query = b_query.where(Billing.status == status)
+            p_query = p_query.where(PharmacyInvoice.status == status)
+        if patient_id:
+            b_query = b_query.where(Billing.patient_id == patient_id)
+            p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
+        if start_date:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            b_query = b_query.where(Billing.created_at >= start_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
+        if end_date:
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            b_query = b_query.where(Billing.created_at <= end_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
+        if q:
+            pattern = f"%{q.lower()}%"
+            b_query = b_query.where(
+                or_(
+                    func.lower(Billing.bill_number).like(pattern),
+                    func.lower(Billing.notes).like(pattern),
+                )
+            )
+            p_query = p_query.where(
+                func.lower(PharmacyInvoice.invoice_number).like(pattern)
+            )
+
+        combined_query = union_all(b_query, p_query)
+        subq = combined_query.subquery()
+        
+        order_col = subq.c.sort_val.desc() if sort_order == "desc" else subq.c.sort_val.asc()
+        tie_col = subq.c.tie_breaker.desc() if sort_order == "desc" else subq.c.tie_breaker.asc()
+        
+        non_paginated_query = select(subq.c.id, subq.c.source).order_by(order_col, tie_col)
+        
+        rows = await self.db.execute(non_paginated_query)
+        id_source_list = list(rows.all())
+        
+        billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
+        pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
+
+        billing_map = {}
+        if billing_ids:
+            b_full = await self.db.execute(
+                select(Billing).where(Billing.id.in_(billing_ids)).options(
+                    selectinload(Billing.items), selectinload(Billing.payments)
+                )
+            )
+            for b in b_full.scalars().unique().all():
+                billing_map[b.id] = self._to_response(b)
+
+        pharmacy_map = {}
+        if pharmacy_ids:
+            p_full = await self.db.execute(
+                select(PharmacyInvoice).where(PharmacyInvoice.id.in_(pharmacy_ids)).options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+            )
+            for p in p_full.scalars().unique().all():
+                pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
+
+        ordered_items = []
+        for r_id, r_source in id_source_list:
+            if r_source == "billing" and r_id in billing_map:
+                ordered_items.append(billing_map[r_id])
+            elif r_source == "pharmacy" and r_id in pharmacy_map:
+                ordered_items.append(pharmacy_map[r_id])
+                
+        # Map patient details
+        from app.models.patient_model import Patient
+        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
+        p_res = await self.db.execute(p_stmt)
+        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
+
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Billings Report"
+            
+            headers = [
+                "id", "patient_id", "patient_name", "bill_number", "subtotal", "discount_percent",
+                "discount_amount", "gst_rate", "gst_amount", "tax_amount", "total_amount",
+                "paid_amount", "balance_amount", "status", "due_date", "notes", "invoice_path",
+                "appointment_id", "created_at", "updated_at", "source",
+                "item_id", "item_description", "item_quantity", "item_unit_price",
+                "item_gst_rate", "item_gst_amount", "item_line_total", "item_type"
+            ]
+            ws.append(headers)
+            
+            for b in ordered_items:
+                p_name = patients_map.get(b.patient_id, "")
+                
+                # Check if there are items to export. If not, output one row with empty item columns
+                if not b.items:
+                    row = [
+                        b.id, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
+                        f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
+                        f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
+                        b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
+                        b.notes or "", b.invoice_path or "", b.appointment_id or "",
+                        b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
+                        b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
+                        b.source,
+                        "", "", "", "", "", "", "", ""
+                    ]
+                    ws.append(row)
+                else:
+                    for item in b.items:
+                        row = [
+                            b.id, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
+                            f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
+                            f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
+                            b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
+                            b.notes or "", b.invoice_path or "", b.appointment_id or "",
+                            b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
+                            b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
+                            b.source,
+                            item.id,
+                            item.description,
+                            item.quantity,
+                            f"₹{item.unit_price:.2f}",
+                            item.gst_rate,
+                            f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else "",
+                            f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else "",
+                            item.item_type
+                        ]
+                        ws.append(row)
+                        
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("billings_export_template.html")
+            
+            formatted_billings = []
+            for b in ordered_items:
+                p_name = patients_map.get(b.patient_id, "")
+                
+                formatted_billings.append({
+                    "id": b.id,
+                    "patient_id": b.patient_id,
+                    "patient_name": p_name,
+                    "bill_number": b.bill_number,
+                    "subtotal": b.subtotal,
+                    "discount_percent": b.discount_percent,
+                    "discount_amount": b.discount_amount,
+                    "gst_rate": b.gst_rate,
+                    "gst_amount": b.gst_amount,
+                    "tax_amount": b.tax_amount,
+                    "total_amount": b.total_amount,
+                    "paid_amount": b.paid_amount,
+                    "balance_amount": b.balance_amount,
+                    "status": b.status,
+                    "due_date": b.due_date.strftime("%Y-%m-%d") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
+                    "notes": b.notes,
+                    "appointment_id": b.appointment_id,
+                    "source": b.source,
+                    "created_at": b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
+                    "bill_items": [
+                        {
+                            "id": item.id,
+                            "description": item.description,
+                            "quantity": item.quantity,
+                            "unit_price": item.unit_price,
+                            "gst_rate": item.gst_rate,
+                            "gst_amount": getattr(item, "gst_amount", 0.0),
+                            "line_total": getattr(item, "line_total", 0.0),
+                            "item_type": item.item_type
+                        }
+                        for item in b.items
+                    ]
+                })
+                
+            html_content = template.render(
+                billings=formatted_billings,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
+        else:
+            raise BadRequestException("Invalid format specified for export")
 
 
 class InsuranceService:

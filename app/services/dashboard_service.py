@@ -155,6 +155,7 @@ class DashboardService:
         total_prescriptions = await self.db.scalar(
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
+                func.date(Prescription.created_at) == today,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -163,6 +164,7 @@ class DashboardService:
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
                 Prescription.status == "pending",
+                func.date(Prescription.created_at) == today,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -171,6 +173,7 @@ class DashboardService:
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
                 Prescription.status == "dispensed",
+                func.date(Prescription.created_at) == today,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -180,6 +183,7 @@ class DashboardService:
             .options(selectinload(Prescription.items))
             .where(
                 Prescription.doctor_id == doctor.id,
+                func.date(Prescription.created_at) == today,
                 Prescription.is_deleted.is_(False)
             )
             .order_by(Prescription.created_at.desc())
@@ -212,7 +216,7 @@ class DashboardService:
                 TestOrder.doctor_id == doctor.id,
                 TestOrder.is_deleted.is_(False),
                 Patient.is_deleted.is_(False),
-                LabReport.status != LabReportStatus.APPROVED,
+                LabReport.status == LabReportStatus.PENDING_APPROVAL,
             )
         ) or len(lab_reports_list)
 

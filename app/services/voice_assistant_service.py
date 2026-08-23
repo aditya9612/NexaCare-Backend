@@ -15,6 +15,7 @@ from app.ai.voice_appointment_assistant.schemas import (
 from app.core.config import settings
 from app.core.constants import (
     AppointmentStatus,
+    BookingSource,
     TelephonyProviderType,
     TransferStatus,
     VoiceCallStatus,
@@ -360,7 +361,12 @@ class VoiceAssistantService:
         if state.step == VoiceStep.FAQ_QUESTION and transcript:
             hospital_id = state.hospital_id or (config.hospital_id if config else None)
             if hospital_id:
-                faq = await self.faq_service.answer(hospital_id, transcript, state.language)
+                faq = await self.faq_service.answer(
+                    hospital_id,
+                    transcript,
+                    state.language,
+                    session_id=state.call_sid or None,
+                )
                 state.faq_hit = faq.faq_hit
                 state.ai_fallback = faq.ai_fallback
                 state.last_confidence = faq.confidence
@@ -374,7 +380,7 @@ class VoiceAssistantService:
                         state,
                         config,
                         provider,
-                        reason="faq_low_confidence",
+                        reason=faq.transfer_reason or "faq_low_confidence",
                         preface=faq.answer,
                     )
                 state.step = VoiceStep.DONE
@@ -596,6 +602,7 @@ class VoiceAssistantService:
             doctor_id=doctor.id,
             appointment_date=appt_date,
             appointment_time=appt_time,
+            booking_source=BookingSource.AI_VOICE,
             symptoms=state.symptoms,
             consultation_type="in_person",
             notes=(

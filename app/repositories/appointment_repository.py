@@ -21,11 +21,22 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: str | None = None,
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
+        query = self._apply_filters(
+            query,
+            patient_id,
+            doctor_id,
+            department_id,
+            status,
+            appointment_date,
+            appointment_type,
+            booking_source,
+        )
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -38,12 +49,33 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
+        query = self._apply_filters(
+            query,
+            patient_id,
+            doctor_id,
+            department_id,
+            status,
+            appointment_date,
+            appointment_type,
+            booking_source,
+        )
         return await self.db.scalar(query) or 0
 
-    def _apply_filters(self, query, patient_id, doctor_id, department_id, status, appointment_date):
+    def _apply_filters(
+        self,
+        query,
+        patient_id,
+        doctor_id,
+        department_id,
+        status,
+        appointment_date,
+        appointment_type=None,
+        booking_source=None,
+    ):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
         if doctor_id:
@@ -51,9 +83,50 @@ class AppointmentRepository:
         if department_id:
             query = query.where(Appointment.department_id == department_id)
         if status:
-            query = query.where(Appointment.appointment_status == status)
+            if isinstance(status, (list, tuple, set)):
+                query = query.where(Appointment.appointment_status.in_(status))
+            else:
+                s_lower = str(status).strip().lower().replace("_", "-")
+                if s_lower in ("check-in", "checked-in"):
+                    query = query.where(
+                        or_(
+                            Appointment.appointment_status.in_(["Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"]),
+                            Appointment.check_in_time.isnot(None),
+                        )
+                    )
+                elif s_lower in ("check-out", "checked-out"):
+                    query = query.where(
+                        Appointment.appointment_status.in_(["Checked-Out", "Checked-out", "checked-out", "Check-out", "Check-Out"])
+                    )
+                elif s_lower in ("in-progress", "in-consultation", "in_consultation"):
+                    query = query.where(
+                        or_(
+                            Appointment.appointment_status.in_(["In-Progress", "in-progress", "In-progress", "in_progress", "In_Progress"]),
+                            Appointment.queue_status.in_(["IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"]),
+                        )
+                    )
+                elif s_lower == "pending":
+                    query = query.where(Appointment.appointment_status.in_(["Pending", "pending", "PENDING"]))
+                elif s_lower == "confirmed":
+                    query = query.where(Appointment.appointment_status.in_(["Confirmed", "confirmed", "CONFIRMED"]))
+                elif s_lower == "completed":
+                    query = query.where(Appointment.appointment_status.in_(["Completed", "completed", "COMPLETED"]))
+                elif s_lower in ("cancelled", "canceled"):
+                    query = query.where(Appointment.appointment_status.in_(["Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled"]))
+                elif s_lower in ("no-show", "no show"):
+                    query = query.where(Appointment.appointment_status.in_(["No Show", "no show", "NO SHOW", "No-Show", "no-show"]))
+                else:
+                    query = query.where(func.lower(Appointment.appointment_status) == func.lower(status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
+        if appointment_type:
+            query = query.where(
+                func.lower(Appointment.appointment_type) == func.lower(appointment_type.strip())
+            )
+        if booking_source:
+            query = query.where(
+                func.lower(Appointment.booking_source) == func.lower(str(booking_source).strip())
+            )
         return query
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:
@@ -90,6 +163,32 @@ class AppointmentRepository:
             )
         )
         return (result or 0) + 1
+
+    async def get_next_queue_token(self, appointment_date: date) -> str:
+        result = await self.db.execute(
+            select(Appointment.queue_token).where(
+                Appointment.appointment_date == appointment_date,
+                Appointment.queue_token.isnot(None)
+            )
+        )
+        tokens = []
+        if hasattr(result, "scalars"):
+            sc = result.scalars()
+            if hasattr(sc, "all") and not hasattr(sc.all, "__await__"):
+                tokens = list(sc.all())
+            elif hasattr(sc, "__iter__"):
+                tokens = list(sc)
+        
+        max_num = 0
+        for t in tokens:
+            if isinstance(t, str) and t.startswith("T-"):
+                try:
+                    num = int(t[2:])
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    pass
+        return f"T-{max_num + 1}"
 
     async def create(self, appointment: Appointment) -> Appointment:
         self.db.add(appointment)
@@ -137,7 +236,8 @@ class AppointmentRepository:
         return list(result.scalars().all())
 
     async def get_today(self) -> list[Appointment]:
-        today = date.today()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .options(joinedload(Appointment.patient))

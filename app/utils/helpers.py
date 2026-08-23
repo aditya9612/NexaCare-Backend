@@ -1,9 +1,14 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def get_today_ist() -> date:
+    return datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+
 
 
 def generate_code(prefix: str) -> str:

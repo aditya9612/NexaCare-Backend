@@ -118,7 +118,11 @@ class TestOrderRepository:
             query = query.where(TestOrder.doctor_id == doctor_id)
         if department_id is not None:
             query = query.where(TestOrder.department_id == department_id)
-        result = await self.db.execute(query.order_by(TestOrder.ordered_at.desc()).offset(skip).limit(limit))
+        result = await self.db.execute(
+            query.order_by(TestOrder.ordered_at.desc(), TestOrder.id.desc())
+            .offset(skip)
+            .limit(limit)
+        )
         return list(result.scalars().unique().all())
 
     async def count_all(self, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None) -> int:
@@ -155,6 +159,24 @@ class TestOrderRepository:
         order.is_deleted = True
         order.deleted_at = utc_now()
         await self.db.flush()
+
+    async def get_all_active(
+        self, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None
+    ) -> list[TestOrder]:
+        query = self._base_query()
+        if status:
+            query = query.where(TestOrder.status == status)
+        if patient_id is not None:
+            if isinstance(patient_id, list):
+                query = query.where(TestOrder.patient_id.in_(patient_id))
+            else:
+                query = query.where(TestOrder.patient_id == patient_id)
+        if doctor_id is not None:
+            query = query.where(TestOrder.doctor_id == doctor_id)
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
+        result = await self.db.execute(query.order_by(TestOrder.ordered_at.desc(), TestOrder.id.desc()))
+        return list(result.scalars().unique().all())
 
 
 class SampleRepository:
@@ -416,7 +438,7 @@ class LabReportRepository:
                 TestOrder.doctor_id == doctor_id,
                 TestOrder.is_deleted.is_(False),
                 Patient.is_deleted.is_(False),
-                LabReport.status != LabReportStatus.APPROVED
+                LabReport.status == LabReportStatus.PENDING_APPROVAL
             )
             .order_by(LabReport.created_at.desc())
             .limit(limit)

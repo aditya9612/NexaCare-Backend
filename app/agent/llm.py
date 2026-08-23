@@ -1,9 +1,12 @@
 """
 app/agent/llm.py
 ----------------
-Gemini LLM client for NexaCare AI Voice Agent.
+LLM client for NexaCare AI Voice Agent.
 
-Uses google-genai SDK with gemini-2.5-flash for:
+Primary: Google Gemini (GEMINI_API_KEY).
+Fallback: OpenAI (OPENAI_API_KEY) when Gemini fails or is not configured.
+
+Used for:
   1. extract_patient_name()   — extracts name from free-form speech transcript
   2. extract_problem()        — extracts/normalises problem + severity from speech
   3. detect_specialty()       — maps problem to medical specialty with confidence
@@ -12,7 +15,7 @@ Uses google-genai SDK with gemini-2.5-flash for:
 import json
 import logging
 from enum import Enum
-from typing import Optional
+from typing import Optional, Type, TypeVar
 
 from google import genai
 from google.genai import types
@@ -31,6 +34,15 @@ load_dotenv()
 
 logger = logging.getLogger("nexacare.agent.llm")
 
+_SchemaT = TypeVar("_SchemaT", bound=BaseModel)
+
+_GEMINI_PLACEHOLDER_KEYS = frozenset({
+    "",
+    "REPLACE_WITH_GEMINI_KEY",
+    "your_gemini_api_key",
+    "changeme",
+})
+
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -40,17 +52,80 @@ def _get_model() -> str:
     return settings.GEMINI_MODEL or "gemini-2.5-flash"
 
 
+def _get_openai_model() -> str:
+    """Get OpenAI model name from settings."""
+    from app.core.config import settings
+    return settings.OPENAI_MODEL or "gpt-4o-mini"
+
+
+def _gemini_api_key() -> str:
+    from app.core.config import settings
+    return (settings.GEMINI_API_KEY or "").strip()
+
+
+def _openai_api_key() -> str:
+    from app.core.config import settings
+    return (settings.OPENAI_API_KEY or "").strip()
+
+
+def _gemini_configured() -> bool:
+    key = _gemini_api_key()
+    return bool(key) and key.upper() not in {k.upper() for k in _GEMINI_PLACEHOLDER_KEYS}
+
+
 def _get_client() -> genai.Client:
     """Create a Gemini client using GEMINI_API_KEY."""
-    from app.core.config import settings
-
-    api_key = (settings.GEMINI_API_KEY or "").strip()
-    if not api_key:
+    api_key = _gemini_api_key()
+    if not api_key or not _gemini_configured():
         raise ValueError(
-            "GEMINI_API_KEY not set. Add it to .env or settings."
+            "GEMINI_API_KEY not set or is a placeholder. Add a valid key to .env."
         )
 
     return genai.Client(api_key=api_key)
+
+
+def openai_json_completion(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    schema: Type[_SchemaT],
+    temperature: float = 0.0,
+    max_completion_tokens: int = 2000,
+) -> dict:
+    """
+    Call OpenAI chat completions and parse a JSON object matching ``schema``.
+
+    Used as the voice-agent fallback when Gemini is unavailable or errors.
+    """
+    from openai import OpenAI
+
+    from app.utils.ai_llm import openai_sampling_kwargs
+
+    api_key = _openai_api_key()
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not set. Add it to .env or settings.")
+
+    schema_hint = json.dumps(schema.model_json_schema())
+    system = (
+        f"{system_prompt}\n\n"
+        "Respond with a single JSON object only (no markdown) matching this schema:\n"
+        f"{schema_hint}"
+    )
+
+    model = _get_openai_model()
+    client = OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_completion_tokens=max_completion_tokens,
+        response_format={"type": "json_object"},
+        **openai_sampling_kwargs(model, temperature=temperature),
+    )
+    raw = response.choices[0].message.content or "{}"
+    return json.loads(raw)
 
 
 # ── Valid specialties ─────────────────────────────────────────────────────────
@@ -189,7 +264,9 @@ Rules:
 
 def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
     """
-    Use Gemini to extract and normalise the patient's problem from transcript.
+    Extract and normalise the patient's problem from transcript.
+
+    Tries Gemini first, then OpenAI, then raw-transcript fallback.
 
     Returns dict with keys: found, problem, severity, keywords, confidence, reason
     """
@@ -201,39 +278,51 @@ def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
         f"twilio_confidence={twilio_confidence}"
     )
 
+    user_content = f'Speech transcript: "{transcript.strip()}"'
+    gemini_error: Exception | None = None
+
+    if _gemini_configured():
+        try:
+            client = _get_client()
+            model = _get_model()
+
+            response = client.models.generate_content(
+                model=model,
+                contents=user_content,
+                config=types.GenerateContentConfig(
+                    system_instruction=PROBLEM_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    max_output_tokens=250,
+                    response_mime_type="application/json",
+                    response_schema=ProblemExtractionResult,
+                ),
+            )
+
+            result = json.loads(response.text)
+            return _normalise_problem_result(result)
+
+        except Exception as e:
+            gemini_error = e
+            logger.warning(f"Problem extraction Gemini failed: {e} — trying OpenAI")
+    else:
+        logger.info("Problem extraction: Gemini not configured — trying OpenAI")
+
     try:
-        client = _get_client()
-        model = _get_model()
-
-        response = client.models.generate_content(
-            model=model,
-            contents=f'Speech transcript: "{transcript.strip()}"',
-            config=types.GenerateContentConfig(
-                system_instruction=PROBLEM_SYSTEM_PROMPT,
-                temperature=0.0,
-                max_output_tokens=250,
-                response_mime_type="application/json",
-                response_schema=ProblemExtractionResult,
-            ),
+        result = openai_json_completion(
+            system_prompt=PROBLEM_SYSTEM_PROMPT,
+            user_prompt=user_content,
+            schema=ProblemExtractionResult,
+            temperature=0.0,
+            max_completion_tokens=2000,
         )
-
-        result = json.loads(response.text)
-
-        if not isinstance(result.get("found"), bool):
-            result["found"] = bool(result.get("problem", "").strip())
-        if not result.get("problem", "").strip():
-            result["found"] = False
-            result["problem"] = ""
-
-        logger.info(
-            f"Problem extraction: found={result['found']} "
-            f"severity={result.get('severity')} keywords={result.get('keywords')} "
-            f"conf={result.get('confidence')} | {result.get('reason')}"
-        )
-        return result
+        logger.info("Problem extraction succeeded via OpenAI fallback")
+        return _normalise_problem_result(result)
 
     except Exception as e:
-        logger.warning(f"Problem extraction LLM failed: {e} — using raw transcript as fallback")
+        err = gemini_error or e
+        logger.warning(
+            f"Problem extraction OpenAI failed: {e} — using raw transcript as fallback"
+        )
         problem = transcript.strip()
         if len(problem.replace(" ", "")) >= 4:
             return {
@@ -241,7 +330,25 @@ def extract_problem(transcript: str, twilio_confidence: float = -1.0) -> dict:
                 "severity": "unclear", "keywords": [],
                 "reason": "LLM error — raw transcript used.",
             }
-        return {"found": False, "problem": "", "confidence": "low", "reason": f"LLM error: {str(e)[:60]}"}
+        return {
+            "found": False, "problem": "", "confidence": "low",
+            "reason": f"LLM error: {str(err)[:60]}",
+        }
+
+
+def _normalise_problem_result(result: dict) -> dict:
+    if not isinstance(result.get("found"), bool):
+        result["found"] = bool(result.get("problem", "").strip())
+    if not result.get("problem", "").strip():
+        result["found"] = False
+        result["problem"] = ""
+
+    logger.info(
+        f"Problem extraction: found={result['found']} "
+        f"severity={result.get('severity')} keywords={result.get('keywords')} "
+        f"conf={result.get('confidence')} | {result.get('reason')}"
+    )
+    return result
 
 
 # ── 3. Specialty detection ────────────────────────────────────────────────────
@@ -269,6 +376,9 @@ def detect_specialty(problem_description: str, keywords: list[str] | None = None
     """
     Detect medical specialty from patient's cleaned problem description.
 
+    Fast path: keyword hint (problem text + English keywords) skips LLM to keep
+    Twilio voice webhooks under timeout. Otherwise tries Gemini, then OpenAI.
+
     Args:
         problem_description: The cleaned problem text (in patient's language)
         keywords: Optional list of English medical keywords from problem extraction
@@ -284,45 +394,74 @@ def detect_specialty(problem_description: str, keywords: list[str] | None = None
             if hint:
                 break
 
-    user_prompt = f'Patient problem: "{problem_description}"'
-    if keywords:
-        user_prompt += f'\nMedical keywords: {", ".join(keywords)}'
+    # Voice webhook latency: skip LLM when specialty is already clear from keywords
     if hint:
-        user_prompt += f'\nKeyword analysis suggests: "{hint}". Confirm or override based on full context.'
-
-    try:
-        client = _get_client()
-        model = _get_model()
-
-        response = client.models.generate_content(
-            model=model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SPECIALTY_SYSTEM_PROMPT,
-                temperature=0.1,
-                max_output_tokens=150,
-                response_mime_type="application/json",
-                response_schema=SpecialtyDetectionResult,
-            ),
-        )
-
-        result = json.loads(response.text)
-
-        # Validate specialty is in our list
-        if result.get("specialty") not in VALID_SPECIALTIES:
-            result["specialty"] = hint or "General Medicine"
-            result["confidence"] = "low"
-            result["reasoning"] = "Specialty not recognised — routing to General Medicine."
-
+        result = {
+            "specialty": hint,
+            "confidence": "high",
+            "reasoning": f"Keyword match — routing to {hint} without LLM.",
+        }
         logger.info(
             f"Specialty: {result['specialty']} ({result['confidence']}) | {result['reasoning']}"
         )
         return result
 
+    user_prompt = f'Patient problem: "{problem_description}"'
+    if keywords:
+        user_prompt += f'\nMedical keywords: {", ".join(keywords)}'
+
+    if _gemini_configured():
+        try:
+            client = _get_client()
+            model = _get_model()
+
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SPECIALTY_SYSTEM_PROMPT,
+                    temperature=0.1,
+                    max_output_tokens=150,
+                    response_mime_type="application/json",
+                    response_schema=SpecialtyDetectionResult,
+                ),
+            )
+
+            result = json.loads(response.text)
+            return _normalise_specialty_result(result, hint)
+
+        except Exception as e:
+            logger.warning(f"Specialty detection Gemini failed: {e} — trying OpenAI")
+    else:
+        logger.info("Specialty detection: Gemini not configured — trying OpenAI")
+
+    try:
+        result = openai_json_completion(
+            system_prompt=SPECIALTY_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            schema=SpecialtyDetectionResult,
+            temperature=0.1,
+            max_completion_tokens=1500,
+        )
+        logger.info("Specialty detection succeeded via OpenAI fallback")
+        return _normalise_specialty_result(result, hint)
+
     except Exception as e:
-        logger.warning(f"Specialty detection LLM failed: {e} — using keyword hint")
+        logger.warning(f"Specialty detection OpenAI failed: {e} — using keyword hint")
         return {
             "specialty": hint or "General Medicine",
             "confidence": "low",
             "reasoning": "AI analysis unavailable — keyword fallback used.",
         }
+
+
+def _normalise_specialty_result(result: dict, hint: Optional[str]) -> dict:
+    if result.get("specialty") not in VALID_SPECIALTIES:
+        result["specialty"] = hint or "General Medicine"
+        result["confidence"] = "low"
+        result["reasoning"] = "Specialty not recognised — routing to General Medicine."
+
+    logger.info(
+        f"Specialty: {result['specialty']} ({result['confidence']}) | {result['reasoning']}"
+    )
+    return result

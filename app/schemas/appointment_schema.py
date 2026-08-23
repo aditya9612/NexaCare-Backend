@@ -2,6 +2,7 @@ from datetime import date, datetime, time
 
 from pydantic import Field, field_validator, model_validator
 
+from app.core.constants import BookingSource
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 
 
@@ -12,11 +13,25 @@ class AppointmentCreate(BaseSchema):
     appointment_date: date
     appointment_time: time
     appointment_type: str | None = None
+    booking_source: BookingSource | None = Field(
+        default=None,
+        description="Booking channel: staff, patient_portal, ai_chat, or ai_voice",
+    )
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
     patient_name: str | None = None
     age: int | None = None
+    patient_mobile_number: str | None = None
+
+    @field_validator("booking_source", mode="before")
+    @classmethod
+    def normalize_booking_source(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
 
 class AppointmentUpdate(BaseSchema):
@@ -24,10 +39,23 @@ class AppointmentUpdate(BaseSchema):
     appointment_date: date | None = None
     appointment_time: time | None = None
     appointment_type: str | None = None
+    booking_source: BookingSource | None = Field(
+        default=None,
+        description="Booking channel: staff, patient_portal, ai_chat, or ai_voice",
+    )
     appointment_status: str | None = None
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
+
+    @field_validator("booking_source", mode="before")
+    @classmethod
+    def normalize_booking_source(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
     @field_validator("appointment_time")
     @classmethod
@@ -46,6 +74,7 @@ class AppointmentResponse(BaseSchema):
     appointment_date: date
     appointment_time: time
     appointment_type: str | None
+    booking_source: str | None = None
     appointment_status: str
     symptoms: str | None
     notes: str | None
@@ -56,6 +85,7 @@ class AppointmentResponse(BaseSchema):
     updated_at: datetime | None = None
     patient_name: str | None = None
     age: int | None = None
+    patient_mobile_number: str | None = None
     
     # Receptionist Queue fields
     check_in_time: datetime | None = None
@@ -133,6 +163,8 @@ class AppointmentFilterQuery(BaseSchema):
     department_id: int | None = None
     status: str | None = None
     appointment_date: date | None = None
+    appointment_type: str | None = None
+    booking_source: BookingSource | None = None
     page: int = 1
     size: int = 20
 
@@ -146,6 +178,11 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     total_scheduled: int
     completed: int
     cancelled: int
+    pending: int = 0
+    confirmed: int = 0
+    in_progress: int = 0
+    checked_in: int = 0
+    checked_out: int = 0
 
 class ConfirmedVisitResponse(BaseSchema):
     appointment_id: int
@@ -163,5 +200,20 @@ class ConfirmedVisitResponse(BaseSchema):
     queue_status: str | None = None
 
 
-ConfirmedVisitListResponse = PaginatedResponse[ConfirmedVisitResponse]  
+ConfirmedVisitListResponse = PaginatedResponse[ConfirmedVisitResponse]
+
+
+class ScheduledDoctorResponse(BaseSchema):
+    doctor_id: int
+    first_name: str
+    last_name: str
+    specialization: str | None = None
+    department_id: int | None = None
+    consultation_fee: float | None = None
+    day_of_week: int
+    start_time: time
+    end_time: time
+    slot_duration_minutes: int
+    is_available: bool
+
 

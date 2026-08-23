@@ -33,13 +33,84 @@ async def list_public_doctors(
     `working_days` / `weekly_schedule.day_name` use MONDAY–SUNDAY (day_of_week 0–6).
     Supports optional filters: department_id, department, specialty, date.
     """
-    doctors = await PublicService(db).list_public_doctors(
-        department_id=department_id,
-        department=department,
-        specialty=specialty,
-        appointment_date=date,
-    )
-    return APIResponse(message="Available doctors retrieved successfully", data=doctors)
+    import logging
+    logger = logging.getLogger("nexacare.api.public")
+    
+    try:
+        doctors = await PublicService(db).list_public_doctors(
+            department_id=department_id,
+            department=department,
+            specialty=specialty,
+            appointment_date=date,
+        )
+        return APIResponse(message="Available doctors retrieved successfully", data=doctors)
+    except Exception as exc:
+        logger.exception("Exception in list_public_doctors API route: %s", exc)
+        from fastapi import HTTPException
+        if isinstance(exc, HTTPException):
+            raise exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred while listing public doctors: {str(exc)}"
+        )
+
+
+@router.get("/debug/health")
+async def debug_health(db: DbSession):
+    """
+    Detailed health and debug monitor endpoint for the public portal.
+    Checks DB and Redis connectivity, calculating response latencies.
+    """
+    import time
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text
+    from app.utils.redis_service import get_redis
+    
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "services": {}
+    }
+    
+    # 1. Database Connectivity Check
+    try:
+        start_time = time.time()
+        await db.execute(text("SELECT 1"))
+        db_elapsed = (time.time() - start_time) * 1000
+        health_status["services"]["database"] = {
+            "status": "connected",
+            "latency_ms": round(db_elapsed, 2)
+        }
+    except Exception as e:
+        health_status["status"] = "unhealthy"
+        health_status["services"]["database"] = {
+            "status": "disconnected",
+            "error": str(e)
+        }
+        
+    # 2. Redis Connectivity Check
+    try:
+        start_time = time.time()
+        redis_client = await get_redis()
+        if redis_client:
+            await redis_client.ping()
+            redis_elapsed = (time.time() - start_time) * 1000
+            health_status["services"]["redis"] = {
+                "status": "connected",
+                "latency_ms": round(redis_elapsed, 2)
+            }
+        else:
+            raise Exception("Redis client initialization failed (offline)")
+    except Exception as e:
+        health_status["services"]["redis"] = {
+            "status": "disconnected",
+            "error": str(e)
+        }
+        
+    if health_status["status"] == "unhealthy":
+        return JSONResponse(status_code=503, content=health_status)
+        
+    return health_status
 
 
 @router.post("/appointments/book", response_model=APIResponse[AppointmentResponse], status_code=201)

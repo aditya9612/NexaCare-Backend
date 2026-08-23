@@ -109,6 +109,12 @@ class InventoryRepository:
         item.deleted_at = utc_now()
         await self.db.flush()
 
+    async def get_all_active(self) -> list[InventoryItem]:
+        query = self._base_query().order_by(InventoryItem.name.asc())
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+
     async def update_quantity(self, item_id: int, delta: int) -> InventoryItem | None:
         item = await self.get_by_id(item_id)
         if item:
@@ -159,11 +165,14 @@ class StockTransactionRepository:
         self, skip: int = 0, limit: int = 20, item_id: int | None = None,
         transaction_type: str | None = None,
     ) -> list[StockTransaction]:
-        query = select(StockTransaction)
+        query = select(StockTransaction).options(
+            selectinload(StockTransaction.item),
+            selectinload(StockTransaction.warehouse),
+        )
         if item_id:
             query = query.where(StockTransaction.item_id == item_id)
         if transaction_type:
-            query = query.where(StockTransaction.transaction_type == transaction_type)
+            query = query.where(func.lower(StockTransaction.transaction_type) == transaction_type.lower())
         result = await self.db.execute(
             query.order_by(StockTransaction.transaction_date.desc()).offset(skip).limit(limit)
         )
@@ -174,18 +183,28 @@ class StockTransactionRepository:
         if item_id:
             query = query.where(StockTransaction.item_id == item_id)
         if transaction_type:
-            query = query.where(StockTransaction.transaction_type == transaction_type)
+            query = query.where(func.lower(StockTransaction.transaction_type) == transaction_type.lower())
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, transaction_id: int) -> StockTransaction | None:
         result = await self.db.execute(
-            select(StockTransaction).where(StockTransaction.id == transaction_id)
+            select(StockTransaction)
+            .options(
+                selectinload(StockTransaction.item),
+                selectinload(StockTransaction.warehouse),
+            )
+            .where(StockTransaction.id == transaction_id)
         )
         return result.scalar_one_or_none()
 
     async def get_by_reference(self, reference_type: str, reference_id: int) -> StockTransaction | None:
         result = await self.db.execute(
-            select(StockTransaction).where(
+            select(StockTransaction)
+            .options(
+                selectinload(StockTransaction.item),
+                selectinload(StockTransaction.warehouse),
+            )
+            .where(
                 StockTransaction.reference_type == reference_type,
                 StockTransaction.reference_id == reference_id
             )
@@ -264,6 +283,14 @@ class WarehouseRepository:
             select(func.count()).select_from(Warehouse).where(
                 Warehouse.is_deleted.is_(False),
                 Warehouse.is_active.is_(True)
+            )
+        )) or 0
+
+    async def count_inactive(self) -> int:
+        return (await self.db.scalar(
+            select(func.count()).select_from(Warehouse).where(
+                Warehouse.is_deleted.is_(False),
+                Warehouse.is_active.is_(False)
             )
         )) or 0
 

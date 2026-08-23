@@ -1,4 +1,10 @@
-from fastapi import APIRouter, Depends
+from enum import Enum
+from fastapi import APIRouter, Depends, Query, File, UploadFile, Response, HTTPException
+from fastapi.responses import StreamingResponse
+
+class InventoryExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -58,6 +64,60 @@ async def list_inventory_items(
             category=category, warehouse_id=warehouse_id,
         )
     return APIResponse(message="Inventory items retrieved", data=result)
+
+
+@router.get("/items/bulk-template")
+async def download_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("inventory", "create")),
+):
+    stream = await InventoryService(db).generate_items_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=inventory_items_bulk_template.xlsx"}
+    )
+
+
+@router.post("/items/bulk-upload", status_code=201)
+async def upload_items_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("inventory", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await InventoryService(db).import_items_from_excel(file, current_user.id)
+    return APIResponse(message="Inventory items bulk upload processed", data=result)
+
+
+@router.get("/items/export")
+async def export_inventory_items(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: InventoryExportFormat = Query(InventoryExportFormat.EXCEL),
+    _: User = Depends(require_permission("inventory", "read")),
+):
+    data, media_type = await InventoryService(db).export_items(format.value)
+    
+    if format == InventoryExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=inventory_items_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=inventory_items_export.pdf"}
+        )
 
 
 @router.get("/items/{item_id}", response_model=APIResponse[InventoryItemResponse])

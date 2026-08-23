@@ -1,38 +1,327 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <title>Invoice {{ invoice_number }}</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; }
-    h1 { color: #2563eb; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #f3f4f6; }
+    @page {
+      size: letter;
+      margin: 30pt 40pt 40pt 40pt;
+    }
+
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 10pt;
+      line-height: 1.4;
+      color: #333333;
+    }
+
+    .header-table {
+      width: 100%;
+      border-bottom: 2px solid #2563eb;
+      padding-bottom: 15px;
+      margin-bottom: 20px;
+    }
+
+    .brand-title {
+      font-size: 20pt;
+      font-weight: bold;
+      color: #2563eb;
+    }
+
+    .brand-sub {
+      font-size: 9pt;
+      color: #666666;
+      margin-top: 3px;
+    }
+
+    .invoice-title {
+      font-size: 18pt;
+      font-weight: bold;
+      color: #1e293b;
+      text-align: right;
+    }
+
+    .info-table {
+      width: 100%;
+      margin-bottom: 25px;
+    }
+
+    .info-cell {
+      width: 50%;
+      vertical-align: top;
+    }
+
+    .info-box {
+      background-color: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 10px;
+      border-radius: 4px;
+      margin-right: 5px;
+    }
+
+    .info-box-right {
+      background-color: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 10px;
+      border-radius: 4px;
+      margin-left: 5px;
+    }
+
+    .section-title {
+      font-size: 11pt;
+      font-weight: bold;
+      color: #1e293b;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 3px;
+    }
+
+    .items-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 25px;
+    }
+
+    .th-header {
+      background-color: #2563eb;
+      color: #ffffff;
+      font-weight: bold;
+      padding: 8px 8px;
+      font-size: 9.5pt;
+      border: 1px solid #2563eb;
+    }
+
+    .td-item {
+      padding: 8px 10px;
+      border-bottom: 1px solid #e2e8f0;
+      border-left: 1px solid #e2e8f0;
+      border-right: 1px solid #e2e8f0;
+    }
+
+    .summary-table {
+      width: 100%;
+      margin-top: 10px;
+    }
+
+    .summary-left {
+      width: 60%;
+      vertical-align: top;
+    }
+
+    .summary-right {
+      width: 40%;
+      vertical-align: top;
+    }
+
+    .totals-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .td-total {
+      padding: 5px 10px;
+      text-align: right;
+    }
+
+    .td-grand-total {
+      border-top: 1.5pt solid #1e293b;
+      border-bottom: 1.5pt solid #1e293b;
+      padding: 8px 10px;
+      background-color: #f1f5f9;
+      text-align: right;
+    }
+
+    .totals-label {
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    .totals-value {
+      font-weight: bold;
+      color: #1e293b;
+    }
+
+    .grand-total-label {
+      font-size: 11pt;
+      font-weight: bold;
+      color: #2563eb;
+    }
+
+    .grand-total-value {
+      font-size: 12pt;
+      font-weight: bold;
+      color: #2563eb;
+    }
+
+    .notes-box {
+      border: 1px solid #e2e8f0;
+      background-color: #fafafa;
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 8.5pt;
+      color: #475569;
+      margin-top: 10px;
+    }
+
+    .footer {
+      margin-top: 40px;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 10px;
+      text-align: center;
+      font-size: 8pt;
+      color: #94a3b8;
+    }
   </style>
 </head>
+
 <body>
-  <h1>Nexa-Care Invoice</h1>
-  <p><strong>Invoice #:</strong> {{ invoice_number }}</p>
-  <p><strong>Patient:</strong> {{ patient_name }}</p>
-  <p><strong>Date:</strong> {{ date }}</p>
-  <table>
-    <tr><th>Description</th><th>Amount</th></tr>
-    {% for item in items %}
-    <tr><td>{{ item.description }}</td><td>{{ item.amount }}</td></tr>
-    {% endfor %}
+
+  <!-- Header Section -->
+  <table class="header-table">
+    <tr>
+      <td style="border: none; padding: 0;">
+        <div class="brand-title">NEXACARE AI 360</div>
+        <div class="brand-sub">NexaCare Hospital | Wing B, Floor 1 | Contact: info@nexacare360.com</div>
+      </td>
+      <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
+        <div class="invoice-title">INVOICE</div>
+      </td>
+    </tr>
   </table>
-  <p><strong>Subtotal:</strong> {{ subtotal }}</p>
-  {% if discount_amount != "0.00" %}
-  <p><strong>Discount ({{ discount_percent }}%):</strong> -{{ discount_amount }}</p>
-  {% endif %}
-  {% if gst_amount != "0.00" %}
-  <p><strong>GST ({{ gst_rate }}%):</strong> +{{ gst_amount }}</p>
-  {% endif %}
-  {% if tax_amount != "0.00" %}
-  <p><strong>Tax Amount:</strong> +{{ tax_amount }}</p>
-  {% endif %}
-  <p><strong>Total:</strong> {{ total_amount }}</p>
-  <p><strong>Balance:</strong> {{ balance_amount }}</p>
+
+  <!-- Info Section -->
+  <table class="info-table">
+    <tr>
+      <td class="info-cell" style="border: none; padding: 0;">
+        <div class="info-box">
+          <div class="section-title">Patient Details</div>
+          <table style="width: 100%; border: none;">
+            <tr>
+              <td style="width: 35%; border: none; padding: 2px 0; color: #64748b;">Name:</td>
+              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ patient_name }}</td>
+            </tr>
+            <tr>
+              <td style="border: none; padding: 2px 0; color: #64748b;">Phone:</td>
+              <td style="border: none; padding: 2px 0;">{{ patient_phone }}</td>
+            </tr>
+            <tr>
+              <td style="border: none; padding: 2px 0; color: #64748b;">Email:</td>
+              <td style="border: none; padding: 2px 0;">{{ patient_email }}</td>
+            </tr>
+          </table>
+        </div>
+      </td>
+      <td class="info-cell" style="border: none; padding: 0;">
+        <div class="info-box-right">
+          <div class="section-title">Invoice Information</div>
+          <table style="width: 100%; border: none;">
+            <tr>
+              <td style="width: 45%; border: none; padding: 2px 0; color: #64748b;">Invoice Number:</td>
+              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ invoice_number }}</td>
+            </tr>
+            <tr>
+              <td style="border: none; padding: 2px 0; color: #64748b;">Date:</td>
+              <td style="border: none; padding: 2px 0;">{{ date }}</td>
+            </tr>
+            <tr>
+              <td style="border: none; padding: 2px 0; color: #64748b;">Payment Status:</td>
+              <td style="border: none; padding: 2px 0;">
+                <span style="font-weight: bold; color: {% if status == 'Paid' %}#16a34a{% else %}#dc2626{% endif %};">{{
+                  status }}</span>
+              </td>
+            </tr>
+          </table>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Items Table -->
+  <div class="section-title" style="margin-left: 2px;">Billed Items</div>
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th class="th-header" style="width: 8%; text-align: center;">Sr. No.</th>
+        <th class="th-header" style="width: 47%; text-align: left;">Description</th>
+        <th class="th-header" style="width: 10%; text-align: center;">Qty</th>
+        <th class="th-header" style="width: 15%; text-align: right;">Unit Price (Rs.)</th>
+        <th class="th-header" style="width: 20%; text-align: right;">Total (Rs.)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td class="td-item" style="text-align: center; color: #64748b;">{{ loop.index }}</td>
+        <td class="td-item">{{ item.description }}</td>
+        <td class="td-item" style="text-align: center;">{{ item.quantity }}</td>
+        <td class="td-item" style="text-align: right;">{{ item.unit_price }}</td>
+        <td class="td-item" style="text-align: right; font-weight: bold;">{{ item.line_total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Summary Section -->
+  <table class="summary-table">
+    <tr>
+      <td class="summary-left" style="border: none; padding: 0;">
+        {% if notes %}
+        <div style="font-weight: bold; color: #475569; font-size: 9pt; margin-top: 5px;">Notes & Comments:</div>
+        <div class="notes-box">
+          {{ notes }}
+        </div>
+        {% endif %}
+      </td>
+      <td class="summary-right" style="border: none; padding: 0;">
+        <table class="totals-table">
+          <tr>
+            <td class="td-total totals-label">Subtotal:</td>
+            <td class="td-total totals-value">Rs. {{ subtotal }}</td>
+          </tr>
+          {% if discount_amount != "0.00" %}
+          <tr>
+            <td class="td-total totals-label">Discount ({{ discount_percent }}%):</td>
+            <td class="td-total totals-value" style="color: #dc2626;">-Rs. {{ discount_amount }}</td>
+          </tr>
+          {% endif %}
+          {% if gst_amount != "0.00" %}
+          <tr>
+            <td class="td-total totals-label">GST ({{ gst_rate }}%):</td>
+            <td class="td-total totals-value">+Rs. {{ gst_amount }}</td>
+          </tr>
+          {% endif %}
+          {% if tax_amount != "0.00" %}
+          <tr>
+            <td class="td-total totals-label">Other Tax:</td>
+            <td class="td-total totals-value">+Rs. {{ tax_amount }}</td>
+          </tr>
+          {% endif %}
+          <tr class="grand-total-row">
+            <td class="td-grand-total grand-total-label">Grand Total:</td>
+            <td class="td-grand-total grand-total-value">Rs. {{ total_amount }}</td>
+          </tr>
+          <tr>
+            <td class="td-total totals-label" style="padding-top: 10px;">Amount Paid:</td>
+            <td class="td-total totals-value" style="padding-top: 10px; color: #16a34a;">Rs. {{ paid_amount }}</td>
+          </tr>
+          <tr>
+            <td class="td-total totals-label" style="font-weight: bold; color: #1e293b;">Balance Due:</td>
+            <td class="td-total totals-value" style="font-size: 11pt; color: #dc2626;">Rs. {{ balance_amount }}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>Thank you for choosing NexaCare AI 360. This is a computer-generated invoice and does not require a physical
+      signature.</p>
+    <p style="margin-top: 5px;">Wish you good health!</p>
+  </div>
+
 </body>
+
 </html>

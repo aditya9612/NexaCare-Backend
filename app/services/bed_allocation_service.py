@@ -374,10 +374,16 @@ class BedAllocationService:
                 detail="No appointment found for this patient."
             )
 
-        if appointment.appointment_status == "Cancelled":
+        status_norm = (appointment.appointment_status or "").strip().lower()
+        if status_norm != "completed":
+            if status_norm == "cancelled":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot allocate bed for a cancelled appointment."
+                )
             raise HTTPException(
                 status_code=400,
-                detail="Cannot allocate bed for a cancelled appointment."
+                detail=f"Bed allocation is only allowed for patients with a completed appointment. Current appointment status: {appointment.appointment_status}."
             )
 
         bed.status = "Occupied"

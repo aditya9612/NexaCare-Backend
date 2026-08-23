@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.appointment_assistant.prompts import booking_system_prompt
 from app.ai.appointment_assistant.schemas import BookingState, BookingStep, BookingTurnResult, SuggestedSlot
 from app.ai.symptom_analysis.analyzer import SymptomAnalyzer
+from app.core.constants import BookingSource
 from app.core.exceptions import ConflictException
 from app.models.chat_model import ChatSession
 from app.repositories.chat_repository import ChatRepository
@@ -264,6 +265,7 @@ class AppointmentAssistant:
             appointment_time=state.appointment_time,
             symptoms=state.symptoms,
             consultation_type=state.consultation_type,
+            booking_source=BookingSource.AI_CHAT,
         )
         try:
             appointment = await AppointmentService(self.db).create(payload, user_id)

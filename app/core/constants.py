@@ -57,6 +57,20 @@ class AppointmentStatus:
     TERMINAL = {COMPLETED, CANCELLED, NO_SHOW}
 
 
+class AppointmentType:
+    """Canonical appointment_type string values (visit modality; free-text column)."""
+    WALK_IN = "walk-in"
+    SCHEDULED = "scheduled"
+
+
+class BookingSource(str, Enum):
+    """How the appointment was booked (channel), distinct from appointment_type."""
+    STAFF = "staff"
+    PATIENT_PORTAL = "patient_portal"
+    AI_CHAT = "ai_chat"
+    AI_VOICE = "ai_voice"
+
+
 class PatientStatus:
     ACTIVE = "active"
     INACTIVE = "inactive"
@@ -94,6 +108,13 @@ class PharmacyStatus:
     CANCELLED = "cancelled"
 
 
+class PharmacyPaymentStatus(str, Enum):
+    PAID = "paid"
+    PENDING = "pending"
+    CANCELLED = "cancelled"
+
+
+
 class PurchaseStatus:
     ORDERED = "ordered"
     RECEIVED = "received"
@@ -127,6 +148,7 @@ class StockTransactionType:
     TRANSFER = "transfer"
     ADJUSTMENT = "adjustment"
     CONSUMPTION = "consumption"
+    RETURN = "return"
 
 
 class ReorderAlertStatus:

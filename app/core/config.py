@@ -57,9 +57,40 @@ class Settings(BaseSettings):
     WHATSAPP_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    # GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    AWS_STORAGE_BUCKET_NAME: str = ""  
+
+    
+    TESSERACT_CMD: str = r""   
+
+
+    # Sarvam AI TTS / voice cloning (local + production voice agent prompts)
+    # Cloned voice (SHIRISH): set SARVAM_VOICE_ID to Studio voice UUID (voice_id).
+    # Built-in voice fallback: set SARVAM_SPEAKER to lowercase name (e.g. ratan).
+    # Prefer VOICE_ID when both are set.
+    VOICE_CLONE_ENABLED: bool = True
+    SARVAM_API_KEY: str = ""
+    SARVAM_VOICE_ID: str = ""  # Studio clone UUID, e.g. 27c4beed-27c5-4623-aabc-62339e9e40fa
+    SARVAM_SPEAKER: str = ""  # built-in speaker name for public /text-to-speech (lowercase)
+    # Optional browser session Cookie header if Studio synthesize requires login auth.
+    SARVAM_STUDIO_COOKIE: str = ""
+    SARVAM_TTS_MODEL: str = "bulbul:v3"
+    SARVAM_TTS_CODEC: str = "mp3"  # mp3 | wav (Twilio <Play> supports both)
+    SARVAM_TTS_SAMPLE_RATE: int = 16000  # telephony-friendly
+    SARVAM_TTS_PACE: float = 1.0
+    SARVAM_TTS_TIMEOUT_SECONDS: float = 30.0
+    SARVAM_TTS_CACHE_DIR: str = "app/uploads/voice-cache"
+    SARVAM_CLONE_MAX_CHARS: int = 1000  # Studio: cloned voices support up to 1000 chars/line
 
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
@@ -93,10 +124,21 @@ class Settings(BaseSettings):
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600
+    VOICE_FAQ_QUERY_CACHE_TTL_SECONDS: int = 300
+    VOICE_FAQ_VECTOR_CACHE_TTL_SECONDS: int = 600
     VOICE_AI_CONFIDENCE_THRESHOLD: float = 0.65
+    # FAQ RAG confidence gates (FAQ path only — does not affect booking)
+    FAQ_CONFIDENCE_ANSWER: float = 0.90
+    FAQ_CONFIDENCE_CLARIFY: float = 0.70
+    # Phase 6: multi-turn FAQ, FAQ↔Booking switching, goodbye flow (default OFF)
+    VOICE_PHASE6_ENABLED: bool = False
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+    # When false (default), do not start pyngrok inside uvicorn lifespan.
+    # Prefer: run `ngrok http 8000` in a separate terminal and set PUBLIC_BASE_URL.
+    ENABLE_NGROK_TUNNEL: bool = False
+    NGROK_AUTH_TOKEN: str = ""
 
     # Hospital info surfaced in FAQ / chatbot prompts
     HOSPITAL_NAME: str = "NesaCare Hospital"
@@ -147,6 +189,11 @@ class Settings(BaseSettings):
     NETWORK_NODE: str | None = None
     PLATFORM_VERSION: str | None = None
     HIPAA_ENFORCED: bool | None = None
+
+        # pyrefly: ignore [parse-error]
+    TESSERACT_CMD: str = r"" 
+
+
 
 @lru_cache
 def get_settings() -> Settings:

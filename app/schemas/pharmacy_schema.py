@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from pydantic import EmailStr, Field, field_validator
 
+from app.core.constants import PharmacyPaymentStatus
 from app.schemas.common_schema import BaseSchema
 from app.utils.validators import validate_gst_number
 
@@ -265,6 +266,7 @@ class PharmacyInvoiceCreate(BaseSchema):
     patient_id: int | None = Field(None, gt=0)
     prescription_id: int | None = Field(None, gt=0)
     payment_mode: str | None = Field("Cash", description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
+    payment_status: PharmacyPaymentStatus = Field(..., description="Payment status of the invoice (paid, pending, cancelled)")
     discount_amount: float = Field(0.0, ge=0)
     discount_percentage: float = Field(0.0, ge=0, le=100)
     tax_percentage: float = Field(0.0, ge=0, le=100)
@@ -276,6 +278,7 @@ class PharmacyInvoiceUpdate(BaseSchema):
     patient_id: Optional[int] = Field(None, gt=0)
     prescription_id: Optional[int] = Field(None, gt=0)
     payment_mode: Optional[str] = Field(None, description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
+    payment_status: Optional[PharmacyPaymentStatus] = Field(None, description="Payment status of the invoice (paid, pending, cancelled)")
     discount_amount: Optional[float] = Field(None, ge=0)
     discount_percentage: Optional[float] = Field(None, ge=0, le=100)
     tax_percentage: Optional[float] = Field(None, ge=0, le=100)

@@ -1,6 +1,7 @@
 from datetime import date
 from sqlalchemy import func, or_, select, cast, String, case
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.appointment_model import Appointment
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
@@ -272,9 +273,11 @@ class PatientRepository:
         return patient
 
     async def get_appointments(self, patient_id: int) -> list[Appointment]:
+        from sqlalchemy.orm import selectinload
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.patient_id == patient_id)
+            .options(selectinload(Appointment.patient))
             .order_by(Appointment.appointment_date.desc(), Appointment.appointment_time.desc())
         )
         return list(result.scalars().all())
@@ -311,4 +314,14 @@ class PatientRepository:
 
     async def delete_document(self, document: PatientDocument) -> None:
         await self.db.delete(document)
+        await self.db.flush()
+
+    async def get_family_member(self, member_id: int) -> FamilyMember | None:
+        result = await self.db.execute(
+            select(FamilyMember).where(FamilyMember.id == member_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def delete_family_member(self, member: FamilyMember) -> None:
+        await self.db.delete(member)
         await self.db.flush()

@@ -19,6 +19,7 @@ class Appointment(Base, TimestampMixin):
     appointment_date: Mapped[date] = mapped_column(Date, index=True)
     appointment_time: Mapped[time] = mapped_column(Time, index=True)
     appointment_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    booking_source: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     appointment_status: Mapped[str] = mapped_column(
         String(50), default=AppointmentStatus.PENDING, index=True
     )
@@ -55,4 +56,11 @@ class Appointment(Base, TimestampMixin):
             - dob.year
             - ((today.month, today.day) < (dob.month, dob.day))
         )
+
+    @property
+    def patient_mobile_number(self) -> str | None:
+        if not self.patient:
+            return None
+        return self.patient.phone
+
 

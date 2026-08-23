@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Billings Export Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 15px;
+    }
+    body { font-family: 'DejaVuSans', sans-serif; font-size: 8px; line-height: 1.3; color: #333333; }
+    h1 { color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
+    .meta { margin-bottom: 10px; font-size: 9px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 4px 3px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th { background: #f3f4f6; font-weight: bold; color: #1e3a8a; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    .badge { padding: 1px 3px; border-radius: 3px; font-weight: bold; font-size: 7px; text-align: center; }
+    .status-paid { background-color: #d1fae5; color: #065f46; }
+    .status-partial { background-color: #fef3c7; color: #92400e; }
+    .status-pending { background-color: #fee2e2; color: #991b1b; }
+    .source-clinical { background-color: #dbeafe; color: #1e40af; }
+    .source-pharmacy { background-color: #f3e8ff; color: #6b21a8; }
+  </style>
+</head>
+<body>
+  <h1>Billings & Invoices Report</h1>
+  <div class="meta">
+    <strong>Total Records:</strong> {{ billings|length }} | <strong>Generated At:</strong> {{ generated_at }}
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 4%;">ID</th>
+        <th style="width: 12%;">Bill Number</th>
+        <th style="width: 13%;">Patient</th>
+        <th style="width: 14%;">Financials</th>
+        <th style="width: 11%;">Status / Bal</th>
+        <th style="width: 24%;">Items Details</th>
+        <th style="width: 11%;">Notes / Dates</th>
+        <th style="width: 11%;">Created At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in billings %}
+      <tr>
+        <td>{{ item.id }}</td>
+        <td>
+          No: {{ item.bill_number }}<br/>
+          Source: 
+          {% if item.source == "pharmacy" %}
+            <span class="badge source-pharmacy">Pharmacy</span>
+          {% else %}
+            <span class="badge source-clinical">Clinical</span>
+          {% endif %}
+        </td>
+        <td>
+          ID: {{ item.patient_id }}<br/>
+          {{ item.patient_name or "" }}
+        </td>
+        <td>
+          Subtotal: ₹{{ "%.2f"|format(item.subtotal) }}<br/>
+          Discount: {{ item.discount_percent }}% (₹{{ "%.2f"|format(item.discount_amount) }})<br/>
+          GST: {{ item.gst_rate }}% (₹{{ "%.2f"|format(item.gst_amount) }})<br/>
+          Total: <strong>₹{{ "%.2f"|format(item.total_amount) }}</strong>
+        </td>
+        <td>
+          Paid: ₹{{ "%.2f"|format(item.paid_amount) }}<br/>
+          Balance: ₹{{ "%.2f"|format(item.balance_amount) }}<br/>
+          Status: 
+          {% if item.status|lower == "paid" %}
+            <span class="badge status-paid">PAID</span>
+          {% elif item.status|lower == "partial" or item.status|lower == "partially_paid" %}
+            <span class="badge status-partial">PARTIAL</span>
+          {% else %}
+            <span class="badge status-pending">{{ item.status|upper }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% for sub in item.bill_items %}
+            • {{ sub.description }} x{{ sub.quantity }} @ ₹{{ "%.2f"|format(sub.unit_price) }} (GST: {{ sub.gst_rate }}%, Total: ₹{{ "%.2f"|format(sub.line_total) }})<br/>
+          {% else %}
+            -
+          {% endfor %}
+        </td>
+        <td>
+          Notes: {{ item.notes or "-" }}<br/>
+          Due: {{ item.due_date or "-" }}
+        </td>
+        <td>{{ item.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

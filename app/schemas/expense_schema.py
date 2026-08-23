@@ -152,9 +152,22 @@ class VendorPaymentCreate(BaseModel):
     @classmethod
     def validate_payment_method(cls, value: str) -> str:
         stripped = value.strip()
-        if stripped.lower() not in {"cash", "upi", "card", "cheque"}:
-            raise ValueError("payment_method must be one of: cash, upi, card, cheque")
-        return stripped
+        val_lower = stripped.lower()
+        mapping = {
+            "debit/credit/prpaid card": "Debit/credit/prpaid card",
+            "debit/credit/prepaid card": "Debit/credit/prpaid card",
+            "bank trasfter(neft, rtgs, imps, net banking)": "bank trasfter(NEFT, RTGS, IMPS, Net banking)",
+            "bank transfer(neft, rtgs, imps, net banking)": "bank trasfter(NEFT, RTGS, IMPS, Net banking)",
+            "upi/bhip pay": "UPI/BHIP PAY",
+            "upi/bhim pay": "UPI/BHIP PAY",
+            "cash": "CASH"
+        }
+        if val_lower not in mapping:
+            raise ValueError(
+                "payment_method must be one of: Debit/credit/prpaid card, "
+                "bank trasfter(NEFT, RTGS, IMPS, Net banking), UPI/BHIP PAY, CASH"
+            )
+        return mapping[val_lower]
 
 
 class VendorPaymentUpdate(BaseModel):
@@ -168,9 +181,22 @@ class VendorPaymentUpdate(BaseModel):
     def validate_payment_method(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             stripped = value.strip()
-            if stripped.lower() not in {"cash", "upi", "card", "cheque"}:
-                raise ValueError("payment_method must be one of: cash, upi, card, cheque")
-            return stripped
+            val_lower = stripped.lower()
+            mapping = {
+                "debit/credit/prpaid card": "Debit/credit/prpaid card",
+                "debit/credit/prepaid card": "Debit/credit/prpaid card",
+                "bank trasfter(neft, rtgs, imps, net banking)": "bank trasfter(NEFT, RTGS, IMPS, Net banking)",
+                "bank transfer(neft, rtgs, imps, net banking)": "bank trasfter(NEFT, RTGS, IMPS, Net banking)",
+                "upi/bhip pay": "UPI/BHIP PAY",
+                "upi/bhim pay": "UPI/BHIP PAY",
+                "cash": "CASH"
+            }
+            if val_lower not in mapping:
+                raise ValueError(
+                    "payment_method must be one of: Debit/credit/prpaid card, "
+                    "bank trasfter(NEFT, RTGS, IMPS, Net banking), UPI/BHIP PAY, CASH"
+                )
+            return mapping[val_lower]
         return value
 
 
@@ -217,7 +243,13 @@ class MonthlySummary(BaseModel):
 class ExpenseSummaryResponse(BaseModel):
     total_amount: float
     total_count: int
-    by_category: List[CategorySummary]
-    by_vendor: List[VendorSummary]
-    by_status: List[StatusSummary]
-    monthly_summary: List[MonthlySummary]
+    paid_amount: float = 0.0
+    paid_count: int = 0
+    pending_amount: float = 0.0
+    pending_count: int = 0
+    total_vendors: int = 0
+    by_category: List[CategorySummary] = []
+    by_vendor: Optional[List[VendorSummary]] = None
+    by_status: Optional[List[StatusSummary]] = None
+    monthly_summary: Optional[List[MonthlySummary]] = None
+

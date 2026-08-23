@@ -746,11 +746,29 @@ class LabService:
         result_id: int,
         data,
         user_id: int,
+        document=None,
     ) -> TestResultResponse:
         result = await self.result_repo.get_by_id(result_id)
 
         if not result:
             raise NotFoundException("Test result not found")
+
+        if document:
+            from uuid import uuid4
+            import aiofiles
+            import os
+            upload_dir = "uploads/lab_results"
+            os.makedirs(upload_dir, exist_ok=True)
+
+            file_ext = os.path.splitext(document.filename)[1]
+            file_name = f"{uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, file_name)
+
+            async with aiofiles.open(file_path, "wb") as f:
+                while content := await document.read(1024 * 1024):
+                    await f.write(content)
+
+            result.document_url = file_path
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(result, key, value)
@@ -1099,4 +1117,834 @@ class LabService:
 
         await self.report_repo.delete(report)
         await self.audit_repo.create("delete", "lab_report", user_id=current_user.id, resource_id=str(report_id))
+
+    async def process_report_ocr(self, order_id: int, file: UploadFile, current_user) -> dict:
+        import os
+        import json
+        from uuid import uuid4
+        import aiofiles
+        import logging
+        from sqlalchemy import select, func
+        from app.core.config import settings
+        from app.core.constants import LabOrderStatus, LabReportStatus, SampleStatus
+        from app.core.exceptions import BadRequestException, NotFoundException
+        from app.models.lab_model import LabReport, TestResult, LabTest
+        from app.schemas.lab_schema import ExtractedLabReport
+        from app.utils.ocr import extract_text_from_image_bytes, extract_text_from_pdf_bytes
+
+        logger = logging.getLogger("nexacare.lab.service")
+
+        # 1. Retrieve and validate TestOrder
+        order = await self.order_repo.get_by_id(order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        # 2. Check if sample has been collected
+        sample = await self.sample_repo.get_by_test_order(order_id)
+        if not sample or sample.status != SampleStatus.COLLECTED:
+            raise BadRequestException(
+                "Cannot process OCR report: Sample has not been collected for this test order"
+            )
+
+        # 3. Validate file size and extension
+        file_size = getattr(file, "size", None)
+        if file_size is None:
+            # Fallback: read file to get size, then seek back to 0
+            content = await file.read()
+            file_size = len(content)
+            await file.seek(0)
+        
+        max_size_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if file_size > max_size_bytes:
+            raise BadRequestException(f"File size exceeds limit of {settings.MAX_UPLOAD_SIZE_MB}MB")
+
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in [".pdf", ".png", ".jpg", ".jpeg"]:
+            raise BadRequestException("Invalid file type. Supported types: PDF, PNG, JPG, JPEG")
+
+        # 4. Save uploaded file to disk
+        import time
+        t_start = time.time()
+        
+        upload_dir = os.path.join(settings.UPLOAD_DIR, "lab_reports")
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        file_uuid = str(uuid4())
+        file_name = f"{file_uuid}{file_ext}"
+        disk_path = os.path.join(settings.UPLOAD_DIR, "lab_reports", file_name)
+
+        # Read file bytes once to save locally, run OCR, and upload to S3
+        file_bytes = await file.read()
+
+        # Write to local disk
+        async with aiofiles.open(disk_path, "wb") as f:
+            await f.write(file_bytes)
+
+        t_save = time.time()
+        logger.info(f"TIMING: File read and local save took {t_save - t_start:.2f} seconds")
+
+        # Try to upload to AWS S3
+        from io import BytesIO
+        from app.utils.s3 import upload_file_to_s3
+        
+        s3_url = upload_file_to_s3(
+            BytesIO(file_bytes),
+            f"lab_reports/{file_name}",
+            file.content_type
+        )
+        if s3_url:
+            file_path = s3_url
+        else:
+            file_path = os.path.join("uploads/lab_reports", file_name)
+
+        t_s3 = time.time()
+        logger.info(f"TIMING: AWS S3 upload attempt took {t_s3 - t_save:.2f} seconds")
+
+        # 5. Extract raw OCR text
+        try:
+            if file_ext == ".pdf":
+                raw_text = extract_text_from_pdf_bytes(file_bytes)
+            else:
+                raw_text = extract_text_from_image_bytes(file_bytes)
+        except Exception as e:
+            logger.error(f"OCR processing failed: {e}")
+            raise BadRequestException(f"OCR processing failed: {str(e)}")
+            
+        if not raw_text.strip():
+            raise BadRequestException("OCR result is empty. No readable text found in the document.")
+
+        t_ocr = time.time()
+        logger.info(f"TIMING: PaddleOCR text extraction took {t_ocr - t_s3:.2f} seconds")
+
+        # Save companion raw OCR text file to disk (and S3 if configured)
+        raw_txt_name = f"{file_uuid}_raw_ocr.txt"
+        raw_txt_disk_path = os.path.join(settings.UPLOAD_DIR, "lab_reports", raw_txt_name)
+        async with aiofiles.open(raw_txt_disk_path, "w", encoding="utf-8") as f:
+            await f.write(raw_text)
+
+        upload_file_to_s3(
+            BytesIO(raw_text.encode("utf-8")),
+            f"lab_reports/{raw_txt_name}",
+            "text/plain"
+        )
+
+        t_raw_txt = time.time()
+        logger.info(f"TIMING: Raw OCR text saving took {t_raw_txt - t_ocr:.2f} seconds")
+
+        # 6. Call Gemini LLM using google-genai
+        from google import genai
+        from google.genai import types
+
+        api_key = (settings.GEMINI_API_KEY or "").strip()
+        if not api_key:
+            raise BadRequestException("GEMINI_API_KEY environment variable is not set.")
+        
+        from app.models.lab_model import LabReport, TestResult, LabTest, LabOcrExtraction
+        from app.models.patient_model import Patient
+
+        try:
+            client = genai.Client(api_key=api_key)
+            model = settings.GEMINI_MODEL or "gemini-2.5-flash"
+            
+            system_prompt = (
+                "You are an expert AI clinical data extractor.\n"
+                "Analyze the provided document file and raw OCR text from a laboratory report and extract both the patient details and test results into the required structured JSON format.\n\n"
+                "Schema fields to extract:\n"
+                "- patient_code: The Patient ID / UHID / Patient Code / Reg No / MRN if present on the report (e.g. 'PAT-2026081800A1FE', '127', 'UHID-9812'). Otherwise null.\n"
+                "- first_name: The patient's first name if clearly stated (e.g. 'Tom'). Otherwise null.\n"
+                "- last_name: The patient's last name / surname if clearly stated (e.g. 'Patient'). Otherwise null.\n"
+                "- test_results: List of extracted test parameters and results. Each item must have:\n"
+                "  * test_name: The name of the test parameter/analyte (e.g. Hemoglobin, WBC, Platelets, TSH)\n"
+                "  * result_value: The numeric or text value of the test result (e.g. '13.5', 'Positive')\n"
+                "  * normal_range: The normal reference range if listed (e.g. '13-17', 'Negative')\n"
+                "  * remarks: Any remarks, flags or notes specifically linked to this parameter (e.g. 'High', 'Low')\n\n"
+                "CRITICAL RULES:\n"
+                "1. Never invent or guess medical or patient values. If a value is missing or unclear, return null/empty according to the schema.\n"
+                "2. Preserve the value exactly as extracted where possible (no rounding or conversions).\n"
+                "3. Do not provide any medical diagnosis or interpretation. Only extract structured data.\n"
+                "4. Extract multiple test results/parameters from the same report if present."
+            )
+            
+            # Determine mime type based on file extension
+            mime_type = "image/jpeg"
+            if file_ext == ".pdf":
+                mime_type = "application/pdf"
+            elif file_ext == ".png":
+                mime_type = "image/png"
+            elif file_ext == ".webp":
+                mime_type = "image/webp"
+            elif file_ext == ".gif":
+                mime_type = "image/gif"
+                
+            contents = [
+                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                f"Raw OCR Text:\n{raw_text}\n\nAnalyze both the provided document file and the raw OCR text above to extract patient details and all parameters accurately."
+            ]
+            
+            # List of models to try in case of 503 High Demand or transient unavailability
+            models_to_try = [model]
+            for fallback in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+                if fallback not in models_to_try:
+                    models_to_try.append(fallback)
+
+            response = None
+            last_error = None
+            for candidate_model in models_to_try:
+                try:
+                    logger.info(f"Attempting Gemini LLM extraction with model: {candidate_model}")
+                    response = client.models.generate_content(
+                        model=candidate_model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            temperature=0.0,
+                            response_mime_type="application/json",
+                            response_schema=ExtractedLabReport,
+                        ),
+                    )
+                    model = candidate_model  # update to the successfully used model
+                    break
+                except Exception as ex:
+                    last_error = ex
+                    err_str = str(ex)
+                    logger.warning(f"Model {candidate_model} failed with: {err_str}. Trying next fallback if available.")
+                    # Continue trying next model if 503/429 or transient error
+                    continue
+
+            if response is None:
+                raise last_error or Exception("All Gemini model attempts failed.")
+
+            extracted_json = json.loads(response.text)
+            report_data = ExtractedLabReport.model_validate(extracted_json)
+        except Exception as e:
+            logger.error(f"Gemini LLM extraction failed: {e}")
+            raise BadRequestException(f"LLM extraction failed: {str(e)}")
+
+        t_llm = time.time()
+        logger.info(f"TIMING: Gemini LLM extraction took {t_llm - t_raw_txt:.2f} seconds")
+
+        # 7. Map results to DB entities and run matching validation
+        created_results = []
+        unmatched_params = []
+        
+        from app.models.lab_model import LabReport, TestResult, LabTest, LabOcrExtraction, LabOcrExtractionItem
+        from app.models.patient_model import Patient
+
+        # 7. Match or Link Patient ID & Create LabOcrExtraction Record
+        patient_id_for_extraction = order.patient_id
+        if report_data.patient_code:
+            matched_patient = await self.db.scalar(
+                select(Patient).where(
+                    (Patient.patient_code == report_data.patient_code.strip()) |
+                    (Patient.id == (int(report_data.patient_code.strip()) if report_data.patient_code.strip().isdigit() else -1)),
+                    Patient.is_deleted == False
+                )
+            )
+            if matched_patient:
+                patient_id_for_extraction = matched_patient.id
+
+        ocr_extraction_record = LabOcrExtraction(
+            test_order_id=order.id,
+            patient_id=patient_id_for_extraction,
+            report_id=None,
+            extracted_patient_code=report_data.patient_code,
+            extracted_first_name=report_data.first_name,
+            extracted_last_name=report_data.last_name,
+            file_path=file_path,
+            status="pending_review",
+            model_used=model,
+            extracted_by=current_user.id
+        )
+        self.db.add(ocr_extraction_record)
+        await self.db.flush()
+
+        # 8. Insert Extracted Items into lab_ocr_extraction_items
+        created_items = []
+        unmatched_count = 0
+        ordered_test_name = order.lab_test.test_name if order.lab_test else ""
+
+        for param in report_data.test_results:
+            if not param.test_name or not param.test_name.strip():
+                continue
+
+            # Matching validation against test catalog
+            is_matched = False
+            if ordered_test_name.lower().strip() == param.test_name.lower().strip():
+                is_matched = True
+            else:
+                catalog_test_res = await self.db.execute(
+                    select(LabTest).where(
+                        func.lower(LabTest.test_name) == param.test_name.lower().strip(),
+                        LabTest.is_active == True,
+                        LabTest.is_deleted == False
+                    )
+                )
+                if catalog_test_res.scalar_one_or_none():
+                    is_matched = True
+
+            if not is_matched:
+                unmatched_count += 1
+
+            extraction_item = LabOcrExtractionItem(
+                ocr_extraction_id=ocr_extraction_record.id,
+                parameter_name=param.test_name.strip(),
+                result_value=param.result_value or "",
+                normal_range=param.normal_range or None,
+                unit=param.unit or None,
+                remarks=param.remarks or "",
+                is_matched_catalog=is_matched,
+                status="completed" if is_matched else "pending"
+            )
+            self.db.add(extraction_item)
+            created_items.append(extraction_item)
+
+        await self.db.flush()
+
+        # Update TestOrder status to in_progress
+        order.status = LabOrderStatus.IN_PROGRESS
+        await self.order_repo.update(order)
+
+        # Create audit log
+        await self.audit_repo.create(
+            action="create",
+            resource="lab_ocr_extraction",
+            user_id=current_user.id,
+            resource_id=str(ocr_extraction_record.id),
+            details=f"OCR extracted {len(created_items)} items for review. File saved to {file_path}"
+        )
+
+        return {
+            "ocr_extraction_id": ocr_extraction_record.id,
+            "test_order_id": order.id,
+            "test_order_number": order.order_number,
+            "status": ocr_extraction_record.status,
+            "file_path": file_path,
+            "patient_info": {
+                "patient_id": patient_id_for_extraction,
+                "extracted_patient_code": report_data.patient_code,
+                "extracted_first_name": report_data.first_name,
+                "extracted_last_name": report_data.last_name,
+            },
+            "items": [
+                {
+                    "id": item.id,
+                    "parameter_name": item.parameter_name,
+                    "result_value": item.result_value,
+                    "normal_range": item.normal_range,
+                    "unit": item.unit,
+                    "remarks": item.remarks,
+                    "is_matched_catalog": item.is_matched_catalog,
+                    "status": item.status,
+                }
+                for item in created_items
+            ]
+        }
+
+    async def get_ocr_extraction(self, extraction_id: int) -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.lab_model import LabOcrExtraction
+        from app.core.exceptions import NotFoundException
+
+        query = (
+            select(LabOcrExtraction)
+            .where(LabOcrExtraction.id == extraction_id)
+            .options(selectinload(LabOcrExtraction.items))
+        )
+        res = await self.db.execute(query)
+        extraction = res.scalar_one_or_none()
+        if not extraction:
+            raise NotFoundException("OCR Extraction record not found")
+
+        return {
+            "id": extraction.id,
+            "test_order_id": extraction.test_order_id,
+            "patient_id": extraction.patient_id,
+            "report_id": extraction.report_id,
+            "extracted_patient_code": extraction.extracted_patient_code,
+            "extracted_first_name": extraction.extracted_first_name,
+            "extracted_last_name": extraction.extracted_last_name,
+            "file_path": extraction.file_path,
+            "status": extraction.status,
+            "model_used": extraction.model_used,
+            "extracted_by": extraction.extracted_by,
+            "created_at": extraction.created_at,
+            "items": [
+                {
+                    "id": item.id,
+                    "ocr_extraction_id": item.ocr_extraction_id,
+                    "parameter_name": item.parameter_name,
+                    "result_value": item.result_value,
+                    "normal_range": item.normal_range,
+                    "unit": item.unit,
+                    "remarks": item.remarks,
+                    "is_matched_catalog": item.is_matched_catalog,
+                    "status": item.status,
+                    "created_at": item.created_at,
+                }
+                for item in extraction.items
+            ]
+        }
+
+    async def approve_ocr_extraction(
+        self,
+        extraction_id: int,
+        data,
+        current_user
+    ) -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.lab_model import LabOcrExtraction, LabReport, TestResult
+        from app.core.constants import LabReportStatus, LabOrderStatus
+        from app.core.exceptions import BadRequestException, NotFoundException
+
+        query = (
+            select(LabOcrExtraction)
+            .where(LabOcrExtraction.id == extraction_id)
+            .options(selectinload(LabOcrExtraction.items))
+        )
+        res = await self.db.execute(query)
+        extraction = res.scalar_one_or_none()
+        if not extraction:
+            raise NotFoundException("OCR Extraction record not found")
+
+        if extraction.status == "approved":
+            raise BadRequestException("This OCR extraction has already been approved.")
+
+        order = await self.order_repo.get_by_id(extraction.test_order_id)
+        if not order:
+            raise NotFoundException("Test order not found")
+
+        # 1. Insert approved items into test_results table
+        created_results = []
+        for item in data.items:
+            test_result = TestResult(
+                test_order_id=order.id,
+                parameter_name=item.parameter_name.strip(),
+                result_value=item.result_value or "",
+                unit=item.unit,
+                normal_range=item.normal_range,
+                is_critical=item.is_critical,
+                status="completed",
+                entered_by=current_user.id,
+                entered_at=utc_now(),
+                document_url=extraction.file_path,
+                remark=item.remarks or ""
+            )
+            self.db.add(test_result)
+            created_results.append(test_result)
+
+        # 2. Create official LabReport in draft status
+        report = LabReport(
+            test_order_id=order.id,
+            report_number=generate_lab_report_number(),
+            status=LabReportStatus.DRAFT,
+            summary="Lab report generated from approved AI OCR extraction.",
+            remarks=data.report_remarks or "AI OCR extraction verified and approved by laboratory staff.",
+            report_path=extraction.file_path,
+            generated_by=current_user.id,
+            generated_at=utc_now()
+        )
+        self.db.add(report)
+        await self.db.flush()
+
+        # 3. Update extraction status to approved and link report_id
+        extraction.status = "approved"
+        extraction.report_id = report.id
+        await self.db.flush()
+
+        # 4. Update TestOrder status
+        order.status = LabOrderStatus.IN_PROGRESS
+        await self.order_repo.update(order)
+
+        # 5. Audit Log
+        await self.audit_repo.create(
+            action="approve",
+            resource="lab_ocr_extraction",
+            user_id=current_user.id,
+            resource_id=str(extraction.id),
+            details=f"Approved OCR extraction ID {extraction.id}. Generated {len(created_results)} test_results and Report ID {report.id}."
+        )
+
+        return {
+            "message": "OCR extraction approved and results successfully transferred to test_results",
+            "extraction_id": extraction.id,
+            "status": extraction.status,
+            "report_id": report.id,
+            "report_number": report.report_number,
+            "test_order_id": order.id,
+            "test_results_count": len(created_results),
+            "test_results": [
+                {
+                    "result_id": r.id,
+                    "parameter_name": r.parameter_name,
+                    "result_value": r.result_value,
+                    "unit": r.unit,
+                    "normal_range": r.normal_range,
+                    "is_critical": r.is_critical,
+                    "status": r.status
+                }
+                for r in created_results
+            ]
+        }
+
+
+    async def generate_orders_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lab Orders Bulk Import"
+        
+        headers = [
+            "patient_id", "doctor_id", "lab_test_id", "appointment_id", "priority", "notes"
+        ]
+        ws.append(headers)
+        
+        # One valid sample row
+        ws.append([
+            1,
+            2,
+            5,
+            10,
+            "normal",
+            "Routine blood sugar test"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_orders_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"patient_id", "lab_test_id"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        seen_keys = set()
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+                    
+            try:
+                # Helper function to normalize Excel numeric IDs safely
+                def normalize_id(val, field_name):
+                    if val is None:
+                        return None
+                    try:
+                        f_val = float(val)
+                        if not f_val.is_integer():
+                            raise ValueError()
+                        return int(f_val)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid integer value for {field_name}: {val}")
+
+                patient_id = normalize_id(row_dict.get("patient_id"), "patient_id")
+                if patient_id is None:
+                    raise BadRequestException("patient_id is required.")
+                    
+                lab_test_id = normalize_id(row_dict.get("lab_test_id"), "lab_test_id")
+                if lab_test_id is None:
+                    raise BadRequestException("lab_test_id is required.")
+                    
+                doctor_id = normalize_id(row_dict.get("doctor_id"), "doctor_id")
+                appointment_id = normalize_id(row_dict.get("appointment_id"), "appointment_id")
+                
+                priority = "normal"
+                priority_raw = row_dict.get("priority")
+                if priority_raw is not None:
+                    priority = str(priority_raw).strip()
+                    
+                notes = None
+                notes_raw = row_dict.get("notes")
+                if notes_raw is not None:
+                    notes = str(notes_raw).strip()
+
+                # Duplicate detection in sheet: (patient_id, lab_test_id, appointment_id)
+                dup_key = (patient_id, lab_test_id, appointment_id)
+                if dup_key in seen_keys:
+                    raise BadRequestException("Duplicate test order found in upload file.")
+                seen_keys.add(dup_key)
+
+                # Validate with TestOrderCreate
+                order_create = TestOrderCreate(
+                    patient_id=patient_id,
+                    doctor_id=doctor_id,
+                    lab_test_id=lab_test_id,
+                    appointment_id=appointment_id,
+                    priority=priority,
+                    notes=notes
+                )
+                
+                await self.create_order(order_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_orders(
+        self,
+        format_type: str,
+        status: str | None = None,
+        patient_id: int | None = None,
+        doctor_id: int | None = None,
+        current_user = None
+    ):
+        from io import BytesIO
+        from datetime import datetime, date
+        from sqlalchemy import select
+        
+        patient_ids = patient_id
+        resolved_doctor_id = doctor_id
+        department_id = None
+
+        if current_user:
+            role_name = current_user.role.name.lower() if current_user.role else ""
+            if role_name == "doctor":
+                from app.repositories.doctor_repository import DoctorRepository
+                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
+                if doctor:
+                    resolved_doctor_id = doctor.id
+            elif role_name == "patient":
+                from app.models.patient_model import Patient
+                result = await self.db.execute(
+                    select(Patient).where(Patient.user_id == current_user.id, Patient.is_deleted == False)
+                )
+                patient = result.scalar_one_or_none()
+                if patient:
+                    patient_ids = patient.id
+            elif role_name in ["lab technician", "lab_technician"]:
+                from app.models.staff_model import Staff
+                result = await self.db.execute(
+                    select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
+                )
+                staff = result.scalar_one_or_none()
+                department_id = staff.department_id if staff else None
+            elif role_name == "nurse":
+                from app.models.nurse_model import Nurse, NursePatientAssignment
+                res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+                nurse = res.scalar_one_or_none()
+                if not nurse:
+                    return b"", "application/pdf"
+                
+                # Fetch active assigned patient IDs
+                assignment_res = await self.db.execute(
+                    select(NursePatientAssignment.patient_id)
+                    .where(
+                        NursePatientAssignment.nurse_id == nurse.id,
+                        NursePatientAssignment.status == "Active"
+                    )
+                )
+                assigned_patient_ids = [row[0] for row in assignment_res.all()]
+                if not assigned_patient_ids:
+                    return b"", "application/pdf"
+                
+                if patient_id is not None:
+                    if patient_id not in assigned_patient_ids:
+                        return b"", "application/pdf"
+                    patient_ids = patient_id
+                else:
+                    patient_ids = assigned_patient_ids
+
+        # Fetch active test orders
+        orders = await self.order_repo.get_all_active(
+            status=status,
+            patient_id=patient_ids,
+            doctor_id=resolved_doctor_id,
+            department_id=department_id
+        )
+
+        # Map patient details
+        from app.models.patient_model import Patient
+        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
+        p_res = await self.db.execute(p_stmt)
+        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
+
+        # Map doctor details
+        from app.models.doctor_model import Doctor
+        d_stmt = select(Doctor.id, Doctor.first_name, Doctor.last_name).where(Doctor.is_deleted == False)
+        d_res = await self.db.execute(d_stmt)
+        doctors_map = {row[0]: f"Dr. {row[1]} {row[2]}" for row in d_res.all()}
+
+        # Map appointment numbers
+        from app.models.appointment_model import Appointment
+        a_stmt = select(Appointment.id, Appointment.appointment_number)
+        a_res = await self.db.execute(a_stmt)
+        appointments_map = {row[0]: row[1] for row in a_res.all()}
+
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Lab Test Orders"
+            
+            headers = [
+                "id", "order_number", "patient_id", "patient_name", "doctor_id", "doctor_name",
+                "lab_test_id", "department_id", "appointment_id", "appointment_number", "status", "priority", "notes",
+                "ordered_at", "completed_at", "created_at",
+                "lab_test_test_code", "lab_test_test_name", "lab_test_category",
+                "lab_test_description", "lab_test_price", "lab_test_sample_type",
+                "lab_test_turnaround_hours", "lab_test_normal_range",
+                "lab_test_is_active", "lab_test_department_id", "lab_test_doctor_id"
+            ]
+            ws.append(headers)
+            
+            for o in orders:
+                med = o.lab_test
+                row = [
+                    o.id,
+                    o.order_number,
+                    o.patient_id,
+                    patients_map.get(o.patient_id, ""),
+                    o.doctor_id,
+                    doctors_map.get(o.doctor_id, "") if o.doctor_id else "",
+                    o.lab_test_id,
+                    o.department_id,
+                    o.appointment_id,
+                    appointments_map.get(o.appointment_id, "") if o.appointment_id else "",
+                    o.status,
+                    o.priority,
+                    o.notes or "",
+                    o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
+                    o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
+                    o.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.created_at, datetime) else str(o.created_at),
+                    med.test_code if med else "",
+                    med.test_name if med else "",
+                    med.category if med else "",
+                    med.description or "" if med else "",
+                    f"₹{med.price:.2f}" if med and med.price is not None else "",
+                    med.sample_type if med else "",
+                    med.turnaround_hours if med else "",
+                    med.normal_range or "" if med else "",
+                    "Active" if med and med.is_active else "Inactive" if med else "",
+                    med.department_id if med else "",
+                    med.doctor_id if med else ""
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("lab_orders_export_template.html")
+            
+            formatted_orders = []
+            for o in orders:
+                med = o.lab_test
+                formatted_orders.append({
+                    "id": o.id,
+                    "order_number": o.order_number,
+                    "patient_id": o.patient_id,
+                    "patient_name": patients_map.get(o.patient_id, ""),
+                    "doctor_id": o.doctor_id,
+                    "doctor_name": doctors_map.get(o.doctor_id, "") if o.doctor_id else "",
+                    "appointment_id": o.appointment_id,
+                    "appointment_number": appointments_map.get(o.appointment_id, "") if o.appointment_id else "",
+                    "department_id": o.department_id,
+                    "status": o.status,
+                    "priority": o.priority,
+                    "notes": o.notes,
+                    "ordered_at": o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
+                    "completed_at": o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
+                    "lab_test_test_code": med.test_code if med else "",
+                    "lab_test_test_name": med.test_name if med else "",
+                    "lab_test_category": med.category if med else "",
+                    "lab_test_sample_type": med.sample_type if med else "",
+                    "lab_test_price": med.price if med else 0.0
+                })
+                
+            html_content = template.render(
+                orders=formatted_orders,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
+        else:
+            raise BadRequestException("Invalid format specified for export")
 

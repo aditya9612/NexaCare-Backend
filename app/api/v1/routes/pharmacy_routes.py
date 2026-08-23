@@ -233,13 +233,13 @@ async def list_prescriptions(
     from app.repositories.nurse_repository import NurseRepository
     from app.repositories.doctor_repository import DoctorRepository
 
-    role_name = current_user.role.name if current_user.role else None
+    role_name = current_user.role.name.lower() if current_user.role else ""
 
     doctor_id = None
     department_id = None
     assigned_patient_ids = None
 
-    if role_name == UserRole.NURSE:
+    if role_name == "nurse":
         nurse = await NurseRepository(db).get_by_user_id(current_user.id)
         if not nurse:
             raise NotFoundException("Nurse profile not found")
@@ -425,6 +425,65 @@ async def delete_pharmacy_invoice(
 
 
 # --- Suppliers ---
+class SupplierExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
+
+
+@router.get("/suppliers/bulk-template")
+async def download_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    stream = await PharmacyService(db).generate_supplier_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=suppliers_bulk_template.xlsx"}
+    )
+
+
+@router.post("/suppliers/bulk-upload", status_code=201)
+async def upload_suppliers_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("pharmacy", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await PharmacyService(db).import_suppliers_from_excel(file, current_user.id)
+    return APIResponse(message="Suppliers bulk upload processed", data=result)
+
+
+@router.get("/suppliers/export")
+async def export_suppliers(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: SupplierExportFormat = Query(SupplierExportFormat.EXCEL),
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    data, media_type = await PharmacyService(db).export_suppliers(format.value)
+    
+    if format == SupplierExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=suppliers_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=suppliers_export.pdf"}
+        )
+
+
 @router.post("/suppliers", response_model=APIResponse[SupplierResponse], status_code=201)
 async def create_supplier(
     data: SupplierCreate,
@@ -586,7 +645,7 @@ async def expiry_alerts(
 async def sales_report(
     db: DbSession,
     current_user: CurrentUser,
-    period: str = "monthly",
+    period: str = "all",
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     report = await PharmacyService(db).get_sales_report(period=period)

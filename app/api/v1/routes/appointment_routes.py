@@ -1,11 +1,11 @@
-from datetime import date
+from datetime import date, time
 from typing import List
 
 from fastapi import APIRouter, Depends
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles
 from app.models.user_model import User
-from app.core.constants import UserRole
+from app.core.constants import BookingSource, UserRole
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentResponse,
@@ -20,6 +20,7 @@ from app.schemas.appointment_schema import (
     QueueStatusResponse,
     ConfirmedVisitListResponse,
     AppointmentListWithCountsResponse,
+    ScheduledDoctorResponse,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -39,6 +40,25 @@ async def create_appointment(
     return APIResponse(message="Appointment booked", data=appointment)
 
 
+@router.get("/search-scheduled-doctor", response_model=APIResponse[List[ScheduledDoctorResponse]])
+async def search_scheduled_doctor(
+    appointment_date: date,
+    db: DbSession,
+    current_user: CurrentUser,
+    appointment_time: time | None = None,
+    department_id: int | None = None,
+    specialization: str | None = None,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    results = await AppointmentService(db).search_scheduled_doctors(
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+        department_id=department_id,
+        specialization=specialization
+    )
+    return APIResponse(message="Scheduled doctors retrieved successfully", data=results)
+
+
 @router.get("", response_model=APIResponse[AppointmentListWithCountsResponse])
 async def list_appointments(
     db: DbSession,
@@ -50,11 +70,14 @@ async def list_appointments(
     department_id: int | None = None,
     status: str | None = None,
     appointment_date: date | None = None,
+    appointment_type: str | None = None,
+    booking_source: BookingSource | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
+        appointment_type=appointment_type, booking_source=booking_source,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 
@@ -320,6 +343,22 @@ async def get_appointment(
 ):
     appointment = await AppointmentService(db).get_by_id(appointment_id)
     return APIResponse(message="Appointment retrieved", data=appointment)
+
+
+@router.get("/{appointment_id}/download")
+async def download_appointment(
+    appointment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    from fastapi import Response
+    pdf_bytes = await AppointmentService(db).download_appointment_pdf(appointment_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=appointment_{appointment_id}.pdf"}
+    )
 
 
 @router.put("/{appointment_id}", response_model=APIResponse[AppointmentResponse])

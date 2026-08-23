@@ -67,6 +67,7 @@ from app.models.appointment_setting import AppointmentSetting
 from app.models.user_preference import UserPreference
 from app.models.notification_setting import NotificationSetting
 from app.models.billing_setting import BillingSetting
+from app.models.knowledge_embedding_model import KnowledgeEmbedding
 
 __all__ = [
     "Notification",
@@ -76,6 +77,7 @@ __all__ = [
     "HospitalPolicy",
     "HospitalVoiceDocument",
     "VoiceCallbackTicket",
+    "KnowledgeEmbedding",
     "SubscriptionPlan",
     "Subscription",
     "AIConfiguration",

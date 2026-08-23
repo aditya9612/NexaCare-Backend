@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lab Test Orders Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 15px;
+    }
+    body { font-family: 'DejaVuSans', sans-serif; font-size: 7px; line-height: 1.3; color: #333333; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
+    .meta { margin-bottom: 10px; font-size: 9px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 3px 2px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
+    tr:nth-child(even) { background-color: #fafafa; }
+  </style>
+</head>
+<body>
+  <h1>Lab Test Orders Report</h1>
+  <div class="meta">
+    <strong>Total Records:</strong> {{ orders|length }} | <strong>Generated At:</strong> {{ generated_at }}
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 4%;">ID</th>
+        <th style="width: 9%;">Order Number</th>
+        <th style="width: 13%;">Patient Info</th>
+        <th style="width: 13%;">Doctor Info</th>
+        <th style="width: 20%;">Lab Test Details</th>
+        <th style="width: 14%;">Appointment / Dept</th>
+        <th style="width: 8%;">Status / Priority</th>
+        <th style="width: 11%;">Ordered At</th>
+        <th style="width: 8%;">Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in orders %}
+      <tr>
+        <td>{{ item.id }}</td>
+        <td>{{ item.order_number }}</td>
+        <td>ID: {{ item.patient_id }}<br/>{{ item.patient_name or "" }}</td>
+        <td>{% if item.doctor_id %}ID: {{ item.doctor_id }}<br/>{{ item.doctor_name or "" }}{% else %}-{% endif %}</td>
+        <td>
+          Code: {{ item.lab_test_test_code or "-" }}<br/>
+          Name: {{ item.lab_test_test_name or "-" }}<br/>
+          Cat: {{ item.lab_test_category or "-" }} | Sample: {{ item.lab_test_sample_type or "-" }}<br/>
+          Price: ₹{{ "%.2f"|format(item.lab_test_price) if item.lab_test_price is not none else "0.00" }}
+        </td>
+        <td>
+          Appt ID: {{ item.appointment_id or "-" }}<br/>
+          Appt No: {{ item.appointment_number or "-" }}<br/>
+          Dept ID: {{ item.department_id or "-" }}
+        </td>
+        <td>
+          Status: {{ item.status }}<br/>
+          Priority: {{ item.priority }}
+        </td>
+        <td>
+          Ordered: {{ item.ordered_at }}<br/>
+          Completed: {{ item.completed_at or "-" }}
+        </td>
+        <td>{{ item.notes or "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

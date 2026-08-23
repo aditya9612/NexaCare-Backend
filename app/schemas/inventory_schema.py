@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone, timedelta
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema
 from app.schemas.vendor_schema import VendorCreate, VendorUpdate, VendorResponse
@@ -150,7 +150,8 @@ class InventoryItemResponse(BaseSchema):
 class StockTransactionCreate(BaseSchema):
     item_id: int = Field(..., gt=0)
     warehouse_id: Optional[int] = Field(None, gt=0)
-    transaction_type: str
+    transaction_type: Optional[str] = None
+    type: Optional[str] = None
     quantity: int = Field(..., ge=1)
     unit_cost: float = Field(0.0, ge=0)
     reference_type: Optional[str] = None
@@ -158,14 +159,26 @@ class StockTransactionCreate(BaseSchema):
     notes: Optional[str] = None
     target_warehouse_id: Optional[int] = Field(None, gt=0)
 
-    @field_validator("transaction_type")
+    @model_validator(mode="before")
     @classmethod
-    def validate_transaction_type(cls, v: str) -> str:
-        v_lower = v.lower()
-        allowed = {"inward", "outward", "transfer", "adjustment", "consumption"}
-        if v_lower not in allowed:
-            raise ValueError(f"transaction_type must be one of {allowed}")
-        return v_lower
+    def handle_type_aliases(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            t_val = values.get("transaction_type") or values.get("type")
+            if t_val is not None:
+                values["transaction_type"] = t_val
+                values["type"] = t_val
+        return values
+
+    @field_validator("transaction_type", "type")
+    @classmethod
+    def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v_lower = str(v).strip().lower()
+            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            if v_lower not in allowed:
+                raise ValueError(f"transaction_type must be one of {allowed}")
+            return v_lower
+        return v
 
     @field_validator("reference_type")
     @classmethod
@@ -194,23 +207,60 @@ class StockTransactionResponse(BaseSchema):
     id: int
     transaction_number: str
     item_id: int
-    warehouse_id: Optional[int]
+    warehouse_id: Optional[int] = None
     transaction_type: str
+    type: Optional[str] = None
     quantity: int
     unit_cost: float
-    reference_type: Optional[str]
-    reference_id: Optional[int]
-    notes: Optional[str]
+    total_value: Optional[float] = None
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+    notes: Optional[str] = None
     transaction_date: datetime
     created_at: datetime
+    item_name: Optional[str] = None
+    warehouse_name: Optional[str] = None
+
+    @model_validator(mode="after")
+    def populate_extra_fields(self) -> "StockTransactionResponse":
+        if not self.type and self.transaction_type:
+            self.type = self.transaction_type
+        if self.total_value is None and self.quantity is not None and self.unit_cost is not None:
+            self.total_value = round(abs(self.quantity) * self.unit_cost, 2)
+        return self
 
 
 class StockTransactionUpdate(BaseSchema):
+    item_id: Optional[int] = Field(None, gt=0)
+    warehouse_id: Optional[int] = Field(None, gt=0)
+    transaction_type: Optional[str] = None
+    type: Optional[str] = None
     quantity: Optional[int] = Field(None, ge=1)
     unit_cost: Optional[float] = Field(None, ge=0)
     reference_type: Optional[str] = None
     reference_id: Optional[int] = Field(None, gt=0)
     notes: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_type_aliases(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            t_val = values.get("transaction_type") or values.get("type")
+            if t_val is not None:
+                values["transaction_type"] = t_val
+                values["type"] = t_val
+        return values
+
+    @field_validator("transaction_type", "type")
+    @classmethod
+    def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v_lower = str(v).strip().lower()
+            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            if v_lower not in allowed:
+                raise ValueError(f"transaction_type must be one of {allowed}")
+            return v_lower
+        return v
 
     @field_validator("reference_type")
     @classmethod
@@ -373,6 +423,7 @@ class StockSummary(BaseSchema):
     total_registered_items: int
     stock_alerts: int
     active_warehouse_units: int
+    inactive_warehouse_units: int
     total_vendors: int
 
 

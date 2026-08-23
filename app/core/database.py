@@ -9,6 +9,8 @@ engine = create_async_engine(
     echo=settings.SQLALCHEMY_ECHO,
     pool_pre_ping=False,  # aiomysql async ping() incompatible with SQLAlchemy pre-ping
     pool_recycle=3600,
+    pool_size=5,
+    max_overflow=10,
 )
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -84,6 +86,7 @@ async def init_db():
         user_model,
         voice_model,
         hospital_voice_model,
+        knowledge_embedding_model,
         whatsapp_model,
         expense_model,
         vendor_model,

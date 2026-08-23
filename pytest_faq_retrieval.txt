@@ -1,0 +1,19 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\Admin\Desktop\NexaCareBackend\NexaCare-Backend\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Admin\Desktop\NexaCareBackend\NexaCare-Backend
+configfile: pytest.ini
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 9 items
+
+app/tests/test_faq_retrieval.py::test_keyword_search_matches_answer_text_not_only_question PASSED [ 11%]
+app/tests/test_faq_retrieval.py::test_keyword_search_synonym_timing_matches_hours_faq PASSED [ 22%]
+app/tests/test_faq_retrieval.py::test_keyword_search_prefers_faq_over_policy_on_tie PASSED [ 33%]
+app/tests/test_faq_retrieval.py::test_lookup_kb_entry_returns_verbatim_text PASSED [ 44%]
+app/tests/test_faq_retrieval.py::test_ground_to_kb_rejects_unrelated_generated_text PASSED [ 55%]
+app/tests/test_faq_retrieval.py::test_merge_snapshots_deduplicates_by_id PASSED [ 66%]
+app/tests/test_faq_retrieval.py::test_answer_transfers_on_medical_advice PASSED [ 77%]
+app/tests/test_faq_retrieval.py::test_openai_fallback_returns_verbatim_kb_on_structured_match PASSED [ 88%]
+app/tests/test_faq_retrieval.py::test_openai_fallback_transfers_on_no_answer PASSED [100%]
+
+============================== 9 passed in 1.43s ==============================

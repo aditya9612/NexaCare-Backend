@@ -19,7 +19,14 @@ from app.schemas.hospital_voice_schema import (
     HospitalVoiceDocumentResponse,
     HospitalVoiceDocumentUpdate,
 )
+from app.services.canonical_faq_specs import CANONICAL_TOPICS, build_canonical_faq_specs
 from app.services.faq_retrieval_service import FaqRetrievalService
+from app.services.knowledge_embedding_sync import (
+    deactivate_kb_embedding,
+    sync_document_embedding,
+    sync_faq_embedding,
+    sync_policy_embedding,
+)
 from app.utils.helpers import utc_now
 
 
@@ -35,6 +42,7 @@ class HospitalKnowledgeService:
     async def create_faq(self, data: HospitalFaqCreate) -> HospitalFaqResponse:
         faq = HospitalFaq(**data.model_dump())
         faq = await self.faq_repo.create(faq)
+        await sync_faq_embedding(self.db, faq)
         await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
         return HospitalFaqResponse.model_validate(faq)
 
@@ -51,6 +59,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(faq, k, v)
         faq = await self.faq_repo.update(faq)
+        await sync_faq_embedding(self.db, faq)
         await FaqRetrievalService(self.db).invalidate_cache(faq.hospital_id)
         return HospitalFaqResponse.model_validate(faq)
 
@@ -65,11 +74,13 @@ class HospitalKnowledgeService:
         faq.is_deleted = True
         faq.deleted_at = utc_now()
         await self.faq_repo.update(faq)
+        await deactivate_kb_embedding(self.db, "faq", faq.id, faq.hospital_id)
         await FaqRetrievalService(self.db).invalidate_cache(faq.hospital_id)
 
     async def create_policy(self, data: HospitalPolicyCreate) -> HospitalPolicyResponse:
         policy = HospitalPolicy(**data.model_dump())
         policy = await self.policy_repo.create(policy)
+        await sync_policy_embedding(self.db, policy)
         await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
         return HospitalPolicyResponse.model_validate(policy)
 
@@ -86,6 +97,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(policy, k, v)
         policy = await self.policy_repo.update(policy)
+        await sync_policy_embedding(self.db, policy)
         await FaqRetrievalService(self.db).invalidate_cache(policy.hospital_id)
         return HospitalPolicyResponse.model_validate(policy)
 
@@ -100,6 +112,7 @@ class HospitalKnowledgeService:
     ) -> HospitalVoiceDocumentResponse:
         doc = HospitalVoiceDocument(**data.model_dump())
         doc = await self.doc_repo.create(doc)
+        await sync_document_embedding(self.db, doc)
         await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
         return HospitalVoiceDocumentResponse.model_validate(doc)
 
@@ -118,6 +131,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(doc, k, v)
         doc = await self.doc_repo.update(doc)
+        await sync_document_embedding(self.db, doc)
         await FaqRetrievalService(self.db).invalidate_cache(doc.hospital_id)
         return HospitalVoiceDocumentResponse.model_validate(doc)
 
@@ -158,3 +172,35 @@ class HospitalKnowledgeService:
         for item in seeds:
             await self.create_faq(item)
         return len(seeds)
+
+    async def ensure_priority_faqs(self, hospital_id: int) -> int:
+        """Create missing canonical hospital FAQs (one per topic, multilingual tags)."""
+        existing = await self.faq_repo.list_for_hospital(hospital_id, language=None)
+        covered_topics: set[str] = set()
+        for faq in existing:
+            if faq.tags:
+                for tag in faq.tags.split(","):
+                    key = tag.strip().lower()
+                    if key in CANONICAL_TOPICS:
+                        covered_topics.add(key)
+            q_lower = (faq.question or "").lower()
+            for topic in CANONICAL_TOPICS:
+                if topic in q_lower or topic in (faq.tags or "").lower():
+                    covered_topics.add(topic)
+
+        created = 0
+        for spec in build_canonical_faq_specs():
+            if spec["topic"] in covered_topics:
+                continue
+            await self.create_faq(
+                HospitalFaqCreate(
+                    hospital_id=hospital_id,
+                    question=spec["question"],
+                    answer=spec["answer"],
+                    language=spec["language"],
+                    tags=spec["tags"],
+                )
+            )
+            covered_topics.add(spec["topic"])
+            created += 1
+        return created

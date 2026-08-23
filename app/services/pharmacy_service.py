@@ -126,47 +126,7 @@ class PharmacyService:
         else:
             return None, None
 
-    async def get_dashboard_summary(
-        self,
-        time_filter: str = "7_days",
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> PharmacyDashboardResponse:
-        start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
-        repo = self.dashboard_repo
-        total_medicines = await repo.get_total_medicines()
-        low_stock_alerts = await repo.get_low_stock_count()
-        expired_alerts = await repo.get_expired_alerts_count()
-        today_sales = await repo.get_today_sales(start_dt, end_dt)
-        monthly_sales = await repo.get_monthly_sales(start_dt, end_dt)
-        pending_purchases = await repo.get_pending_purchases_count(start_dt, end_dt)
-        total_suppliers = await repo.get_total_suppliers_count()
-        prescriptions_count = await repo.get_prescriptions_count(start_dt, end_dt)
-
-        low_stock_raw = await repo.get_low_stock_items()
-        today_trend_raw = await repo.get_today_sales_trend(start_dt, end_dt)
-        monthly_trend_raw = await repo.get_monthly_sales_trend(start_dt, end_dt)
-        status_mix_raw = await repo.get_inventory_status_mix()
-
-        low_stock_items = [LowStockItemAlert(**item) for item in low_stock_raw]
-        today_sales_trend = [PharmacySalesTrendPoint(**item) for item in today_trend_raw]
-        monthly_sales_trend = [PharmacySalesTrendPoint(**item) for item in monthly_trend_raw]
-        inventory_status_mix = InventoryStatusMix(**status_mix_raw)
-
-        return PharmacyDashboardResponse(
-            total_medicines=total_medicines if total_medicines > 0 else 3,
-            low_stock_alerts=low_stock_alerts if low_stock_alerts > 0 else 1,
-            expired_alerts=expired_alerts,
-            today_sales=today_sales,
-            monthly_sales=monthly_sales if monthly_sales > 0 else 145000.0,
-            pending_purchases=pending_purchases if pending_purchases > 0 else 5,
-            total_suppliers=total_suppliers if total_suppliers > 0 else 4,
-            prescriptions_count=prescriptions_count,
-            low_stock_items=low_stock_items,
-            today_sales_trend=today_sales_trend,
-            monthly_sales_trend=monthly_sales_trend,
-            inventory_status_mix=inventory_status_mix,
-        )
+    # Duplicate get_dashboard_summary method removed to avoid method overriding
 
 
 
@@ -231,8 +191,9 @@ class PharmacyService:
         ]
 
     async def get_expiry_alerts(self, days: int = 30) -> list[ExpiryAlert]:
-        medicines = await self.medicine_repo.get_expiry_alerts(days=days)
-        today = date.today()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        medicines = await self.medicine_repo.get_expiry_alerts(reference_date=today, days=days)
         return [
             ExpiryAlert(
                 medicine_id=m.id, name=m.name, sku=m.sku,
@@ -394,7 +355,11 @@ class PharmacyService:
                     raise BadRequestException("Doctors can only update prescription status to 'pending' or 'sent_to_pharmacy'.")
 
         if data.patient_id is not None:
+            patient = await self.patient_repo.get_by_id(data.patient_id)
+            if not patient:
+                raise NotFoundException("Patient not found")
             prescription.patient_id = data.patient_id
+
         if data.instructions is not None:
             prescription.instructions = data.instructions
         if data.status is not None:
@@ -402,6 +367,10 @@ class PharmacyService:
 
         items = None
         if data.items is not None:
+            for item_data in data.items:
+                medicine = await self.medicine_repo.get_by_id(item_data.medicine_id)
+                if not medicine:
+                    raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
             items = [PrescriptionItem(**item.model_dump()) for item in data.items]
 
         prescription = await self.prescription_repo.update(prescription, items)
@@ -511,6 +480,10 @@ class PharmacyService:
         tax_amount = round((subtotal - discount_amount) * tax_percentage_val / 100, 2)
         gst_amount = tax_amount
         total = round(subtotal - discount_amount + tax_amount, 2)
+        
+        status_val = data.payment_status.value if hasattr(data.payment_status, "value") else str(data.payment_status)
+        paid_amount_val = total if status_val == "paid" else 0.0
+
         invoice = PharmacyInvoice(
             invoice_number=generate_code(billing_settings.get("receipt_prefix", "PHR")),
             patient_id=data.patient_id,
@@ -523,8 +496,8 @@ class PharmacyService:
             tax_amount=tax_amount,
             gst_amount=gst_amount,
             total_amount=total,
-            paid_amount=total,
-            status="paid",
+            paid_amount=paid_amount_val,
+            status=status_val,
             created_by=user_id,
         )
         invoice = await self.invoice_repo.create(invoice, invoice_items)
@@ -543,19 +516,20 @@ class PharmacyService:
             amount=invoice.total_amount,
             source_module="pharmacy_billing",
             source_id=invoice.id,
-            status="completed",
+            status="completed" if status_val == "paid" else status_val,
             user_id=user_id
         )
-        await tx_service.create_event(
-            event_type="PAYMENT_RECEIVED",
-            reference_no=invoice.invoice_number,
-            description=f"Pharmacy Invoice Paid: {invoice.invoice_number}",
-            amount=invoice.total_amount,
-            source_module="pharmacy_billing",
-            source_id=invoice.id,
-            status="completed",
-            user_id=user_id
-        )
+        if status_val == "paid":
+            await tx_service.create_event(
+                event_type="PAYMENT_RECEIVED",
+                reference_no=invoice.invoice_number,
+                description=f"Pharmacy Invoice Paid: {invoice.invoice_number}",
+                amount=invoice.total_amount,
+                source_module="pharmacy_billing",
+                source_id=invoice.id,
+                status="completed",
+                user_id=user_id
+            )
 
         return self._invoice_response(invoice)
 
@@ -583,7 +557,9 @@ class PharmacyService:
 
         if data.payment_mode is not None:
             invoice.payment_mode = data.payment_mode
-        if data.status is not None:
+        if data.payment_status is not None:
+            invoice.status = data.payment_status.value if hasattr(data.payment_status, "value") else str(data.payment_status)
+        elif data.status is not None:
             invoice.status = data.status
         if data.discount_percentage is not None:
             invoice.discount_percentage = data.discount_percentage
@@ -597,7 +573,7 @@ class PharmacyService:
         invoice.tax_amount = tax_amount
         invoice.gst_amount = tax_amount
         invoice.total_amount = round(invoice.subtotal - discount_amount + tax_amount, 2)
-        invoice.paid_amount = invoice.total_amount
+        invoice.paid_amount = invoice.total_amount if invoice.status == "paid" else 0.0
 
         invoice = await self.invoice_repo.update(invoice)
 
@@ -1076,16 +1052,31 @@ class PharmacyService:
         await self.db.flush()
         return self._purchase_response(purchase)
 
-    async def get_sales_report(self, period: str = "monthly") -> SalesReport:
+    async def get_sales_report(self, period: str = "all") -> SalesReport:
+        from datetime import timedelta
+        from app.core.exceptions import BadRequestException
+
+        valid_periods = {"daily", "weekly", "monthly", "yearly", "all", "overall"}
+        if period not in valid_periods:
+            raise BadRequestException(
+                f"Invalid period parameter. Allowed values: {', '.join(sorted(valid_periods))}"
+            )
+
         now = utc_now()
+        start = None
         if period == "daily":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "weekly":
+            start = now - timedelta(days=7)
+        elif period == "monthly":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         elif period == "yearly":
             start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif period in ("all", "overall"):
+            start = None
+
         data = await self.invoice_repo.get_sales_report(start, now)
-        return SalesReport(period=period, top_medicines=[], **data)
+        return SalesReport(period=period, **data)
 
     async def get_dashboard_summary(
         self,
@@ -1093,16 +1084,20 @@ class PharmacyService:
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> PharmacyDashboardResponse:
-        return await self.get_dashboard_overview()
+        start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
+        return await self.get_dashboard_overview(time_filter=time_filter, start_dt=start_dt, end_dt=end_dt)
 
-    async def get_dashboard_overview(self) -> PharmacyDashboardResponse:
+    async def get_dashboard_overview(
+        self,
+        time_filter: str = "7_days",
+        start_dt: Optional[datetime] = None,
+        end_dt: Optional[datetime] = None,
+    ) -> PharmacyDashboardResponse:
         from datetime import timezone, timedelta, time, date as dt_date
         from sqlalchemy import select, func, or_, cast, Date
+        from app.utils.helpers import get_today_ist
 
-        # Indian Standard Time (UTC+5:30) or local date.today()
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        now_ist = datetime.now(ist_tz)
-        today_ist = now_ist.date()
+        today_ist = get_today_ist()
 
         # 1. Total Medicines (active, i.e., is_deleted=False and is_active=True)
         total_medicines = (await self.db.scalar(
@@ -1121,42 +1116,64 @@ class PharmacyService:
             )
         )) or 0
 
-        # 3. Expired Alerts (Medicine.expiry_date < today)
+        # 3. Expired Alerts (Near expiry and expired: Medicine.expiry_date <= today_ist + 30 days, stock_quantity > 0)
+        threshold_date = today_ist + timedelta(days=30)
         expired_alerts = (await self.db.scalar(
             select(func.count(Medicine.id)).where(
                 Medicine.is_deleted.is_(False),
                 Medicine.is_active.is_(True),
+                Medicine.stock_quantity > 0,
+                Medicine.expiry_date.isnot(None),
+                Medicine.expiry_date <= threshold_date
+            )
+        )) or 0
+
+        # Expired medicines count (strictly expired: Medicine.expiry_date < today_ist, stock_quantity > 0)
+        expired_medicines_alerts = (await self.db.scalar(
+            select(func.count(Medicine.id)).where(
+                Medicine.is_deleted.is_(False),
+                Medicine.is_active.is_(True),
+                Medicine.stock_quantity > 0,
                 Medicine.expiry_date.isnot(None),
                 Medicine.expiry_date < today_ist
             )
         )) or 0
 
-        # 4. Today Sales (Invoice/billing amount created today)
-        today_start = datetime.combine(today_ist, time.min)
-        tomorrow_start = today_start + timedelta(days=1)
-        today_sales = (await self.db.scalar(
-            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= today_start,
-                PharmacyInvoice.created_at < tomorrow_start
-            )
-        )) or 0.0
+        # 4. Today Sales (Invoice/billing amount created today, OR in the filtered period)
+        today_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.status != "cancelled",
+        )
+        if start_dt:
+            today_sales_query = today_sales_query.where(PharmacyInvoice.created_at >= start_dt)
+        if end_dt:
+            today_sales_query = today_sales_query.where(PharmacyInvoice.created_at <= end_dt)
+            
+        today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
-        # 5. Monthly Sales (Invoice/billing amount for current month)
+        # 5. Monthly Sales (Invoice/billing amount for current month, OR in the filtered period)
         month_start = datetime.combine(today_ist.replace(day=1), time.min)
         if month_start.month == 12:
             next_month_start = month_start.replace(year=month_start.year + 1, month=1)
         else:
             next_month_start = month_start.replace(month=month_start.month + 1)
-        monthly_sales = (await self.db.scalar(
-            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
+            
+        monthly_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.status != "cancelled",
+        )
+        if time_filter in ("overall", "30_days", "7_days", "3_month", "custom"):
+            if start_dt:
+                monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at >= start_dt)
+            if end_dt:
+                monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at <= end_dt)
+        else:
+            monthly_sales_query = monthly_sales_query.where(
                 PharmacyInvoice.created_at >= month_start,
                 PharmacyInvoice.created_at < next_month_start
             )
-        )) or 0.0
+            
+        monthly_sales = (await self.db.scalar(monthly_sales_query)) or 0.0
 
         # 6. Pending Purchases (Count status: Pending, Ordered)
         pending_purchases = (await self.db.scalar(
@@ -1209,7 +1226,9 @@ class PharmacyService:
             for m in low_stock_res.scalars().all()
         ]
 
-        # 10. Today Sales Trend (Hourly sales for today - DIALECT AGNOSTIC EXTRACT)
+        # 10. Today Sales Trend (Hourly sales for today)
+        today_start = datetime.combine(today_ist, time.min)
+        tomorrow_start = today_start + timedelta(days=1)
         today_trend_query = (
             select(
                 func.extract('hour', PharmacyInvoice.created_at).label("hr"),
@@ -1239,7 +1258,7 @@ class PharmacyService:
                 "label": f"{hr_val:02d}:00"
             })
 
-        # 11. Monthly Sales Trend (Daily sales for current month - DIALECT AGNOSTIC CAST)
+        # 11. Monthly Sales Trend (Daily sales for selected period/current month)
         monthly_trend_query = (
             select(
                 cast(PharmacyInvoice.created_at, Date).label("dt"),
@@ -1248,9 +1267,18 @@ class PharmacyService:
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= month_start,
-                PharmacyInvoice.created_at < next_month_start
             )
+        )
+        if start_dt:
+            monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at >= start_dt)
+        if end_dt:
+            monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at <= end_dt)
+        else:
+            # Fallback to current month if no dates (e.g. if overall is somehow not returning None)
+            pass
+            
+        monthly_trend_query = (
+            monthly_trend_query
             .group_by(cast(PharmacyInvoice.created_at, Date))
             .order_by(cast(PharmacyInvoice.created_at, Date).asc())
         )
@@ -1266,7 +1294,7 @@ class PharmacyService:
 
         today_sales = round(float(today_sales or 0.0), 2)
         monthly_sales = round(float(monthly_sales or 0.0), 2)
-        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix()
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(reference_date=today_ist)
         inventory_status_mix = InventoryStatusMix(**status_mix_raw)
 
         total_mix = (
@@ -1303,7 +1331,7 @@ class PharmacyService:
             total_suppliers=total_suppliers,
             prescriptions=prescriptions,
             prescriptions_count=prescriptions,
-            expired_medicines_alerts=expired_alerts,
+            expired_medicines_alerts=expired_medicines_alerts,
             daily_sales=today_sales,
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
@@ -1313,7 +1341,9 @@ class PharmacyService:
         )
 
     async def get_inventory_overview(self) -> PharmacyInventoryOverviewResponse:
-        counts = await self.medicine_repo.get_inventory_counts()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        counts = await self.medicine_repo.get_inventory_counts(reference_date=today)
         daily_deductions = await self.invoice_repo.get_daily_stock_deductions()
         most_selling = await self.invoice_repo.get_most_selling_medicines()
         date_wise = await self.invoice_repo.get_date_wise_medicines()
@@ -1564,5 +1594,242 @@ class PharmacyService:
             pdf_bytes = html_to_pdf(html)
             return pdf_bytes, "application/pdf"
 
+        else:
+            raise BadRequestException("Invalid format specified for export")
+
+    async def generate_supplier_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Suppliers Bulk Import"
+        
+        headers = [
+            "name", "contact_person", "phone", "email", "address", "gst_number"
+        ]
+        ws.append(headers)
+        
+        # One valid sample row
+        ws.append([
+            "Alpha Pharma Distributors",
+            "Jane Doe",
+            "9876543211",
+            "janedoe@alphapharma.com",
+            "456 Medical Park, Sector 4",
+            "27AAAAA1111A1Z1"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_suppliers_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"name"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        seen_phones = set()
+        seen_emails = set()
+        seen_gsts = set()
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = str(val).strip()
+                    
+            try:
+                name_raw = row_dict.get("name")
+                if not name_raw:
+                    raise BadRequestException("name is required.")
+                name = str(name_raw).strip()
+                
+                phone_raw = row_dict.get("phone")
+                email_raw = row_dict.get("email")
+                gst_raw = row_dict.get("gst_number")
+                
+                # Check duplicate in file
+                if phone_raw:
+                    norm_phone = phone_raw.strip()
+                    if norm_phone.startswith("+91"):
+                        raw_ph = norm_phone[3:]
+                    elif norm_phone.startswith("91") and len(norm_phone) == 12:
+                        raw_ph = norm_phone[2:]
+                    else:
+                        raw_ph = norm_phone
+                    if raw_ph in seen_phones:
+                        raise BadRequestException(f"Duplicate phone number '{phone_raw}' found in upload file.")
+                    seen_phones.add(raw_ph)
+                    
+                if email_raw:
+                    norm_email = email_raw.strip().lower()
+                    if norm_email in seen_emails:
+                        raise BadRequestException(f"Duplicate email '{email_raw}' found in upload file.")
+                    seen_emails.add(norm_email)
+                    
+                if gst_raw:
+                    norm_gst = gst_raw.strip().upper()
+                    if norm_gst in seen_gsts:
+                        raise BadRequestException(f"Duplicate GST number '{gst_raw}' found in upload file.")
+                    seen_gsts.add(norm_gst)
+                
+                # Build SupplierCreate model to run validations
+                supplier_create = SupplierCreate(
+                    name=name,
+                    contact_person=row_dict.get("contact_person"),
+                    phone=phone_raw,
+                    email=email_raw,
+                    address=row_dict.get("address"),
+                    gst_number=gst_raw
+                )
+                
+                await self.create_supplier(supplier_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_suppliers(self, format_type: str):
+        from io import BytesIO
+        from datetime import datetime, date
+        
+        suppliers = await self.supplier_repo.get_all_active()
+        
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Suppliers Export"
+            
+            headers = [
+                "id", "name", "contact_person", "phone", "email",
+                "address", "gst_number", "is_active", "created_at"
+            ]
+            ws.append(headers)
+            
+            for s in suppliers:
+                row = [
+                    s.id,
+                    s.name,
+                    s.contact_person or "",
+                    s.phone or "",
+                    s.email or "",
+                    s.address or "",
+                    s.gst_number or "",
+                    "Active" if s.is_active else "Inactive",
+                    s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("suppliers_export_template.html")
+            
+            formatted_suppliers = []
+            for s in suppliers:
+                formatted_suppliers.append({
+                    "id": s.id,
+                    "name": s.name,
+                    "contact_person": s.contact_person,
+                    "phone": s.phone,
+                    "email": s.email,
+                    "address": s.address,
+                    "gst_number": s.gst_number,
+                    "is_active": s.is_active,
+                    "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
+                })
+                
+            html_content = template.render(
+                suppliers=formatted_suppliers,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
         else:
             raise BadRequestException("Invalid format specified for export")

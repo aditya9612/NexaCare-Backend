@@ -42,6 +42,19 @@ def _is_connection_error(exc: BaseException) -> bool:
     return isinstance(exc, _CONNECTION_ERRORS)
 
 
+def redis_cooldown_active() -> bool:
+    """True when Redis is in unavailable cooldown (sync, no connect attempt)."""
+    return time.monotonic() < _redis_unavailable_until
+
+
+async def redis_available() -> bool:
+    """Quick check — returns False during cooldown without opening a connection."""
+    if redis_cooldown_active():
+        return False
+    client = await get_redis()
+    return client is not None
+
+
 def _reset_redis_state_for_tests() -> None:
     """Test helper — clear cached client and cooldown."""
     global _redis_client, _redis_unavailable_until

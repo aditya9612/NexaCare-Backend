@@ -132,6 +132,15 @@ class Settings(BaseSettings):
     FAQ_CONFIDENCE_CLARIFY: float = 0.70
     # Phase 6: multi-turn FAQ, FAQ↔Booking switching, goodbye flow (default OFF)
     VOICE_PHASE6_ENABLED: bool = False
+    # Dev-only: when True AND APP_ENV is not production, unresolved inbound DID may use
+    # the sole active hospital_voice_config. Never enable in production.
+    VOICE_SINGLE_HOSPITAL_DEV_FALLBACK: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "VOICE_SINGLE_HOSPITAL_DEV_FALLBACK",
+            "DEVELOPMENT_SINGLE_HOSPITAL",
+        ),
+    )
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"

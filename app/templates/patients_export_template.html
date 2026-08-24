@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Patients Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 15px;
+    }
+    body { font-family: 'DejaVuSans', sans-serif; font-size: 7px; line-height: 1.3; color: #333333; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
+    .meta { margin-bottom: 10px; font-size: 9px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 3px 5px; text-align: left; overflow: hidden; }
+    th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    .wrap-col {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      word-wrap: break-word;
+    }
+    .wrap-email {
+      white-space: normal;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+    .wrap-address {
+      white-space: normal;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .wrap-code {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+    .nowrap-col {
+      white-space: nowrap;
+    }
+    .short-col {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <h1>Patients Report</h1>
+  <div class="meta">
+    <strong>Total Records:</strong> {{ patients|length }} | <strong>Generated At:</strong> {{ generated_at }}
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th class="short-col" style="width: 3%;">Sr. No.</th>
+        <th class="wrap-code" style="width: 10%;">Patient Code</th>
+        <th class="wrap-col" style="width: 10%;">Full Name</th>
+        <th class="short-col" style="width: 4%;">Gender</th>
+        <th class="nowrap-col" style="width: 6%;">DOB</th>
+        <th class="short-col" style="width: 3%;">Blood Group</th>
+        <th class="nowrap-col" style="width: 7%;">Phone</th>
+        <th class="wrap-email" style="width: 14%;">Email</th>
+        <th class="wrap-address" style="width: 13%;">Full Address</th>
+        <th class="wrap-col" style="width: 12%;">Emergency Contact</th>
+        <th class="wrap-col" style="width: 12%;">Diagnosis</th>
+        <th class="nowrap-col" style="width: 6%;">Created At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in patients %}
+      <tr>
+        <td class="short-col">{{ loop.index }}</td>
+        <td class="wrap-code">{{ item.patient_code }}</td>
+        <td class="wrap-col">{{ item.first_name }} {{ item.last_name }}</td>
+        <td class="short-col">{{ item.gender or "-" }}</td>
+        <td class="nowrap-col">{{ item.dob or "-" }}</td>
+        <td class="short-col">{{ item.blood_group or "-" }}</td>
+        <td class="nowrap-col">{{ item.phone or "-" }}</td>
+        <td class="wrap-email">{{ item.email or "-" }}</td>
+        <td class="wrap-address">{{ item.full_address or "-" }}</td>
+        <td class="wrap-col">{{ item.emergency_contact | safe }}</td>
+        <td class="wrap-col">{{ item.diagnosis or "-" }}</td>
+        <td class="nowrap-col">
+          {% if item.created_at and item.created_at != '-' %}
+            {{ item.created_at.split(' ')[0] }}<br/>{{ item.created_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

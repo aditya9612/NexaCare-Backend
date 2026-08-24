@@ -252,6 +252,12 @@ class AppointmentFilterQuery(BaseSchema):
 AppointmentListResponse = PaginatedResponse[AppointmentResponse]
 
 
+class DoctorAppointmentListResponse(BaseSchema):
+    items: list[AppointmentResponse]
+    total: int
+
+
+
 class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     total_appointments: int
     today_appointments: int

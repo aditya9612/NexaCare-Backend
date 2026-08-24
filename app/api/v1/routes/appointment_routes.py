@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles
 from app.models.user_model import User
-from app.core.constants import UserRole
+from app.core.constants import BookingSource, UserRole
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentResponse,
@@ -74,11 +74,14 @@ async def list_appointments(
     status: str | None = None,
     admission_status: str | None = None,
     appointment_date: date | None = None,
+    appointment_type: str | None = None,
+    booking_source: BookingSource | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
+        appointment_type=appointment_type, booking_source=booking_source,
         admission_status=admission_status,
     )
     return APIResponse(message="Appointments retrieved", data=result)

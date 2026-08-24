@@ -2,8 +2,50 @@ import re
 
 from app.core.constants import VoiceLanguage
 
-MARATHI_MARKERS = {"आहे", "करू", "शकते", "नमस्कार", "अपॉइंटमेंट", "रुग्णालय", "मदत"}
-HINDI_MARKERS = {"है", "कर", "सकती", "नमस्ते", "अपॉइंटमेंट", "अस्पताल", "मदद", "कृपया"}
+MARATHI_MARKERS = {"आहे", "करू", "शकते", "नमस्कार", "अपॉइंटमेंट", "रुग्णालय", "मदत", "किती", "वाजता", "उद्या", "का", "काय"}
+HINDI_MARKERS = {"है", "कर", "सकती", "नमस्ते", "अपॉइंटमेंट", "अस्पताल", "मदद", "कृपया", "क्या", "कब"}
+ROMAN_MARATHI_MARKERS = {
+    "namaskar",
+    "mala",
+    "karu",
+    "shakte",
+    "ahe",
+    "aahe",
+    "aahet",
+    "ahet",
+    "kiti",
+    "vajta",
+    "vajey",
+    "kay",
+    "udya",
+    "tumhi",
+    "tumhala",
+    "suru",
+    "hote",
+    "aste",
+    "asat",
+    "chi",
+    "che",
+    "cha",
+    "rugnalay",
+    "band",
+    "ugad",
+    "milat",
+    "nahi",
+    "kas",
+    "kasa",
+}
+ROMAN_HINDI_MARKERS = {
+    "namaste",
+    "kripya",
+    "sahayata",
+    "hai",
+    "hoon",
+    "kab",
+    "kya",
+    "kaise",
+    "chahiye",
+}
 
 
 def detect_language(text: str, current: str = "en") -> str:
@@ -27,10 +69,14 @@ def detect_language(text: str, current: str = "en") -> str:
         return current if current in (VoiceLanguage.HI, VoiceLanguage.MR) else VoiceLanguage.HI
 
     lowered = text.lower()
-    if any(w in lowered for w in ("namaskar", "mala", "karu", "shakte", "ahe")):
+    marathi_score = sum(1 for m in ROMAN_MARATHI_MARKERS if m in lowered)
+    hindi_score = sum(1 for m in ROMAN_HINDI_MARKERS if m in lowered)
+    if marathi_score > hindi_score and marathi_score > 0:
         return VoiceLanguage.MR
-    if any(w in lowered for w in ("namaste", "kripya", "sahayata", "hai", "hoon")):
+    if hindi_score > marathi_score and hindi_score > 0:
         return VoiceLanguage.HI
+    if marathi_score > 0 and marathi_score == hindi_score:
+        return current if current in (VoiceLanguage.HI, VoiceLanguage.MR) else VoiceLanguage.MR
     return VoiceLanguage.EN
 
 

@@ -21,11 +21,23 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: str | None = None,
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
         admission_status: str | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
+        query = self._apply_filters(
+            query,
+            patient_id,
+            doctor_id,
+            department_id,
+            status,
+            appointment_date,
+            appointment_type,
+            booking_source,
+        )
         query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date, admission_status)
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -39,12 +51,35 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: str | None = None,
         admission_status: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
+        query = self._apply_filters(
+            query,
+            patient_id,
+            doctor_id,
+            department_id,
+            status,
+            appointment_date,
+            appointment_type,
+            booking_source,
+        )
         query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date, admission_status)
         return await self.db.scalar(query) or 0
 
+    def _apply_filters(
+        self,
+        query,
+        patient_id,
+        doctor_id,
+        department_id,
+        status,
+        appointment_date,
+        appointment_type=None,
+        booking_source=None,
+    ):
     def _apply_filters(self, query, patient_id, doctor_id, department_id, status, appointment_date, admission_status=None):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
@@ -122,6 +157,14 @@ class AppointmentRepository:
                     query = query.where(func.lower(Appointment.admission_status) == func.lower(admission_status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
+        if appointment_type:
+            query = query.where(
+                func.lower(Appointment.appointment_type) == func.lower(appointment_type.strip())
+            )
+        if booking_source:
+            query = query.where(
+                func.lower(Appointment.booking_source) == func.lower(str(booking_source).strip())
+            )
         return query
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:

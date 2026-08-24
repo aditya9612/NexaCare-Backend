@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.constants import ChatSenderType, ChatSessionStatus
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.chat_model import AIResponse, ChatIntent, ChatMessage, ChatSession, ConversationMemory
+from app.repositories.auth_repository import AuthRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.chat_schema import (
@@ -38,6 +39,7 @@ class ChatService:
         self.db = db
         self.repo = ChatRepository(db)
         self.patient_repo = PatientRepository(db)
+        self.auth_repo = AuthRepository(db)
         self.chatbot = ChatbotHandler(db)
 
     async def start_session(self, data: ChatSessionCreate) -> ChatSessionResponse:
@@ -53,6 +55,10 @@ class ChatService:
         )
         session = await self.repo.create_session(session)
         await self.repo.upsert_memory(session.id, "language", data.language)
+        if data.hospital_id:
+            await self.repo.upsert_memory(
+                session.id, "hospital_id", str(data.hospital_id)
+            )
 
         snapshot = ChatSessionResponse.model_validate(session).model_dump(mode="json")
         await cache_set(
@@ -87,6 +93,7 @@ class ChatService:
         intent = await self.repo.add_intent(intent)
 
         context = await self._build_context(session.id)
+        hospital_id = await self._resolve_hospital_id(session.id, user_id)
         llm_result = await self.chatbot.respond(
             session,
             data.message,
@@ -94,6 +101,7 @@ class ChatService:
             language,
             intent_name=intent.intent_name,
             user_id=user_id or session.patient_id,
+            hospital_id=hospital_id,
         )
         bot_text = llm_result["response_text"]
         booking_state = llm_result.get("booking_state")
@@ -104,7 +112,9 @@ class ChatService:
 
         session.sentiment_score = await llm_service.analyze_sentiment(data.message)
 
-        if intent.intent_name == "escalate" or session.sentiment_score < 0.3:
+        if llm_result.get("should_transfer") and intent.intent_name == "faq":
+            session.session_status = ChatSessionStatus.ESCALATED
+        elif intent.intent_name == "escalate" or session.sentiment_score < 0.3:
             bot_text = "Connecting you to a human agent. Please hold."
             session.session_status = ChatSessionStatus.ESCALATED
 
@@ -252,6 +262,22 @@ class ChatService:
         if session.session_status == ChatSessionStatus.CLOSED:
             raise BadRequestException("Chat session is closed")
         return session
+
+    async def _resolve_hospital_id(
+        self, session_pk: int, user_id: int = 0
+    ) -> int | None:
+        memories = await self.repo.get_memories(session_pk)
+        for memory in memories:
+            if memory.memory_key == "hospital_id" and memory.memory_value:
+                try:
+                    return int(memory.memory_value)
+                except (TypeError, ValueError):
+                    pass
+        if user_id:
+            user = await self.auth_repo.get_by_id(user_id)
+            if user and user.hospital_id:
+                return user.hospital_id
+        return None
 
     async def _build_context(self, session_pk: int) -> List[Dict[str, str]]:
         messages = await self.repo.get_messages(session_pk, limit=20)

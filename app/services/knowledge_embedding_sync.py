@@ -7,6 +7,7 @@ not block admin CRUD (embeddings lazy-backfill on next retrieve).
 
 from __future__ import annotations
 
+from app.ai.rag.retriever import build_faq_retrieval_embed_text
 from app.ai.embeddings.store import (
     EmbeddingStore,
     build_embed_text,
@@ -25,11 +26,10 @@ async def sync_faq_embedding(db: AsyncSession, faq: HospitalFaq) -> None:
             source_type="faq",
             source_id=faq.id,
             language=faq.language or "en",
-            embed_text=build_embed_text(
-                "faq",
-                question=faq.question,
-                tags=faq.tags or "",
-                answer=faq.answer,
+            embed_text=build_faq_retrieval_embed_text(
+                faq.question,
+                faq.tags or "",
+                faq.answer,
             ),
             answer_text=faq.answer,
             label=label_for_entry(

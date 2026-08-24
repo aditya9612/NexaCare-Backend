@@ -211,6 +211,77 @@ async def filter_patients(
     return APIResponse(message="Filtered patients", data=result)
 
 
+from enum import Enum
+
+class PatientExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"
+
+
+@router.get("/bulk-template")
+async def download_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    stream = await PatientService(db).generate_patient_bulk_template()
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=patients_bulk_template.xlsx"}
+    )
+
+
+@router.post("/bulk-upload", status_code=201)
+async def upload_patients_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("patients", "create")),
+):
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only .xlsx files are supported."
+        )
+        
+    result = await PatientService(db).import_patients_from_excel(file, current_user.id)
+    return APIResponse(message="Patients bulk upload processed", data=result)
+
+
+@router.get("/export")
+async def export_patients(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: PatientExportFormat = Query(PatientExportFormat.EXCEL),
+    status: Optional[str] = Query(None),
+    _: User = Depends(require_permission("patients", "read")),
+):
+    from fastapi.responses import StreamingResponse, Response
+    if status is not None:
+        try:
+            from app.schemas.patient_schema import validate_status_field
+            status = validate_status_field(status)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+    data, media_type = await PatientService(db).export_patients(format.value, status)
+    
+    if format == PatientExportFormat.EXCEL:
+        return StreamingResponse(
+            data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=patients_export.xlsx"}
+        )
+    else:
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": "attachment; filename=patients_export.pdf"}
+        )
+
+
 @router.get("/{patient_id}", response_model=APIResponse[PatientResponse])
 async def get_patient(
     patient_id: int,

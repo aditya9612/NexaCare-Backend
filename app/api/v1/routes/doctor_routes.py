@@ -543,6 +543,65 @@ async def add_treatment_note(
     )
     return APIResponse(message="Treatment note added", data=note)
 
+
+@router.get("/bulk-template")
+async def get_bulk_template(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    from fastapi.responses import StreamingResponse
+    stream = await DoctorService(db).generate_doctor_bulk_template()
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=doctors_bulk_template.xlsx"}
+    )
+
+
+@router.post("/bulk-upload", response_model=APIResponse[dict])
+async def upload_bulk(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission("doctors", "create")),
+):
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Only Excel (.xlsx) files are allowed.")
+        
+    content = await file.read()
+    result = await DoctorService(db).import_doctors_from_excel(content, current_user)
+    return APIResponse(message="Bulk upload processed", data=result)
+
+
+@router.get("/export")
+async def export_doctors_data(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: str = Query(..., description="Export format: excel or pdf"),
+    department_id: Optional[int] = Query(None),
+    availability_status: Optional[str] = Query(None),
+    _: User = Depends(require_permission("doctors", "read")),
+):
+    if format not in ("excel", "pdf"):
+        raise HTTPException(status_code=400, detail="Format must be 'excel' or 'pdf'")
+        
+    content, media_type = await DoctorService(db).export_doctors(
+        format_type=format,
+        department_id=department_id,
+        availability_status=availability_status
+    )
+    
+    filename = f"doctors_export.{'xlsx' if format == 'excel' else 'pdf'}"
+    
+    from fastapi import Response
+    return Response(
+        content=content if format == "pdf" else content.getvalue(),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
 @router.get("/{doctor_id}", response_model=APIResponse[DoctorResponse])
 async def get_doctor(
     doctor_id: int,

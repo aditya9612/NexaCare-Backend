@@ -912,13 +912,21 @@ class BillingService:
     async def generate_billing_bulk_template(self):
         from io import BytesIO
         import openpyxl
+        from sqlalchemy import select
+        from app.models.patient_model import Patient
+        
+        # Try to find an actual active patient name
+        stmt = select(Patient).where(Patient.is_deleted == False).limit(1)
+        res = await self.db.execute(stmt)
+        patient = res.scalar_one_or_none()
+        patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Rahul Sharma"
         
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Billings Bulk Import"
         
         headers = [
-            "group_key", "patient_id", "discount_percent", "discount_amount", "due_date", "notes",
+            "group_key", "Patient Name", "discount_percent", "discount_amount", "due_date", "notes",
             "appointment_id", "item_description", "item_quantity", "item_unit_price", "item_gst_rate", "item_type"
         ]
         ws.append(headers)
@@ -926,7 +934,7 @@ class BillingService:
         # One valid sample billing with 2 items sharing group_key=1
         ws.append([
             1,
-            1,
+            patient_name,
             10.0,
             0.0,
             "2026-08-30 12:00:00",
@@ -940,7 +948,7 @@ class BillingService:
         ])
         ws.append([
             1,
-            1,
+            patient_name,
             10.0,
             0.0,
             "2026-08-30 12:00:00",
@@ -972,7 +980,7 @@ class BillingService:
             raise BadRequestException("The uploaded file is empty or has no headers.")
             
         headers = [str(h).strip().lower() for h in header_row if h is not None]
-        required_headers = {"group_key", "patient_id", "item_description", "item_unit_price"}
+        required_headers = {"group_key", "patient name", "item_description", "item_unit_price"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
             
@@ -1011,7 +1019,7 @@ class BillingService:
             # Check consistency of billing-level parameters
             first_idx, first_row = rows[0]
             
-            patient_id_raw = first_row.get("patient_id")
+            patient_name_raw = first_row.get("patient name")
             discount_percent_raw = first_row.get("discount_percent")
             discount_amount_raw = first_row.get("discount_amount")
             due_date_raw = first_row.get("due_date")
@@ -1025,7 +1033,7 @@ class BillingService:
                 
             conflict_found = False
             for idx, r in rows[1:]:
-                if (val_to_str(r.get("patient_id")) != val_to_str(patient_id_raw) or
+                if (val_to_str(r.get("patient name")) != val_to_str(patient_name_raw) or
                     val_to_str(r.get("discount_percent")) != val_to_str(discount_percent_raw) or
                     val_to_str(r.get("discount_amount")) != val_to_str(discount_amount_raw) or
                     val_to_str(r.get("due_date")) != val_to_str(due_date_raw) or
@@ -1045,7 +1053,43 @@ class BillingService:
                 continue
                 
             try:
-                # 1. patient_id parsing
+                # 1. patient resolution
+                patient_name_str = str(patient_name_raw).strip() if patient_name_raw is not None else ""
+                if not patient_name_str:
+                    raise BadRequestException("Patient Name is required.")
+                
+                from sqlalchemy import select, or_
+                from app.models.patient_model import Patient
+                
+                parts = [p for p in patient_name_str.split() if p]
+                if not parts:
+                    raise BadRequestException("Patient Name cannot be empty.")
+                
+                stmt = select(Patient).where(Patient.is_deleted == False)
+                filters = []
+                for part in parts:
+                    filters.append(Patient.first_name.ilike(f"%{part}%"))
+                    filters.append(Patient.last_name.ilike(f"%{part}%"))
+                if filters:
+                    stmt = stmt.where(or_(*filters))
+                    
+                result = await self.db.execute(stmt)
+                candidates = result.scalars().all()
+                
+                matching_patients = []
+                normalized_target = " ".join(parts).lower()
+                for p in candidates:
+                    p_full_name = f"{p.first_name} {p.last_name}".strip().lower()
+                    if p_full_name == normalized_target:
+                        matching_patients.append(p)
+                        
+                if not matching_patients:
+                    raise BadRequestException(f"Patient not found: {patient_name_str}")
+                if len(matching_patients) > 1:
+                    raise BadRequestException(f"Multiple patients found with name {patient_name_str}. Use a unique patient.")
+                    
+                patient_id = matching_patients[0].id
+                
                 def normalize_id(val, name):
                     if val is None:
                         return None
@@ -1057,10 +1101,6 @@ class BillingService:
                     except (ValueError, TypeError):
                         raise BadRequestException(f"Invalid integer value for {name}: {val}")
                         
-                patient_id = normalize_id(patient_id_raw, "patient_id")
-                if patient_id is None:
-                    raise BadRequestException("patient_id is required.")
-                    
                 appointment_id = normalize_id(appointment_id_raw, "appointment_id")
                 
                 # 2. discount_percent
@@ -1339,7 +1379,7 @@ class BillingService:
             ws.title = "Billings Report"
             
             headers = [
-                "Sr. No.", "patient_id", "patient_name", "bill_number", "subtotal", "discount_percent",
+                "Sr. No.", "Patient Name", "bill_number", "subtotal", "discount_percent",
                 "discount_amount", "gst_rate", "gst_amount", "tax_amount", "total_amount",
                 "paid_amount", "balance_amount", "status", "due_date", "notes", "invoice_path",
                 "appointment_id", "created_at", "updated_at", "source",
@@ -1354,7 +1394,7 @@ class BillingService:
                 # Check if there are items to export. If not, output one row with empty item columns
                 if not b.items:
                     row = [
-                        sr_no, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
+                        sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
                         f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
                         f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
                         b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
@@ -1368,7 +1408,7 @@ class BillingService:
                 else:
                     for item in b.items:
                         row = [
-                            sr_no, b.patient_id, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
+                            sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
                             f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
                             f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
                             b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),

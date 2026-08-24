@@ -8,13 +8,26 @@
       size: A4 landscape;
       margin: 15px;
     }
-    body { font-family: Arial, sans-serif; font-size: 6.5px; line-height: 1.3; color: #333333; }
-    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 15px; }
+    body { font-family: 'DejaVuSans', sans-serif; font-size: 5.8px; line-height: 1.3; color: #333333; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
     .meta { margin-bottom: 10px; font-size: 8px; }
     table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
-    th, td { border: 0.5px solid #e5e7eb; padding: 2px 1px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 2px 1.5px; text-align: left; overflow: hidden; }
     th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
     tr:nth-child(even) { background-color: #fafafa; }
+    .wrap-col {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      word-wrap: break-word;
+    }
+    .nowrap-col {
+      white-space: nowrap;
+    }
+    .short-col {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -26,45 +39,57 @@
   <table>
     <thead>
       <tr>
-        <th style="width: 3%;">ID</th>
-        <th style="width: 9%;">Name</th>
-        <th style="width: 9%;">Generic Name</th>
-        <th style="width: 7%;">Barcode</th>
-        <th style="width: 5%;">Batch No</th>
-        <th style="width: 10%;">SKU</th>
-        <th style="width: 7%;">Category</th>
-        <th style="width: 4%;">Unit</th>
-        <th style="width: 4%;">Price</th>
-        <th style="width: 4%;">Stock</th>
-        <th style="width: 4%;">Reorder</th>
-        <th style="width: 6%;">Expiry Date</th>
-        <th style="width: 7%;">Manufacturer</th>
-        <th style="width: 9%;">Description</th>
-        <th style="width: 4%;">Active</th>
-        <th style="width: 9%;">Created At</th>
-        <th style="width: 9%;">Updated At</th>
+        <th class="short-col" style="width: 3%;">Sr. No.</th>
+        <th class="wrap-col" style="width: 10%;">Name</th>
+        <th class="wrap-col" style="width: 9%;">Generic Name</th>
+        <th class="nowrap-col" style="width: 6%;">Barcode</th>
+        <th class="wrap-col" style="width: 7%;">Batch No</th>
+        <th class="wrap-col" style="width: 7%;">SKU</th>
+        <th class="wrap-col" style="width: 7%;">Category</th>
+        <th class="short-col" style="width: 4%;">Unit</th>
+        <th class="short-col" style="width: 4%;">Price</th>
+        <th class="short-col" style="width: 4%;">Stock</th>
+        <th class="short-col" style="width: 4%;">Reorder</th>
+        <th class="short-col" style="width: 6%;">Expiry Date</th>
+        <th class="wrap-col" style="width: 8%;">Manufacturer</th>
+        <th class="wrap-col" style="width: 7%;">Description</th>
+        <th class="short-col" style="width: 4%;">Active</th>
+        <th class="nowrap-col" style="width: 7%;">Created At</th>
+        <th class="nowrap-col" style="width: 7%;">Updated At</th>
       </tr>
     </thead>
     <tbody>
       {% for item in medicines %}
       <tr>
-        <td>{{ item.id }}</td>
-        <td>{{ item.name }}</td>
-        <td>{{ item.generic_name or '-' }}</td>
-        <td>{{ item.barcode or '-' }}</td>
-        <td>{{ item.batch_number or '-' }}</td>
-        <td>{{ item.sku }}</td>
-        <td>{{ item.category }}</td>
-        <td>{{ item.unit }}</td>
-        <td>${{ "%.2f"|format(item.unit_price) }}</td>
-        <td>{{ item.stock_quantity }}</td>
-        <td>{{ item.reorder_level }}</td>
-        <td>{{ item.expiry_date or '-' }}</td>
-        <td>{{ item.manufacturer or '-' }}</td>
-        <td>{{ item.description or '-' }}</td>
-        <td>{{ item.is_active }}</td>
-        <td>{{ item.created_at }}</td>
-        <td>{{ item.updated_at or '-' }}</td>
+        <td class="short-col">{{ loop.index }}</td>
+        <td class="wrap-col">{{ item.name }}</td>
+        <td class="wrap-col">{{ item.generic_name or '-' }}</td>
+        <td class="nowrap-col">{{ item.barcode or '-' }}</td>
+        <td class="wrap-col">{{ item.batch_number or '-' }}</td>
+        <td class="wrap-col">{{ item.sku }}</td>
+        <td class="wrap-col">{{ item.category }}</td>
+        <td class="short-col">{{ item.unit }}</td>
+        <td class="short-col">₹{{ "%.2f"|format(item.unit_price) }}</td>
+        <td class="short-col">{{ item.stock_quantity }}</td>
+        <td class="short-col">{{ item.reorder_level }}</td>
+        <td class="short-col">{{ item.expiry_date or '-' }}</td>
+        <td class="wrap-col">{{ item.manufacturer or '-' }}</td>
+        <td class="wrap-col">{{ item.description or '-' }}</td>
+        <td class="short-col">{{ item.is_active }}</td>
+        <td class="nowrap-col">
+          {% if item.created_at and item.created_at != '-' %}
+            {{ item.created_at.split(' ')[0] }}<br/>{{ item.created_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
+        <td class="nowrap-col">
+          {% if item.updated_at and item.updated_at != '-' %}
+            {{ item.updated_at.split(' ')[0] }}<br/>{{ item.updated_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

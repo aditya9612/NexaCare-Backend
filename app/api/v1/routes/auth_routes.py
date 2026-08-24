@@ -1,6 +1,9 @@
-from typing import List
+from datetime import date
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Form, File, UploadFile, HTTPException
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app.core.dependencies import CurrentUser, DbSession
 from app.schemas.auth_schema import (
@@ -132,8 +135,83 @@ async def get_me(db: DbSession, current_user: CurrentUser):
     return APIResponse(message="Profile retrieved", data=profile)
 
 
+async def save_profile_image(file: UploadFile) -> str:
+    import os
+    import uuid
+    from pathlib import Path
+    import aiofiles
+    from app.core.config import settings
+
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(
+            status_code=400,
+            detail="File type not allowed. Only jpg, jpeg, png, and webp are allowed."
+        )
+
+    upload_dir = Path("app/uploads/profiles")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = upload_dir / unique_filename
+
+    content = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=400, detail="File too large")
+
+    async with aiofiles.open(filepath, "wb") as f:
+        await f.write(content)
+
+    return str(filepath).replace(os.sep, "/")
+
+
 @router.put("/profile", response_model=APIResponse[UserProfileResponse])
-async def update_profile(data: ProfileUpdateRequest, db: DbSession, current_user: CurrentUser):
+async def update_profile(
+    request: Request,
+    db: DbSession,
+    current_user: CurrentUser,
+    full_name: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    date_of_birth: Optional[date] = Form(None),
+    profile_image: Optional[UploadFile] = File(None)
+):
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            data = ProfileUpdateRequest(**body)
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["body"], "msg": f"Invalid JSON payload: {str(e)}", "type": "json_invalid"}]
+            )
+    else:
+        form_data = await request.form()
+        update_dict = {}
+        
+        if "full_name" in form_data:
+            update_dict["full_name"] = full_name
+        if "phone" in form_data:
+            update_dict["phone"] = phone
+        if "gender" in form_data:
+            update_dict["gender"] = gender
+        if "date_of_birth" in form_data:
+            update_dict["date_of_birth"] = date_of_birth
+            
+        if profile_image and profile_image.filename:
+            profile_image_path = await save_profile_image(profile_image)
+            update_dict["profile_image"] = profile_image_path
+            
+        try:
+            data = ProfileUpdateRequest(**update_dict)
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+
     profile = await AuthService(db).update_profile(current_user, data)
     return APIResponse(message="Profile updated", data=profile)
 

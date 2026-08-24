@@ -392,8 +392,14 @@ class PharmacyInvoiceRepository:
 
     async def get_sales_report(self, start, end) -> dict:
         filters = [
-            PharmacyInvoice.is_deleted.is_(False),
-            PharmacyInvoice.status != "cancelled",
+            or_(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.is_deleted.is_(None),
+            ),
+            or_(
+                PharmacyInvoice.status.is_(None),
+                PharmacyInvoice.status != "cancelled",
+            ),
             PharmacyInvoice.created_at <= end,
         ]
         if start is not None:
@@ -407,6 +413,8 @@ class PharmacyInvoiceRepository:
 
         # Query top selling medicines compatible with MySQL ONLY_FULL_GROUP_BY
         total_qty_col = func.sum(PharmacyInvoiceItem.quantity).label("total_sold_quantity")
+        
+        # Query top selling medicines
         top_meds_query = (
             select(
                 PharmacyInvoiceItem.medicine_id.label("medicine_id"),

@@ -12,12 +12,25 @@
     h1 { color: #0f766e; border-bottom: 2px solid #0f766e; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
     .meta { margin-bottom: 10px; font-size: 9px; }
     table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
-    th, td { border: 0.5px solid #e5e7eb; padding: 4px 3px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 4px 3px; text-align: left; overflow: hidden; }
     th { background: #f3f4f6; font-weight: bold; color: #0f766e; }
     tr:nth-child(even) { background-color: #fafafa; }
     .badge { padding: 1px 3px; border-radius: 3px; font-weight: bold; font-size: 7px; text-align: center; }
     .payment { background-color: #d1fae5; color: #065f46; }
     .refund { background-color: #fee2e2; color: #991b1b; }
+    .wrap-col {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      word-wrap: break-word;
+    }
+    .nowrap-col {
+      white-space: nowrap;
+    }
+    .short-col {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -29,46 +42,57 @@
   <table>
     <thead>
       <tr>
-        <th style="width: 5%;">ID</th>
-        <th style="width: 13%;">Billing Info</th>
-        <th style="width: 9%;">Type</th>
-        <th style="width: 11%;">Amount</th>
-        <th style="width: 10%;">Method</th>
-        <th style="width: 22%;">Ref Number / Reason</th>
-        <th style="width: 14%;">Date / Status</th>
-        <th style="width: 16%;">Timestamps</th>
+        <th class="short-col" style="width: 5%;">Sr. No.</th>
+        <th class="wrap-col" style="width: 13%;">Billing Info</th>
+        <th class="short-col" style="width: 7%;">Type</th>
+        <th class="short-col" style="width: 9%;">Amount</th>
+        <th class="short-col" style="width: 8%;">Method</th>
+        <th class="wrap-col" style="width: 28%;">Ref Number / Reason</th>
+        <th class="wrap-col" style="width: 14%;">Date / Status</th>
+        <th class="wrap-col" style="width: 16%;">Timestamps</th>
       </tr>
     </thead>
     <tbody>
       {% for item in transactions %}
       <tr>
-        <td>{{ item.id }}</td>
-        <td>
+        <td class="short-col">{{ loop.index }}</td>
+        <td class="wrap-col">
           Bill ID: {{ item.billing_id }}<br/>
           Bill No: {{ item.bill_number or "-" }}
         </td>
-        <td>
+        <td class="short-col">
           {% if item.is_refund %}
             <span class="badge refund">Refund</span>
           {% else %}
             <span class="badge payment">Payment</span>
           {% endif %}
         </td>
-        <td>₹{{ "%.2f"|format(item.amount) }}</td>
-        <td>{{ item.payment_method|upper }}</td>
-        <td>
+        <td class="short-col">₹{{ "%.2f"|format(item.amount) }}</td>
+        <td class="short-col">{{ item.payment_method|upper }}</td>
+        <td class="wrap-col">
           Ref: {{ item.transaction_ref or "-" }}<br/>
           {% if item.is_refund and item.refund_reason %}
             Reason: {{ item.refund_reason }}
           {% endif %}
         </td>
-        <td>
+        <td class="wrap-col">
           Date: {{ item.payment_date }}<br/>
           Status: {{ item.status|upper }}
         </td>
-        <td>
-          Created: {{ item.created_at }}<br/>
-          Updated: {{ item.updated_at }}
+        <td class="wrap-col">
+          Created:<br/>
+          {% if item.created_at and item.created_at != '-' %}
+            {{ item.created_at.split(' ')[0] }}<br/>{{ item.created_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+          <br/>
+          Updated:<br/>
+          {% if item.updated_at and item.updated_at != '-' %}
+            {{ item.updated_at.split(' ')[0] }}<br/>{{ item.updated_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

@@ -811,16 +811,15 @@ class InventoryService:
             ws.title = "Inventory Items"
             
             headers = [
-                "id", "name", "sku", "barcode", "category", "quantity", "unit",
+                "Sr. No.", "name", "sku", "barcode", "category", "quantity", "unit",
                 "unit_cost", "reorder_level", "expiry_date", "warehouse_id",
-                "vendor_id", "department_id", "description", "is_active",
-                "created_at", "updated_at"
+                "vendor_id", "department_id", "created_at", "updated_at"
             ]
             ws.append(headers)
             
-            for item in items:
+            for sr_no, item in enumerate(items, start=1):
                 row = [
-                    item.id,
+                    sr_no,
                     item.name,
                     item.sku,
                     item.barcode or "",
@@ -833,8 +832,6 @@ class InventoryService:
                     int(item.warehouse_id) if item.warehouse_id is not None else "",
                     int(item.vendor_id) if item.vendor_id is not None else "",
                     int(item.department_id) if item.department_id is not None else "",
-                    item.description or "",
-                    bool(item.is_active),
                     item.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.created_at, datetime) else str(item.created_at),
                     item.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.updated_at, datetime) else (str(item.updated_at) if item.updated_at else "")
                 ]
@@ -848,6 +845,19 @@ class InventoryService:
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
             
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("inventory_items_export_template.html")
@@ -889,6 +899,9 @@ class InventoryService:
                     "warehouse_id": item.warehouse_id,
                     "vendor_id": item.vendor_id,
                     "department_id": item.department_id,
+                    "warehouse_name": item.warehouse.name if item.warehouse else "-",
+                    "vendor_name": item.vendor.name if item.vendor else "-",
+                    "department_name": item.department.department_name if item.department else "-",
                     "description": item.description or "",
                     "is_active": "Yes" if item.is_active else "No",
                     "created_at": created_str,

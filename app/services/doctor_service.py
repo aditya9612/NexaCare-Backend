@@ -14,7 +14,7 @@ from app.repositories.auth_repository import AuthRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.doctor_repository import DoctorRepository
 from app.repositories.rbac_repository import RBACRepository
-from app.schemas.appointment_schema import AppointmentResponse
+from app.schemas.appointment_schema import AppointmentResponse, DoctorAppointmentListResponse
 from app.schemas.doctor_schema import (
     DoctorCreate,
     DoctorOnboardCreate,
@@ -404,10 +404,11 @@ class DoctorService:
         doctors = await self.repo.list_available()
         return [DoctorResponse.model_validate(d) for d in doctors]
 
-    async def get_appointments(self, doctor_id: int) -> list[AppointmentResponse]:
+    async def get_appointments(self, doctor_id: int) -> DoctorAppointmentListResponse:
         await self.get_by_id(doctor_id)
         appointments = await self.repo.get_appointments(doctor_id)
-        return [AppointmentResponse.model_validate(a) for a in appointments]
+        items = [AppointmentResponse.model_validate(a) for a in appointments]
+        return DoctorAppointmentListResponse(items=items, total=len(items))
 
     async def get_schedule(self, doctor_id: int) -> list[DoctorScheduleResponse]:
         await self.get_by_id(doctor_id)
@@ -539,4 +540,330 @@ class DoctorService:
 
         await self.audit_repo.create("update", "doctor_schedules", user_id=user_id, resource_id=str(doctor_id))
         return [DoctorScheduleResponse.model_validate(s) for s in created_slots]
+
+    async def generate_doctor_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Doctor Bulk Template"
+        
+        headers = [
+            "First Name", "Last Name", "Specialization", "Qualification", "Experience", 
+            "Phone", "Email", "Password", "Department Name", "Consultation Fee", 
+            "License Number", "Availability Status", "Bio", "Gender", "Date of Birth"
+        ]
+        ws.append(headers)
+        
+        sample_row = [
+            "Ramesh",
+            "Sharma",
+            "Cardiology",
+            "MBBS, MD",
+            8,
+            "9876502001",
+            "ramesh.sharma.bulk@example.com",
+            "Doctor@123",
+            "Cardiology",
+            800,
+            "DOC-BULK-001",
+            "available",
+            "Cardiologist with 8 years of experience",
+            "Male",
+            "1985-06-15"
+        ]
+        ws.append(sample_row)
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_doctors_from_excel(self, file_content: bytes, actor: User) -> dict:
+        from io import BytesIO
+        import openpyxl
+        from datetime import datetime, date
+        from pydantic import ValidationError
+        from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+        
+        wb = openpyxl.load_workbook(BytesIO(file_content))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {
+            "first name", "last name", "specialization", "experience", 
+            "phone", "email", "password", "license number"
+        }
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        seen_phones = set()
+        seen_emails = set()
+        seen_licenses = set()
+        
+        header_mapping = {
+            "first name": "first_name",
+            "last name": "last_name",
+            "specialization": "specialization",
+            "qualification": "qualification",
+            "experience": "experience",
+            "phone": "phone",
+            "email": "email",
+            "password": "password",
+            "department name": "department_name",
+            "consultation fee": "consultation_fee",
+            "license number": "license_number",
+            "availability status": "availability_status",
+            "bio": "bio",
+            "gender": "gender",
+            "date of birth": "date_of_birth"
+        }
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                mapped_key = header_mapping.get(header)
+                if not mapped_key:
+                    continue
+                if val is None or str(val).strip() == "" or str(val).strip().lower() == "none":
+                    row_dict[mapped_key] = None
+                else:
+                    row_dict[mapped_key] = str(val).strip()
+                    
+            try:
+                # Experience
+                exp_raw = row_dict.get("experience")
+                if exp_raw is not None:
+                    try:
+                        row_dict["experience"] = int(float(exp_raw))
+                    except ValueError:
+                        raise BadRequestException("Experience must be a valid integer.")
+                
+                # Consultation Fee
+                fee_raw = row_dict.get("consultation_fee")
+                if fee_raw is not None:
+                    try:
+                        row_dict["consultation_fee"] = float(fee_raw)
+                    except ValueError:
+                        raise BadRequestException("Consultation fee must be a valid number.")
+
+                # DOB parsing
+                dob_raw = row_dict.get("date_of_birth")
+                if dob_raw:
+                    try:
+                        if isinstance(dob_raw, (datetime, date)):
+                            row_dict["date_of_birth"] = dob_raw if isinstance(dob_raw, date) else dob_raw.date()
+                        else:
+                            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S"):
+                                try:
+                                    row_dict["date_of_birth"] = datetime.strptime(dob_raw, fmt).date()
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                raise ValueError(f"Invalid date format '{dob_raw}'. Expected YYYY-MM-DD.")
+                    except Exception as ex:
+                        raise BadRequestException(str(ex))
+                
+                # Phone duplicate check
+                phone = row_dict.get("phone")
+                if phone:
+                    if phone in seen_phones:
+                        raise BadRequestException(f"Duplicate phone '{phone}' in upload file.")
+                    seen_phones.add(phone)
+                    
+                # Email duplicate check
+                email = row_dict.get("email")
+                if email:
+                    email_lower = email.lower()
+                    if email_lower in seen_emails:
+                        raise BadRequestException(f"Duplicate email '{email}' in upload file.")
+                    seen_emails.add(email_lower)
+                    
+                # License Number duplicate check
+                lic = row_dict.get("license_number")
+                if lic:
+                    if lic in seen_licenses:
+                        raise BadRequestException(f"Duplicate license number '{lic}' in upload file.")
+                    seen_licenses.add(lic)
+                
+                # Resolve Department Name
+                dept_name = row_dict.pop("department_name", None)
+                dept_id_val = None
+                if dept_name:
+                    dept = await self.dept_repo.get_by_name(dept_name)
+                    if not dept:
+                        raise BadRequestException(f"Department '{dept_name}' not found.")
+                    dept_id_val = dept.department_id
+                row_dict["department_id"] = dept_id_val
+                
+                # Availability status normalization
+                availability_status = row_dict.get("availability_status")
+                if availability_status is None:
+                    row_dict["availability_status"] = "available"
+                
+                # Build DoctorOnboardCreate
+                onboard_data = DoctorOnboardCreate(**row_dict)
+                
+                async with self.db.begin_nested():
+                    await self.onboard(onboard_data, actor)
+                    
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_doctors(self, format_type: str, department_id: int | None = None, availability_status: str | None = None):
+        from io import BytesIO
+        from datetime import datetime, date
+        from sqlalchemy import select
+        from app.models.user_model import User
+        from app.models.department_model import Department
+        
+        from sqlalchemy.orm import joinedload
+        query = select(Doctor, User).options(joinedload(Doctor.department)).outerjoin(User, Doctor.user_id == User.id).where(Doctor.is_deleted == False)
+        if department_id:
+            query = query.where(Doctor.department_id == department_id)
+        if availability_status:
+            query = query.where(Doctor.availability_status == availability_status)
+            
+        query = query.order_by(Doctor.created_at.desc())
+        result = await self.db.execute(query)
+        rows = result.all()
+        
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Doctors Export"
+            
+            headers = [
+                "Sr. No.", "Doctor Code", "First Name", "Last Name", "Gender", 
+                "Date of Birth", "Phone", "Email", "Specialization", "Qualification", 
+                "Experience", "License Number", "Department Name", "Consultation Fee", 
+                "Status", "Created At"
+            ]
+            ws.append(headers)
+            
+            for sr_no, (p, u) in enumerate(rows, start=1):
+                row = [
+                    sr_no,
+                    p.doctor_code,
+                    p.first_name,
+                    p.last_name,
+                    u.gender if u and u.gender else "",
+                    str(u.date_of_birth) if u and u.date_of_birth else "",
+                    p.phone or "",
+                    p.email or "",
+                    p.specialization or "",
+                    p.qualification or "",
+                    p.experience if p.experience is not None else "",
+                    p.license_number or "",
+                    p.department.department_name if p.department else "",
+                    p.consultation_fee if p.consultation_fee is not None else "",
+                    p.availability_status or "",
+                    p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at)
+                ]
+                ws.append(row)
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("doctors_export_template.html")
+            
+            formatted_doctors = []
+            for p, u in rows:
+                formatted_doctors.append({
+                    "doctor_code": p.doctor_code,
+                    "full_name": f"{p.first_name} {p.last_name}".strip(),
+                    "gender": u.gender if u and u.gender else "-",
+                    "dob": str(u.date_of_birth) if u and u.date_of_birth else "-",
+                    "phone": p.phone or "-",
+                    "email": p.email or "-",
+                    "specialization": p.specialization or "-",
+                    "qualification": p.qualification or "-",
+                    "department_name": p.department.department_name if p.department else "-",
+                    "status": p.availability_status or "-",
+                    "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at),
+                })
+                
+            html_content = template.render(
+                doctors=formatted_doctors,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
 

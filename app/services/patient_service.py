@@ -378,3 +378,309 @@ class PatientService:
             raise BadRequestException("Family member does not belong to this patient")
         await self.repo.delete_family_member(member)
         await self.audit_repo.create("delete", "family_members", user_id=user_id, resource_id=str(member_id))
+
+    async def generate_patient_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Patient Bulk Template"
+        
+        headers = [
+            "First Name", "Last Name", "Gender", "Date of Birth", "Blood Group", 
+            "Marital Status", "Phone", "Email", "Address", "City", "State", 
+            "Pincode", "Emergency Contact Name", "Emergency Contact Number", 
+            "Allergies", "Medical History", "Chronic Disease", "Diagnosis", 
+            "Insurance Provider", "Insurance Number", "Status", "Preferred Language"
+        ]
+        ws.append(headers)
+        
+        ws.append([
+            "John", "Doe", "Male", "1985-05-15", "O+", "Married", "9876543210", 
+            "john.doe@example.com", "123 Health Street", "Mumbai", "Maharashtra", 
+            "400001", "Jane Doe", "9876543211", "Peanuts", "Hypertension", "None", 
+            "Routine Checkup", "Star Health", "SH123456", "active", "English"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_patients_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"first name", "last name", "diagnosis"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        seen_phones = set()
+        seen_emails = set()
+        
+        header_mapping = {
+            "first name": "first_name",
+            "last name": "last_name",
+            "gender": "gender",
+            "date of birth": "dob",
+            "blood group": "blood_group",
+            "marital status": "marital_status",
+            "phone": "phone",
+            "email": "email",
+            "address": "address",
+            "city": "city",
+            "state": "state",
+            "pincode": "pincode",
+            "emergency contact name": "emergency_contact_name",
+            "emergency contact number": "emergency_contact_number",
+            "allergies": "allergies",
+            "medical history": "medical_history",
+            "chronic disease": "chronic_disease",
+            "diagnosis": "diagnosis",
+            "insurance provider": "insurance_provider",
+            "insurance_number": "insurance_number",
+            "insurance number": "insurance_number",
+            "status": "status",
+            "preferred language": "preferred_language"
+        }
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                mapped_key = header_mapping.get(header)
+                if not mapped_key:
+                    continue
+                if val is None or str(val).strip() == "" or str(val).strip().lower() == "none":
+                    row_dict[mapped_key] = None
+                else:
+                    row_dict[mapped_key] = str(val).strip()
+                    
+            try:
+                dob_raw = row_dict.get("dob")
+                if dob_raw:
+                    from datetime import datetime, date
+                    try:
+                        if isinstance(dob_raw, (datetime, date)):
+                            row_dict["dob"] = dob_raw
+                        else:
+                            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S"):
+                                try:
+                                    row_dict["dob"] = datetime.strptime(dob_raw, fmt).date()
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                raise ValueError(f"Invalid date format '{dob_raw}'. Expected YYYY-MM-DD.")
+                    except Exception as ex:
+                        raise BadRequestException(str(ex))
+                
+                phone = row_dict.get("phone")
+                if phone:
+                    if phone in seen_phones:
+                        raise BadRequestException(f"Duplicate phone number '{phone}' found in upload file.")
+                    seen_phones.add(phone)
+                    
+                email = row_dict.get("email")
+                if email:
+                    if email.lower() in seen_emails:
+                        raise BadRequestException(f"Duplicate email '{email}' found in upload file.")
+                    seen_emails.add(email.lower())
+                
+                patient_create = PatientCreate(**row_dict)
+                
+                await self.create(patient_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "row": row_idx,
+                    "error": err_msg
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "row": row_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_patients(self, format_type: str, status: str | None = None):
+        from io import BytesIO
+        from datetime import datetime, date
+        
+        def format_full_address(address: str | None, city: str | None, state: str | None, pincode: str | None) -> str:
+            parts = []
+            if address and str(address).strip() and str(address).lower() not in ("none", "null"):
+                parts.append(str(address).strip())
+            if city and str(city).strip() and str(city).lower() not in ("none", "null"):
+                parts.append(str(city).strip())
+            if state and str(state).strip() and str(state).lower() not in ("none", "null"):
+                parts.append(str(state).strip())
+            
+            main_addr = ", ".join(parts)
+            
+            pincode_clean = None
+            if pincode and str(pincode).strip() and str(pincode).lower() not in ("none", "null"):
+                pincode_clean = str(pincode).strip()
+                
+            if main_addr:
+                if pincode_clean:
+                    return f"{main_addr} - {pincode_clean}"
+                return main_addr
+            elif pincode_clean:
+                return pincode_clean
+            return "-"
+
+        def format_emergency_contact(name: str | None, phone: str | None, line_break: str = "\n") -> str:
+            name_clean = str(name).strip() if name and str(name).strip() and str(name).lower() not in ("none", "null") else None
+            phone_clean = str(phone).strip() if phone and str(phone).strip() and str(phone).lower() not in ("none", "null") else None
+            
+            if name_clean and phone_clean:
+                return f"{name_clean}{line_break}{phone_clean}"
+            elif name_clean:
+                return name_clean
+            elif phone_clean:
+                return phone_clean
+            return "-"
+        
+        if status:
+            patients = await self.repo.filter_patients(status=status, limit=10000)
+        else:
+            patients = await self.repo.list_all(limit=10000)
+        
+        if format_type == "excel":
+            import openpyxl
+            from openpyxl.styles import Alignment
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Patients Export"
+            
+            headers = [
+                "Sr. No.", "Patient Code", "Full Name", "Gender", "DOB", 
+                "Blood Group", "Phone", "Email", "Full Address", 
+                "Emergency Contact", "Diagnosis", "Created At"
+            ]
+            ws.append(headers)
+            
+            for sr_no, p in enumerate(patients, start=1):
+                row = [
+                    sr_no,
+                    p.patient_code,
+                    f"{p.first_name} {p.last_name}".strip(),
+                    p.gender or "",
+                    str(p.dob) if p.dob else "",
+                    p.blood_group or "",
+                    p.phone or "",
+                    p.email or "",
+                    format_full_address(p.address, p.city, p.state, p.pincode),
+                    format_emergency_contact(p.emergency_contact_name, p.emergency_contact_number, "\n"),
+                    p.diagnosis or "",
+                    p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at)
+                ]
+                ws.append(row)
+                
+            # Enable wrap text for "Emergency Contact" column
+            col_idx = headers.index("Emergency Contact") + 1
+            for r in range(2, ws.max_row + 1):
+                cell = ws.cell(row=r, column=col_idx)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+                
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("patients_export_template.html")
+            
+            formatted_patients = []
+            for p in patients:
+                formatted_patients.append({
+                    "id": p.id,
+                    "patient_code": p.patient_code,
+                    "first_name": p.first_name,
+                    "last_name": p.last_name,
+                    "gender": p.gender,
+                    "dob": str(p.dob) if p.dob else "",
+                    "blood_group": p.blood_group,
+                    "phone": p.phone,
+                    "email": p.email,
+                    "full_address": format_full_address(p.address, p.city, p.state, p.pincode),
+                    "status": p.status,
+                    "diagnosis": p.diagnosis,
+                    "emergency_contact": format_emergency_contact(p.emergency_contact_name, p.emergency_contact_number, "<br/>"),
+                    "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at),
+                })
+                
+            html_content = template.render(
+                patients=formatted_patients,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"

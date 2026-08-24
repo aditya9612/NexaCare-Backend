@@ -135,7 +135,10 @@ class Settings(BaseSettings):
 
     # Public URL for Twilio/Exotel webhooks (use ngrok in local dev)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
-    NGROK_AUTH_TOKEN: str | None = None
+    # When false (default), do not start pyngrok inside uvicorn lifespan.
+    # Prefer: run `ngrok http 8000` in a separate terminal and set PUBLIC_BASE_URL.
+    ENABLE_NGROK_TUNNEL: bool = False
+    NGROK_AUTH_TOKEN: str = ""
 
     # Hospital info surfaced in FAQ / chatbot prompts
     HOSPITAL_NAME: str = "NesaCare Hospital"
@@ -186,7 +189,6 @@ class Settings(BaseSettings):
     NETWORK_NODE: str | None = None
     PLATFORM_VERSION: str | None = None
     HIPAA_ENFORCED: bool | None = None
-    NGROK_AUTH_TOKEN: str = ""
 
         # pyrefly: ignore [parse-error]
     TESSERACT_CMD: str = r"" 

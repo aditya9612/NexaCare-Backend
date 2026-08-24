@@ -1,4 +1,3 @@
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,6 +21,8 @@ from app.agent.router import router as agent_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.core.production_checks import validate_production_settings
+    from app.core.database import engine
+    from app.utils.ngrok_tunnel import start_dev_tunnel, stop_dev_tunnel
 
     validate_production_settings()
 
@@ -31,31 +32,12 @@ async def lifespan(app: FastAPI):
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
 
-    # Start ngrok tunnel for Twilio webhooks (dev only — never in production)
-    if (settings.APP_ENV or "").lower() not in ("production", "prod"):
-        try:
-            from pyngrok import ngrok, conf
-            ngrok_token = settings.NGROK_AUTH_TOKEN or os.getenv("NGROK_AUTH_TOKEN")
-            if ngrok_token:
-                ngrok.kill()  # kill any existing tunnel first
-                conf.get_default().auth_token = ngrok_token
-                # Bind IPv4 loopback explicitly. On Windows, ngrok.connect(8000) can
-                # target [::1]:8000, which may be owned by Docker/WSL — not this uvicorn
-                # process (0.0.0.0:8000). That routes Twilio to a different app instance
-                # (often APP_ENV=production with SKIP_VOICE_WEBHOOK_AUTH=false).
-                tunnel = ngrok.connect("127.0.0.1:8000", "http")
-                public_url = tunnel.public_url
-                os.environ["PUBLIC_BASE_URL"] = public_url
-                import logging
-                logging.getLogger("nexacare").info(
-                    f"ngrok tunnel: {public_url} -> 127.0.0.1:8000"
-                )
-                print(f"\nngrok URL: {public_url}/agent/v1/voice/incoming")
-                print("   (forwarding to 127.0.0.1:8000 — this uvicorn process)\n")
-            else:
-                print("NGROK_AUTH_TOKEN not set — skipping ngrok tunnel")
-        except Exception as e:
-            print(f"ngrok failed to start: {e}")
+    # Optional embedded ngrok (dev only). Default OFF — set ENABLE_NGROK_TUNNEL=true
+    # or run `ngrok http 8000` separately and keep PUBLIC_BASE_URL in .env.
+    public_url = start_dev_tunnel(port=8000)
+    if public_url:
+        print(f"\nngrok URL: {public_url}/agent/v1/voice/incoming")
+        print("   (forwarding to 127.0.0.1:8000 — this uvicorn process)\n")
 
     # NOTE: Appointment reminders now run via Celery Beat, not in-process.
     # Start separately with:
@@ -67,7 +49,11 @@ async def lifespan(app: FastAPI):
     print("   Health:  http://localhost:8000/health")
     print("   (Use localhost — browsers cannot open http://0.0.0.0:8000)\n")
 
-    yield
+    try:
+        yield
+    finally:
+        stop_dev_tunnel()
+        await engine.dispose()
 
 
 app = FastAPI(

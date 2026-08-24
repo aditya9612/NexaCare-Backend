@@ -10,6 +10,7 @@ from app.schemas.common_schema import BaseSchema
 class ChatSessionCreate(BaseSchema):
     patient_id: int
     language: str = "en"
+    hospital_id: Optional[int] = None
 
 
 class ChatSessionResponse(BaseSchema):

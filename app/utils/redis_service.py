@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.logger import logger
 
 REDIS_UNAVAILABLE_COOLDOWN_SECONDS = 30
+REDIS_CONNECT_TIMEOUT_SECONDS = 1
 
 _redis_client: Optional[aioredis.Redis] = None
 _redis_unavailable_until: float = 0.0
@@ -62,8 +63,16 @@ async def get_redis() -> Optional[aioredis.Redis]:
         return None
 
     try:
-        client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-        await client.ping()
+        client = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+            socket_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+        )
+        await asyncio.wait_for(
+            client.ping(),
+            timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+        )
         _redis_client = client
         if _redis_unavailable_until > 0:
             logger.info("Redis reconnected after cooldown")

@@ -19,6 +19,7 @@ from app.schemas.hospital_voice_schema import (
     HospitalVoiceDocumentResponse,
     HospitalVoiceDocumentUpdate,
 )
+from app.services.canonical_faq_specs import CANONICAL_TOPICS, build_canonical_faq_specs
 from app.services.faq_retrieval_service import FaqRetrievalService
 from app.services.knowledge_embedding_sync import (
     deactivate_kb_embedding,
@@ -171,3 +172,35 @@ class HospitalKnowledgeService:
         for item in seeds:
             await self.create_faq(item)
         return len(seeds)
+
+    async def ensure_priority_faqs(self, hospital_id: int) -> int:
+        """Create missing canonical hospital FAQs (one per topic, multilingual tags)."""
+        existing = await self.faq_repo.list_for_hospital(hospital_id, language=None)
+        covered_topics: set[str] = set()
+        for faq in existing:
+            if faq.tags:
+                for tag in faq.tags.split(","):
+                    key = tag.strip().lower()
+                    if key in CANONICAL_TOPICS:
+                        covered_topics.add(key)
+            q_lower = (faq.question or "").lower()
+            for topic in CANONICAL_TOPICS:
+                if topic in q_lower or topic in (faq.tags or "").lower():
+                    covered_topics.add(topic)
+
+        created = 0
+        for spec in build_canonical_faq_specs():
+            if spec["topic"] in covered_topics:
+                continue
+            await self.create_faq(
+                HospitalFaqCreate(
+                    hospital_id=hospital_id,
+                    question=spec["question"],
+                    answer=spec["answer"],
+                    language=spec["language"],
+                    tags=spec["tags"],
+                )
+            )
+            covered_topics.add(spec["topic"])
+            created += 1
+        return created

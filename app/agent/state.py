@@ -23,6 +23,8 @@ class BookingCallState(TypedDict):
 
     # ── Hospital / production config (from HospitalVoiceConfigService) ─────
     hospital_id: Optional[int]
+    hospital_resolution_source: Optional[str]  # did_match | dev_single_hospital_fallback | ...
+    to_number: Optional[str]                     # inbound DID (Twilio To) for safe re-resolution
     voice_profile: Optional[str]
     voice_gender: Optional[str]
     reception_number: Optional[str]
@@ -53,6 +55,7 @@ class BookingCallState(TypedDict):
     # ── Appointment ────────────────────────────────────────────────────────
     appointment_id: Optional[int]
     appointment_number: Optional[str]
+    booking_attempt_id: Optional[str]     # idempotency key for voice booking
 
     # ── Phase 6 conversation memory ────────────────────────────────────────
     current_topic: Optional[str]

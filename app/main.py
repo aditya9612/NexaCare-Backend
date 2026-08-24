@@ -16,6 +16,7 @@ from app.middleware.rbac_middleware import RBACMiddleware
 from app.websocket.chat_socket import router as chat_ws_router
 from app.websocket.notification_socket import router as notification_ws_router
 from app.agent.router import router as agent_router
+from app.services.hospital_voice_config_service import HospitalVoiceConfigService
 
 
 @asynccontextmanager
@@ -31,6 +32,17 @@ async def lifespan(app: FastAPI):
     Path(settings.SARVAM_TTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
+
+    # Voice: warn if TWILIO_PHONE_NUMBER does not match any hospital inbound_did
+    if settings.TWILIO_PHONE_NUMBER:
+        try:
+            async with AsyncSessionLocal() as session:
+                await HospitalVoiceConfigService(session).validate_twilio_did_configuration(
+                    settings.TWILIO_PHONE_NUMBER
+                )
+        except Exception as exc:
+            from app.core.logger import logger
+            logger.warning("voice_startup_did_check_failed: %s", exc)
 
     # Optional embedded ngrok (dev only). Default OFF — set ENABLE_NGROK_TUNNEL=true
     # or run `ngrok http 8000` separately and keep PUBLIC_BASE_URL in .env.

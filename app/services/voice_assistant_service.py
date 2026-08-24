@@ -172,8 +172,22 @@ class VoiceAssistantService:
         language: str = "en",
         provider_name: str | None = None,
     ) -> str:
-        config = await self.voice_config_service.resolve_for_inbound(to_number=to_number)
-        hospital_id = config.hospital_id if config else None
+        resolution_result = await self.voice_config_service.resolve_inbound_hospital(
+            to_number=to_number
+        )
+        from app.services.hospital_voice_config_service import (
+            log_hospital_resolution,
+            mask_inbound_did,
+        )
+
+        log_hospital_resolution(
+            resolution_result,
+            call_sid=call_sid,
+            masked_did=mask_inbound_did(to_number),
+            step="incoming",
+        )
+        config = resolution_result.config
+        hospital_id = resolution_result.hospital_id
         default_lang = (config.default_language if config else language) or "en"
         provider = ProviderFactory.from_hospital_config(config)
         pname = provider_name or provider.name
@@ -359,7 +373,14 @@ class VoiceAssistantService:
             )
 
         if state.step == VoiceStep.FAQ_QUESTION and transcript:
-            hospital_id = state.hospital_id or (config.hospital_id if config else None)
+            hospital_id = state.hospital_id
+            if not hospital_id:
+                res = await self.voice_config_service.resolve_inbound_hospital(
+                    to_number=getattr(state, "to_number", "") or "",
+                )
+                hospital_id = res.hospital_id
+                if hospital_id:
+                    state.hospital_id = hospital_id
             if hospital_id:
                 faq = await self.faq_service.answer(
                     hospital_id,
@@ -475,10 +496,23 @@ class VoiceAssistantService:
             if result.ticket_id:
                 try:
                     from app.tasks.voice_tasks import process_reception_callback_tickets
+                    from app.utils.redis_service import redis_cooldown_active
 
-                    process_reception_callback_tickets.delay()
+                    if redis_cooldown_active():
+                        logger.info(
+                            "callback_enqueue_skipped call_sid=%s ticket_id=%s reason=redis_unavailable",
+                            state.call_sid,
+                            result.ticket_id,
+                        )
+                    else:
+                        process_reception_callback_tickets.delay()
                 except Exception as exc:
-                    logger.error("Failed to enqueue callback ticket task: %s", exc)
+                    logger.warning(
+                        "callback_enqueue_failed call_sid=%s ticket_id=%s error=%s",
+                        state.call_sid,
+                        result.ticket_id,
+                        exc,
+                    )
         return provider.render_response(result.xml)
 
     async def _do_transfer(
@@ -506,10 +540,23 @@ class VoiceAssistantService:
         if result.ticket_id:
             try:
                 from app.tasks.voice_tasks import process_reception_callback_tickets
+                from app.utils.redis_service import redis_cooldown_active
 
-                process_reception_callback_tickets.delay()
+                if redis_cooldown_active():
+                    logger.info(
+                        "callback_enqueue_skipped call_sid=%s ticket_id=%s reason=redis_unavailable",
+                        state.call_sid,
+                        result.ticket_id,
+                    )
+                else:
+                    process_reception_callback_tickets.delay()
             except Exception as exc:
-                logger.error("Failed to enqueue callback ticket task: %s", exc)
+                logger.warning(
+                    "callback_enqueue_failed call_sid=%s ticket_id=%s error=%s",
+                    state.call_sid,
+                    result.ticket_id,
+                    exc,
+                )
         lang = twilio_say_language(state.language)
         if preface:
             xml = result.xml

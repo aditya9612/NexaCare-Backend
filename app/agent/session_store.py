@@ -37,6 +37,8 @@ def _empty_state(call_sid: str, from_number: str, base_url: str) -> BookingCallS
         language_locked=False,
         language_source=None,
         hospital_id=None,
+        hospital_resolution_source=None,
+        to_number=None,
         voice_profile=None,
         voice_gender=None,
         reception_number=None,
@@ -55,6 +57,7 @@ def _empty_state(call_sid: str, from_number: str, base_url: str) -> BookingCallS
         selected_slot=None,
         appointment_id=None,
         appointment_number=None,
+        booking_attempt_id=None,
         current_topic=None,
         last_question=None,
         last_answer=None,
@@ -83,8 +86,20 @@ async def _persist(call_sid: str, state: BookingCallState) -> None:
     saved = await cache_set(_key(call_sid), payload, ttl=SESSION_TTL)
     if not saved:
         _sessions[call_sid] = state
+        logger.debug(
+            "SESSION_UPDATED call_sid=%s step=%s hospital_id=%s redis_available=false",
+            call_sid,
+            state.get("step"),
+            state.get("hospital_id"),
+        )
     else:
         _sessions[call_sid] = state  # keep local mirror for active_session_count
+        logger.debug(
+            "SESSION_UPDATED call_sid=%s step=%s hospital_id=%s redis_available=true",
+            call_sid,
+            state.get("step"),
+            state.get("hospital_id"),
+        )
 
 
 async def create_session(
@@ -100,7 +115,13 @@ async def create_session(
             if k in state:
                 state[k] = v  # type: ignore[literal-required]
     await _persist(call_sid, state)
-    logger.info(f"[{call_sid}] Session created | from={from_number}")
+    logger.info(
+        "SESSION_CREATED call_sid=%s hospital_id=%s step=%s from=%s",
+        call_sid,
+        state.get("hospital_id"),
+        state.get("step"),
+        from_number,
+    )
     return state
 
 
@@ -145,7 +166,12 @@ async def delete_session(call_sid: str) -> None:
     await cache_delete(_key(call_sid))
     removed = _sessions.pop(call_sid, None)
     if removed:
-        logger.info(f"[{call_sid}] Session deleted")
+        logger.info(
+            "SESSION_DELETED call_sid=%s hospital_id=%s step=%s",
+            call_sid,
+            (session or {}).get("hospital_id"),
+            (session or {}).get("step"),
+        )
 
 
 def active_session_count() -> int:

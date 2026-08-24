@@ -10,8 +10,9 @@ After a successful booking, an SMS confirmation is sent to the caller.
 
 import os
 import re
+import hashlib
 import logging
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, time
 from xml.sax.saxutils import escape
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,9 @@ from sqlalchemy import select, and_
 from app.agent.state import BookingCallState
 from app.agent.llm import extract_patient_name, extract_problem, detect_specialty
 from app.models.doctor_model import Doctor, DoctorSchedule
+from app.models.user_model import User
+from app.core.constants import AppointmentStatus, BookingSource
+from app.repositories.appointment_repository import AppointmentRepository
 from app.services.sarvam_tts import speak
 
 logger = logging.getLogger("nexacare.agent.nodes.booking")
@@ -522,27 +526,54 @@ def process_collect_problem(state: BookingCallState, speech_result: str, confide
 
 # ── Node: suggest_doctors ─────────────────────────────────────────────────────
 
-async def fetch_doctors_for_specialty(specialty: str, db: AsyncSession) -> list[dict]:
+async def doctor_belongs_to_hospital(
+    doctor_id: int, hospital_id: int, db: AsyncSession
+) -> bool:
+    """Verify doctor is linked to the given hospital via user account."""
+    if not hospital_id:
+        return False
     result = await db.execute(
-        select(Doctor).where(
-            and_(
-                Doctor.specialization.ilike(f"%{specialty}%"),
-                Doctor.availability_status == "available",
-                Doctor.is_deleted == False,
-            )
-        ).limit(3)
+        select(User.hospital_id)
+        .select_from(Doctor)
+        .join(User, Doctor.user_id == User.id)
+        .where(Doctor.id == doctor_id, Doctor.is_deleted.is_(False))
+    )
+    return result.scalar_one_or_none() == hospital_id
+
+
+async def fetch_doctors_for_specialty(
+    specialty: str, db: AsyncSession, *, hospital_id: int
+) -> list[dict]:
+    if not hospital_id:
+        return []
+
+    base_filters = and_(
+        Doctor.specialization.ilike(f"%{specialty}%"),
+        Doctor.availability_status == "available",
+        Doctor.is_deleted == False,
+        User.hospital_id == hospital_id,
+    )
+    result = await db.execute(
+        select(Doctor)
+        .join(User, Doctor.user_id == User.id)
+        .where(base_filters)
+        .limit(3)
     )
     doctors = result.scalars().all()
 
     if not doctors:
         result = await db.execute(
-            select(Doctor).where(
+            select(Doctor)
+            .join(User, Doctor.user_id == User.id)
+            .where(
                 and_(
                     Doctor.specialization.ilike("%General%"),
                     Doctor.availability_status == "available",
                     Doctor.is_deleted == False,
+                    User.hospital_id == hospital_id,
                 )
-            ).limit(3)
+            )
+            .limit(3)
         )
         doctors = result.scalars().all()
 
@@ -629,9 +660,97 @@ def process_select_doctor(state: BookingCallState, digit: str) -> dict:
     }
 
 
-# ── Node: select_slot ─────────────────────────────────────────────────────────
+def _parse_slot_date(value) -> date:
+    if isinstance(value, date):
+        return value
+    return datetime.strptime(str(value), "%Y-%m-%d").date()
 
-async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
+
+def _parse_slot_time(value) -> time:
+    if isinstance(value, time):
+        return value
+    text = str(value)
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt).time()
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid slot time: {value!r}")
+
+
+def _booking_attempt_id(state: BookingCallState, slot: dict) -> str:
+    raw = (
+        f"{state['call_sid']}|{state.get('selected_doctor_id')}|"
+        f"{slot.get('date')}|{slot.get('time')}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+def _build_booking_success_result(
+    state: BookingCallState,
+    *,
+    appt_id: int,
+    appt_no: str,
+    slot: dict,
+    doctor_name: str,
+    lang: str,
+    twilio_lang: str,
+    base_url: str,
+    booking_attempt_id: str,
+) -> dict:
+    time_display = _format_time_for_tts(slot["time"])
+    confirm_text = _s(
+        "confirm_booking",
+        lang,
+        doctor=doctor_name,
+        date=slot["date"],
+        time=time_display,
+        appt_no=appt_no,
+    )
+    return {
+        "step": "booked",
+        "appointment_id": appt_id,
+        "appointment_number": appt_no,
+        "booking_attempt_id": booking_attempt_id,
+        "_twiml": _twiml(
+            _say(confirm_text, twilio_lang, base_url, allow_generate=False),
+            "<Hangup/>",
+        ),
+    }
+
+
+async def _slot_is_available(
+    db: AsyncSession, doctor_id: int, slot_date: date, slot_time: time
+) -> bool:
+    repo = AppointmentRepository(db)
+    return not await repo.exists_conflict(doctor_id, slot_date, slot_time)
+
+
+async def _filter_available_slots(
+    db: AsyncSession, doctor_id: int, slots: list[dict]
+) -> list[dict]:
+    available = []
+    for slot in slots:
+        try:
+            slot_date = _parse_slot_date(slot["date"])
+            slot_time = _parse_slot_time(slot["time"])
+        except ValueError:
+            continue
+        if await _slot_is_available(db, doctor_id, slot_date, slot_time):
+            available.append(slot)
+    return available
+
+
+async def fetch_available_slots(
+    doctor_id: int, db: AsyncSession, *, hospital_id: int | None = None
+) -> list[dict]:
+    if hospital_id and not await doctor_belongs_to_hospital(doctor_id, hospital_id, db):
+        logger.warning(
+            "Blocked slot fetch: doctor_id=%s not in hospital_id=%s",
+            doctor_id,
+            hospital_id,
+        )
+        return []
     today = date.today()
     slots = []
 
@@ -646,11 +765,12 @@ async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
     schedules = result.scalars().all()
 
     if not schedules:
-        return [
+        fallback = [
             {"date": str(today + timedelta(days=1)), "time": "10:00:00", "doctor_id": doctor_id},
             {"date": str(today + timedelta(days=2)), "time": "14:00:00", "doctor_id": doctor_id},
             {"date": str(today + timedelta(days=3)), "time": "11:00:00", "doctor_id": doctor_id},
         ]
+        return await _filter_available_slots(db, doctor_id, fallback)
 
     for offset in range(7):
         check_date = today + timedelta(days=offset + 1)
@@ -662,12 +782,16 @@ async def fetch_available_slots(doctor_id: int, db: AsyncSession) -> list[dict]:
                     "time": schedule.start_time.strftime("%H:%M:%S"),
                     "doctor_id": doctor_id,
                 })
-                if len(slots) >= 3:
-                    return slots
+                if len(slots) >= 6:
+                    break
+        if len(slots) >= 6:
+            break
 
-    return slots or [
+    candidate = slots or [
         {"date": str(today + timedelta(days=1)), "time": "10:00:00", "doctor_id": doctor_id},
     ]
+    filtered = await _filter_available_slots(db, doctor_id, candidate)
+    return filtered[:3]
 
 
 def build_select_slot_twiml(state: BookingCallState, slots: list[dict]) -> str:
@@ -724,8 +848,8 @@ def process_select_slot(state: BookingCallState, digit: str) -> dict:
 async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     from app.models.appointment_model import Appointment
     from app.services.voice_patient_resolver import VoicePatientResolver
-    import random
-    import string
+    from app.services.booking_validation_service import BookingValidationService
+    from app.utils.helpers import generate_appointment_number
 
     lang        = state["language"]
     twilio_lang = state["twilio_language"]
@@ -735,6 +859,68 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
     doctor_name = state.get("selected_doctor_name", "the doctor")
     patient_name = state.get("patient_name", "Patient")
     caller_number = state.get("from_number", "")
+    hospital_id = state.get("hospital_id")
+    attempt_id = _booking_attempt_id(state, slot)
+
+    # Idempotency: Twilio webhook retry or duplicate confirm must not create a second appointment.
+    if state.get("appointment_id") and state.get("appointment_number"):
+        logger.info(
+            "BOOKING_ALREADY_PROCESSED call_sid=%s appointment_id=%s attempt_id=%s",
+            state["call_sid"],
+            state.get("appointment_id"),
+            state.get("booking_attempt_id") or attempt_id,
+        )
+        return _build_booking_success_result(
+            state,
+            appt_id=state["appointment_id"],
+            appt_no=state["appointment_number"],
+            slot=slot,
+            doctor_name=doctor_name,
+            lang=lang,
+            twilio_lang=twilio_lang,
+            base_url=base_url,
+            booking_attempt_id=state.get("booking_attempt_id") or attempt_id,
+        )
+
+    if not hospital_id or not await doctor_belongs_to_hospital(doctor_id, hospital_id, db):
+        logger.error(
+            "BOOKING_VALIDATION_FAILED reason=HOSPITAL_NOT_RESOLVED call_sid=%s doctor_id=%s hospital_id=%s",
+            state["call_sid"],
+            doctor_id,
+            hospital_id,
+        )
+        return {
+            "step": "error",
+            "_twiml": _hangup_twiml(_s("error", lang), twilio_lang, base_url),
+        }
+
+    try:
+        slot_date = _parse_slot_date(slot["date"])
+        slot_time = _parse_slot_time(slot["time"])
+    except ValueError:
+        logger.error(
+            "BOOKING_VALIDATION_FAILED reason=DATE_TIME_UNCLEAR call_sid=%s slot=%s",
+            state["call_sid"],
+            slot,
+        )
+        return {
+            "step": "error",
+            "_twiml": _hangup_twiml(_s("error", lang), twilio_lang, base_url),
+        }
+
+    if not await _slot_is_available(db, doctor_id, slot_date, slot_time):
+        logger.warning(
+            "BOOKING_VALIDATION_FAILED reason=SLOT_UNAVAILABLE call_sid=%s doctor_id=%s date=%s time=%s",
+            state["call_sid"],
+            doctor_id,
+            slot_date,
+            slot_time,
+        )
+        return {
+            "step": "select_slot",
+            "available_slots": [],
+            "_twiml": _hangup_twiml(_s("error", lang), twilio_lang, base_url),
+        }
 
     try:
         attendee, holder = await VoicePatientResolver(db).resolve_for_booking(
@@ -742,32 +928,50 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
             spoken_name=patient_name,
         )
         logger.info(
-            f"[{state['call_sid']}] ✓ Resolved patients: "
-            f"attendee={attendee.id} holder={holder.id} spoken={patient_name!r}"
+            "BOOKING_STARTED call_sid=%s hospital_id=%s doctor_id=%s attempt_id=%s "
+            "attendee=%s holder=%s",
+            state["call_sid"],
+            hospital_id,
+            doctor_id,
+            attempt_id,
+            attendee.id,
+            holder.id,
         )
 
-        appt_no = "APT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        await BookingValidationService(db).validate(
+            doctor_id, slot_date, slot_time
+        )
 
-        from app.core.constants import BookingSource
+        appt_repo = AppointmentRepository(db)
+        appt_no = generate_appointment_number()
+        token = await appt_repo.get_next_token(doctor_id, slot_date)
+        queue_tok = await appt_repo.get_next_queue_token(slot_date)
+        department_id = None
+        for doc in state.get("suggested_doctors") or []:
+            if doc.get("id") == doctor_id:
+                department_id = doc.get("department_id")
+                break
 
         appt = Appointment(
             appointment_number=appt_no,
             patient_id=attendee.id,
             doctor_id=doctor_id,
-            department_id=None,
-            appointment_date=slot["date"],
-            appointment_time=slot["time"],   # HH:MM:SS — correct for MySQL TIME
-            appointment_status="scheduled",
+            department_id=department_id,
+            appointment_date=slot_date,
+            appointment_time=slot_time,
+            appointment_status=AppointmentStatus.PENDING,
             booking_source=BookingSource.AI_VOICE,
             symptoms=state.get("problem_description"),
             notes=(
                 f"Booked via AI Voice Agent. "
                 f"Patient: {patient_name} | Phone: {caller_number} | Lang: {lang} | "
-                f"Booked by patient_id={holder.id}"
+                f"Booked by patient_id={holder.id} | attempt_id={attempt_id}"
             ),
             consultation_type="in_person",
             reminder_sent=False,
-            token_number=random.randint(1, 99),
+            token_number=token,
+            queue_token=queue_tok,
+            queue_status="WAITING",
         )
         db.add(appt)
         await db.commit()
@@ -776,11 +980,16 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
         time_display = _format_time_for_tts(slot["time"])
 
         logger.info(
-            f"[{state['call_sid']}] ✓ Appointment booked: {appt_no} | "
-            f"Doctor: {doctor_name} | {slot['date']} {time_display}"
+            "APPOINTMENT_CREATED call_sid=%s appointment_id=%s appointment_number=%s "
+            "hospital_id=%s doctor_id=%s attempt_id=%s",
+            state["call_sid"],
+            appt.id,
+            appt_no,
+            hospital_id,
+            doctor_id,
+            attempt_id,
         )
 
-        # ── Send SMS confirmation (non-blocking — failure won't affect call) ──
         sms_sent = _send_sms_confirmation(
             to_number=caller_number,
             lang=lang,
@@ -793,26 +1002,25 @@ async def confirm_and_book(state: BookingCallState, db: AsyncSession) -> dict:
         if sms_sent:
             logger.info(f"[{state['call_sid']}] ✓ SMS confirmation sent to {caller_number}")
 
-        confirm_text = _s(
-            "confirm_booking", lang,
-            doctor=doctor_name,
-            date=slot["date"],
-            time=time_display,
+        return _build_booking_success_result(
+            state,
+            appt_id=appt.id,
             appt_no=appt_no,
+            slot=slot,
+            doctor_name=doctor_name,
+            lang=lang,
+            twilio_lang=twilio_lang,
+            base_url=base_url,
+            booking_attempt_id=attempt_id,
         )
 
-        return {
-            "step": "booked",
-            "appointment_id": appt.id,
-            "appointment_number": appt_no,
-            "_twiml": _twiml(
-                _say(confirm_text, twilio_lang, base_url, allow_generate=False),
-                "<Hangup/>",
-            ),
-        }
-
     except Exception as e:
-        logger.error(f"[{state['call_sid']}] Booking failed: {e}")
+        logger.error(
+            "BOOKING_FAILED call_sid=%s reason=%s attempt_id=%s",
+            state["call_sid"],
+            e,
+            attempt_id,
+        )
         await db.rollback()
         return {
             "step": "error",

@@ -8,6 +8,7 @@ from app.models.hospital_voice_model import (
     HospitalVoiceDocument,
     VoiceCallbackTicket,
 )
+from app.utils.phone_utils import inbound_dids_match
 
 
 class HospitalVoiceConfigRepository:
@@ -23,19 +24,20 @@ class HospitalVoiceConfigRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_inbound_did(self, did: str) -> HospitalVoiceConfig | None:
+    def _did_matches(self, inbound_did: str, caller_did: str) -> bool:
+        return inbound_dids_match(inbound_did, caller_did)
+
+    async def find_active_by_inbound_did(self, did: str) -> list[HospitalVoiceConfig]:
+        """Return all active voice configs whose inbound_did matches the caller DID."""
         if not did:
-            return None
-        digits = "".join(c for c in did if c.isdigit())
+            return []
         result = await self.db.execute(self._base().where(HospitalVoiceConfig.is_active.is_(True)))
         configs = list(result.scalars().all())
-        for cfg in configs:
-            if not cfg.inbound_did:
-                continue
-            cfg_digits = "".join(c for c in cfg.inbound_did if c.isdigit())
-            if digits and cfg_digits and (digits.endswith(cfg_digits[-10:]) or cfg_digits.endswith(digits[-10:])):
-                return cfg
-        return None
+        return [cfg for cfg in configs if cfg.inbound_did and self._did_matches(cfg.inbound_did, did)]
+
+    async def get_by_inbound_did(self, did: str) -> HospitalVoiceConfig | None:
+        matches = await self.find_active_by_inbound_did(did)
+        return matches[0] if len(matches) == 1 else None
 
     async def get_by_id(self, config_id: int) -> HospitalVoiceConfig | None:
         result = await self.db.execute(self._base().where(HospitalVoiceConfig.id == config_id))

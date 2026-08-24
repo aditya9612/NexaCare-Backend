@@ -902,6 +902,9 @@ class RagFaqService:
         top = chunks[0] if chunks else None
 
         top_candidate_id = f"{top.source}:{top.id}" if top else None
+        score_decision_reason = top.decision_reason if top else None
+        if outcome == "transfer" and transfer_reason == "faq_low_confidence":
+            score_decision_reason = "low_confidence"
 
         RagAnalytics.log(
 
@@ -944,7 +947,14 @@ class RagFaqService:
             language_score=top.language_score if top else None,
 
             authority_score=top.authority_score if top else None,
-
+            exact_match_score=top.exact_match_score if top else None,
+            phrase_match_score=top.phrase_match_score if top else None,
+            decision_reason=score_decision_reason,
+            normalized_candidate=top.normalized_candidate if top else None,
+            candidate_question=top.candidate_question if top else None,
+            candidate_hospital_id=hospital_id,
+            candidate_active=True if top else None,
+            candidate_deleted=False if top else None,
             faq_hit=result.faq_hit,
 
             cache_hit=cache_hit,

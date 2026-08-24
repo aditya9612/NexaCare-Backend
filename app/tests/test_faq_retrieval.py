@@ -20,11 +20,14 @@ from app.ai.rag.retriever import (
     RetrievedChunk,
     _apply_controlled_tag_boost,
     _entity_match_score,
+    _exact_match_score,
     _keyword_score,
     _normalize_query,
+    _phrase_match_score,
     _retrieval_query_variants,
     _tag_match_score,
     build_faq_retrieval_embed_text,
+    compute_retrieval_confidence,
     fuse_retrieval_score,
 )
 from app.ai.voice_appointment_assistant.language import detect_language
@@ -677,9 +680,95 @@ def test_fusion_semantic_plus_keyword_can_reach_answer_band():
     assert fused >= 0.90
 
 
-def test_fusion_weak_semantic_cannot_reach_answer_band():
+def test_fusion_weak_semantic_cannot_reach_answer_band_without_deterministic():
     fused = fuse_retrieval_score(cosine=0.45, keyword=0.95, source="faq")
     assert fused < 0.90
+
+
+def test_fusion_weak_semantic_with_exact_match_reaches_answer_band():
+    result = compute_retrieval_confidence(
+        semantic=0.429,
+        keyword=0.93,
+        tag=0.95,
+        entity=0.84,
+        language=1.0,
+        authority=1.0,
+        exact_match=0.96,
+        phrase_match=0.92,
+        source="faq",
+    )
+    assert result.fused >= 0.90
+    assert result.decision_reason == "strong_deterministic_match"
+    assert ConfidenceScorer().score(result.fused).action == ConfidenceAction.ANSWER
+
+
+def test_production_opd_failure_case_multi_signal_agreement():
+    """Regression: strong keyword/tag/entity must reach ANSWER despite weak semantic."""
+    result = compute_retrieval_confidence(
+        semantic=0.429,
+        keyword=0.93,
+        tag=0.95,
+        entity=0.84,
+        language=1.0,
+        authority=0.02,
+        exact_match=0.42,
+        phrase_match=0.72,
+        source="faq",
+    )
+    assert result.fused >= 0.90
+    assert result.decision_reason == "multi_signal_agreement"
+    assert ConfidenceScorer().score(result.fused).action == ConfidenceAction.ANSWER
+
+
+def test_stt_opidi_variant_entity_alignment():
+    """STT spelling ओपिडी must align with OPD entity for retrieval scoring."""
+    label = "[faq:1] Q: OPD किती वाजता सुरू होते?\nA: OPD hours."
+    embed = build_faq_retrieval_embed_text(
+        "OPD किती वाजता सुरू होते?",
+        "opd,timing,What time does OPD start",
+        "OPD hours.",
+    )
+    query = _normalize_query("ओपिडी किती वाजता सुरू होते")
+    entity = _entity_match_score(query, embed, label)
+    assert entity >= 0.80
+    result = compute_retrieval_confidence(
+        semantic=0.429,
+        keyword=_keyword_score(query, embed, label),
+        tag=_tag_match_score(query, embed),
+        entity=entity,
+        language=1.0,
+        authority=0.02,
+        exact_match=_exact_match_score(query, label),
+        phrase_match=_phrase_match_score(query, label, embed),
+        source="faq",
+    )
+    assert result.fused >= 0.90
+    assert ConfidenceScorer().score(result.fused).action == ConfidenceAction.ANSWER
+
+
+def test_vague_timing_query_stays_below_answer_band():
+    """Ambiguous timing-only queries must not auto-answer OPD."""
+    opd_label = "[faq:1] Q: OPD किती वाजता सुरू होते?\nA: OPD hours."
+    opd_embed = build_faq_retrieval_embed_text(
+        "OPD किती वाजता सुरू होते?",
+        "opd,timing,ओपीडी",
+        "OPD hours.",
+    )
+    query = _normalize_query("किती वाजता उघडते?")
+    result = compute_retrieval_confidence(
+        semantic=0.55,
+        keyword=_keyword_score(query, opd_embed, opd_label),
+        tag=_tag_match_score(query, opd_embed),
+        entity=_entity_match_score(query, opd_embed, opd_label),
+        language=1.0,
+        authority=1.0,
+        exact_match=_exact_match_score(query, opd_label),
+        phrase_match=_phrase_match_score(query, opd_label, opd_embed),
+        source="faq",
+    )
+    assert result.fused < 0.90
+    assert result.decision_reason == "entity_mismatch"
+    assert ConfidenceScorer().score(result.fused).action != ConfidenceAction.ANSWER
 
 
 # --- Language detection ---
@@ -818,6 +907,287 @@ def test_controlled_tag_boost_caps_below_answer_band():
         fused=0.86, cosine=0.72, keyword=0.80, tag=0.95
     )
     assert boosted <= 0.89
+
+
+def test_opd_production_failure_case_reaches_answer_band():
+    """Regression: OPD near-exact Marathi match must not transfer on weak semantic."""
+    from app.services.canonical_faq_specs import build_canonical_faq_specs
+
+    opd_spec = next(s for s in build_canonical_faq_specs() if s["topic"] == "opd")
+    question = opd_spec["question"]
+    tags = opd_spec["tags"]
+    answer = "आमची OPD Mon-Sat 8:00 AM - 8:00 PM दरम्यान उपलब्ध आहे."
+    label = f"[faq:1] Q: {question}\nA: {answer}"
+    embed = build_faq_retrieval_embed_text(question, tags, answer)
+    queries = [
+        "ओपीडी किती वाजता सुरू होते",
+        "ओपीडी किती वाजजता ओपन होते",
+        "OPD किती वाजता सुरू होते",
+        "OPD chi timing kay aahe",
+        "ओपीडीची वेळ काय आहे",
+        "opd kiti vajta suru hote",
+        "What time does OPD start",
+        "OPD kab shuru hota hai",
+        "ओपीडी कधी सुरू होते",
+        "OPD किती वाजता open होते",
+    ]
+    scorer = ConfidenceScorer()
+    for query in queries:
+        normalized = _normalize_query(query)
+        exact = _exact_match_score(normalized, label)
+        phrase = _phrase_match_score(normalized, label, embed)
+        kw = _keyword_score(normalized, embed, label)
+        tag = _tag_match_score(normalized, embed)
+        entity = _entity_match_score(normalized, embed, label)
+        result = compute_retrieval_confidence(
+            semantic=0.429,
+            keyword=kw,
+            tag=tag,
+            entity=entity,
+            language=1.0,
+            authority=1.0,
+            exact_match=exact,
+            phrase_match=phrase,
+            source="faq",
+        )
+        assert result.fused >= 0.90, f"{query!r} fused={result.fused}"
+        assert scorer.score(result.fused).action == ConfidenceAction.ANSWER
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_id"),
+    [
+        ("फार्मसीची वेळ काय आहे", 13),
+        ("pharmacy chi timing kay aahe", 13),
+        ("What time is pharmacy open", 13),
+        ("लॅबची वेळ काय आहे", 14),
+        ("lab chi timing kay aahe", 14),
+        ("What time is the lab open", 14),
+        ("आपत्कालीन विभाग किती वाजता उघडा असतो", 15),
+        ("emergency 24 hours aahe ka", 15),
+        ("is emergency open 24 hours", 15),
+    ],
+)
+def test_topic_specific_queries_reach_answer_band(query, expected_id):
+    specs = {s["topic"]: s for s in __import__(
+        "app.services.canonical_faq_specs", fromlist=["build_canonical_faq_specs"]
+    ).build_canonical_faq_specs()}
+    topic_map = {
+        13: "pharmacy",
+        14: "laboratory",
+        15: "emergency_dept",
+    }
+    spec = specs[topic_map[expected_id]]
+    faq_id = expected_id
+    question = spec["question"]
+    tags = spec.get("tags", "")
+    answer = f"Verified answer for FAQ {faq_id}."
+    embed = build_faq_retrieval_embed_text(question, tags, answer)
+    label = f"[faq:{faq_id}] Q: {question}\nA: {answer}"
+    normalized = _normalize_query(query)
+    exact = _exact_match_score(normalized, label)
+    phrase = _phrase_match_score(normalized, label, embed)
+    kw = _keyword_score(normalized, embed, label)
+    tag = _tag_match_score(normalized, embed)
+    entity = _entity_match_score(normalized, embed, label)
+    result = compute_retrieval_confidence(
+        semantic=0.45,
+        keyword=kw,
+        tag=tag,
+        entity=entity,
+        language=1.0,
+        authority=1.0,
+        exact_match=exact,
+        phrase_match=phrase,
+        source="faq",
+    )
+    assert result.fused >= 0.90
+    assert ConfidenceScorer().score(result.fused).action == ConfidenceAction.ANSWER
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "फार्मसी किती वाजता उघडते?",
+        "लॅब किती वाजता उघडते?",
+        "बिलिंग किती वाजता बंद होते?",
+        "इमर्जन्सी किती वाजता सुरू असते?",
+        "अॅम्ब्युलन्स कधी मिळते?",
+        "डॉक्टर उद्या उपलब्ध आहेत का?",
+        "doctor उद्या available आहेत का",
+        "pharmacy timing",
+        "lab timing",
+        "billing timing",
+        "insurance available",
+        "ambulance number",
+    ],
+)
+def test_opd_negative_queries_do_not_match_opd_faq(query):
+    opd_label = "[faq:1] Q: OPD किती वाजता सुरू होते?\nA: OPD hours answer."
+    opd_embed = build_faq_retrieval_embed_text(
+        "OPD किती वाजता सुरू होते?",
+        "opd,timing,ओपीडी",
+        "OPD hours answer.",
+    )
+    normalized = _normalize_query(query)
+    entity = _entity_match_score(normalized, opd_embed, opd_label)
+    result = compute_retrieval_confidence(
+        semantic=0.55,
+        keyword=_keyword_score(normalized, opd_embed, opd_label),
+        tag=_tag_match_score(normalized, opd_embed),
+        entity=entity,
+        language=1.0,
+        authority=1.0,
+        exact_match=_exact_match_score(normalized, opd_label),
+        phrase_match=_phrase_match_score(normalized, opd_label, opd_embed),
+        source="faq",
+    )
+    assert result.fused < 0.90, f"{query!r} wrongly reached answer band: {result.fused}"
+    assert ConfidenceScorer().score(result.fused).action != ConfidenceAction.ANSWER
+
+
+def _sunday_opd_faq_16_fixtures():
+    """FAQ ID 16 — Sunday OPD availability (production KB row)."""
+    question = "रविवारी OPD सुरू असते का?"
+    answer = "रविवारी OPD उपलब्धतेसाठी कृपया रिसेप्शनशी संपर्क साधा."
+    tags = (
+        "sunday opd, ravivari opd aste ka, ravivari hospital open aste ka, "
+        "Ravivar ko OPD hota hai kya, Sunday OPD, Sunday hospital timing, "
+        "OPD Sunday, Sunday hospital timing, रविवारी ओपीडी, रविवार OPD, "
+        "रविवारी डॉक्टर उपलब्ध आहेत का"
+    )
+    faq_id = 16
+    label = f"[faq:{faq_id}] Q: {question}\nA: {answer}"
+    embed = build_faq_retrieval_embed_text(question, tags, answer)
+    return faq_id, question, tags, answer, label, embed
+
+
+def _general_opd_faq_1_fixture():
+    from app.services.canonical_faq_specs import build_canonical_faq_specs
+
+    opd_spec = next(s for s in build_canonical_faq_specs() if s["topic"] == "opd")
+    question = opd_spec["question"]
+    tags = opd_spec["tags"]
+    answer = opd_spec["answer"]
+    faq_id = 1
+    label = f"[faq:{faq_id}] Q: {question}\nA: {answer}"
+    embed = build_faq_retrieval_embed_text(question, tags, answer)
+    return faq_id, question, tags, answer, label, embed
+
+
+def _score_sunday_opd_candidate(
+    query: str,
+    *,
+    faq_id: int,
+    label: str,
+    embed: str,
+    semantic: float = 0.45,
+) -> tuple[float, ConfidenceAction]:
+    from app.ai.rag.retriever import _apply_sunday_opd_availability_adjustment
+
+    normalized = _normalize_query(query)
+    result = compute_retrieval_confidence(
+        semantic=semantic,
+        keyword=_keyword_score(normalized, embed, label),
+        tag=_tag_match_score(normalized, embed),
+        entity=_entity_match_score(normalized, embed, label),
+        language=1.0,
+        authority=1.0,
+        exact_match=_exact_match_score(normalized, label),
+        phrase_match=_phrase_match_score(normalized, label, embed),
+        source="faq",
+    )
+    fused, _ = _apply_sunday_opd_availability_adjustment(
+        result.fused,
+        query=normalized,
+        label=label,
+        embed_text=embed,
+        decision_reason=result.decision_reason,
+    )
+    return fused, ConfidenceScorer().score(fused).action
+
+
+def _rank_sunday_opd_faqs(query: str, semantic: float = 0.45) -> list[tuple[int, float, ConfidenceAction]]:
+    faq16 = _sunday_opd_faq_16_fixtures()
+    faq1 = _general_opd_faq_1_fixture()
+    ranked: list[tuple[int, float, ConfidenceAction]] = []
+    for faq_id, _question, _tags, _answer, label, embed in (faq1, faq16):
+        fused, action = _score_sunday_opd_candidate(
+            query, faq_id=faq_id, label=label, embed=embed, semantic=semantic
+        )
+        ranked.append((faq_id, fused, action))
+    ranked.sort(key=lambda row: (row[1], row[0]), reverse=True)
+    return ranked
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "रविवारी OPD सुरू असते का?",
+        "रविवारी OPD सुरू आहे का?",
+        "रविवारी ओपीडी सुरू आहे का?",
+        "रविवारला OPD सुरू असते का?",
+        "रविवारी OPD चालू आहे का?",
+        "Sunday ला OPD open आहे का?",
+        "Ravivari OPD suru ahe ka?",
+    ],
+)
+def test_sunday_opd_positive_queries_answer_faq_16(query):
+    """Sunday OPD availability queries must rank FAQ 16 first with ANSWER confidence."""
+    ranked = _rank_sunday_opd_faqs(query)
+    top_id, top_fused, top_action = ranked[0]
+    assert top_id == 16, f"{query!r} top candidate was FAQ {top_id}: {ranked}"
+    assert top_fused >= 0.90
+    assert top_action == ConfidenceAction.ANSWER
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "रविवारी फार्मसी सुरू आहे का?",
+        "रविवारी लॅब सुरू आहे का?",
+        "रविवारी बिलिंग सुरू आहे का?",
+        "रविवारी इमर्जन्सी सुरू आहे का?",
+        "रविवारी डॉक्टर उपलब्ध आहेत का?",
+    ],
+)
+def test_sunday_opd_negative_queries_do_not_answer_faq_16(query):
+    """Non-OPD Sunday queries must not answer FAQ 16."""
+    _faq_id, _question, _tags, _answer, label, embed = _sunday_opd_faq_16_fixtures()
+    fused, action = _score_sunday_opd_candidate(
+        query, faq_id=16, label=label, embed=embed
+    )
+    assert fused < 0.90, f"{query!r} wrongly reached answer band for FAQ 16: {fused}"
+    assert action != ConfidenceAction.ANSWER
+
+
+def test_sunday_opd_pipeline_trace_regression():
+    """Regression trace for रविवारी OPD सुरू आहे का? — FAQ 16 must reach ANSWER."""
+    from app.ai.rag.retriever import (
+        _entity_group_ids,
+        _retrieval_query_variants,
+        _retrieval_tokens,
+    )
+
+    query = "रविवारी OPD सुरू आहे का?"
+    normalized = _normalize_query(query)
+    variants = _retrieval_query_variants(normalized)
+    tokens = _retrieval_tokens(query)
+    entities = _entity_group_ids(tokens)
+
+    _faq_id, question, _tags, _answer, label, embed = _sunday_opd_faq_16_fixtures()
+    fused, action = _score_sunday_opd_candidate(
+        query, faq_id=16, label=label, embed=embed
+    )
+
+    assert normalized == "रविवारी OPD सुरू आहे का?"
+    assert variants == ["रविवारी OPD सुरू आहे का?"]
+    assert "opd" in tokens
+    assert "रविवारी" in tokens or "रविवार" in tokens
+    assert 0 in entities  # OPD entity group
+    assert fused >= 0.90
+    assert action == ConfidenceAction.ANSWER
+    assert question.startswith("रविवारी OPD")
 
 
 @pytest.mark.asyncio
@@ -967,17 +1337,33 @@ def _priority_mock_kb() -> list[dict]:
 
 def _rank_mock_kb(query: str, semantic: float = 0.72) -> list[tuple[int, float]]:
     normalized = _normalize_query(query)
-    ranked: list[tuple[int, float, float, float]] = []
+    variants = _retrieval_query_variants(normalized)
+    ranked: list[tuple[int, float, float, float, float, float]] = []
     for entry in _priority_mock_kb():
-        kw = _keyword_score(normalized, entry["embed_text"], entry["label"])
-        tag = _tag_match_score(normalized, entry["embed_text"])
-        entity = _entity_match_score(normalized, entry["embed_text"], entry["label"])
-        fused = fuse_retrieval_score(semantic, kw, "faq")
-        fused = _apply_controlled_tag_boost(fused, semantic, kw, tag)
-        if entity >= 0.84 and kw >= 0.55:
-            fused = min(0.95, fused + 0.03)
-        ranked.append((entry["id"], fused, entity, kw))
-    ranked.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
+        kw = max(_keyword_score(form, entry["embed_text"], entry["label"]) for form in variants)
+        tag = max(_tag_match_score(form, entry["embed_text"]) for form in variants)
+        entity = max(
+            _entity_match_score(form, entry["embed_text"], entry["label"])
+            for form in variants
+        )
+        exact = max(_exact_match_score(form, entry["label"]) for form in variants)
+        phrase = max(
+            _phrase_match_score(form, entry["label"], entry["embed_text"])
+            for form in variants
+        )
+        result = compute_retrieval_confidence(
+            semantic=semantic,
+            keyword=kw,
+            tag=tag,
+            entity=entity,
+            language=1.0,
+            authority=1.0,
+            exact_match=exact,
+            phrase_match=phrase,
+            source="faq",
+        )
+        ranked.append((entry["id"], result.fused, exact, phrase, entity, kw))
+    ranked.sort(key=lambda x: (x[1], x[2], x[3], x[4], x[5]), reverse=True)
     return [(r[0], r[1]) for r in ranked]
 
 
@@ -1125,8 +1511,16 @@ async def test_diagnose_returns_score_decomposition():
                 "tag": 0.90,
                 "entity": 0.90,
                 "language": 0.85,
-                "authority": 0.02,
+                "authority": 1.0,
+                "exact_match": 0.95,
+                "phrase_match": 0.90,
                 "fused": 0.92,
+                "decision_reason": "strong_deterministic_match",
+                "normalized_candidate": "opd",
+                "candidate_question": "OPD",
+                "hospital_id": 1,
+                "active": True,
+                "deleted": False,
             }
         ]
     )
@@ -1137,6 +1531,8 @@ async def test_diagnose_returns_score_decomposition():
     assert diag.candidates[0].tag_score >= 0.0
     assert diag.candidates[0].entity_score == pytest.approx(0.90)
     assert diag.candidates[0].language_score == pytest.approx(0.85)
+    assert diag.candidates[0].authority_bonus == pytest.approx(1.0)
+    assert diag.candidates[0].exact_match_score == pytest.approx(0.95)
     assert diag.confidence_action == "answer"
 
 

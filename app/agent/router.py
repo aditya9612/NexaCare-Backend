@@ -40,7 +40,14 @@ from app.agent.nodes import booking as book_node
 from app.core.constants import TelephonyProviderType
 from app.core.dependencies import DbSession
 from app.services.faq_retrieval_service import TRANSFER_PHRASES, FaqRetrievalService
-from app.services.hospital_voice_config_service import HospitalVoiceConfigService
+from app.services.hospital_voice_config_service import (
+    HospitalVoiceConfigService,
+    log_hospital_resolution,
+    log_hospital_resolution_attempt,
+    mask_inbound_did,
+)
+from app.utils.phone_utils import normalize_inbound_did
+from app.utils.redis_service import redis_cooldown_active
 from app.services.language_resolver_service import LanguageResolverService
 from app.services.medical_safety_guard import MedicalSafetyGuard
 from app.services.reception_transfer_service import ReceptionTransferService
@@ -87,6 +94,87 @@ def _base_url() -> str:
     val = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
     logger.debug(f"base_url from os.getenv = {val}")
     return val.rstrip("/")
+
+
+def _hospital_session_updates(state: dict, result) -> dict:
+    """Merge resolved hospital config into session fields without overwriting caller data."""
+    config = result.config
+    updates: dict = {
+        "hospital_id": result.hospital_id,
+        "hospital_resolution_source": result.source.value,
+    }
+    if config:
+        if not state.get("reception_number"):
+            updates["reception_number"] = config.reception_number
+        if not state.get("voice_profile"):
+            updates["voice_profile"] = config.voice_profile
+        if not state.get("voice_gender"):
+            updates["voice_gender"] = config.voice_gender
+    return updates
+
+
+async def _ensure_session_hospital(
+    db,
+    call_sid: str,
+    state: dict,
+    *,
+    step: str = "",
+    service: str = "",
+) -> int | None:
+    """Return validated hospital_id from session or safe inbound resolution."""
+    if state.get("hospital_id"):
+        return state["hospital_id"]
+
+    to_number = state.get("to_number") or ""
+    log_hospital_resolution_attempt(
+        call_sid=call_sid,
+        masked_did=mask_inbound_did(to_number),
+        normalized_did=normalize_inbound_did(to_number),
+        step=step or state.get("step") or "",
+        service=service or state.get("service") or "",
+    )
+
+    svc = HospitalVoiceConfigService(db)
+    result = await svc.resolve_inbound_hospital(to_number=state.get("to_number") or "")
+    log_hospital_resolution(
+        result,
+        call_sid=call_sid,
+        masked_did=mask_inbound_did(state.get("to_number") or ""),
+        step=step or state.get("step") or "",
+        service=service or state.get("service") or "",
+    )
+    if not result.hospital_id:
+        return None
+
+    updates = _hospital_session_updates(state, result)
+    await session_store.update_session(call_sid, updates)
+    state.update(updates)
+    return result.hospital_id
+
+
+async def _transfer_no_hospital(
+    db,
+    call_sid: str,
+    state: dict,
+    *,
+    reason: str,
+    service: str = "",
+) -> str:
+    lang = state.get("language") or "en"
+    phrase = TRANSFER_PHRASES.get(lang, TRANSFER_PHRASES["en"])
+    bump_counter(state, "transfer_count")
+    record_analytics_event(state, "transfer", reason=reason)
+    logger.warning(
+        "voice_transfer_no_hospital call_sid=%s reason=%s service=%s step=%s masked_did=%s",
+        call_sid,
+        reason,
+        service or state.get("service"),
+        state.get("step"),
+        mask_inbound_did(state.get("to_number") or ""),
+    )
+    twiml = await _do_reception_transfer(db, state, reason=reason, preface=phrase)
+    await session_store.delete_session(call_sid)
+    return twiml
 
 
 def _error_twiml(msg: str = None) -> str:
@@ -197,8 +285,21 @@ def _booking_lock_redirect_twiml(state: dict) -> str:
     )
 
 
-async def _enter_booking_flow(call_sid: str, state: dict, resume: bool = False) -> str:
+async def _enter_booking_flow(
+    db,
+    call_sid: str,
+    state: dict,
+    resume: bool = False,
+) -> str:
     """Start or resume booking without restarting call/session (Phase 6.3)."""
+    hospital_id = await _ensure_session_hospital(
+        db, call_sid, state, step=state.get("step") or "", service="book"
+    )
+    if not hospital_id:
+        return await _transfer_no_hospital(
+            db, call_sid, state, reason="booking_no_hospital", service="book"
+        )
+
     updates = {
         "service": "book",
         "retry_count": 0,
@@ -307,19 +408,13 @@ async def _process_faq_transcript(
         await session_store.delete_session(call_sid)
         return twiml
 
-    hospital_id = state.get("hospital_id")
+    hospital_id = await _ensure_session_hospital(
+        db, call_sid, state, step="faq_question", service="faq"
+    )
     if not hospital_id:
-        phrase = TRANSFER_PHRASES.get(lang, TRANSFER_PHRASES["en"])
-        bump_counter(state, "transfer_count")
-        record_analytics_event(state, "transfer", reason="faq_no_hospital")
-        twiml = await _do_reception_transfer(
-            db,
-            state,
-            reason="faq_no_hospital",
-            preface=phrase,
+        return await _transfer_no_hospital(
+            db, call_sid, state, reason="faq_no_hospital", service="faq"
         )
-        await session_store.delete_session(call_sid)
-        return twiml
 
     faq = await FaqRetrievalService(db).answer(
         hospital_id, transcript, lang, session_id=call_sid
@@ -419,7 +514,7 @@ async def _handle_pre_intent_route(
         "post_booking_continue",
         "greeting",
     }:
-        return await _enter_booking_flow(call_sid, state, resume=False)
+        return await _enter_booking_flow(db, call_sid, state, resume=False)
 
     # Booking lock: FAQ must not leave an active booking transaction.
     if intent == ConversationIntent.FAQ and is_booking_lock_active(state):
@@ -468,9 +563,26 @@ async def _do_reception_transfer(
         from app.tasks.voice_tasks import process_reception_callback_tickets
 
         if result.ticket_id:
-            process_reception_callback_tickets.delay()
+            if redis_cooldown_active():
+                logger.info(
+                    "callback_enqueue_skipped call_sid=%s reason=redis_unavailable ticket_id=%s",
+                    state.get("call_sid"),
+                    result.ticket_id,
+                )
+            else:
+                process_reception_callback_tickets.delay()
+                logger.info(
+                    "callback_enqueue_success call_sid=%s ticket_id=%s",
+                    state.get("call_sid"),
+                    result.ticket_id,
+                )
     except Exception as exc:
-        logger.error("Failed to enqueue callback ticket task: %s", exc)
+        logger.warning(
+            "callback_enqueue_failed call_sid=%s ticket_id=%s error=%s",
+            state.get("call_sid"),
+            getattr(result, "ticket_id", None),
+            exc,
+        )
 
     twiml = result.xml
     if preface and "<Response>" in twiml:
@@ -518,10 +630,26 @@ async def incoming_call(
         logger.info(f"  ↳ base_url={base_url}")
 
         # Phase 1: hospital config (reuse Flow A service)
-        config = await HospitalVoiceConfigService(db).resolve_for_inbound(
-            to_number=to_number
+        voice_svc = HospitalVoiceConfigService(db)
+        log_hospital_resolution_attempt(
+            call_sid=call_sid,
+            masked_did=mask_inbound_did(to_number),
+            normalized_did=normalize_inbound_did(to_number),
+            step="incoming",
         )
-        hospital_id = config.hospital_id if config else None
+        resolution_result = await voice_svc.resolve_inbound_hospital(to_number=to_number)
+        active_configs = await voice_svc.repo.list_active()
+        log_hospital_resolution(
+            resolution_result,
+            call_sid=call_sid,
+            masked_did=mask_inbound_did(to_number),
+            step="incoming",
+            active_config_count=len(active_configs),
+        )
+        if resolution_result.source.value == "unresolved" and to_number:
+            await voice_svc.validate_twilio_did_configuration(to_number)
+        config = resolution_result.config
+        hospital_id = resolution_result.hospital_id
         voice_profile = (config.voice_profile if config else None) or None
         voice_gender = (config.voice_gender if config else None) or None
         reception_number = (config.reception_number if config else None) or None
@@ -537,6 +665,8 @@ async def incoming_call(
 
         session_extra = {
             "hospital_id": hospital_id,
+            "hospital_resolution_source": resolution_result.source.value,
+            "to_number": to_number,
             "voice_profile": voice_profile,
             "voice_gender": voice_gender,
             "reception_number": reception_number,
@@ -686,6 +816,7 @@ async def language_select(
 @router.post("/menu")
 async def service_menu(
     request: Request,
+    db: DbSession,
     CallSid: str = Form(default=""),
     Digits: str = Form(default=""),
 ):
@@ -719,7 +850,7 @@ async def service_menu(
         logger.info(f"  ↳ [{call_sid}] Service selected: {service}")
 
         if service == "book":
-            twiml = book_node.build_collect_name_twiml(state)
+            twiml = await _enter_booking_flow(db, call_sid, state, resume=False)
             logger.info(f"  ↳ [{call_sid}] Returning collect_name TwiML")
             return xml(twiml)
 
@@ -804,7 +935,7 @@ async def conversation_turn(
             routed_intent = route_intent(transcript, state) if transcript else ConversationIntent.UNKNOWN
 
             if routed_intent == ConversationIntent.BOOKING:
-                return xml(await _enter_booking_flow(call_sid, state, resume=bool(state.get("return_step"))))
+                return xml(await _enter_booking_flow(db, call_sid, state, resume=bool(state.get("return_step"))))
             if routed_intent == ConversationIntent.TRANSFER:
                 bump_counter(state, "transfer_count")
                 await session_store.update_session(call_sid, {"step": "transfer"})
@@ -821,7 +952,7 @@ async def conversation_turn(
 
             if yn == "no":
                 if state.get("return_step") in booking_steps():
-                    return xml(await _enter_booking_flow(call_sid, state, resume=True))
+                    return xml(await _enter_booking_flow(db, call_sid, state, resume=True))
                 return xml(await _goodbye_twiml_and_cleanup(call_sid, state))
 
             if routed_intent == ConversationIntent.FAQ and transcript:
@@ -855,7 +986,7 @@ async def conversation_turn(
                 await session_store.delete_session(call_sid)
                 return xml(twiml)
             if routed_intent == ConversationIntent.BOOKING:
-                return xml(await _enter_booking_flow(call_sid, state, resume=False))
+                return xml(await _enter_booking_flow(db, call_sid, state, resume=False))
             if routed_intent == ConversationIntent.FAQ or yn == "yes" or transcript:
                 await session_store.update_session(call_sid, {"step": "faq_question", "service": "faq"})
                 state = await session_store.get_session(call_sid)
@@ -912,9 +1043,20 @@ async def conversation_turn(
 
             if result.get("_pending") == "suggest_doctors":
                 state = await session_store.get_session(call_sid)
+                hospital_id = await _ensure_session_hospital(
+                    db, call_sid, state, step="collect_problem", service="book"
+                )
+                if not hospital_id:
+                    return xml(
+                        await _transfer_no_hospital(
+                            db, call_sid, state, reason="booking_no_hospital", service="book"
+                        )
+                    )
                 specialty = state["detected_specialty"]
                 logger.info(f"  ↳ [{call_sid}] Fetching doctors for: {specialty}")
-                doctors = await book_node.fetch_doctors_for_specialty(specialty, db)
+                doctors = await book_node.fetch_doctors_for_specialty(
+                    specialty, db, hospital_id=hospital_id
+                )
                 logger.info(f"  ↳ [{call_sid}] Found {len(doctors)} doctors")
                 await session_store.update_session(call_sid, {"suggested_doctors": doctors})
                 state = await session_store.get_session(call_sid)
@@ -935,9 +1077,12 @@ async def conversation_turn(
 
             if result.get("_pending") == "select_slot":
                 state = await session_store.get_session(call_sid)
+                hospital_id = state.get("hospital_id")
                 doctor_id = state["selected_doctor_id"]
                 logger.info(f"  ↳ [{call_sid}] Fetching slots for doctor_id={doctor_id}")
-                slots = await book_node.fetch_available_slots(doctor_id, db)
+                slots = await book_node.fetch_available_slots(
+                    doctor_id, db, hospital_id=hospital_id
+                )
                 logger.info(f"  ↳ [{call_sid}] Found {len(slots)} slots")
                 await session_store.update_session(call_sid, {"available_slots": slots})
                 state = await session_store.get_session(call_sid)
@@ -957,8 +1102,35 @@ async def conversation_turn(
 
             if result.get("_pending") == "confirm":
                 state = await session_store.get_session(call_sid)
-                logger.info(f"  ↳ [{call_sid}] Confirming and booking appointment...")
-                confirm_result = await book_node.confirm_and_book(state, db)
+                if state.get("appointment_id"):
+                    logger.info(
+                        "BOOKING_ALREADY_PROCESSED call_sid=%s appointment_id=%s step=%s",
+                        call_sid,
+                        state.get("appointment_id"),
+                        step,
+                    )
+                    confirm_result = {
+                        "step": "booked",
+                        "appointment_id": state["appointment_id"],
+                        "appointment_number": state.get("appointment_number"),
+                        "_twiml": book_node._hangup_twiml(
+                            book_node._s(
+                                "confirm_booking",
+                                state.get("language") or "en",
+                                doctor=state.get("selected_doctor_name", "the doctor"),
+                                date=(state.get("selected_slot") or {}).get("date", ""),
+                                time=book_node._format_time_for_tts(
+                                    (state.get("selected_slot") or {}).get("time", "")
+                                ),
+                                appt_no=state.get("appointment_number", ""),
+                            ),
+                            state["twilio_language"],
+                            base_url=state.get("base_url", ""),
+                        ),
+                    }
+                else:
+                    logger.info(f"  ↳ [{call_sid}] Confirming and booking appointment...")
+                    confirm_result = await book_node.confirm_and_book(state, db)
                 await _apply(call_sid, confirm_result)
                 if confirm_result["step"] == "booked":
                     logger.info(

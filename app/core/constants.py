@@ -50,11 +50,21 @@ class AppointmentStatus:
     PENDING = "Pending"
     CONFIRMED = "Confirmed"
     COMPLETED = "Completed"
+    ADMIT_RECOMMENDED = "Admit Recommended"
+    ADMITTED = "Admitted"
     CANCELLED = "Cancelled"
     NO_SHOW = "No Show"
 
-    ACTIVE = {PENDING, CONFIRMED}
-    TERMINAL = {COMPLETED, CANCELLED, NO_SHOW}
+    ACTIVE = {PENDING, CONFIRMED, ADMIT_RECOMMENDED}
+    TERMINAL = {COMPLETED, ADMITTED, CANCELLED, NO_SHOW}
+
+
+class AdmissionStatus:
+    NOT_RECOMMENDED = "Not Recommended"
+    ADMIT_RECOMMENDED = "Admit Recommended"
+    ADMITTED = "Admitted"
+    DISCHARGED = "Discharged"
+    CANCELLED = "Cancelled"
 
 
 class PatientStatus:

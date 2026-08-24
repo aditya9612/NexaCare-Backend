@@ -21,6 +21,9 @@ from app.schemas.appointment_schema import (
     ConfirmedVisitListResponse,
     AppointmentListWithCountsResponse,
     ScheduledDoctorResponse,
+    AdmitRecommendationRequest,
+    AdmitRecommendationResponse,
+    PendingAdmissionItem,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -69,12 +72,14 @@ async def list_appointments(
     doctor_id: int | None = None,
     department_id: int | None = None,
     status: str | None = None,
+    admission_status: str | None = None,
     appointment_date: date | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
+        admission_status=admission_status,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 
@@ -318,6 +323,28 @@ async def skip_token(
             queue_status=appointment.queue_status
         )
     )
+
+
+@router.get("/pending-admissions", response_model=APIResponse[List[PendingAdmissionItem]])
+async def get_pending_admissions(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.DOCTOR)),
+):
+    result = await AppointmentService(db).get_pending_admissions()
+    return APIResponse(message="Pending admissions retrieved successfully", data=result)
+
+
+@router.post("/{appointment_id}/admit", response_model=APIResponse[AdmitRecommendationResponse])
+async def recommend_admission(
+    appointment_id: int,
+    data: AdmitRecommendationRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+):
+    result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id)
+    return APIResponse(message="Admission recommended successfully", data=result)
 
 
 @router.get("/{appointment_id}/token", response_model=APIResponse[TokenResponse])

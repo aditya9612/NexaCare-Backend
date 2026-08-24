@@ -19,6 +19,11 @@ from app.schemas.appointment_schema import (
     TokenResponse,    
     ConfirmedVisitResponse,
     ScheduledDoctorResponse,
+    AdmitRecommendationRequest,
+    AdmitRecommendationResponse,
+    PendingAdmissionItem,
+    PendingAdmissionPatientInfo,
+    PendingAdmissionDoctorInfo,
 )
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
@@ -91,15 +96,18 @@ class AppointmentService:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        admission_status: str | None = None,
     ):
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            admission_status=admission_status,
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            admission_status=admission_status,
         )
 
         # Calculate summary counts independently of pagination and status/date filters where appropriate
@@ -146,6 +154,14 @@ class AppointmentService:
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
             status="Checked-Out", appointment_date=appointment_date
         )
+        admit_recommended = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admit-recommended", appointment_date=appointment_date
+        )
+        admitted = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admitted", appointment_date=appointment_date
+        )
 
         paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
@@ -166,6 +182,8 @@ class AppointmentService:
             "in_progress": in_progress,
             "checked_in": checked_in,
             "checked_out": checked_out,
+            "admit_recommended": admit_recommended,
+            "admitted": admitted,
         }
 
     async def get_by_id(self, appointment_id: int) -> AppointmentResponse:
@@ -877,4 +895,165 @@ class AppointmentService:
             )
             
         return response_list
+
+    async def recommend_admission(
+        self,
+        appointment_id: int,
+        data: AdmitRecommendationRequest,
+        user_id: int,
+    ) -> AdmitRecommendationResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+
+        doctor = await self.doctor_repo.get_by_user_id(user_id)
+        if doctor and appointment.doctor_id != doctor.id:
+            from app.models.user_model import User
+            from app.core.constants import UserRole
+            from sqlalchemy import select
+            user_res = await self.db.execute(select(User).where(User.id == user_id))
+            user = user_res.scalar_one_or_none()
+            if user and user.role and user.role.name not in UserRole.ADMIN_ROLES:
+                raise BadRequestException("You can only recommend admission for your own appointments")
+
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW, "Cancelled", "No Show"):
+            raise BadRequestException(f"Cannot recommend admission for an appointment with status: {appointment.appointment_status}")
+
+        if appointment.appointment_status in (AppointmentStatus.PENDING, "Pending"):
+            raise BadRequestException("Cannot recommend admission for an appointment that is pending. Please confirm and check in the patient first.")
+
+        if not appointment.check_in_time and appointment.appointment_status not in (AppointmentStatus.COMPLETED, "Checked-In", "In-Progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
+            raise BadRequestException("Cannot recommend admission for a patient who has not checked in. Please check in the patient first.")
+
+        from app.core.constants import AdmissionStatus
+        appointment.appointment_status = AppointmentStatus.COMPLETED
+        appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
+        appointment.admission_recommended = True
+        appointment.admission_reason = data.admission_reason
+        appointment.expected_los = data.expected_los
+        appointment.recommended_ward = data.recommended_ward
+        if data.notes:
+            appointment.notes = f"{appointment.notes or ''}\n[Admission Notes]: {data.notes}".strip()
+
+        diagnosis_val = data.diagnosis
+        if diagnosis_val:
+            from app.models.clinical_record_model import ClinicalRecord
+            from sqlalchemy import select
+            cr_res = await self.db.execute(
+                select(ClinicalRecord).where(ClinicalRecord.appointment_id == appointment.id)
+            )
+            clinical_record = cr_res.scalar_one_or_none() if hasattr(cr_res, "scalar_one_or_none") else None
+            if hasattr(clinical_record, "__await__"):
+                clinical_record = await clinical_record
+            if isinstance(clinical_record, ClinicalRecord):
+                clinical_record.diagnosis = diagnosis_val
+                if data.notes:
+                    clinical_record.notes = f"{clinical_record.notes or ''}\n[Admission Notes]: {data.notes}".strip()
+            else:
+                clinical_record = ClinicalRecord(
+                    patient_id=appointment.patient_id,
+                    doctor_id=appointment.doctor_id,
+                    appointment_id=appointment.id,
+                    diagnosis=diagnosis_val,
+                    notes=data.notes,
+                )
+                self.db.add(clinical_record)
+
+            if appointment.patient:
+                appointment.patient.diagnosis = diagnosis_val
+
+        await self.db.flush()
+
+        patient_name = appointment.patient_name or f"Patient ID {appointment.patient_id}"
+        await self._create_queue_notification(
+            appointment,
+            f"Admission recommended for {patient_name}. Please allocate a bed."
+        )
+
+        return AdmitRecommendationResponse(
+            appointment_id=appointment.id,
+            patient_id=appointment.patient_id,
+            doctor_id=appointment.doctor_id,
+            appointment_status=appointment.appointment_status,
+            admission_status=appointment.admission_status,
+            admission_recommended=appointment.admission_recommended,
+            admission_reason=appointment.admission_reason,
+            expected_los=appointment.expected_los,
+            recommended_ward=appointment.recommended_ward,
+            diagnosis=diagnosis_val or (appointment.patient.diagnosis if appointment.patient else None),
+            notes=data.notes,
+        )
+
+    async def get_pending_admissions(self) -> list[PendingAdmissionItem]:
+        from app.models.bed_allocation_model import Bed
+        from app.core.constants import AdmissionStatus
+        from sqlalchemy import select, and_, not_, exists, or_
+
+        stmt = (
+            select(Appointment)
+            .where(
+                or_(
+                    Appointment.admission_status == AdmissionStatus.ADMIT_RECOMMENDED,
+                    Appointment.appointment_status == AppointmentStatus.ADMIT_RECOMMENDED,
+                    Appointment.admission_recommended.is_(True),
+                ),
+                Appointment.admission_status != AdmissionStatus.ADMITTED,
+                Appointment.appointment_status != AppointmentStatus.ADMITTED,
+                not_(
+                    exists().where(
+                        and_(
+                            Bed.patient_id == Appointment.patient_id,
+                            Bed.status == "Occupied",
+                        )
+                    )
+                )
+            )
+            .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
+        )
+        res = await self.db.execute(stmt)
+        appointments = list(res.scalars().all())
+
+        items: list[PendingAdmissionItem] = []
+        for a in appointments:
+            p = a.patient
+            d = a.doctor
+            dept_name = d.department.name if d and d.department else (a.department.name if a.department else None)
+
+            p_info = PendingAdmissionPatientInfo(
+                id=p.id if p else a.patient_id,
+                patient_code=p.patient_code if p else "",
+                first_name=p.first_name if p else "",
+                last_name=p.last_name if p else "",
+                gender=p.gender if p else None,
+                age=a.age if p else None,
+                phone=p.phone if p else None,
+            )
+            d_info = PendingAdmissionDoctorInfo(
+                id=d.id if d else a.doctor_id,
+                first_name=d.first_name if d else "",
+                last_name=d.last_name if d else "",
+                specialization=d.specialization if d else None,
+                department_name=dept_name,
+            )
+            diagnosis_val = (p.diagnosis if p else None) or (a.clinical_record.diagnosis if a.clinical_record else None)
+            items.append(
+                PendingAdmissionItem(
+                    appointment_id=a.id,
+                    patient_id=a.patient_id,
+                    appointment_number=a.appointment_number,
+                    appointment_date=a.appointment_date,
+                    appointment_status=a.appointment_status,
+                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if a.admission_recommended else None),
+                    admission_recommended=a.admission_recommended,
+                    admission_reason=a.admission_reason,
+                    expected_los=a.expected_los,
+                    recommended_ward=a.recommended_ward,
+                    diagnosis=diagnosis_val,
+                    patient=p_info,
+                    doctor=d_info,
+                    created_at=a.created_at,
+                )
+            )
+
+        return items
 

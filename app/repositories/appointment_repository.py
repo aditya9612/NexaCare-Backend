@@ -23,9 +23,10 @@ class AppointmentRepository:
         appointment_date: date | None = None,
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
+        admission_status: str | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
+        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date, admission_status)
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -38,12 +39,13 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        admission_status: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date)
+        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date, admission_status)
         return await self.db.scalar(query) or 0
 
-    def _apply_filters(self, query, patient_id, doctor_id, department_id, status, appointment_date):
+    def _apply_filters(self, query, patient_id, doctor_id, department_id, status, appointment_date, admission_status=None):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
         if doctor_id:
@@ -83,8 +85,41 @@ class AppointmentRepository:
                     query = query.where(Appointment.appointment_status.in_(["Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled"]))
                 elif s_lower in ("no-show", "no show"):
                     query = query.where(Appointment.appointment_status.in_(["No Show", "no show", "NO SHOW", "No-Show", "no-show"]))
+                elif s_lower in ("admit-recommended", "admit recommended", "admit_recommended"):
+                    query = query.where(
+                        or_(
+                            Appointment.admission_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
+                            Appointment.appointment_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
+                            Appointment.admission_recommended.is_(True),
+                        )
+                    )
+                elif s_lower in ("admitted", "admit"):
+                    query = query.where(
+                        or_(
+                            Appointment.admission_status.in_(["Admitted", "admitted", "ADMITTED"]),
+                            Appointment.appointment_status.in_(["Admitted", "admitted", "ADMITTED"]),
+                        )
+                    )
                 else:
                     query = query.where(func.lower(Appointment.appointment_status) == func.lower(status))
+        if admission_status:
+            if isinstance(admission_status, (list, tuple, set)):
+                query = query.where(Appointment.admission_status.in_(admission_status))
+            else:
+                adm_lower = str(admission_status).strip().lower().replace("_", "-")
+                if adm_lower in ("admit-recommended", "admit recommended", "admit_recommended"):
+                    query = query.where(
+                        or_(
+                            Appointment.admission_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
+                            Appointment.admission_recommended.is_(True),
+                        )
+                    )
+                elif adm_lower in ("admitted", "admit"):
+                    query = query.where(
+                        Appointment.admission_status.in_(["Admitted", "admitted", "ADMITTED"])
+                    )
+                else:
+                    query = query.where(func.lower(Appointment.admission_status) == func.lower(admission_status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
         return query

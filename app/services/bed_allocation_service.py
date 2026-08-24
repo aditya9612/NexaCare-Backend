@@ -42,10 +42,37 @@ class BedAllocationService:
                     bed.admission_date = None
         return floor
 
-    async def list_floors(self) -> List[Floor]:
-        floors = await self.repo.list_floors()
+    async def list_floors(
+        self,
+        status: Optional[str] = None,
+        floor_id: Optional[int] = None,
+        floor_number: Optional[int] = None,
+        floor_type: Optional[str] = None,
+        room_id: Optional[int] = None,
+        room_number: Optional[int] = None,
+        room_type: Optional[str] = None,
+    ) -> List[Floor]:
+        floors = await self.repo.list_floors(
+            floor_id=floor_id,
+            floor_number=floor_number,
+            floor_type=floor_type,
+        )
+
+        status_clean = status.strip().lower() if status else None
+        room_type_clean = room_type.strip().lower() if room_type else None
+
+        filtered_floors = []
         for floor in floors:
+            matching_rooms = []
             for room in floor.rooms:
+                if room_id is not None and room.id != room_id:
+                    continue
+                if room_number is not None and room.number != room_number:
+                    continue
+                if room_type_clean is not None and (room.type or "").strip().lower() != room_type_clean:
+                    continue
+
+                matching_beds = []
                 for bed in room.beds:
                     if bed.patient and getattr(bed.patient, "is_deleted", False):
                         bed.status = "Available"
@@ -53,7 +80,30 @@ class BedAllocationService:
                         bed.patient = None
                         bed.allocation_time = None
                         bed.admission_date = None
-        return floors
+
+                    if status_clean is not None:
+                        if (bed.status or "").strip().lower() != status_clean:
+                            continue
+
+                    matching_beds.append(bed)
+
+                if status_clean is not None:
+                    if matching_beds:
+                        room.beds = matching_beds
+                        matching_rooms.append(room)
+                else:
+                    room.beds = matching_beds
+                    matching_rooms.append(room)
+
+            if room_id is not None or room_number is not None or room_type_clean is not None or status_clean is not None:
+                if matching_rooms:
+                    floor.rooms = matching_rooms
+                    filtered_floors.append(floor)
+            else:
+                floor.rooms = matching_rooms
+                filtered_floors.append(floor)
+
+        return filtered_floors
 
     async def create_floor(self, data: FloorCreate) -> Floor:
         existing = await self.repo.get_floor_by_number(data.number)
@@ -375,8 +425,21 @@ class BedAllocationService:
             )
 
         status_norm = (appointment.appointment_status or "").strip().lower()
-        if status_norm != "completed":
-            if status_norm == "cancelled":
+        adm_status_norm = (appointment.admission_status or "").strip().lower()
+        allowed_statuses = {"completed", "admit recommended", "admit_recommended", "admitted"}
+        is_recommended = (
+            adm_status_norm in ("admit recommended", "admit_recommended")
+            or appointment.admission_recommended
+            or status_norm in ("admit recommended", "admit_recommended")
+        )
+        if status_norm == "pending":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate bed for a pending appointment. Please confirm and check in the patient first."
+            )
+
+        if not is_recommended and status_norm not in allowed_statuses:
+            if status_norm == "cancelled" or adm_status_norm == "cancelled":
                 raise HTTPException(
                     status_code=400,
                     detail="Cannot allocate bed for a cancelled appointment."
@@ -386,8 +449,26 @@ class BedAllocationService:
                 detail=f"Bed allocation is only allowed for patients with a completed appointment. Current appointment status: {appointment.appointment_status}."
             )
 
+        if not appointment.check_in_time and not is_recommended and status_norm not in ("completed", "admitted", "checked-in", "in-progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate bed for a patient who has not checked in. Please check in the patient first."
+            )
+
+        if status_norm == "cancelled" or adm_status_norm == "cancelled":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate bed for a cancelled appointment."
+            )
+
+        from app.core.constants import AdmissionStatus, AppointmentStatus
+        appointment.admission_status = AdmissionStatus.ADMITTED
+        if status_norm in ("admit recommended", "admit_recommended"):
+            appointment.appointment_status = AppointmentStatus.COMPLETED
+
         bed.status = "Occupied"
         bed.patient_id = patient.id
+        bed.patient = patient
         bed.allocation_time = utc_now()
         bed.admission_date = data.admissionDate
 
@@ -427,8 +508,26 @@ class BedAllocationService:
 
         bed.status = "Available"
         bed.patient_id = None
+        bed.patient = None
         bed.allocation_time = None
         bed.admission_date = None
+
+        from app.models.appointment_model import Appointment
+        from app.core.constants import AdmissionStatus
+        from sqlalchemy import select, desc
+        app_stmt = (
+            select(Appointment)
+            .where(
+                Appointment.patient_id == patient_id,
+                Appointment.admission_status == AdmissionStatus.ADMITTED,
+            )
+            .order_by(desc(Appointment.id))
+            .limit(1)
+        )
+        app_res = await self.db.execute(app_stmt)
+        patient_app = app_res.scalar_one_or_none()
+        if patient_app:
+            patient_app.admission_status = AdmissionStatus.DISCHARGED
 
         await self.db.flush()
 
@@ -477,11 +576,13 @@ class BedAllocationService:
 
         target_bed.status = "Occupied"
         target_bed.patient_id = patient.id
+        target_bed.patient = patient
         target_bed.allocation_time = allocation_time
         target_bed.admission_date = admission_date
 
         source_bed.status = "Available"
         source_bed.patient_id = None
+        source_bed.patient = None
         source_bed.allocation_time = None
         source_bed.admission_date = None
 

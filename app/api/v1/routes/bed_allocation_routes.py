@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -32,8 +32,23 @@ async def list_floors(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
+    status: Optional[str] = Query(None, description="Filter beds by status (e.g. Available, Occupied, Cleaning, Maintenance, Reserved)"),
+    floor_id: Optional[int] = Query(None, description="Filter by Floor ID"),
+    floor_number: Optional[int] = Query(None, description="Filter by Floor Number"),
+    floor_type: Optional[str] = Query(None, description="Filter by Floor Type (e.g. ICU, General, Emergency)"),
+    room_id: Optional[int] = Query(None, description="Filter by Room ID"),
+    room_number: Optional[int] = Query(None, description="Filter by Room Number"),
+    room_type: Optional[str] = Query(None, description="Filter by Room Type (e.g. ICU, General, Deluxe)"),
 ):
-    floors = await BedAllocationService(db).list_floors()
+    floors = await BedAllocationService(db).list_floors(
+        status=status,
+        floor_id=floor_id,
+        floor_number=floor_number,
+        floor_type=floor_type,
+        room_id=room_id,
+        room_number=room_number,
+        room_type=room_type,
+    )
     return APIResponse(message="Floors retrieved successfully", data=floors)
 
 

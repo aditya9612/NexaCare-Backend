@@ -79,8 +79,8 @@ class AppointmentRepository:
         appointment_date,
         appointment_type=None,
         booking_source=None,
+        admission_status=None,
     ):
-    def _apply_filters(self, query, patient_id, doctor_id, department_id, status, appointment_date, admission_status=None):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
         if doctor_id:

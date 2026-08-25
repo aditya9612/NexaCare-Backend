@@ -296,3 +296,390 @@ class TestFaqSttUnclear:
         mock_transfer.assert_awaited_once()
         assert mock_transfer.await_args.kwargs["reason"] == "stt_unclear"
         assert "Dial" in twiml
+
+    @pytest.mark.asyncio
+    async def test_faq_resolves_hospital_when_missing_from_state(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from app.agent.router import _process_faq_transcript
+        from app.services.faq_retrieval_service import FaqAnswer
+        from app.services.hospital_voice_config_service import (
+            HospitalResolutionResult,
+            HospitalResolutionSource,
+        )
+
+        state = _state(
+            language="mr",
+            twilio_language="mr-IN",
+            step="faq_question",
+            service="faq",
+            hospital_id=None,
+            to_number="+15551234567",
+            retry_count=0,
+        )
+        db = AsyncMock()
+        mock_config = MagicMock()
+        mock_config.hospital_id = 1
+        mock_config.reception_number = "+911234567890"
+        faq_answer = FaqAnswer(
+            found=True,
+            answer="आमचे हॉस्पिटल सकाळी ८ ते रात्री ८ वाजेपर्यंत उघडे असते.",
+            source="faq",
+            confidence=0.95,
+            faq_hit=True,
+        )
+
+        with patch(
+            "app.agent.router.HospitalVoiceConfigService"
+        ) as mock_config_cls:
+            mock_config_cls.return_value.resolve_inbound_hospital = AsyncMock(
+                return_value=HospitalResolutionResult(
+                    hospital_id=1,
+                    config=mock_config,
+                    source=HospitalResolutionSource.DID_MATCH,
+                    matched_count=1,
+                )
+            )
+            with patch(
+                "app.agent.router.FaqRetrievalService"
+            ) as mock_faq_cls:
+                mock_faq_cls.return_value.answer = AsyncMock(return_value=faq_answer)
+                with patch(
+                    "app.agent.router._do_reception_transfer",
+                    new=AsyncMock(),
+                ) as mock_transfer:
+                    with patch(
+                        "app.agent.router.session_store.update_session",
+                        new=AsyncMock(),
+                    ):
+                        with patch(
+                            "app.agent.router.session_store.delete_session",
+                            new=AsyncMock(),
+                        ):
+                            twiml = await _process_faq_transcript(
+                                db,
+                                "CA123",
+                                state,
+                                "आपल्या हॉस्पिटल किती वाजता ओपन होते",
+                                phase6=False,
+                                confidence=0.86,
+                            )
+
+        mock_config_cls.return_value.resolve_inbound_hospital.assert_awaited_once()
+        mock_faq_cls.return_value.answer.assert_awaited_once_with(
+            1,
+            "आपल्या हॉस्पिटल किती वाजता ओपन होते",
+            "mr",
+            session_id="CA123",
+        )
+        mock_transfer.assert_not_awaited()
+        assert "Hangup" in twiml
+
+
+class TestHospitalResolutionSafety:
+    def test_mask_inbound_did(self):
+        from app.services.hospital_voice_config_service import mask_inbound_did
+
+        assert mask_inbound_did("+15551234567") == "***4567"
+        assert mask_inbound_did("") == "***"
+
+    @pytest.mark.asyncio
+    async def test_exact_did_match(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.services.hospital_voice_config_service import (
+            HospitalResolutionSource,
+            HospitalVoiceConfigService,
+        )
+
+        db = AsyncMock()
+        cfg = MagicMock()
+        cfg.hospital_id = 1
+        cfg.is_active = True
+        cfg.is_deleted = False
+        svc = HospitalVoiceConfigService(db)
+        svc.repo.find_active_by_inbound_did = AsyncMock(return_value=[cfg])
+
+        result = await svc.resolve_inbound_hospital(to_number="+15551111111")
+
+        assert result.hospital_id == 1
+        assert result.source == HospitalResolutionSource.DID_MATCH
+
+    @pytest.mark.asyncio
+    async def test_unknown_did_unresolved_without_dev_fallback(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from app.services.hospital_voice_config_service import (
+            HospitalResolutionSource,
+            HospitalVoiceConfigService,
+        )
+
+        db = AsyncMock()
+        svc = HospitalVoiceConfigService(db)
+        svc.repo.find_active_by_inbound_did = AsyncMock(return_value=[])
+        svc.repo.list_active = AsyncMock(return_value=[MagicMock(), MagicMock()])
+
+        with patch(
+            "app.services.hospital_voice_config_service.is_dev_single_hospital_fallback_enabled",
+            return_value=False,
+        ):
+            result = await svc.resolve_inbound_hospital(to_number="+19999999999")
+
+        assert result.hospital_id is None
+        assert result.source == HospitalResolutionSource.UNRESOLVED
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_did_unresolved(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.services.hospital_voice_config_service import (
+            HospitalResolutionSource,
+            HospitalVoiceConfigService,
+        )
+
+        db = AsyncMock()
+        svc = HospitalVoiceConfigService(db)
+        svc.repo.find_active_by_inbound_did = AsyncMock(
+            return_value=[MagicMock(hospital_id=1), MagicMock(hospital_id=2)]
+        )
+
+        result = await svc.resolve_inbound_hospital(to_number="+15550000000")
+
+        assert result.hospital_id is None
+        assert result.source == HospitalResolutionSource.UNRESOLVED
+        assert result.matched_count == 2
+
+    @pytest.mark.asyncio
+    async def test_dev_single_hospital_fallback(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from app.services.hospital_voice_config_service import (
+            HospitalResolutionSource,
+            HospitalVoiceConfigService,
+        )
+
+        db = AsyncMock()
+        cfg = MagicMock()
+        cfg.hospital_id = 42
+        svc = HospitalVoiceConfigService(db)
+        svc.repo.find_active_by_inbound_did = AsyncMock(return_value=[])
+        svc.repo.list_active = AsyncMock(return_value=[cfg])
+
+        with patch(
+            "app.services.hospital_voice_config_service.is_dev_single_hospital_fallback_enabled",
+            return_value=True,
+        ):
+            result = await svc.resolve_inbound_hospital(to_number="+19999999999")
+
+        assert result.hospital_id == 42
+        assert result.source == HospitalResolutionSource.DEV_SINGLE_HOSPITAL_FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_faq_unknown_did_transfers_without_retrieval(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent.router import _process_faq_transcript
+        from app.services.hospital_voice_config_service import (
+            HospitalResolutionResult,
+            HospitalResolutionSource,
+        )
+
+        state = _state(
+            language="mr",
+            step="faq_question",
+            service="faq",
+            hospital_id=None,
+            to_number="+19999999999",
+        )
+        db = AsyncMock()
+
+        with patch(
+            "app.agent.router.HospitalVoiceConfigService"
+        ) as mock_config_cls:
+            mock_config_cls.return_value.resolve_inbound_hospital = AsyncMock(
+                return_value=HospitalResolutionResult(
+                    hospital_id=None,
+                    config=None,
+                    source=HospitalResolutionSource.UNRESOLVED,
+                    matched_count=0,
+                )
+            )
+            with patch("app.agent.router.FaqRetrievalService") as mock_faq_cls:
+                with patch(
+                    "app.agent.router._do_reception_transfer",
+                    new=AsyncMock(return_value="<Response><Dial/></Response>"),
+                ) as mock_transfer:
+                    with patch(
+                        "app.agent.router.session_store.delete_session",
+                        new=AsyncMock(),
+                    ):
+                        twiml = await _process_faq_transcript(
+                            db,
+                            "CA123",
+                            state,
+                            "hospital hours",
+                            phase6=False,
+                            confidence=0.9,
+                        )
+
+        mock_faq_cls.return_value.answer.assert_not_called()
+        mock_transfer.assert_awaited_once()
+        assert mock_transfer.await_args.kwargs["reason"] == "faq_no_hospital"
+        assert "Dial" in twiml
+
+    @pytest.mark.asyncio
+    async def test_faq_hospital1_not_hospital2(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent.router import _process_faq_transcript
+        from app.services.faq_retrieval_service import FaqAnswer
+
+        state = _state(
+            language="en",
+            step="faq_question",
+            service="faq",
+            hospital_id=1,
+        )
+        db = AsyncMock()
+
+        with patch(
+            "app.agent.router.FaqRetrievalService"
+        ) as mock_faq_cls:
+            mock_faq_cls.return_value.answer = AsyncMock(
+                return_value=FaqAnswer(found=True, answer="H1 hours", confidence=0.95)
+            )
+            with patch(
+                "app.agent.router.session_store.delete_session",
+                new=AsyncMock(),
+            ):
+                await _process_faq_transcript(
+                    db,
+                    "CA123",
+                    state,
+                    "hours?",
+                    phase6=False,
+                    confidence=0.9,
+                )
+
+        mock_faq_cls.return_value.answer.assert_awaited_once_with(
+            1, "hours?", "en", session_id="CA123"
+        )
+
+    @pytest.mark.asyncio
+    async def test_session_retains_hospital_id_across_updates(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent import session_store
+
+        with patch("app.agent.session_store.cache_set", new=AsyncMock(return_value=False)):
+            with patch("app.agent.session_store.cache_get", new=AsyncMock(return_value=None)):
+                state = await session_store.create_session(
+                    "CA999",
+                    "+919999999999",
+                    "http://localhost:8000",
+                    hospital_id=7,
+                    to_number="+15551111111",
+                    hospital_resolution_source="did_match",
+                )
+                await session_store.update_session("CA999", {"step": "faq_question"})
+                reloaded = await session_store.get_session("CA999")
+
+        assert reloaded is not None
+        assert reloaded["hospital_id"] == 7
+        assert reloaded["to_number"] == "+15551111111"
+        assert reloaded["hospital_resolution_source"] == "did_match"
+
+    @pytest.mark.asyncio
+    async def test_doctor_belongs_to_hospital_blocks_cross_hospital(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.agent.nodes.booking import doctor_belongs_to_hospital
+
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=2))
+        )
+
+        assert await doctor_belongs_to_hospital(10, 1, db) is False
+
+    @pytest.mark.asyncio
+    async def test_confirm_and_book_blocks_cross_hospital_doctor(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent.nodes import booking as book_node
+
+        state = _state(
+            step="select_slot",
+            hospital_id=1,
+            selected_doctor_id=99,
+            selected_slot={"date": "2026-08-25", "time": "10:00:00"},
+            patient_name="Test",
+        )
+        db = AsyncMock()
+
+        with patch.object(
+            book_node,
+            "doctor_belongs_to_hospital",
+            new=AsyncMock(return_value=False),
+        ):
+            result = await book_node.confirm_and_book(state, db)
+
+        assert result["step"] == "error"
+
+
+class TestInboundDidNormalization:
+    def test_us_twilio_e164_match(self):
+        from app.utils.phone_utils import inbound_dids_match, normalize_inbound_did
+
+        twilio = "+17372508034"
+        stored = "+17372508034"
+        assert normalize_inbound_did(twilio) == "+17372508034"
+        assert inbound_dids_match(stored, twilio)
+
+    def test_us_twilio_formatted_match(self):
+        from app.utils.phone_utils import inbound_dids_match
+
+        assert inbound_dids_match("+1 (737) 250-8034", "+17372508034")
+
+    def test_mismatch_different_numbers(self):
+        from app.utils.phone_utils import inbound_dids_match
+
+        assert inbound_dids_match("+14787588435", "+17372508034") is False
+
+
+class TestBookingIdempotency:
+    @pytest.mark.asyncio
+    async def test_confirm_and_book_returns_existing_on_duplicate(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.agent.nodes import booking as book_node
+
+        state = _state(
+            step="confirm",
+            hospital_id=1,
+            selected_doctor_id=5,
+            selected_doctor_name="Dr Test",
+            selected_slot={"date": "2026-08-25", "time": "10:00:00"},
+            appointment_id=99,
+            appointment_number="APT-EXISTING",
+            booking_attempt_id="abc123",
+        )
+        db = AsyncMock()
+
+        with patch.object(book_node, "doctor_belongs_to_hospital", new=AsyncMock(return_value=True)):
+            result = await book_node.confirm_and_book(state, db)
+
+        assert result["step"] == "booked"
+        assert result["appointment_id"] == 99
+        assert result["appointment_number"] == "APT-EXISTING"
+        db.commit.assert_not_called()
+
+    def test_booking_attempt_id_is_deterministic(self):
+        from app.agent.nodes.booking import _booking_attempt_id
+
+        state = _state(
+            call_sid="CA123",
+            selected_doctor_id=7,
+        )
+        slot = {"date": "2026-08-25", "time": "10:00:00"}
+        assert _booking_attempt_id(state, slot) == _booking_attempt_id(state, slot)

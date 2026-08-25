@@ -241,15 +241,15 @@ class VendorService:
             ws.title = "Vendors Export"
             
             headers = [
-                "id", "name", "vendor_type", "contact_person", "phone",
+                "Sr. No.", "name", "vendor_type", "contact_person", "phone",
                 "email", "address", "gst_number", "service_type", "is_active",
                 "created_at", "updated_at"
             ]
             ws.append(headers)
             
-            for v in vendors:
+            for sr_no, v in enumerate(vendors, start=1):
                 row = [
-                    v.id,
+                    sr_no,
                     v.name,
                     v.vendor_type,
                     v.contact_person or "",

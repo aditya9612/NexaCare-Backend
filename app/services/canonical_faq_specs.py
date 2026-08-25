@@ -79,7 +79,8 @@ def build_canonical_faq_specs() -> list[dict]:
             "answer": "आपत्कालीन विभाग २४ तास उघडा असतो.",
             "tags": (
                 "emergency,timing,department,आपत्कालीन विभाग,"
-                "emergency department hours,emergency open 24 hours"
+                "emergency department hours,emergency open 24 hours,"
+                "emergency 24 hours aahe ka,is emergency open 24 hours"
             ),
         },
         {
@@ -157,7 +158,8 @@ def build_canonical_faq_specs() -> list[dict]:
             "answer": f"फार्मसी {hours} दरम्यान उघडी असते.",
             "tags": (
                 "pharmacy,timing,फार्मसी,फार्मसी आहे का,medical store,"
-                "औषधांचे दुकान,medicine shop"
+                "औषधांचे दुकान,medicine shop,pharmacy chi timing kay aahe,"
+                "What time is pharmacy open,Pharmacy timing,फार्मसीची वेळ"
             ),
         },
         {
@@ -167,7 +169,8 @@ def build_canonical_faq_specs() -> list[dict]:
             "answer": f"लॅब {hours} दरम्यान उपलब्ध आहे. ब्लड टेस्ट, X-Ray, MRI आणि CT Scan सुविधा उपलब्ध आहेत.",
             "tags": (
                 "laboratory,lab,timing,लॅब,blood test,ब्लड टेस्ट,"
-                "X-Ray,MRI,CT Scan,lab report,रिपोर्ट"
+                "X-Ray,MRI,CT Scan,lab report,रिपोर्ट,lab chi timing kay aahe,"
+                "What time is the lab open,Lab timing,लॅबची वेळ"
             ),
         },
     ]

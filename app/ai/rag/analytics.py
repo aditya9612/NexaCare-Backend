@@ -38,6 +38,14 @@ class RagAnalytics:
         entity_score: Optional[float] = None,
         language_score: Optional[float] = None,
         authority_score: Optional[float] = None,
+        exact_match_score: Optional[float] = None,
+        phrase_match_score: Optional[float] = None,
+        decision_reason: Optional[str] = None,
+        normalized_candidate: Optional[str] = None,
+        candidate_question: Optional[str] = None,
+        candidate_hospital_id: Optional[int] = None,
+        candidate_active: Optional[bool] = None,
+        candidate_deleted: Optional[bool] = None,
         faq_hit: bool = False,
         cache_hit: bool = False,
         embedding_status: str = "ok",
@@ -50,7 +58,21 @@ class RagAnalytics:
             "entity": round(entity_score, 3) if entity_score is not None else None,
             "language": round(language_score, 3) if language_score is not None else None,
             "authority": round(authority_score, 3) if authority_score is not None else None,
+            "exact_match": round(exact_match_score, 3)
+            if exact_match_score is not None
+            else None,
+            "phrase_match": round(phrase_match_score, 3)
+            if phrase_match_score is not None
+            else None,
+            "normalized_query": (normalized_query or "")[:200] or None,
+            "normalized_candidate": (normalized_candidate or "")[:200] or None,
+            "candidate_question": (candidate_question or "")[:200] or None,
+            "candidate_hospital_id": candidate_hospital_id,
+            "candidate_active": candidate_active,
+            "candidate_deleted": candidate_deleted,
             "fused": round(confidence, 3),
+            "decision": confidence_action,
+            "decision_reason": decision_reason,
         }
         logger.info(
             "faq_rag_analytics hospital_id=%s kb_version=%s language=%s outcome=%s "

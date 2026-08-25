@@ -65,3 +65,48 @@ def validate_phone_field(phone: str) -> str:
             raise ValueError("Phone number must start with 6, 7, 8, or 9")
 
     return normalized
+
+
+def normalize_inbound_did(phone: str | None) -> str:
+    """
+    Canonical E.164-style key for inbound DID matching (voice hospital resolution).
+
+    Strips formatting, normalizes country codes, and returns +digits form.
+    Used only for comparison — does not validate carrier rules.
+    """
+    if not phone:
+        return ""
+    cleaned = _NON_DIGIT.sub("", phone.strip())
+    if cleaned.startswith("00"):
+        cleaned = cleaned[2:]
+    if cleaned.startswith("0") and not cleaned.startswith("00"):
+        rest = cleaned[1:]
+        if rest.startswith("91") and len(rest) >= 12:
+            cleaned = rest
+        elif len(rest) == 10 and rest[0] in "6789":
+            cleaned = f"91{rest}"
+    if len(cleaned) == 10 and cleaned[0] in "6789":
+        cleaned = f"91{cleaned}"
+    if cleaned.startswith("91") and len(cleaned) >= 12:
+        return f"+91{cleaned[-10:]}"
+    if cleaned.startswith("1") and len(cleaned) == 11:
+        return f"+{cleaned}"
+    if cleaned and not cleaned.startswith("+"):
+        return f"+{cleaned}"
+    return cleaned if cleaned.startswith("+") else f"+{cleaned}"
+
+
+def inbound_dids_match(stored_did: str | None, caller_did: str | None) -> bool:
+    """True when two inbound DIDs refer to the same number after normalization."""
+    a = normalize_inbound_did(stored_did)
+    b = normalize_inbound_did(caller_did)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # National significant number fallback (last 10) for legacy rows
+    a_digits = "".join(c for c in a if c.isdigit())
+    b_digits = "".join(c for c in b if c.isdigit())
+    if len(a_digits) >= 10 and len(b_digits) >= 10:
+        return a_digits[-10:] == b_digits[-10:]
+    return False

@@ -12,9 +12,22 @@
     h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
     .meta { margin-bottom: 10px; font-size: 9px; }
     table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
-    th, td { border: 0.5px solid #e5e7eb; padding: 3px 2px; text-align: left; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; overflow: hidden; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 3px 2px; text-align: left; overflow: hidden; }
     th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
     tr:nth-child(even) { background-color: #fafafa; }
+    .wrap-col {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      word-wrap: break-word;
+    }
+    .nowrap-col {
+      white-space: nowrap;
+    }
+    .short-col {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -26,35 +39,47 @@
   <table>
     <thead>
       <tr>
-        <th style="width: 4%;">ID</th>
-        <th style="width: 12%;">Name</th>
-        <th style="width: 7%;">Type</th>
-        <th style="width: 11%;">Contact Person</th>
-        <th style="width: 8%;">Phone</th>
-        <th style="width: 11%;">Email</th>
-        <th style="width: 13%;">Address</th>
-        <th style="width: 10%;">GST Number</th>
-        <th style="width: 10%;">Service Type</th>
-        <th style="width: 5%;">Status</th>
-        <th style="width: 9%;">Created At</th>
-        <th style="width: 10%;">Updated At</th>
+        <th class="short-col" style="width: 4%;">Sr. No.</th>
+        <th class="wrap-col" style="width: 14%;">Name</th>
+        <th class="wrap-col" style="width: 7%;">Type</th>
+        <th class="wrap-col" style="width: 13%;">Contact Person</th>
+        <th class="nowrap-col" style="width: 8%;">Phone</th>
+        <th class="wrap-col" style="width: 13%;">Email</th>
+        <th class="wrap-col" style="width: 15%;">Address</th>
+        <th class="nowrap-col" style="width: 8%;">GST Number</th>
+        <th class="wrap-col" style="width: 10%;">Service Type</th>
+        <th class="short-col" style="width: 5%;">Status</th>
+        <th class="nowrap-col" style="width: 6.5%;">Created At</th>
+        <th class="nowrap-col" style="width: 6.5%;">Updated At</th>
       </tr>
     </thead>
     <tbody>
       {% for item in vendors %}
       <tr>
-        <td>{{ item.id }}</td>
-        <td>{{ item.name }}</td>
-        <td>{{ item.vendor_type }}</td>
-        <td>{{ item.contact_person or "" }}</td>
-        <td>{{ item.phone or "" }}</td>
-        <td>{{ item.email or "" }}</td>
-        <td>{{ item.address or "" }}</td>
-        <td>{{ item.gst_number or "" }}</td>
-        <td>{{ item.service_type or "" }}</td>
-        <td>{{ "Active" if item.is_active else "Inactive" }}</td>
-        <td>{{ item.created_at }}</td>
-        <td>{{ item.updated_at }}</td>
+        <td class="short-col">{{ loop.index }}</td>
+        <td class="wrap-col">{{ item.name }}</td>
+        <td class="wrap-col">{{ item.vendor_type }}</td>
+        <td class="wrap-col">{{ item.contact_person or "" }}</td>
+        <td class="nowrap-col">{{ item.phone or "" }}</td>
+        <td class="wrap-col">{{ item.email or "" }}</td>
+        <td class="wrap-col">{{ item.address or "" }}</td>
+        <td class="nowrap-col">{{ item.gst_number or "" }}</td>
+        <td class="wrap-col">{{ item.service_type or "" }}</td>
+        <td class="short-col">{{ "Active" if item.is_active else "Inactive" }}</td>
+        <td class="nowrap-col">
+          {% if item.created_at and item.created_at != '-' %}
+            {{ item.created_at.split(' ')[0] }}<br/>{{ item.created_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
+        <td class="nowrap-col">
+          {% if item.updated_at and item.updated_at != '-' %}
+            {{ item.updated_at.split(' ')[0] }}<br/>{{ item.updated_at.split(' ')[1] }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

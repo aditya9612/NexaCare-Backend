@@ -1524,26 +1524,28 @@ class PharmacyService:
 
         if format_type == "excel":
             import openpyxl
+            from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Medicines Inventory"
 
             headers = [
-                "sku", "name", "generic_name", "category", "barcode", "batch_number",
-                "expiry_date", "manufacturer", "unit", "unit_price",
-                "stock_quantity", "reorder_level", "description"
+                "Sr. No.", "SKU", "Medicine Name", "Generic Name", "Category", "Barcode", "Batch Number",
+                "Expiry Date", "Manufacturer", "Unit", "Unit Price", "Stock Qty.", "Reorder Level", "Description"
             ]
             ws.append(headers)
 
-            for item in medicines:
+            for idx, item in enumerate(medicines, 1):
                 row = [
+                    idx,
                     item.sku,
                     item.name,
                     item.generic_name or "",
                     item.category,
                     item.barcode or "",
                     item.batch_number or "",
-                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
+                    item.expiry_date.strftime("%d-%m-%Y") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
                     item.manufacturer or "",
                     item.unit,
                     float(item.unit_price) if item.unit_price is not None else 0.0,
@@ -1552,6 +1554,80 @@ class PharmacyService:
                     item.description or ""
                 ]
                 ws.append(row)
+
+            # Styling definitions
+            wrap_alignment = Alignment(wrap_text=True, vertical="center")
+            center_alignment = Alignment(horizontal="center", vertical="center")
+            left_alignment = Alignment(horizontal="left", vertical="center")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+            header_font = Font(name="Calibri", size=11, bold=True, color="000000")
+            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid") # White background
+            
+            thin_side = Side(style='thin', color='DDDDDD')
+            thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            zebra_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid") # subtle shading
+
+            # Freeze the header row
+            ws.freeze_panes = "A2"
+
+            # Enable auto-filter
+            ws.auto_filter.ref = f"A1:N{len(medicines) + 1}"
+
+            # Set header row height to 32 for padding
+            ws.row_dimensions[1].height = 32
+
+            # Apply header styling
+            for col_idx in range(1, 15):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = thin_border
+
+            # Set custom column widths
+            column_widths = {
+                1: 8,   # Sr. No.
+                2: 20,  # SKU
+                3: 22,  # Medicine Name
+                4: 22,  # Generic Name
+                5: 16,  # Category
+                6: 18,  # Barcode
+                7: 16,  # Batch Number
+                8: 14,  # Expiry Date
+                9: 20,  # Manufacturer
+                10: 10, # Unit
+                11: 13, # Unit Price
+                12: 12, # Stock Qty.
+                13: 13, # Reorder Level
+                14: 30  # Description
+            }
+            for col_idx, width in column_widths.items():
+                ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+
+            # Apply data row styling, borders and formatting
+            for row_idx in range(2, len(medicines) + 2):
+                ws.row_dimensions[row_idx].height = 22
+                is_shaded_row = (row_idx % 2 == 1) # Alternating rows: Row 2 = white, Row 3 = shaded
+                for col_idx in range(1, 15):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.border = thin_border
+                    if is_shaded_row:
+                        cell.fill = zebra_fill
+                    
+                    # Alignments and wrapping
+                    # Center: Sr. No. (1), SKU (2), Category (5), Barcode (6), Batch (7), Expiry (8), Unit (10), Price (11), Stock (12), Reorder (13)
+                    # Left: Name (3), Generic Name (4), Manufacturer (9), Description (14)
+                    if col_idx in (3, 4, 9, 14): # wrap-text columns
+                        cell.alignment = wrap_alignment
+                    elif col_idx in (1, 2, 5, 6, 7, 8, 10, 11, 12, 13): # center aligned
+                        cell.alignment = center_alignment
+                    else:
+                        cell.alignment = left_alignment
+
+                # Currency formatting for price column
+                price_cell = ws.cell(row=row_idx, column=11)
+                price_cell.number_format = '"₹"#,##0.00'
 
             stream = BytesIO()
             wb.save(stream)
@@ -1783,6 +1859,8 @@ class PharmacyService:
         
         if format_type == "excel":
             import openpyxl
+            from openpyxl.styles import Font
+            
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Suppliers Export"
@@ -1792,6 +1870,11 @@ class PharmacyService:
                 "address", "gst_number", "is_active", "created_at"
             ]
             ws.append(headers)
+            
+            # Apply styling to the header row (Bold, Size 12)
+            header_font = Font(name="Calibri", size=12, bold=True)
+            for col_idx in range(1, len(headers) + 1):
+                ws.cell(row=1, column=col_idx).font = header_font
             
             for sr_no, s in enumerate(suppliers, start=1):
                 row = [

@@ -123,7 +123,7 @@ class DashboardService:
             )
         ) or 0
 
-        # Fetch 5 most recent pending test orders (excluding soft-deleted patients)
+        # Fetch pending test orders (excluding soft-deleted patients)
         recent_labs_result = await self.db.execute(
             select(TestOrder)
             .join(Patient, TestOrder.patient_id == Patient.id)
@@ -134,7 +134,6 @@ class DashboardService:
                 TestOrder.status.in_(pending_statuses)
             )
             .order_by(TestOrder.created_at.desc())
-            .limit(5)
         )
         recent_labs = list(recent_labs_result.scalars().all())
 
@@ -152,10 +151,20 @@ class DashboardService:
         ]
 
         # Prescription summary metrics
+        from datetime import datetime, time
+        from app.utils.helpers import get_today_ist
+
+        today_ist = get_today_ist()
+        start_ist = datetime.combine(today_ist, time.min)
+        end_ist = datetime.combine(today_ist, time.max)
+        start_utc = start_ist - timedelta(hours=5, minutes=30)
+        end_utc = end_ist - timedelta(hours=5, minutes=30)
+
         total_prescriptions = await self.db.scalar(
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
-                func.date(Prescription.created_at) == today,
+                Prescription.created_at >= start_utc,
+                Prescription.created_at <= end_utc,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -164,7 +173,8 @@ class DashboardService:
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
                 Prescription.status == "pending",
-                func.date(Prescription.created_at) == today,
+                Prescription.created_at >= start_utc,
+                Prescription.created_at <= end_utc,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -173,7 +183,8 @@ class DashboardService:
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
                 Prescription.status == "dispensed",
-                func.date(Prescription.created_at) == today,
+                Prescription.created_at >= start_utc,
+                Prescription.created_at <= end_utc,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -183,7 +194,8 @@ class DashboardService:
             .options(selectinload(Prescription.items))
             .where(
                 Prescription.doctor_id == doctor.id,
-                func.date(Prescription.created_at) == today,
+                Prescription.created_at >= start_utc,
+                Prescription.created_at <= end_utc,
                 Prescription.is_deleted.is_(False)
             )
             .order_by(Prescription.created_at.desc())

@@ -285,14 +285,15 @@ class AppointmentRepository:
         return list(result.scalars().all())
 
     async def get_upcoming_appointments(self, doctor_id: int, limit: int = 10) -> list[Appointment]:
-        now = datetime.now()
-        current_date = now.date()
-        current_time = now.time()
+        from datetime import timezone, timedelta
+        now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+        current_date = now_ist.date()
+        current_time = now_ist.time()
         query = (
             select(Appointment)
             .where(
                 Appointment.doctor_id == doctor_id,
-                Appointment.appointment_status == AppointmentStatus.CONFIRMED,
+                Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
                 or_(
                     Appointment.appointment_date > current_date,
                     and_(

@@ -356,17 +356,30 @@ class TransactionService:
                         payment_date = payment_date_val
                     elif isinstance(payment_date_val, date) and not isinstance(payment_date_val, datetime):
                         payment_date = datetime.combine(payment_date_val, datetime.min.time())
+                    elif isinstance(payment_date_val, (int, float)) and not isinstance(payment_date_val, bool):
+                        try:
+                            from openpyxl.utils.datetime import from_excel
+                            payment_date = from_excel(payment_date_val)
+                        except Exception:
+                            raise BadRequestException(f"Invalid numeric date value for payment_date: {payment_date_val}")
                     else:
                         try:
                             p_str = str(payment_date_val).strip()
-                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
-                                try:
-                                    payment_date = datetime.strptime(p_str, fmt)
-                                    break
-                                except ValueError:
-                                    continue
-                            if payment_date is None:
-                                payment_date = datetime.fromisoformat(p_str)
+                            # Check if string represents an Excel serial date number
+                            try:
+                                float_val = float(p_str)
+                                from openpyxl.utils.datetime import from_excel
+                                payment_date = from_excel(float_val)
+                            except ValueError:
+                                # Try standard string date formats
+                                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+                                    try:
+                                        payment_date = datetime.strptime(p_str, fmt)
+                                        break
+                                    except ValueError:
+                                        continue
+                                if payment_date is None:
+                                    payment_date = datetime.fromisoformat(p_str)
                         except Exception:
                             raise BadRequestException(f"Invalid datetime format for payment_date: {payment_date_val}")
 

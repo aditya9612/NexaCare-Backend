@@ -1,7 +1,10 @@
 from typing import List, Optional
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import BedStatus
 from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
 from app.models.bed_allocation_model import Floor, Room, Bed, BedActivityLog
 from app.models.patient_model import Patient
@@ -409,14 +412,46 @@ class BedAllocationService:
 
         from app.models.appointment_model import Appointment
         from sqlalchemy import select, desc
-        stmt = (
-            select(Appointment)
-            .where(Appointment.patient_id == patient.id)
-            .order_by(desc(Appointment.appointment_date), desc(Appointment.appointment_time))
-            .limit(1)
-        )
-        res = await self.db.execute(stmt)
-        appointment = res.scalar_one_or_none()
+
+        appointment = None
+        if getattr(data, "appointmentId", None):
+            stmt = select(Appointment).where(
+                Appointment.id == data.appointmentId,
+                Appointment.patient_id == patient.id
+            )
+            res = await self.db.execute(stmt)
+            appointment = res.scalar_one_or_none()
+            if not appointment:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Appointment {data.appointmentId} not found for this patient."
+                )
+        else:
+            # 1. Search for appointment where admission was recommended or admitted
+            stmt = (
+                select(Appointment)
+                .where(
+                    Appointment.patient_id == patient.id,
+                    (Appointment.admission_status.in_(["Admit Recommended", "Admitted"]))
+                    | (Appointment.admission_recommended == True)
+                    | (Appointment.appointment_status.in_(["Admit Recommended", "Admitted"]))
+                )
+                .order_by(desc(Appointment.id))
+                .limit(1)
+            )
+            res = await self.db.execute(stmt)
+            appointment = res.scalar_one_or_none()
+
+            # 2. Fallback to latest appointment if no recommended appointment found
+            if not appointment:
+                stmt = (
+                    select(Appointment)
+                    .where(Appointment.patient_id == patient.id)
+                    .order_by(desc(Appointment.id))
+                    .limit(1)
+                )
+                res = await self.db.execute(stmt)
+                appointment = res.scalar_one_or_none()
 
         if not appointment:
             raise HTTPException(
@@ -428,11 +463,12 @@ class BedAllocationService:
         adm_status_norm = (appointment.admission_status or "").strip().lower()
         allowed_statuses = {"completed", "admit recommended", "admit_recommended", "admitted"}
         is_recommended = (
-            adm_status_norm in ("admit recommended", "admit_recommended")
-            or appointment.admission_recommended
-            or status_norm in ("admit recommended", "admit_recommended")
+            adm_status_norm in ("admit recommended", "admit_recommended", "admitted")
+            or bool(appointment.admission_recommended)
+            or status_norm in ("admit recommended", "admit_recommended", "admitted")
         )
-        if status_norm == "pending":
+
+        if not is_recommended and status_norm == "pending":
             raise HTTPException(
                 status_code=400,
                 detail="Cannot allocate bed for a pending appointment. Please confirm and check in the patient first."
@@ -463,6 +499,7 @@ class BedAllocationService:
 
         from app.core.constants import AdmissionStatus, AppointmentStatus
         appointment.admission_status = AdmissionStatus.ADMITTED
+        appointment.appointment_type = "IPD"
         if status_norm in ("admit recommended", "admit_recommended"):
             appointment.appointment_status = AppointmentStatus.COMPLETED
 
@@ -654,3 +691,37 @@ class BedAllocationService:
             available_icu_beds=available,
             icu_utilization_percentage=utilization_percentage,
         )
+
+    # Housekeeping & Cleaning Lifecycle Services
+    async def get_cleaning_queue(self) -> List[Bed]:
+        result = await self.db.execute(
+            select(Bed)
+            .where(Bed.status == BedStatus.CLEANING.value)
+            .options(
+                selectinload(Bed.room).selectinload(Room.floor)
+            )
+        )
+        return list(result.scalars().all())
+
+    async def mark_cleaning_complete(self, bed_id: int, user_id: int, notes: str | None = None) -> Bed:
+        bed = await self.get_bed(bed_id)
+        if bed.status != BedStatus.CLEANING.value:
+            raise BadRequestException(f"Bed is not in 'Cleaning' status (Current status: {bed.status})")
+
+        bed.status = BedStatus.AVAILABLE.value
+        bed.patient_id = None
+        bed.patient = None
+        bed.allocation_time = None
+        bed.admission_date = None
+
+        log = BedActivityLog(
+            type="maintenance",
+            message=f"Housekeeping sanitization completed for Bed {bed.name}. Status set to Available.{(' Notes: ' + notes) if notes else ''}",
+            floor_id=bed.room.floor_id if bed.room else None,
+            room_id=bed.room_id,
+            bed_id=bed.id,
+        )
+        await self.repo.create_activity_log(log)
+        await self.db.flush()
+        return bed
+

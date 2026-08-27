@@ -37,8 +37,8 @@ class AppointmentRepository:
             appointment_date,
             appointment_type,
             booking_source,
+            admission_status,
         )
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date, admission_status)
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -65,8 +65,8 @@ class AppointmentRepository:
             appointment_date,
             appointment_type,
             booking_source,
+            admission_status,
         )
-        query = self._apply_filters(query, patient_id, doctor_id, department_id, status, appointment_date, admission_status)
         return await self.db.scalar(query) or 0
 
     def _apply_filters(
@@ -110,6 +110,8 @@ class AppointmentRepository:
                             Appointment.queue_status.in_(["IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"]),
                         )
                     )
+                elif s_lower == "waiting":
+                    query = query.where(func.upper(Appointment.queue_status) == "WAITING")
                 elif s_lower == "pending":
                     query = query.where(Appointment.appointment_status.in_(["Pending", "pending", "PENDING"]))
                 elif s_lower == "confirmed":
@@ -323,21 +325,27 @@ class AppointmentRepository:
         return list(result.scalars().all())
 
     async def get_upcoming_appointments(self, doctor_id: int, limit: int = 10) -> list[Appointment]:
-        now = datetime.now()
-        current_date = now.date()
-        current_time = now.time()
+        from app.utils.helpers import get_today_ist
+        from sqlalchemy.orm import joinedload
+        current_date = get_today_ist()
+        
+        excluded_statuses = [
+            AppointmentStatus.CANCELLED,
+            AppointmentStatus.COMPLETED,
+            "Cancelled",
+            "Completed",
+            "Checked-Out",
+            "checked-out",
+            "No Show",
+            "no-show",
+        ]
         query = (
             select(Appointment)
+            .options(joinedload(Appointment.patient))
             .where(
                 Appointment.doctor_id == doctor_id,
-                Appointment.appointment_status == AppointmentStatus.CONFIRMED,
-                or_(
-                    Appointment.appointment_date > current_date,
-                    and_(
-                        Appointment.appointment_date == current_date,
-                        Appointment.appointment_time >= current_time,
-                    ),
-                ),
+                Appointment.appointment_date >= current_date,
+                Appointment.appointment_status.notin_(excluded_statuses),
             )
             .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
             .limit(limit)

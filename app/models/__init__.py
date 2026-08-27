@@ -26,8 +26,11 @@ from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.models.permission_model import Permission
 from app.models.pharmacy_model import (
     Medicine,
+    MedicineBatch,
     PharmacyInvoice,
     PharmacyInvoiceItem,
+    PharmacyReturn,
+    PharmacyReturnItem,
     Prescription,
     PrescriptionItem,
     Purchase,

@@ -7,8 +7,11 @@ from sqlalchemy.orm import selectinload
 
 from app.models.pharmacy_model import (
     Medicine,
+    MedicineBatch,
     PharmacyInvoice,
     PharmacyInvoiceItem,
+    PharmacyReturn,
+    PharmacyReturnItem,
     Prescription,
     PrescriptionItem,
     Purchase,
@@ -112,7 +115,15 @@ class MedicineRepository:
     async def update_stock(self, medicine_id: int, delta: int) -> Medicine | None:
         medicine = await self.get_by_id(medicine_id)
         if medicine:
-            medicine.stock_quantity = max(0, medicine.stock_quantity + delta)
+            medicine.stock_quantity = max(0, (medicine.stock_quantity or 0) + delta)
+            await self.db.flush()
+            await self.db.refresh(medicine)
+        return medicine
+
+    async def update_reserved_stock(self, medicine_id: int, delta: int) -> Medicine | None:
+        medicine = await self.get_by_id(medicine_id)
+        if medicine:
+            medicine.reserved_quantity = max(0, (medicine.reserved_quantity or 0) + delta)
             await self.db.flush()
             await self.db.refresh(medicine)
         return medicine
@@ -879,5 +890,94 @@ class PharmacyDashboardRepository:
             "low_stock": int(row.low_stock) if row.low_stock else 0,
             "out_of_stock": int(row.out_of_stock) if row.out_of_stock else 0,
         }
+
+
+class MedicineBatchRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def get_by_id_for_update(self, batch_id: int) -> MedicineBatch | None:
+        stmt = select(MedicineBatch).where(MedicineBatch.id == batch_id).with_for_update()
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def get_available_batches_fefo(self, medicine_id: int) -> list[MedicineBatch]:
+        """
+        Returns active non-expired batches for a medicine sorted by earliest expiry date first (FEFO).
+        """
+        stmt = (
+            select(MedicineBatch)
+            .where(
+                MedicineBatch.medicine_id == medicine_id,
+                MedicineBatch.is_active.is_(True),
+                MedicineBatch.expiry_date >= date.today(),
+                (MedicineBatch.stock_quantity - MedicineBatch.reserved_quantity) > 0,
+            )
+            .order_by(MedicineBatch.expiry_date.asc(), MedicineBatch.id.asc())
+            .with_for_update()
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def create_batch(self, batch: MedicineBatch) -> MedicineBatch:
+        self.db.add(batch)
+        await self.db.flush()
+        await self.db.refresh(batch)
+        return batch
+
+    async def update_batch_stock(self, batch_id: int, delta: int) -> MedicineBatch | None:
+        batch = await self.get_by_id_for_update(batch_id)
+        if batch:
+            batch.stock_quantity = max(0, (batch.stock_quantity or 0) + delta)
+            await self.db.flush()
+            await self.db.refresh(batch)
+        return batch
+
+    async def update_batch_reserved_stock(self, batch_id: int, delta: int) -> MedicineBatch | None:
+        batch = await self.get_by_id_for_update(batch_id)
+        if batch:
+            batch.reserved_quantity = max(0, (batch.reserved_quantity or 0) + delta)
+            await self.db.flush()
+            await self.db.refresh(batch)
+        return batch
+
+
+class PharmacyReturnRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    def _base_query(self):
+        return (
+            select(PharmacyReturn)
+            .where(PharmacyReturn.is_deleted.is_(False))
+            .options(
+                selectinload(PharmacyReturn.items).selectinload(PharmacyReturnItem.medicine),
+                selectinload(PharmacyReturn.invoice),
+            )
+        )
+
+    async def create(self, pharmacy_return: PharmacyReturn, items: list[PharmacyReturnItem]) -> PharmacyReturn:
+        self.db.add(pharmacy_return)
+        await self.db.flush()
+        for item in items:
+            item.return_id = pharmacy_return.id
+            self.db.add(item)
+        await self.db.flush()
+        await self.db.refresh(pharmacy_return)
+        return await self.get_by_id(pharmacy_return.id)  # type: ignore
+
+    async def get_by_id(self, return_id: int) -> PharmacyReturn | None:
+        stmt = self._base_query().where(PharmacyReturn.id == return_id)
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def list_by_invoice(self, invoice_id: int) -> list[PharmacyReturn]:
+        stmt = self._base_query().where(PharmacyReturn.invoice_id == invoice_id).order_by(PharmacyReturn.id.desc())
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def list_all(self, skip: int = 0, limit: int = 20) -> list[PharmacyReturn]:
+        stmt = self._base_query().order_by(PharmacyReturn.id.desc()).offset(skip).limit(limit)
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def count_all(self) -> int:
+        stmt = select(func.count()).select_from(PharmacyReturn).where(PharmacyReturn.is_deleted.is_(False))
+        return (await self.db.scalar(stmt)) or 0
 
 

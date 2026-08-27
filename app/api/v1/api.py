@@ -39,6 +39,8 @@ from app.api.v1.routes import (
     notification_routes,
     report_routes,
     share_routes,
+    room_tariff_routes,
+    discharge_routes,
 )
 from app.api import settings
 
@@ -92,3 +94,5 @@ api_router.include_router(notification_routes.router, prefix="/notifications", t
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
 api_router.include_router(report_routes.router, prefix="/reports", tags=["Reports"])
 api_router.include_router(share_routes.router, prefix="/share", tags=["Share Resource"])
+api_router.include_router(room_tariff_routes.router)
+api_router.include_router(discharge_routes.router)

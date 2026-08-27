@@ -16,6 +16,7 @@ celery_app = Celery(
         "app.tasks.chat_tasks",
         "app.tasks.reminder_tasks",
         "app.tasks.lab_tasks",
+        "app.tasks.notification_tasks",
     ],
 )
 
@@ -32,6 +33,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_always_eager=False,
     task_publish_retry=False,
+    task_ignore_result=True,
     broker_connection_retry_on_startup=True,
     broker_transport_options={
         "socket_connect_timeout": 1,

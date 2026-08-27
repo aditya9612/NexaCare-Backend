@@ -20,6 +20,7 @@ from app.schemas.appointment_schema import (
     QueueStatusResponse,
     ConfirmedVisitListResponse,
     AppointmentListWithCountsResponse,
+    TodayAppointmentsResponse,
     ScheduledDoctorResponse,
     AdmitRecommendationRequest,
     AdmitRecommendationResponse,
@@ -78,6 +79,10 @@ async def list_appointments(
     booking_source: BookingSource | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
+    if appointment_type:
+        from app.schemas.appointment_schema import normalize_and_validate_appointment_type
+        appointment_type = normalize_and_validate_appointment_type(appointment_type)
+
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
@@ -100,7 +105,7 @@ async def calendar_view(
     return APIResponse(message="Calendar data", data=appointments)
 
 
-@router.get("/today", response_model=APIResponse[List[AppointmentResponse]])
+@router.get("/today", response_model=APIResponse[TodayAppointmentsResponse])
 async def today_appointments(
     db: DbSession,
     current_user: CurrentUser,

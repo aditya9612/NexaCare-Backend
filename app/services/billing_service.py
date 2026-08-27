@@ -185,11 +185,17 @@ class BillingService:
                     "Billing cannot be created for a cancelled appointment."
                 )
 
+            is_ipd = (
+                (appointment.appointment_type or "").upper() == "IPD"
+                or (appointment.admission_status or "") in ("Admitted", "Discharged", "Admit Recommended")
+                or bool(appointment.admission_recommended)
+            )
             is_completed = (
                 appointment.appointment_status == AppointmentStatus.COMPLETED
                 or appointment.appointment_status == "Checked-Out"
                 or appointment.queue_status == "COMPLETED"
                 or appointment.check_out_time is not None
+                or is_ipd
             )
             if not is_completed:
                 raise BadRequestException(

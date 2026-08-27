@@ -67,8 +67,19 @@ class AdmissionStatus:
     CANCELLED = "Cancelled"
 
 
-class AppointmentType:
-    """Canonical appointment_type string values (visit modality; free-text column)."""
+class BedStatus(str, Enum):
+    AVAILABLE = "Available"
+    OCCUPIED = "Occupied"
+    RESERVED = "Reserved"
+    CLEANING = "Cleaning"
+    MAINTENANCE = "Maintenance"
+
+
+class AppointmentType(str, Enum):
+    OPD = "OPD"
+    IPD = "IPD"
+    EMERGENCY = "Emergency"
+    FOLLOW_UP = "Follow-up"
     WALK_IN = "walk-in"
     SCHEDULED = "scheduled"
 

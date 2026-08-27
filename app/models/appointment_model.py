@@ -35,6 +35,7 @@ class Appointment(Base, TimestampMixin):
     queue_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
 
     admission_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    admission_number: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True, index=True)
     admission_recommended: Mapped[bool] = mapped_column(Boolean, default=False)
     admission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_los: Mapped[int | None] = mapped_column(Integer, nullable=True)

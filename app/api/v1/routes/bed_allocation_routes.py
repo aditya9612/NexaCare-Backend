@@ -225,3 +225,33 @@ async def get_icu_analytics(
 ):
     analytics = await BedAllocationService(db).get_icu_analytics()
     return APIResponse(message="ICU bed analytics retrieved successfully", data=analytics)
+
+
+# 7. Housekeeping & Bed Cleaning Routes
+@router.get("/cleaning-queue", response_model=APIResponse[List[BedResponse]])
+async def get_cleaning_queue(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("bed_allocation", "read")),
+):
+    """
+    List all beds currently in 'Cleaning' status awaiting housekeeping sanitization.
+    """
+    beds = await BedAllocationService(db).get_cleaning_queue()
+    return APIResponse(message="Beds awaiting cleaning retrieved successfully", data=beds)
+
+
+@router.patch("/beds/{bedId}/cleaning-complete", response_model=APIResponse[BedResponse])
+async def mark_cleaning_complete(
+    bedId: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    notes: str | None = Query(None, description="Housekeeping sanitization notes"),
+    _: User = Depends(require_permission("bed_allocation", "assign")),
+):
+    """
+    Housekeeping marks bed sanitization complete. Bed status transitions to 'Available'.
+    """
+    bed = await BedAllocationService(db).mark_cleaning_complete(bedId, current_user.id, notes)
+    return APIResponse(message="Bed cleaning completed and bed is now Available", data=bed)
+

@@ -40,6 +40,10 @@ def generate_appointment_number() -> str:
     return generate_code("APT")
 
 
+def generate_admission_number() -> str:
+    return generate_code("ADM")
+
+
 def generate_invoice_number() -> str:
     return generate_code("INV")
 
@@ -50,6 +54,14 @@ def generate_bill_number() -> str:
 
 def generate_claim_number() -> str:
     return generate_code("CLM")
+
+
+def generate_discharge_number() -> str:
+    return generate_code("DIS")
+
+
+def generate_gate_pass_number() -> str:
+    return generate_code("GP")
 
 
 def generate_prescription_number() -> str:

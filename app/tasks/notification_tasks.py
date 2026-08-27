@@ -61,7 +61,7 @@ async def _send_browser_push(user_id: int, title: str, message: str) -> None:
             except Exception as e:
                 logger.error(f"Unexpected error sending push to {sub.endpoint}: {e}")
 
-@celery_app.task(name="app.tasks.notification_tasks.send_browser_push_async", bind=True, max_retries=3)
+@celery_app.task(name="app.tasks.notification_tasks.send_browser_push_async", bind=True, max_retries=3, ignore_result=True)
 def send_browser_push_async(self, user_id: int, title: str, message: str) -> None:
     try:
         run_celery_async(_send_browser_push(user_id, title, message))

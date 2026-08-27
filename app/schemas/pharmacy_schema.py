@@ -184,6 +184,8 @@ class MedicineResponse(BaseSchema):
     unit: str
     unit_price: float
     stock_quantity: int
+    reserved_quantity: int = 0
+    available_quantity: int = 0
     reorder_level: int
     expiry_date: date | None
     manufacturer: str | None
@@ -199,6 +201,7 @@ class PrescriptionItemCreate(BaseSchema):
     frequency: str
     duration_days: int = Field(1, ge=1)
     quantity: int = Field(1, ge=1)
+    batch_number: str | None = None
     instructions: str | None = None
 
 
@@ -216,18 +219,20 @@ class PrescriptionItemUpdate(BaseSchema):
     frequency: str
     duration_days: int = Field(1, ge=1)
     quantity: int = Field(1, ge=1)
+    batch_number: str | None = None
     instructions: str | None = None
-
 
 
 class PrescriptionItemResponse(BaseSchema):
     id: int
     prescription_id: int
     medicine_id: int
+    batch_number: str | None = None
     dosage: str
     frequency: str
     duration_days: int
     quantity: int
+    dispensed_quantity: int = 0
     instructions: str | None
 
 
@@ -244,6 +249,15 @@ class PrescriptionResponse(BaseSchema):
     created_at: datetime
 
 
+class PrescriptionDispenseRequest(BaseSchema):
+    payment_mode: Optional[str] = Field("Cash", description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
+    payment_status: PharmacyPaymentStatus = Field(PharmacyPaymentStatus.PAID, description="Payment status of generated invoice")
+    discount_amount: float = Field(0.0, ge=0)
+    discount_percentage: float = Field(0.0, ge=0, le=100)
+    tax_percentage: float = Field(0.0, ge=0, le=100)
+    notes: Optional[str] = None
+
+
 class PrescriptionUpdate(BaseSchema):
     patient_id: Optional[int] = None
     instructions: Optional[str] = None
@@ -255,11 +269,11 @@ class PrescriptionStatusUpdate(BaseSchema):
     status: str = Field(..., min_length=1, description="New status of the prescription")
 
 
-
 class PharmacyInvoiceItemCreate(BaseSchema):
     medicine_id: int = Field(..., gt=0)
     quantity: int = Field(1, ge=1)
     unit_price: float | None = Field(None, ge=0)
+    batch_number: str | None = None
 
 
 class PharmacyInvoiceCreate(BaseSchema):
@@ -291,9 +305,47 @@ class PharmacyInvoiceItemResponse(BaseSchema):
     id: int
     invoice_id: int
     medicine_id: int
+    batch_number: str | None = None
     quantity: int
+    returned_quantity: int = 0
     unit_price: float
     line_total: float
+
+
+class PharmacyReturnItemRequest(BaseSchema):
+    invoice_item_id: Optional[int] = None
+    medicine_id: int = Field(..., gt=0)
+    quantity: int = Field(1, ge=1)
+    reason: Optional[str] = None
+
+
+class PharmacyReturnCreate(BaseSchema):
+    items: List[PharmacyReturnItemRequest] = Field(..., min_length=1)
+    reason: Optional[str] = None
+    payment_mode: Optional[str] = "Cash"
+
+
+class PharmacyReturnItemResponse(BaseSchema):
+    id: int
+    return_id: int
+    invoice_item_id: int
+    medicine_id: int
+    batch_number: str | None = None
+    quantity: int
+    unit_price: float
+    refund_amount: float
+
+
+class PharmacyReturnResponse(BaseSchema):
+    id: int
+    return_number: str
+    invoice_id: int
+    patient_id: int | None
+    total_refund_amount: float
+    reason: str | None
+    status: str
+    items: List[PharmacyReturnItemResponse] = []
+    created_at: datetime
 
 
 class PharmacyInvoiceResponse(BaseSchema):

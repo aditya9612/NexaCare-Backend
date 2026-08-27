@@ -167,6 +167,10 @@ class AppointmentService:
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
             status="admitted", appointment_date=appointment_date
         )
+        waiting = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="waiting", appointment_date=appointment_date
+        )
 
         paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
@@ -179,6 +183,8 @@ class AppointmentService:
             "pages": paginated.pages,
             "total_appointments": total_appointments,
             "today_appointments": today_appointments,
+            "total_today_appointments": today_appointments,
+            "total_today_tokens": today_appointments,
             "total_scheduled": total_scheduled,
             "completed": completed,
             "cancelled": cancelled,
@@ -187,6 +193,7 @@ class AppointmentService:
             "in_progress": in_progress,
             "checked_in": checked_in,
             "checked_out": checked_out,
+            "waiting": waiting,
             "admit_recommended": admit_recommended,
             "admitted": admitted,
         }
@@ -203,10 +210,10 @@ class AppointmentService:
         if not appointment:
            raise NotFoundException("Appointment not found")
 
-        return TokenResponse(
-            appointment_id=appointment.id,
-            token_number=appointment.token_number,
-    )     
+        if not appointment.token_number:
+            raise BadRequestException("Token not generated for this appointment")
+
+        return TokenResponse(appointment_id=appointment.id, token_number=appointment.token_number)
 
     async def _notify_confirmation_safely(self, appointment: Appointment, target_user_id: int):
         try:
@@ -286,6 +293,13 @@ class AppointmentService:
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            appointment.queue_status = "CANCELLED"
+        elif appointment.appointment_status in (AppointmentStatus.COMPLETED, "Completed", "completed", "Checked-Out", "checked-out"):
+            if not appointment.queue_status or appointment.queue_status in ("WAITING", "CALLED"):
+                appointment.queue_status = "COMPLETED"
+        elif appointment.appointment_status in (AppointmentStatus.NO_SHOW, "No Show", "no-show", "no_show"):
+            appointment.queue_status = "SKIPPED"
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("update", "appointments", user_id=user_id, resource_id=str(appointment.id))
         return AppointmentResponse.model_validate(appointment)
@@ -319,6 +333,7 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
         appointment.appointment_status = AppointmentStatus.CANCELLED
+        appointment.queue_status = "CANCELLED"
         if data.reason:
             appointment.notes = data.reason
         appointment = await self.repo.update(appointment)
@@ -339,18 +354,47 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(start_date, end_date, doctor_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self):
+    async def get_today(self) -> dict:
         appointments = await self.repo.get_today()
         has_updated = False
         for a in appointments:
             if not a.queue_token:
                 a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
                 if not a.queue_status:
-                    a.queue_status = "WAITING"
+                    a.queue_status = "CANCELLED" if a.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled") else "WAITING"
                 has_updated = True
         if has_updated:
             await self.db.flush()
-        return [AppointmentResponse.model_validate(a) for a in appointments]
+
+        items = [AppointmentResponse.model_validate(a) for a in appointments]
+        total_today = len(items)
+        cancelled_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("cancelled", "canceled", "no show", "no-show") or (a.queue_status or "").upper() == "CANCELLED")
+        waiting_count = sum(1 for a in items if (a.queue_status or "").upper() == "WAITING")
+        completed_count = sum(1 for a in items if (a.appointment_status or "").lower() == "completed" or (a.queue_status or "").upper() == "COMPLETED")
+        checked_in_count = sum(1 for a in items if a.check_in_time is not None or (a.appointment_status or "").lower() in ("checked-in", "checked_in", "check-in"))
+        checked_out_count = sum(1 for a in items if a.check_out_time is not None or (a.appointment_status or "").lower() in ("checked-out", "checked_out", "check-out"))
+        pending_count = sum(1 for a in items if (a.appointment_status or "").lower() == "pending")
+        confirmed_count = sum(1 for a in items if (a.appointment_status or "").lower() == "confirmed")
+        in_progress_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("in-progress", "in_progress") or (a.queue_status or "").upper() in ("CALLED", "IN_PROGRESS", "IN_CONSULTATION"))
+        admitted_count = sum(1 for a in items if (a.admission_status or "").lower() in ("admitted", "admit recommended", "admit-recommended"))
+
+        return {
+            "items": items,
+            "total": total_today,
+            "total_appointments": total_today,
+            "total_today_appointments": total_today,
+            "total_today_tokens": total_today,
+            "today_appointments": total_today,
+            "cancelled": cancelled_count,
+            "waiting": waiting_count,
+            "completed": completed_count,
+            "checked_in": checked_in_count,
+            "checked_out": checked_out_count,
+            "pending": pending_count,
+            "confirmed": confirmed_count,
+            "in_progress": in_progress_count,
+            "admitted": admitted_count,
+        }
 
     async def get_upcoming(self, limit: int = 20):
         appointments = await self.repo.get_upcoming(limit)
@@ -371,7 +415,7 @@ class AppointmentService:
         appointment.check_in_time = datetime.now()
         if not appointment.queue_token:
             appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date)
-        if not appointment.queue_status:
+        if not appointment.queue_status or appointment.queue_status == "CANCELLED":
             appointment.queue_status = "WAITING"
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Patient checked in for appointment {appointment.appointment_number}")
@@ -403,6 +447,8 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            raise BadRequestException("Cannot generate queue token for a cancelled appointment")
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
         
@@ -429,7 +475,7 @@ class AppointmentService:
             if not a.queue_token:
                 a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
                 if not a.queue_status:
-                    a.queue_status = "WAITING"
+                    a.queue_status = "CANCELLED" if a.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled") else "WAITING"
                 has_updated = True
         if has_updated:
             await self.db.flush()
@@ -933,8 +979,11 @@ class AppointmentService:
             raise BadRequestException("Cannot recommend admission for a patient who has not checked in. Please check in the patient first.")
 
         from app.core.constants import AdmissionStatus
+        from app.utils.helpers import generate_admission_number
+        appointment.appointment_type = "IPD"
         appointment.appointment_status = AppointmentStatus.COMPLETED
         appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
+        appointment.admission_number = appointment.admission_number or generate_admission_number()
         appointment.admission_recommended = True
         appointment.admission_reason = data.admission_reason
         appointment.expected_los = data.expected_los
@@ -974,11 +1023,12 @@ class AppointmentService:
         patient_name = appointment.patient_name or f"Patient ID {appointment.patient_id}"
         await self._create_queue_notification(
             appointment,
-            f"Admission recommended for {patient_name}. Please allocate a bed."
+            f"Admission recommended for {patient_name} (Admission No: {appointment.admission_number}). Please allocate a bed."
         )
 
         return AdmitRecommendationResponse(
             appointment_id=appointment.id,
+            admission_number=appointment.admission_number,
             patient_id=appointment.patient_id,
             doctor_id=appointment.doctor_id,
             appointment_status=appointment.appointment_status,
@@ -1046,6 +1096,7 @@ class AppointmentService:
             items.append(
                 PendingAdmissionItem(
                     appointment_id=a.id,
+                    admission_number=a.admission_number,
                     patient_id=a.patient_id,
                     appointment_number=a.appointment_number,
                     appointment_date=a.appointment_date,

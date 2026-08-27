@@ -99,6 +99,24 @@ class VendorService:
         ]
         ws.append(headers)
         
+        # Configure Header Row Height
+        ws.row_dimensions[1].height = 32
+        
+        # Header Style definition
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+        header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin_side = Side(style="thin", color="D3D3D3")
+        header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = header_border
+        
         # One valid sample row
         ws.append([
             "Acme Healthcare Solutions",
@@ -110,6 +128,27 @@ class VendorService:
             "27AAAAA1111A1Z1",
             "Medical Equipment"
         ])
+        
+        # Freeze panes at A2
+        ws.freeze_panes = "A2"
+        
+        # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
+        ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}2"
+        
+        # Set custom column widths
+        col_widths = {
+            1: 25,  # name
+            2: 15,  # vendor_type
+            3: 20,  # contact_person
+            4: 15,  # phone
+            5: 25,  # email
+            6: 30,  # address
+            7: 20,  # gst_number
+            8: 20   # service_type
+        }
+        for col_idx, width in col_widths.items():
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = width
         
         stream = BytesIO()
         wb.save(stream)
@@ -247,6 +286,24 @@ class VendorService:
             ]
             ws.append(headers)
             
+            # Configure Header Row Height
+            ws.row_dimensions[1].height = 32
+            
+            # Header Style definition
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            thin_side = Side(style="thin", color="D3D3D3")
+            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = header_border
+            
             for sr_no, v in enumerate(vendors, start=1):
                 row = [
                     sr_no,
@@ -264,6 +321,33 @@ class VendorService:
                 ]
                 ws.append(row)
                 
+            # Freeze panes at A2
+            ws.freeze_panes = "A2"
+            
+            # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
+            total_rows = len(vendors) + 1
+            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
+            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
+            
+            # Set custom column widths
+            col_widths = {
+                1: 8,   # Sr. No.
+                2: 25,  # name
+                3: 15,  # vendor_type
+                4: 20,  # contact_person
+                5: 15,  # phone
+                6: 25,  # email
+                7: 30,  # address
+                8: 20,  # gst_number
+                9: 20,  # service_type
+                10: 12, # is_active
+                11: 22, # created_at
+                12: 22  # updated_at
+            }
+            for col_idx, width in col_widths.items():
+                col_letter = openpyxl.utils.get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = width
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
@@ -290,18 +374,36 @@ class VendorService:
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("vendors_export_template.html")
             
+            def wrap_unbroken_text(text: str, max_chars: int = 12) -> str:
+                if not text:
+                    return ""
+                words = text.split(" ")
+                processed_words = []
+                for word in words:
+                    if len(word) > max_chars:
+                        chunks = [word[i:i+max_chars] for i in range(0, len(word), max_chars)]
+                        processed_words.append("\u200b".join(chunks))
+                    else:
+                        processed_words.append(word)
+                return " ".join(processed_words)
+
+            def wrap_val(val, max_chars: int = 12) -> str:
+                if val is None:
+                    return ""
+                return wrap_unbroken_text(str(val), max_chars)
+            
             formatted_vendors = []
             for v in vendors:
                 formatted_vendors.append({
                     "id": v.id,
-                    "name": v.name,
-                    "vendor_type": v.vendor_type.capitalize(),
-                    "contact_person": v.contact_person,
-                    "phone": v.phone,
-                    "email": v.email,
-                    "address": v.address,
-                    "gst_number": v.gst_number,
-                    "service_type": v.service_type,
+                    "name": wrap_val(v.name, 12),
+                    "vendor_type": v.vendor_type.capitalize() if v.vendor_type else "",
+                    "contact_person": wrap_val(v.contact_person, 12),
+                    "phone": wrap_val(v.phone, 12),
+                    "email": wrap_val(v.email, 12),
+                    "address": wrap_val(v.address, 12),
+                    "gst_number": wrap_val(v.gst_number, 12),
+                    "service_type": wrap_val(v.service_type, 12),
                     "is_active": v.is_active,
                     "created_at": v.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.created_at, datetime) else str(v.created_at),
                     "updated_at": v.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.updated_at, datetime) else str(v.updated_at)

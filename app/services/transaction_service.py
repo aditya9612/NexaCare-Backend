@@ -247,19 +247,45 @@ class TransactionService:
     async def generate_transactions_bulk_template(self):
         from io import BytesIO
         import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from sqlalchemy import select
+        from app.models.billing_model import Billing
         
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Transactions Bulk Import"
         
         headers = [
-            "billing_id", "amount", "payment_method", "transaction_ref", "payment_date", "status", "is_refund", "refund_reason"
+            "Bill Number", "amount", "payment_method", "transaction_ref", "payment_date", "status", "is_refund", "refund_reason"
         ]
         ws.append(headers)
         
+        # Apply Header Styling
+        ws.row_dimensions[1].height = 32
+        ws.freeze_panes = "A2"
+        
+        header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+        header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin_side = Side(style="thin", color="D3D3D3")
+        header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = header_border
+            
+        # Prefer an actual active/existing bill number from the database.
+        # If no bill exists, leave the sample cell blank.
+        stmt = select(Billing.bill_number).where(Billing.is_deleted == False).limit(1)
+        res = await self.db.execute(stmt)
+        bill_number = res.scalar_one_or_none()
+        
         # One valid sample row
         ws.append([
-            1,
+            bill_number if bill_number is not None else "",
             1500.00,
             "upi",
             "TXN12345678",
@@ -268,6 +294,24 @@ class TransactionService:
             "false",
             ""
         ])
+        
+        # Set custom column widths
+        column_widths = {
+            1: 22,  # Bill Number
+            2: 12,  # amount
+            3: 18,  # payment_method
+            4: 22,  # transaction_ref
+            5: 22,  # payment_date
+            6: 15,  # status
+            7: 12,  # is_refund
+            8: 25   # refund_reason
+        }
+        for col_idx, width in column_widths.items():
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = width
+            
+        # Set AutoFilter covering A1:H2
+        ws.auto_filter.ref = "A1:H2"
         
         stream = BytesIO()
         wb.save(stream)
@@ -288,7 +332,7 @@ class TransactionService:
             raise BadRequestException("The uploaded file is empty or has no headers.")
             
         headers = [str(h).strip().lower() for h in header_row if h is not None]
-        required_headers = {"billing_id", "amount", "payment_method"}
+        required_headers = {"bill number", "amount", "payment_method"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
             
@@ -312,17 +356,27 @@ class TransactionService:
                     row_dict[header] = val
                     
             try:
-                # 1. billing_id parsing & validation
-                billing_id_raw = row_dict.get("billing_id")
-                if billing_id_raw is None:
-                    raise BadRequestException("billing_id is required.")
-                try:
-                    f_val = float(billing_id_raw)
-                    if not f_val.is_integer():
-                        raise ValueError()
-                    billing_id = int(f_val)
-                except (ValueError, TypeError):
-                    raise BadRequestException(f"Invalid integer value for billing_id: {billing_id_raw}")
+                # 1. Bill Number parsing & resolution
+                bill_number_raw = row_dict.get("bill number")
+                if bill_number_raw is None:
+                    raise BadRequestException("Bill Number is required.")
+                bill_number = str(bill_number_raw).strip()
+                
+                from app.models.billing_model import Billing
+                from app.core.constants import BillingStatus
+                from sqlalchemy import select
+                
+                stmt = select(Billing).where(Billing.bill_number == bill_number, Billing.is_deleted == False)
+                res = await self.db.execute(stmt)
+                billing = res.scalar_one_or_none()
+                if not billing:
+                    raise BadRequestException(f"Bill '{bill_number}' not found")
+                
+                # Allow transaction creation only when billing.status == BillingStatus.PAID
+                if billing.status != BillingStatus.PAID:
+                    raise BadRequestException("Transactions can only be added to completed bills")
+                
+                billing_id = billing.id
 
                 # 2. amount parsing
                 amount_raw = row_dict.get("amount")
@@ -499,25 +553,43 @@ class TransactionService:
 
         if format_type == "excel":
             import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Transactions Report"
             
             headers = [
-                "Sr. No.", "billing_id", "bill_number", "patient_name", "amount", "payment_method",
+                "Sr. No.", "Bill Number", "patient_name", "amount", "payment_method",
                 "transaction_ref", "payment_date", "status", "is_refund", "refund_reason",
                 "created_at", "updated_at"
             ]
             ws.append(headers)
             
+            # Apply Header Styling
+            ws.row_dimensions[1].height = 32
+            ws.freeze_panes = "A2"
+            
+            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            thin_side = Side(style="thin", color="D3D3D3")
+            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = header_border
+                
             for sr_no, p in enumerate(payments, start=1):
                 bill_number, p_id = billing_map.get(p.billing_id, ("", None))
                 pat_name = patients_map.get(p_id, "") if p_id else ""
                 
                 row = [
                     sr_no,
-                    p.billing_id,
-                    bill_number,
+                    bill_number or "-",
                     pat_name,
                     f"₹{p.amount:.2f}",
                     p.payment_method,
@@ -531,6 +603,30 @@ class TransactionService:
                 ]
                 ws.append(row)
                 
+            # Set custom column widths
+            column_widths = {
+                1: 8,   # Sr. No.
+                2: 22,  # Bill Number
+                3: 22,  # patient_name
+                4: 12,  # amount
+                5: 15,  # payment_method
+                6: 20,  # transaction_ref
+                7: 22,  # payment_date
+                8: 12,  # status
+                9: 10,  # is_refund
+                10: 25, # refund_reason
+                11: 22, # created_at
+                12: 22  # updated_at
+            }
+            for col_idx, width in column_widths.items():
+                col_letter = openpyxl.utils.get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = width
+                
+            # Set AutoFilter covering the complete header/data range
+            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
+            total_rows = len(payments) + 1
+            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
+            
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)

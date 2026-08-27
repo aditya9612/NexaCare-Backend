@@ -132,11 +132,28 @@ class PharmacyService:
 
     # --- Medicines ---
     async def create_medicine(self, data: MedicineCreate, user_id: int) -> MedicineResponse:
+        from app.models.inventory_model import InventoryItem
         if data.barcode:
             existing = await self.medicine_repo.get_by_barcode(data.barcode)
             if existing:
                 raise ConflictException("Medicine with this barcode already exists")
-        medicine = Medicine(sku=generate_medicine_sku(), **data.model_dump())
+
+        sku = generate_medicine_sku()
+        inv_item = InventoryItem(
+            name=data.name,
+            sku=sku,
+            barcode=data.barcode,
+            category=data.category,
+            quantity=0,
+            unit=data.unit,
+            unit_cost=data.unit_price,
+            reorder_level=data.reorder_level if data.reorder_level is not None else 10,
+            expiry_date=data.expiry_date
+        )
+        self.db.add(inv_item)
+        await self.db.flush()
+
+        medicine = Medicine(sku=sku, inventory_item_id=inv_item.id, **data.model_dump())
         medicine = await self.medicine_repo.create(medicine)
         await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
         return MedicineResponse.model_validate(medicine)
@@ -213,6 +230,7 @@ class PharmacyService:
             raise BadRequestException("Prescription must contain at least one medicine item")
 
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         from app.models.doctor_model import Doctor
         from app.models.patient_model import Patient
         from app.models.appointment_model import Appointment
@@ -384,18 +402,81 @@ class PharmacyService:
         data: PrescriptionStatusUpdate,
         user_id: int
     ) -> PrescriptionResponse:
-        prescription = await self.prescription_repo.get_by_id(prescription_id)
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import Prescription
+        from app.models.inventory_model import Warehouse
+        from app.services.stock_movement_service import StockMovementService
+        from app.utils.helpers import utc_now
+
+        from app.models.user_model import User
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
+
+        # 1. Lock the prescription row
+        res = await self.db.execute(
+            select(Prescription).where(Prescription.id == prescription_id).with_for_update()
+        )
+        prescription = res.scalars().first()
+
         if not prescription:
             raise NotFoundException("Prescription not found")
 
-        prescription.status = data.status
-        if data.status.lower() in ("completed", "dispensed"):
+        current_status = prescription.status.lower() if prescription.status else ""
+        target_status = data.status.lower()
+
+        # Duplicate dispensing protection
+        if current_status == "dispensed" and target_status == "dispensed":
+            raise BadRequestException("Prescription is already dispensed")
+
+        if current_status == "cancelled" and target_status == "dispensed":
+            raise BadRequestException("Cannot dispense a cancelled prescription")
+
+        # If transitioning to dispensed, we must perform the stock OUT
+        if target_status == "dispensed" and current_status != "dispensed":
+            # Locate warehouse
+            wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
+            warehouse_id = wh_res.scalar()
+            if not warehouse_id:
+                raise BadRequestException("Pharmacy warehouse not configured")
+
+            for item in prescription.items:
+                medicine = await self.medicine_repo.get_by_id(item.medicine_id)
+                if not medicine or not medicine.inventory_item_id:
+                    raise BadRequestException(f"Medicine {item.medicine_id} has no mapped inventory item. Cannot dispense.")
+
+                if item.quantity <= 0:
+                    raise BadRequestException(f"Invalid quantity {item.quantity} for medicine {item.medicine_id}")
+
+                # Deduct from Central Ledger
+                # Note: StockMovementService enforces availability and throws if insufficient stock
+                await StockMovementService.create_movement(
+                    db=self.db,
+                    item_id=medicine.inventory_item_id,
+                    warehouse_id=warehouse_id,
+                    transaction_type="DISPENSE",
+                    direction="OUT",
+                    quantity=item.quantity,
+                    batch_id=None,  # Not available in PrescriptionItem
+                    unit_cost=medicine.unit_price,
+                    reference_type="PHARMACY_PRESCRIPTION",
+                    reference_id=prescription.id,
+                    notes=f"Dispensed for prescription {prescription.prescription_number}",
+                    performed_by=user_id
+                )
+
+                # Legacy mirror sync
+                await self.medicine_repo.update_stock(item.medicine_id, -item.quantity)
+
+            prescription.dispensed_at = utc_now()
+        elif target_status == "completed":
             prescription.dispensed_at = utc_now()
         else:
             prescription.dispensed_at = None
 
-        prescription = await self.prescription_repo.update(prescription)
-        prescription = await self.prescription_repo.get_by_id(prescription.id)
+        prescription.status = data.status
+        await self.prescription_repo.update(prescription)
+        await self.db.flush()
 
         await self.audit_repo.create(
             "update_status",
@@ -403,6 +484,71 @@ class PharmacyService:
             user_id=user_id,
             resource_id=str(prescription.id)
         )
+        return self._prescription_response(prescription)
+
+    async def return_prescription(self, prescription_id: int, user_id: int) -> PrescriptionResponse:
+        from app.services.stock_movement_service import StockMovementService
+        from app.models.inventory_model import Warehouse, StockTransaction
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import Prescription
+
+        res = await self.db.execute(select(Prescription).where(Prescription.id == prescription_id).with_for_update())
+        prescription = res.scalar_one_or_none()
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        if prescription.status.lower() not in ("dispensed", "completed"):
+            raise BadRequestException("Cannot return a prescription that has not been dispensed")
+
+        if prescription.status.lower() == "returned":
+            raise BadRequestException("Prescription is already returned")
+
+        from app.models.user_model import User
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and hasattr(user_record, "hospital_id") else None
+        if not hospital_id:
+            raise BadRequestException("User hospital not configured")
+
+        wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
+        warehouse_id = wh_res.scalar()
+        if not warehouse_id:
+            raise BadRequestException("Pharmacy warehouse not configured")
+
+        existing_reversal = await self.db.scalar(
+            select(StockTransaction.id).where(
+                StockTransaction.reference_type == "PRESCRIPTION_RETURN",
+                StockTransaction.reference_id == prescription.id,
+                StockTransaction.direction == "IN"
+            )
+        )
+        if existing_reversal:
+            raise BadRequestException("This prescription has already been returned")
+
+        for item in prescription.items:
+            medicine = await self.medicine_repo.get_by_id(item.medicine_id)
+            if not medicine or not medicine.inventory_item_id:
+                raise BadRequestException(f"Medicine {item.medicine_id} has no mapped inventory item")
+
+            await StockMovementService.create_movement(
+                db=self.db,
+                item_id=medicine.inventory_item_id,
+                warehouse_id=warehouse_id,
+                transaction_type="RETURN",
+                direction="IN",
+                quantity=item.quantity,
+                batch_id=None,
+                unit_cost=0.0,
+                reference_type="PRESCRIPTION_RETURN",
+                reference_id=prescription.id,
+                notes=f"Return for dispensed prescription {prescription.id}",
+                performed_by=user_id
+            )
+            await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+
+        prescription.status = "returned"
+        prescription = await self.prescription_repo.update(prescription)
+        await self.audit_repo.create("return", "prescription", user_id=user_id, resource_id=str(prescription.id))
         return self._prescription_response(prescription)
 
 
@@ -431,6 +577,9 @@ class PharmacyService:
 
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
+        from app.models.inventory_model import Warehouse
+        from app.services.stock_movement_service import StockMovementService
+
         if data.patient_id is not None:
             patient = await self.patient_repo.get_by_id(data.patient_id)
             if not patient:
@@ -442,6 +591,9 @@ class PharmacyService:
                 raise NotFoundException("Prescription not found")
             if prescription.patient_id != data.patient_id:
                 raise BadRequestException("Prescription does not belong to this patient")
+            # Phase 6: Enforce prescription must be dispensed to avoid skipping stock deduction.
+            if prescription.status.lower() not in ("dispensed", "completed"):
+                raise BadRequestException("Prescription must be dispensed before creating an invoice")
 
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
@@ -449,8 +601,12 @@ class PharmacyService:
             medicine = await self.medicine_repo.get_by_id_for_update(item_data.medicine_id)
             if not medicine:
                 raise NotFoundException(f"Medicine {item_data.medicine_id} not found")
-            if medicine.stock_quantity < item_data.quantity:
+
+            # Phase 5 & 6: For walk-in sales (no prescription), we validate stock here.
+            # If linked to a prescription, the dispensing action handled stock calculation to avoid double-deduction.
+            if data.prescription_id is None and medicine.stock_quantity < item_data.quantity:
                 raise BadRequestException(f"Insufficient stock for {medicine.name}")
+
             if medicine.expiry_date and medicine.expiry_date < date.today():
                 raise BadRequestException(f"Medicine {medicine.name} has expired")
             unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
@@ -462,11 +618,11 @@ class PharmacyService:
                 unit_price=unit_price,
                 line_total=line_total,
             ))
-            await self.medicine_repo.update_stock(item_data.medicine_id, -item_data.quantity)
 
         from app.models.user_model import User
         from app.services.settings_service import SettingsService
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         from app.utils.helpers import generate_code
 
         user_record = await self.db.scalar(select(User).where(User.id == user_id))
@@ -480,7 +636,7 @@ class PharmacyService:
         tax_amount = round((subtotal - discount_amount) * tax_percentage_val / 100, 2)
         gst_amount = tax_amount
         total = round(subtotal - discount_amount + tax_amount, 2)
-        
+
         status_val = data.payment_status.value if hasattr(data.payment_status, "value") else str(data.payment_status)
         paid_amount_val = total if status_val == "paid" else 0.0
 
@@ -501,10 +657,41 @@ class PharmacyService:
             created_by=user_id,
         )
         invoice = await self.invoice_repo.create(invoice, invoice_items)
+
+        # Phase 6: Central Ledger Integration for walk-in invoices
+        if data.prescription_id is None:
+            wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
+            warehouse_id = wh_res.scalar()
+            if not warehouse_id:
+                raise BadRequestException("Pharmacy warehouse not configured")
+
+            for item in invoice_items:
+                medicine = await self.medicine_repo.get_by_id(item.medicine_id)
+                if not medicine or not medicine.inventory_item_id:
+                    raise BadRequestException(f"Medicine {item.medicine_id} has no mapped inventory item.")
+
+                await StockMovementService.create_movement(
+                    db=self.db,
+                    item_id=medicine.inventory_item_id,
+                    warehouse_id=warehouse_id,
+                    transaction_type="SALE",
+                    direction="OUT",
+                    quantity=item.quantity,
+                    batch_id=None,
+                    unit_cost=item.unit_price,
+                    reference_type="PHARMACY_INVOICE",
+                    reference_id=invoice.id,
+                    notes=f"Walk-in sale for invoice {invoice.invoice_number}",
+                    performed_by=user_id
+                )
+                # Legacy mirror sync
+                await self.medicine_repo.update_stock(item.medicine_id, -item.quantity)
+
         if data.prescription_id is not None:
             prescription.status = "completed"
             prescription.dispensed_at = utc_now()
             await self.prescription_repo.update(prescription)
+
         await self.audit_repo.create("create", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
 
         from app.services.transaction_history_service import TransactionHistoryService
@@ -580,6 +767,7 @@ class PharmacyService:
         # Update transaction history
         from app.models.transaction_history_model import TransactionHistory
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         tx_result = await self.db.execute(
             select(TransactionHistory).where(
                 TransactionHistory.source_module == "pharmacy_billing",
@@ -603,6 +791,7 @@ class PharmacyService:
         # Soft delete transaction history
         from app.models.transaction_history_model import TransactionHistory
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         tx_result = await self.db.execute(
             select(TransactionHistory).where(
                 TransactionHistory.source_module == "pharmacy_billing",
@@ -616,9 +805,74 @@ class PharmacyService:
             tx.deleted_at = utc_now()
             await self.db.flush()
 
+    async def return_invoice(self, invoice_id: int, user_id: int) -> PharmacyInvoiceResponse:
+        from app.services.stock_movement_service import StockMovementService
+        from app.models.inventory_model import Warehouse, StockTransaction
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        invoice = await self.invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundException("Pharmacy invoice not found")
+
+        if invoice.status == "returned":
+            raise BadRequestException("Invoice is already returned")
+
+        if invoice.prescription_id is not None:
+            raise BadRequestException("Cannot return prescription-linked invoice here. Use prescription return workflow.")
+
+        from app.models.user_model import User
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and hasattr(user_record, "hospital_id") else None
+        if not hospital_id:
+            raise BadRequestException("User hospital not configured")
+
+        wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
+        warehouse_id = wh_res.scalar()
+        if not warehouse_id:
+            raise BadRequestException("Pharmacy warehouse not configured")
+
+        existing_reversal = await self.db.scalar(
+            select(StockTransaction.id).where(
+                StockTransaction.reference_type == "PHARMACY_RETURN",
+                StockTransaction.reference_id == invoice.id,
+                StockTransaction.direction == "IN"
+            )
+        )
+        if existing_reversal:
+            raise BadRequestException("This invoice has already been returned")
+
+        for item in invoice.items:
+            medicine = await self.medicine_repo.get_by_id(item.medicine_id)
+            if not medicine or not medicine.inventory_item_id:
+                raise BadRequestException(f"Medicine {item.medicine_id} has no mapped inventory item")
+
+            await StockMovementService.create_movement(
+                db=self.db,
+                item_id=medicine.inventory_item_id,
+                warehouse_id=warehouse_id,
+                transaction_type="RETURN",
+                direction="IN",
+                quantity=item.quantity,
+                batch_id=None,
+                unit_cost=item.unit_price,
+                reference_type="PHARMACY_RETURN",
+                reference_id=invoice.id,
+                notes=f"Return for walk-in invoice {invoice.invoice_number}",
+                performed_by=user_id
+            )
+            await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+
+        invoice.status = "returned"
+        invoice = await self.invoice_repo.update(invoice)
+        await self.audit_repo.create("return", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+        return self._invoice_response(invoice)
+
+
     async def download_invoice(self, invoice_id: int):
         from fastapi.responses import Response
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         from sqlalchemy.orm import selectinload
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
         from app.utils.pdf_generator import html_to_pdf
@@ -964,6 +1218,7 @@ class PharmacyService:
         # Update transaction history
         from app.models.transaction_history_model import TransactionHistory
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         tx_result = await self.db.execute(
             select(TransactionHistory).where(
                 TransactionHistory.source_module == "pharmacy_purchases",
@@ -999,6 +1254,7 @@ class PharmacyService:
         # Soft delete transaction history
         from app.models.transaction_history_model import TransactionHistory
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         tx_result = await self.db.execute(
             select(TransactionHistory).where(
                 TransactionHistory.source_module == "pharmacy_purchases",
@@ -1017,7 +1273,22 @@ class PharmacyService:
         purchase_order_id: int,
         current_user,
     ) -> PurchaseResponse:
-        purchase = await self.purchase_repo.get_by_id(purchase_order_id)
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import Purchase
+        from app.models.inventory_model import Warehouse
+        from app.services.stock_movement_service import StockMovementService
+        from app.utils.helpers import utc_now
+
+        from app.models.user_model import User
+        user_record = await self.db.scalar(select(User).where(User.id == current_user.id))
+        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
+
+        # 1. Lock the purchase for concurrency safety
+        res = await self.db.execute(
+            select(Purchase).options(selectinload(Purchase.items)).where(Purchase.id == purchase_order_id).with_for_update()
+        )
+        purchase = res.scalars().first()
 
         if not purchase:
             raise NotFoundException("Purchase not found")
@@ -1029,14 +1300,42 @@ class PharmacyService:
         if current_status == "received":
             raise BadRequestException("Purchase Order already received")
 
-        allowed_statuses = {"ordered", "pending", "partially_received"}
+        allowed_statuses = {"ordered", "pending", "partially_received", "draft"}
         if current_status not in allowed_statuses:
             raise BadRequestException("Invalid Purchase Order status")
+
+        # Determine the warehouse. In this architecture, we use the PHARMACY warehouse
+        wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
+        warehouse_id = wh_res.scalar()
+        if not warehouse_id:
+            raise BadRequestException("Pharmacy warehouse not configured")
 
         purchase.status = "received"
         purchase.received_at = utc_now()
         purchase.received_by = current_user.id
 
+        # Phase 4 Stock Movement: Process items and integrate with Ledger
+        for item in purchase.items:
+            medicine = await self.medicine_repo.get_by_id(item.medicine_id)
+            if not medicine or not medicine.inventory_item_id:
+                raise BadRequestException(f"Medicine {item.medicine_id} has no mapped inventory item. Cannot receive stock.")
+
+            await StockMovementService.create_movement(
+                db=self.db,
+                item_id=medicine.inventory_item_id,
+                warehouse_id=warehouse_id,
+                transaction_type="PURCHASE_RECEIPT",
+                direction="IN",
+                quantity=item.quantity,
+                batch_id=None,
+                unit_cost=item.unit_price,
+                reference_type="PHARMACY_PURCHASE_RECEIPT",
+                reference_id=purchase.id,
+                notes=f"Received from purchase {purchase.purchase_number}",
+                performed_by=current_user.id
+            )
+
+        # Legacy backward compatibility update for older APIs
         for item in purchase.items:
             await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
 
@@ -1097,7 +1396,8 @@ class PharmacyService:
         end_dt: Optional[datetime] = None,
     ) -> PharmacyDashboardResponse:
         from datetime import timezone, timedelta, time, date as dt_date
-        from sqlalchemy import select, func, or_, cast, Date
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload, func, or_, cast, Date
         from app.utils.helpers import get_today_ist
 
         today_ist = get_today_ist()
@@ -1151,7 +1451,7 @@ class PharmacyService:
             today_sales_query = today_sales_query.where(PharmacyInvoice.created_at >= start_dt)
         if end_dt:
             today_sales_query = today_sales_query.where(PharmacyInvoice.created_at <= end_dt)
-            
+
         today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
         # 5. Monthly Sales (Invoice/billing amount for current month, OR in the filtered period)
@@ -1160,7 +1460,7 @@ class PharmacyService:
             next_month_start = month_start.replace(year=month_start.year + 1, month=1)
         else:
             next_month_start = month_start.replace(month=month_start.month + 1)
-            
+
         monthly_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
@@ -1175,7 +1475,7 @@ class PharmacyService:
                 PharmacyInvoice.created_at >= month_start,
                 PharmacyInvoice.created_at < next_month_start
             )
-            
+
         monthly_sales = (await self.db.scalar(monthly_sales_query)) or 0.0
 
         # 6. Pending Purchases (Count status: Pending, Ordered)
@@ -1279,7 +1579,7 @@ class PharmacyService:
         else:
             # Fallback to current month if no dates (e.g. if overall is somehow not returning None)
             pass
-            
+
         monthly_trend_query = (
             monthly_trend_query
             .group_by(cast(PharmacyInvoice.created_at, Date))
@@ -1565,16 +1865,16 @@ class PharmacyService:
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
             import os
-            
+
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                
+
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
-            
+
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("medicines_export_template.html")
 
@@ -1623,16 +1923,16 @@ class PharmacyService:
     async def generate_supplier_bulk_template(self):
         from io import BytesIO
         import openpyxl
-        
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Suppliers Bulk Import"
-        
+
         headers = [
             "name", "contact_person", "phone", "email", "address", "gst_number"
         ]
         ws.append(headers)
-        
+
         # One valid sample row
         ws.append([
             "Alpha Pharma Distributors",
@@ -1642,7 +1942,7 @@ class PharmacyService:
             "456 Medical Park, Sector 4",
             "27AAAAA1111A1Z1"
         ])
-        
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -1652,33 +1952,33 @@ class PharmacyService:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
-        
+
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
         ws = wb.active
-        
+
         header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
         if not header_row:
             raise BadRequestException("The uploaded file is empty or has no headers.")
-            
+
         headers = [str(h).strip().lower() for h in header_row if h is not None]
         required_headers = {"name"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
-            
+
         total_rows = 0
         created = 0
         failed = 0
         errors = []
-        
+
         seen_phones = set()
         seen_emails = set()
         seen_gsts = set()
-        
+
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if all(cell is None for cell in row):
                 continue
-                
+
             total_rows += 1
             row_dict = {}
             for header, val in zip(headers, row):
@@ -1686,17 +1986,17 @@ class PharmacyService:
                     row_dict[header] = None
                 else:
                     row_dict[header] = str(val).strip()
-                    
+
             try:
                 name_raw = row_dict.get("name")
                 if not name_raw:
                     raise BadRequestException("name is required.")
                 name = str(name_raw).strip()
-                
+
                 phone_raw = row_dict.get("phone")
                 email_raw = row_dict.get("email")
                 gst_raw = row_dict.get("gst_number")
-                
+
                 # Check duplicate in file
                 if phone_raw:
                     norm_phone = phone_raw.strip()
@@ -1709,19 +2009,19 @@ class PharmacyService:
                     if raw_ph in seen_phones:
                         raise BadRequestException(f"Duplicate phone number '{phone_raw}' found in upload file.")
                     seen_phones.add(raw_ph)
-                    
+
                 if email_raw:
                     norm_email = email_raw.strip().lower()
                     if norm_email in seen_emails:
                         raise BadRequestException(f"Duplicate email '{email_raw}' found in upload file.")
                     seen_emails.add(norm_email)
-                    
+
                 if gst_raw:
                     norm_gst = gst_raw.strip().upper()
                     if norm_gst in seen_gsts:
                         raise BadRequestException(f"Duplicate GST number '{gst_raw}' found in upload file.")
                     seen_gsts.add(norm_gst)
-                
+
                 # Build SupplierCreate model to run validations
                 supplier_create = SupplierCreate(
                     name=name,
@@ -1731,10 +2031,10 @@ class PharmacyService:
                     address=row_dict.get("address"),
                     gst_number=gst_raw
                 )
-                
+
                 await self.create_supplier(supplier_create, user_id)
                 created += 1
-                
+
             except ValidationError as e:
                 failed += 1
                 err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
@@ -1766,7 +2066,7 @@ class PharmacyService:
                     "row": row_idx,
                     "error": str(e)
                 })
-                
+
         await self.db.flush()
         return {
             "total_rows": total_rows,
@@ -1778,21 +2078,21 @@ class PharmacyService:
     async def export_suppliers(self, format_type: str):
         from io import BytesIO
         from datetime import datetime, date
-        
+
         suppliers = await self.supplier_repo.get_all_active()
-        
+
         if format_type == "excel":
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Suppliers Export"
-            
+
             headers = [
                 "Sr. No.", "name", "contact_person", "phone", "email",
                 "address", "gst_number", "is_active", "created_at"
             ]
             ws.append(headers)
-            
+
             for sr_no, s in enumerate(suppliers, start=1):
                 row = [
                     sr_no,
@@ -1806,12 +2106,12 @@ class PharmacyService:
                     s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
                 ]
                 ws.append(row)
-                
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
             return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
+
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
@@ -1820,19 +2120,19 @@ class PharmacyService:
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
             import os
-            
+
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                
+
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
-            
+
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("suppliers_export_template.html")
-            
+
             formatted_suppliers = []
             for s in suppliers:
                 formatted_suppliers.append({
@@ -1846,12 +2146,12 @@ class PharmacyService:
                     "is_active": s.is_active,
                     "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
                 })
-                
+
             html_content = template.render(
                 suppliers=formatted_suppliers,
                 generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
             )
-            
+
             pdf_data = html_to_pdf(html_content)
             return pdf_data, "application/pdf"
         else:

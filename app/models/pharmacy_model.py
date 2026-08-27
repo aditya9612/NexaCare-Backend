@@ -26,6 +26,8 @@ class Medicine(Base, TimestampMixin, SoftDeleteMixin):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    inventory_item_id: Mapped[int | None] = mapped_column(ForeignKey("inventory_items.id"), nullable=True, index=True)
+
 
 class Prescription(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "prescriptions"
@@ -111,6 +113,8 @@ class Supplier(Base, TimestampMixin, SoftDeleteMixin):
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     gst_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    vendor_id: Mapped[int | None] = mapped_column(ForeignKey("vendors.id"), nullable=True, index=True)
 
 
 class Purchase(Base, TimestampMixin, SoftDeleteMixin):

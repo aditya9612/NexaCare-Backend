@@ -69,6 +69,10 @@ class TestStageB3(unittest.IsolatedAsyncioTestCase):
     async def test_stock_movement_tenant_security_success(self):
         db = AsyncMock()
         db.scalar.side_effect = [42, 42]
+        db.add = MagicMock()
+        db.begin_nested = MagicMock()
+        db.begin_nested.return_value.__aenter__ = AsyncMock()
+        db.begin_nested.return_value.__aexit__ = AsyncMock()
 
         mock_ws = MagicMock()
         mock_ws.quantity = 50
@@ -84,6 +88,10 @@ class TestStageB3(unittest.IsolatedAsyncioTestCase):
     async def test_stock_movement_concurrency_integrity_error(self):
         db = AsyncMock()
         db.scalar.side_effect = [42, 42]
+        db.add = MagicMock()
+        db.begin_nested = MagicMock()
+        db.begin_nested.return_value.__aenter__ = AsyncMock()
+        db.begin_nested.return_value.__aexit__ = AsyncMock()
 
         mock_res_empty = MagicMock()
         mock_res_empty.scalars().first.return_value = None
@@ -114,12 +122,26 @@ class TestStageB3(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(has_uq)
 
     def test_migration_statically(self):
-        with open("alembic/versions/c8e6f1a0b3d5_warehouse_stock_unique.py", "r") as f:
+        with open("alembic/versions/b7d5f0e9c1a2_phase_11_consolidated_stock_tenant_architecture.py", "r") as f:
             content = f.read()
-            self.assertIn("down_revision = 'b7d5f0e9c1a2'", content)
-            self.assertIn("revision = 'c8e6f1a0b3d5'", content)
-            self.assertIn("create_unique_constraint('uq_warehouse_item'", content)
-            self.assertIn("drop_constraint('uq_warehouse_item'", content)
+            self.assertIn("down_revision: Union[str, None] = 'f7a1c2d3e4b5'", content)
+            self.assertIn("revision: str = 'b7d5f0e9c1a2'", content)
+            self.assertIn(
+                """op.create_unique_constraint(
+        'uq_warehouse_item',
+        'warehouse_stock',
+        ['warehouse_id', 'inventory_item_id']
+    )""",
+                content,
+            )
+            self.assertIn(
+                """op.drop_constraint(
+        'uq_warehouse_item',
+        'warehouse_stock',
+        type_='unique'
+    )""",
+                content,
+            )
 
 if __name__ == '__main__':
     unittest.main()

@@ -92,7 +92,7 @@ async def upload_items_bulk(
             status_code=400,
             detail="Unsupported file format. Only .xlsx files are supported."
         )
-        
+
     result = await InventoryService(db).import_items_from_excel(file, current_user.id)
     return APIResponse(message="Inventory items bulk upload processed", data=result)
 
@@ -105,7 +105,7 @@ async def export_inventory_items(
     _: User = Depends(require_permission("inventory", "read")),
 ):
     data, media_type = await InventoryService(db).export_items(format.value)
-    
+
     if format == InventoryExportFormat.EXCEL:
         return StreamingResponse(
             data,
@@ -227,7 +227,7 @@ async def create_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    warehouse = await InventoryService(db).create_warehouse(data, current_user.id)
+    warehouse = await InventoryService(db).create_warehouse(data, current_user.hospital_id)
     return APIResponse(message="Warehouse created", data=warehouse)
 
 
@@ -239,7 +239,12 @@ async def list_warehouses(
     size: int = 20,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    result = await InventoryService(db).list_warehouses(page=page, size=size)
+    try:
+        result = await InventoryService(db).list_warehouses(hospital_id=current_user.hospital_id, page=page, size=size)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise
     return APIResponse(message="Warehouses retrieved", data=result)
 
 
@@ -250,7 +255,7 @@ async def get_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    warehouse = await InventoryService(db).get_warehouse(warehouse_id)
+    warehouse = await InventoryService(db).get_warehouse(warehouse_id, current_user.hospital_id)
     return APIResponse(message="Warehouse retrieved", data=warehouse)
 
 
@@ -262,7 +267,7 @@ async def update_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, current_user.id)
+    warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, current_user.hospital_id)
     return APIResponse(message="Warehouse updated", data=warehouse)
 
 
@@ -273,7 +278,7 @@ async def delete_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    await InventoryService(db).delete_warehouse(warehouse_id, current_user.id)
+    await InventoryService(db).delete_warehouse(warehouse_id, current_user.hospital_id)
     return APIResponse(message="Warehouse deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -296,7 +301,7 @@ async def stock_summary(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    summary = await InventoryService(db).get_stock_summary()
+    summary = await InventoryService(db).get_stock_summary(current_user.hospital_id)
     return APIResponse(message="Stock summary", data=summary)
 
 
@@ -319,4 +324,3 @@ async def get_inventory_dashboard(
 ):
     dashboard_data = await InventoryService(db).get_dashboard_summary()
     return APIResponse(message="Inventory dashboard stats retrieved", data=dashboard_data)
-

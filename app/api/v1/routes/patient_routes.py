@@ -293,15 +293,137 @@ async def get_patient(
     return APIResponse(message="Patient retrieved", data=patient)
 
 
-@router.put("/{patient_id}", response_model=APIResponse[PatientResponse])
+@router.put(
+    "/{patient_id}",
+    response_model=APIResponse[PatientResponse],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "first_name": {"type": "string"},
+                            "last_name": {"type": "string"},
+                            "gender": {"type": "string"},
+                            "dob": {"type": "string", "format": "date"},
+                            "blood_group": {"type": "string"},
+                            "marital_status": {"type": "string"},
+                            "phone": {"type": "string"},
+                            "email": {"type": "string", "format": "email"},
+                            "address": {"type": "string"},
+                            "city": {"type": "string"},
+                            "state": {"type": "string"},
+                            "pincode": {"type": "string"},
+                            "emergency_contact_name": {"type": "string"},
+                            "emergency_contact_number": {"type": "string"},
+                            "allergies": {"type": "string"},
+                            "medical_history": {"type": "string"},
+                            "chronic_disease": {"type": "string"},
+                            "diagnosis": {"type": "string"},
+                            "insurance_provider": {"type": "string"},
+                            "insurance_number": {"type": "string"},
+                            "status": {"type": "string"},
+                            "preferred_language": {"type": "string"},
+                            "consent_form": {"type": "string", "format": "binary"}
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def update_patient(
     patient_id: int,
-    data: PatientUpdate,
+    request: Request,
     db: DbSession,
     current_user: CurrentUser,
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    dob: Optional[date] = Form(None),
+    blood_group: Optional[str] = Form(None),
+    marital_status: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    city: Optional[str] = Form(None),
+    state: Optional[str] = Form(None),
+    pincode: Optional[str] = Form(None),
+    emergency_contact_name: Optional[str] = Form(None),
+    emergency_contact_number: Optional[str] = Form(None),
+    allergies: Optional[str] = Form(None),
+    medical_history: Optional[str] = Form(None),
+    chronic_disease: Optional[str] = Form(None),
+    diagnosis: Optional[str] = Form(None),
+    insurance_provider: Optional[str] = Form(None),
+    insurance_number: Optional[str] = Form(None),
+    status: Optional[str] = Form(None),
+    preferred_language: Optional[str] = Form(None),
+    consent_form: Optional[UploadFile] = File(None),
     _: User = Depends(require_permission("patients", "update")),
 ):
-    patient = await PatientService(db).update(patient_id, data, current_user.id)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            patient_data = PatientUpdate(**body)
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["body"], "msg": f"Invalid JSON payload: {str(e)}", "type": "json_invalid"}]
+            )
+    else:
+        try:
+            form_fields = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "gender": gender,
+                "dob": dob,
+                "blood_group": blood_group,
+                "marital_status": marital_status,
+                "phone": phone,
+                "email": email,
+                "address": address,
+                "city": city,
+                "state": state,
+                "pincode": pincode,
+                "emergency_contact_name": emergency_contact_name,
+                "emergency_contact_number": emergency_contact_number,
+                "allergies": allergies,
+                "medical_history": medical_history,
+                "chronic_disease": chronic_disease,
+                "diagnosis": diagnosis,
+                "insurance_provider": insurance_provider,
+                "insurance_number": insurance_number,
+                "status": status,
+                "preferred_language": preferred_language,
+            }
+            filtered_fields = {k: v for k, v in form_fields.items() if v is not None}
+            patient_data = PatientUpdate(**filtered_fields)
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+
+    patient = await PatientService(db).update(patient_id, patient_data, current_user.id)
+
+    if consent_form:
+        from app.utils.file_upload import save_upload_file
+        from app.core.config import settings
+        from app.models.patient_model import PatientDocument
+        from app.repositories.patient_repository import PatientRepository
+
+        file_path = await save_upload_file(consent_form, settings.UPLOAD_DIR)
+        doc = PatientDocument(
+            patient_id=patient_id,
+            document_name=consent_form.filename or "consent_form",
+            document_type="Consent Form",
+            file_path=file_path,
+            uploaded_by=current_user.id,
+        )
+        await PatientRepository(db).add_document(doc)
+
     return APIResponse(message="Patient updated", data=patient)
 
 

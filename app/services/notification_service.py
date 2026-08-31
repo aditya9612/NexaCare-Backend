@@ -21,6 +21,7 @@ from app.utils.email_sender import send_email
 from app.utils.helpers import utc_now
 from app.utils.pagination import build_paginated_result
 from app.utils.sms_sender import send_sms
+from app.tasks.notification_tasks import send_email_async, send_sms_async
 from app.utils.whatsapp_sender import send_whatsapp
 from app.websocket.notification_socket import notification_manager
 
@@ -180,14 +181,14 @@ class NotificationService:
             try:
                 subject = email_subject or title
                 body = email_html or f"<p>{message}</p>"
-                asyncio.create_task(send_email(email, subject, body))
+                send_email_async.delay(email, subject, body)
             except Exception as e:
                 logger.warning(f"Failed to dispatch email notification to {email}: {e}")
 
         # 4. SMS Channel (Async & Fault-Tolerant)
         if phone:
             try:
-                asyncio.create_task(send_sms(phone, message))
+                send_sms_async.delay(phone, message)
             except Exception as e:
                 logger.warning(f"Failed to dispatch SMS notification to {phone}: {e}")
 

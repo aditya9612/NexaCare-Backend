@@ -11,6 +11,7 @@ celery_app = Celery(
     backend=result_backend,
     include=[
         "app.tasks.voice_tasks",
+        "app.tasks.notification_tasks",
         "app.tasks.whatsapp_tasks",
         "app.tasks.analytics_tasks",
         "app.tasks.chat_tasks",

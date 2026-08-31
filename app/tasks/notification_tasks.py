@@ -68,3 +68,26 @@ def send_browser_push_async(self, user_id: int, title: str, message: str) -> Non
     except Exception as exc:
         logger.error(f"Failed to send browser push: {exc}")
         self.retry(exc=exc, countdown=10)
+
+from app.utils.email_sender import send_email
+from app.utils.sms_sender import send_sms
+
+@celery_app.task(name="app.tasks.notification_tasks.send_email_async", bind=True, max_retries=3)
+def send_email_async(self, to: str, subject: str, body: str) -> None:
+    try:
+        success = run_celery_async(send_email(to, subject, body))
+        if not success:
+            raise Exception("Email provider returned False")
+    except Exception as exc:
+        logger.error(f"Failed to send email via Celery: {exc}")
+        self.retry(exc=exc, countdown=10)
+
+@celery_app.task(name="app.tasks.notification_tasks.send_sms_async", bind=True, max_retries=3)
+def send_sms_async(self, phone: str, message: str) -> None:
+    try:
+        success = run_celery_async(send_sms(phone, message))
+        if not success:
+            raise Exception("SMS provider returned False")
+    except Exception as exc:
+        logger.error(f"Failed to send SMS via Celery: {exc}")
+        self.retry(exc=exc, countdown=10)

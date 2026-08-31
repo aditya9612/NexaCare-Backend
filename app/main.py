@@ -33,6 +33,10 @@ async def lifespan(app: FastAPI):
     Path("app/static").mkdir(parents=True, exist_ok=True)
     await init_db()
 
+    # Start Pub/Sub Listener
+    from app.websocket.notification_socket import notification_manager
+    await notification_manager.start_listener()
+
     # Voice: warn if TWILIO_PHONE_NUMBER does not match any hospital inbound_did
     if settings.TWILIO_PHONE_NUMBER:
         try:
@@ -64,6 +68,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await notification_manager.stop_listener()
         stop_dev_tunnel()
         await engine.dispose()
 

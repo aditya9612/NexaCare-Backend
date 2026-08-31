@@ -55,6 +55,27 @@ async def list_active_discharges(
     )
 
 
+@router.get("/final-bills", response_model=APIResponse[list[IPDFinalBillSummaryResponse]])
+async def list_final_bills(
+    db: DbSession,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 50,
+    patient_id: int | None = None,
+    status: str | None = None,
+    _: User = Depends(require_permission("billing", "read")),
+):
+    """
+    List all IPD Final Discharge Bills with search and status filters.
+    """
+    bills = await DischargeService(db).list_final_bills(skip=skip, limit=limit, patient_id=patient_id, status=status)
+    return APIResponse(
+        success=True,
+        message="IPD Final Bills retrieved successfully",
+        data=bills,
+    )
+
+
 @router.get("/{discharge_id}", response_model=APIResponse[DischargeResponse])
 async def get_discharge(
     discharge_id: int,
@@ -125,27 +146,6 @@ async def clear_pharmacy(
         success=True,
         message="Pharmacy clearance approved successfully",
         data=discharge,
-    )
-
-
-@router.get("/final-bills", response_model=APIResponse[list[IPDFinalBillSummaryResponse]])
-async def list_final_bills(
-    db: DbSession,
-    current_user: CurrentUser,
-    skip: int = 0,
-    limit: int = 50,
-    patient_id: int | None = None,
-    status: str | None = None,
-    _: User = Depends(require_permission("billing", "read")),
-):
-    """
-    List all IPD Final Discharge Bills with search and status filters.
-    """
-    bills = await DischargeService(db).list_final_bills(skip=skip, limit=limit, patient_id=patient_id, status=status)
-    return APIResponse(
-        success=True,
-        message="IPD Final Bills retrieved successfully",
-        data=bills,
     )
 
 

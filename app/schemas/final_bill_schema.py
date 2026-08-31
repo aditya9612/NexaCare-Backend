@@ -5,17 +5,17 @@ from app.schemas.common_schema import BaseSchema
 
 
 class IPDFinalBillItemResponse(BaseSchema):
-    id: int
-    final_bill_id: int
+    id: int | None = None
+    final_bill_id: int | None = None
     item_type: str
     item_name: str
-    quantity: int
-    unit_price: float
-    tax_rate: float
-    total_price: float
+    quantity: int = 1
+    unit_price: float = 0.0
+    tax_rate: float = 0.0
+    total_price: float = 0.0
     reference_id: int | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class IPDFinalBillResponse(BaseSchema):

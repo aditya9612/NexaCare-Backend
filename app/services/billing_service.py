@@ -262,6 +262,26 @@ class BillingService:
             user_id=user_id
         )
 
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+
+            if patient and patient.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Invoice Generated",
+                    message=f"An invoice ({billing.bill_number}) of {billing.total_amount} has been generated.",
+                    notification_type="INVOICE_CREATED",
+                    reference_type="BILLING",
+                    reference_id=billing.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
+
         return self._to_response(billing)
 
     async def _paginate_combined_billings(

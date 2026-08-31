@@ -63,7 +63,7 @@ class NotificationRepository:
 
     async def create(self, notification: Notification) -> Notification:
         self.db.add(notification)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(notification)
         return notification
 
@@ -150,7 +150,7 @@ class NotificationRepository:
 
         notification.is_read = True
         notification.updated_at = utc_now()
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(notification)
         return notification
 
@@ -165,7 +165,6 @@ class NotificationRepository:
             .values(is_read=True, updated_at=utc_now())
         )
         result = await self.db.execute(stmt)
-        await self.db.commit()
         return result.rowcount
 
     async def exists_duplicate(

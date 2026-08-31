@@ -16,7 +16,7 @@ from app.schemas.appointment_schema import (
     CancelRequest,
     ConfirmRequest,
     RescheduleRequest,
-    TokenResponse,    
+    TokenResponse,
     ConfirmedVisitResponse,
     ScheduledDoctorResponse,
 )
@@ -67,7 +67,7 @@ class AppointmentService:
         patient = await self.patient_repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
-        
+
         from app.core.constants import PatientStatus
         if patient.status == PatientStatus.INACTIVE:
             raise BadRequestException(
@@ -110,7 +110,7 @@ class AppointmentService:
         # Calculate summary counts independently of pagination and status/date filters where appropriate
         from app.utils.helpers import utc_now
         today = utc_now().date()
-        
+
         total_appointments = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
         )
@@ -188,7 +188,7 @@ class AppointmentService:
         return TokenResponse(
             appointment_id=appointment.id,
             token_number=appointment.token_number,
-    )     
+    )
 
     async def _notify_confirmation_safely(self, appointment: Appointment, target_user_id: int):
         try:
@@ -255,7 +255,7 @@ class AppointmentService:
 
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
-        
+
         if "appointment_date" in update_data or "appointment_time" in update_data:
             new_date, new_time = self._validate_future_datetime(new_date, new_time)
             if "appointment_date" in update_data:
@@ -294,6 +294,29 @@ class AppointmentService:
             appointment.notes = data.notes
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("reschedule", "appointments", user_id=user_id, resource_id=str(appointment.id))
+
+        try:
+            patient = await self.patient_repo.get_by_id(appointment.patient_id)
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+            user_target = (patient.user_id if patient and patient.user_id else None) or user_id
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).dispatch_notification(
+                user_id=user_target,
+                title="Appointment Rescheduled",
+                message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been rescheduled to {new_date} at {new_time}.",
+                notification_type="APPOINTMENT_RESCHEDULE",
+                reference_type="APPOINTMENT",
+                reference_id=appointment.id,
+                priority="NORMAL",
+                email=patient.email if patient else None,
+                phone=patient.phone if patient else None,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch reschedule notification: %s", exc)
+
         return AppointmentResponse.model_validate(appointment)
 
     async def cancel(self, data: CancelRequest, user_id: int) -> AppointmentResponse:
@@ -305,6 +328,29 @@ class AppointmentService:
             appointment.notes = data.reason
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("cancel", "appointments", user_id=user_id, resource_id=str(appointment.id))
+
+        try:
+            patient = await self.patient_repo.get_by_id(appointment.patient_id)
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+            user_target = (patient.user_id if patient and patient.user_id else None) or user_id
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).dispatch_notification(
+                user_id=user_target,
+                title="Appointment Cancelled",
+                message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been cancelled.",
+                notification_type="APPOINTMENT_CANCELLATION",
+                reference_type="APPOINTMENT",
+                reference_id=appointment.id,
+                priority="NORMAL",
+                email=patient.email if patient else None,
+                phone=patient.phone if patient else None,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch cancellation notification: %s", exc)
+
         return AppointmentResponse.model_validate(appointment)
 
     async def confirm(self, data: ConfirmRequest, user_id: int) -> AppointmentResponse:
@@ -387,9 +433,9 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
-        
+
         next_token = await self.repo.get_next_queue_token(appointment.appointment_date)
-        
+
         appointment.queue_token = next_token
         appointment.queue_status = "WAITING"
         await self.db.flush()
@@ -459,46 +505,40 @@ class AppointmentService:
         return appointment
 
     async def _create_queue_notification(self, appointment: Appointment, message: str) -> None:
-        from app.models.notification_model import Notification
         from app.models.doctor_model import Doctor
         from app.models.patient_model import Patient
+        from app.services.notification_service import NotificationService
         from sqlalchemy import select
-        
-        # Find doctor user_id
+
         doc_user_id = await self.db.scalar(
             select(Doctor.user_id).where(Doctor.id == appointment.doctor_id)
         )
-        # Find patient user_id
         pat_user_id = await self.db.scalar(
             select(Patient.user_id).where(Patient.id == appointment.patient_id)
         )
-        
+
+        notif_service = NotificationService(self.db)
         if doc_user_id:
-            doc_notif = Notification(
+            await notif_service.dispatch_notification(
                 user_id=doc_user_id,
                 title="Appointment Queue Alert",
                 message=message,
                 notification_type="QUEUE_ALERT",
                 reference_type="APPOINTMENT",
                 reference_id=appointment.id,
-                priority="NORMAL",
-                is_read=False
+                priority="NORMAL"
             )
-            self.db.add(doc_notif)
-            
+
         if pat_user_id:
-            pat_notif = Notification(
+            await notif_service.dispatch_notification(
                 user_id=pat_user_id,
                 title="Appointment Queue Alert",
                 message=message,
                 notification_type="QUEUE_ALERT",
                 reference_type="APPOINTMENT",
                 reference_id=appointment.id,
-                priority="NORMAL",
-                is_read=False
+                priority="NORMAL"
             )
-            self.db.add(pat_notif)
-        await self.db.flush()
 
     async def get_confirmed_visit_list(
             self,
@@ -518,13 +558,13 @@ class AppointmentService:
                 search=search, doctor_id=doctor_id,
                 department_id=department_id, appointment_date=appointment_date,
             )
-            
+
             responses = []
             for appt in items:
                 p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else ""
                 doc_name = f"Dr. {appt.doctor.first_name} {appt.doctor.last_name}" if appt.doctor else ""
                 dept_name = appt.department.department_name if appt.department else None
-                
+
                 responses.append(
                     ConfirmedVisitResponse(
                         appointment_id=appt.id,
@@ -542,7 +582,7 @@ class AppointmentService:
                         queue_status=appt.queue_status
                     )
                 )
-                
+
             return build_paginated_result(responses, total, page, limit)
 
     async def download_appointment_pdf(self, appointment_id: int) -> bytes:
@@ -822,10 +862,10 @@ class AppointmentService:
         from app.models.doctor_model import Doctor, DoctorSchedule
         from sqlalchemy import select
         from datetime import time as dt_time
-        
+
         # 1. Convert appointment_date to weekday (0 = Monday, 6 = Sunday)
         day_of_week = appointment_date.weekday()
-        
+
         # 2. Base query: Join DoctorSchedule with Doctor
         query = (
             select(Doctor, DoctorSchedule)
@@ -836,20 +876,20 @@ class AppointmentService:
                 DoctorSchedule.is_active.is_(True)
             )
         )
-        
+
         # Apply filters
         if department_id is not None:
             query = query.where(Doctor.department_id == department_id)
         if specialization is not None and specialization.strip() != "":
             query = query.where(Doctor.specialization.ilike(f"%{specialization.strip()}%"))
-            
+
         result = await self.db.execute(query)
         rows = result.all()
-        
+
         response_list = []
         for doctor, sched in rows:
             is_available = True
-            
+
             # If appointment_time is provided, evaluate availability for the exact slot
             if appointment_time is not None:
                 if doctor.availability_status in ("onleave", "on_leave"):
@@ -866,7 +906,7 @@ class AppointmentService:
                         is_available = True
                     except Exception:
                         is_available = False
-                        
+
             response_list.append(
                 ScheduledDoctorResponse(
                     doctor_id=doctor.id,
@@ -882,6 +922,6 @@ class AppointmentService:
                     is_available=is_available
                 )
             )
-            
+
         return response_list
 

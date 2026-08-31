@@ -93,7 +93,7 @@ class BedAllocationService:
 
     async def update_floor(self, floor_id: int, data: FloorUpdate) -> Floor:
         floor = await self.get_floor(floor_id)
-        
+
         if data.number is not None and data.number != floor.number:
             existing = await self.repo.get_floor_by_number(data.number)
             if existing:
@@ -198,7 +198,7 @@ class BedAllocationService:
             room.type = data.type
         if data.description is not None:
             room.description = data.description
-        
+
         if data.capacity is not None:
             room.capacity = data.capacity
 
@@ -407,6 +407,47 @@ class BedAllocationService:
         )
         await self.repo.create_activity_log(log)
 
+        try:
+            from app.models.doctor_model import Doctor
+            from app.services.notification_service import NotificationService
+
+            notif_service = NotificationService(self.db)
+
+            # Notify Patient
+            if patient.user_id:
+                await notif_service.dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Patient Admission",
+                    message=f"You have been admitted to Bed {bed.name} on Floor: {floor_name}.",
+                    notification_type="PATIENT_ADMISSION",
+                    reference_type="BED_ALLOCATION",
+                    reference_id=bed.id,
+                    priority="HIGH",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+
+            # Notify Doctor
+            if appointment and appointment.doctor_id:
+                doc_user_id = await self.db.scalar(
+                    select(Doctor.user_id).where(Doctor.id == appointment.doctor_id)
+                )
+                if doc_user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=doc_user_id,
+                        title="Patient Admission",
+                        message=f"Your patient {patient.first_name} {patient.last_name} has been admitted to Bed {bed.name}.",
+                        notification_type="PATIENT_ADMISSION",
+                        reference_type="BED_ALLOCATION",
+                        reference_id=bed.id,
+                        priority="HIGH",
+                        email=None,
+                        phone=None,
+                    )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch admission notification: %s", exc)
+
         return await self.get_bed(bed.id)
 
     async def release_bed(self, bed_id: int, data: BedReleaseRequest) -> Bed:
@@ -441,6 +482,58 @@ class BedAllocationService:
             patient_id=patient_id,
         )
         await self.repo.create_activity_log(log)
+
+        try:
+            from app.models.appointment_model import Appointment
+            from app.models.doctor_model import Doctor
+            from app.services.notification_service import NotificationService
+            from sqlalchemy import select, desc
+
+            notif_service = NotificationService(self.db)
+
+            # Notify Patient
+            if patient.user_id:
+                await notif_service.dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Patient Discharge",
+                    message=f"You have been discharged from Bed {bed.name}. Please follow your discharge instructions.",
+                    notification_type="PATIENT_DISCHARGE",
+                    reference_type="BED_ALLOCATION",
+                    reference_id=bed.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+
+            # Lookup Doctor
+            stmt = (
+                select(Appointment)
+                .where(Appointment.patient_id == patient.id)
+                .order_by(desc(Appointment.appointment_date), desc(Appointment.appointment_time))
+                .limit(1)
+            )
+            res = await self.db.execute(stmt)
+            appointment = res.scalar_one_or_none()
+
+            if appointment and appointment.doctor_id:
+                doc_user_id = await self.db.scalar(
+                    select(Doctor.user_id).where(Doctor.id == appointment.doctor_id)
+                )
+                if doc_user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=doc_user_id,
+                        title="Patient Discharge",
+                        message=f"Your patient {patient.first_name} {patient.last_name} has been discharged from Bed {bed.name}.",
+                        notification_type="PATIENT_DISCHARGE",
+                        reference_type="BED_ALLOCATION",
+                        reference_id=bed.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                    )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch discharge notification: %s", exc)
 
         return await self.get_bed(bed.id)
 

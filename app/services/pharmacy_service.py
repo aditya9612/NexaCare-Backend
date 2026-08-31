@@ -301,6 +301,26 @@ class PharmacyService:
             user_id=user_id,
             resource_id=str(prescription.id)
         )
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+            if patient_exists and patient_exists.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient_exists.user_id,
+                    title="Prescription Issued",
+                    message=f"Your prescription {prescription.prescription_number} has been issued and is ready for review.",
+                    notification_type="PRESCRIPTION_ISSUED",
+                    reference_type="PRESCRIPTION",
+                    reference_id=prescription.id,
+                    priority="NORMAL",
+                    email=patient_exists.email,
+                    phone=patient_exists.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch prescription issued notification: %s", exc)
+
         return self._prescription_response(prescription)
     async def list_prescriptions(
         self,

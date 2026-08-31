@@ -615,6 +615,28 @@ class BillingService:
             user_id=user_id
         )
 
+        try:
+            from app.services.notification_service import NotificationService
+            from app.models.patient_model import Patient
+            import logging
+
+            patient = await self.db.get(Patient, billing.patient_id)
+            if patient and patient.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Payment Received",
+                    message=f"A payment of {payment.amount} has been received for bill {billing.bill_number}.",
+                    notification_type="PAYMENT_RECEIVED",
+                    reference_type="PAYMENT",
+                    reference_id=payment.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
+
         return PaymentResponse.model_validate(payment)
 
     async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int) -> PaymentResponse:

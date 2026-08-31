@@ -1069,6 +1069,41 @@ class LabService:
             )
             report.report_path = path
 
+            try:
+                notif_service = NotificationService(self.db)
+                test_name = order.lab_test.test_name if order.lab_test else "Lab Test"
+
+                # Notify Patient
+                if patient and patient.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Lab Report Approved",
+                        message=f"Your lab report {report.report_number} for {test_name} has been approved and is now available.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=patient.email,
+                        phone=patient.phone,
+                    )
+
+                # Notify Doctor
+                if doctor and doctor.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=doctor.user_id,
+                        title="Lab Report Approved",
+                        message=f"Lab report {report.report_number} for {patient.first_name} {patient.last_name} has been approved.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                    )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch lab report approval notification: %s", exc)
+
         report = await self.report_repo.update(report)
         await self.audit_repo.create(
             "approve",

@@ -504,6 +504,30 @@ class PharmacyService:
             user_id=user_id,
             resource_id=str(prescription.id)
         )
+
+        if target_status == "dispensed" and current_status != "dispensed":
+            try:
+                from app.services.notification_service import NotificationService
+                from app.models.patient_model import Patient
+                import logging
+
+                patient = await self.db.get(Patient, prescription.patient_id)
+                if patient and patient.user_id:
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Prescription Dispensed",
+                        message=f"Your prescription ({prescription.prescription_number}) has been dispensed and is ready for pickup/use.",
+                        notification_type="PRESCRIPTION_DISPENSED",
+                        reference_type="PHARMACY_PRESCRIPTION",
+                        reference_id=prescription.id,
+                        priority="NORMAL",
+                        email=patient.email,
+                        phone=patient.phone,
+                    )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch prescription dispensed notification: %s", exc)
+
         return self._prescription_response(prescription)
 
     async def return_prescription(self, prescription_id: int, user_id: int) -> PrescriptionResponse:

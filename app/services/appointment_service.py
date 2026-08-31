@@ -24,6 +24,8 @@ from app.schemas.appointment_schema import (
     PendingAdmissionItem,
     PendingAdmissionPatientInfo,
     PendingAdmissionDoctorInfo,
+    EmergencyTriageRequest,
+    EmergencyDispositionRequest,
 )
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
@@ -99,6 +101,8 @@ class AppointmentService:
         appointment_type: str | None = None,
         booking_source: BookingSource | str | None = None,
         admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ):
         skip = (page - 1) * size
         source = booking_source.value if isinstance(booking_source, BookingSource) else booking_source
@@ -106,13 +110,13 @@ class AppointmentService:
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             appointment_type=appointment_type, booking_source=source,
-            admission_status=admission_status,
+            admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             appointment_type=appointment_type, booking_source=source,
-            admission_status=admission_status,
+            admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
 
         # Calculate summary counts independently of pagination and status/date filters where appropriate
@@ -462,12 +466,18 @@ class AppointmentService:
 
     async def get_today_queue(self) -> list[Appointment]:
         from app.utils.helpers import get_today_ist
-        from sqlalchemy import select
+        from sqlalchemy import select, case
         today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.appointment_date == today)
-            .order_by(Appointment.id.asc())
+            .order_by(
+                case(
+                    (Appointment.triage_level.isnot(None), Appointment.triage_level),
+                    else_=999,
+                ).asc(),
+                Appointment.id.asc(),
+            )
         )
         appointments = list(result.scalars().all())
         has_updated = False
@@ -978,7 +988,7 @@ class AppointmentService:
         if not appointment.check_in_time and appointment.appointment_status not in (AppointmentStatus.COMPLETED, "Checked-In", "In-Progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
             raise BadRequestException("Cannot recommend admission for a patient who has not checked in. Please check in the patient first.")
 
-        from app.core.constants import AdmissionStatus
+        from app.core.constants import AdmissionStatus, EmergencyDisposition
         from app.utils.helpers import generate_admission_number
         appointment.appointment_type = "IPD"
         appointment.appointment_status = AppointmentStatus.COMPLETED
@@ -988,6 +998,7 @@ class AppointmentService:
         appointment.admission_reason = data.admission_reason
         appointment.expected_los = data.expected_los
         appointment.recommended_ward = data.recommended_ward
+        appointment.disposition = EmergencyDisposition.ADMIT.value
         if data.notes:
             appointment.notes = f"{appointment.notes or ''}\n[Admission Notes]: {data.notes}".strip()
 
@@ -1039,7 +1050,45 @@ class AppointmentService:
             recommended_ward=appointment.recommended_ward,
             diagnosis=diagnosis_val or (appointment.patient.diagnosis if appointment.patient else None),
             notes=data.notes,
+            disposition=appointment.disposition,
         )
+
+    async def update_triage(
+        self,
+        appointment_id: int,
+        data: EmergencyTriageRequest,
+        user_id: int,
+    ) -> AppointmentResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        appointment.triage_level = data.triage_level
+        if data.triage_notes is not None:
+            appointment.triage_notes = data.triage_notes
+        appointment = await self.repo.update(appointment)
+        await self.audit_repo.create("update_triage", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        return AppointmentResponse.model_validate(appointment)
+
+    async def update_disposition(
+        self,
+        appointment_id: int,
+        data: EmergencyDispositionRequest,
+        user_id: int,
+    ) -> AppointmentResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        disp_clean = data.disposition.strip().upper()
+        appointment.disposition = disp_clean
+        if data.referred_to is not None:
+            appointment.referred_to = data.referred_to
+        if data.referral_reason is not None:
+            appointment.referral_reason = data.referral_reason
+        if data.notes:
+            appointment.notes = f"{appointment.notes or ''}\n[Disposition Notes]: {data.notes}".strip()
+        appointment = await self.repo.update(appointment)
+        await self.audit_repo.create("update_disposition", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        return AppointmentResponse.model_validate(appointment)
 
     async def get_pending_admissions(self) -> list[PendingAdmissionItem]:
         from app.models.bed_allocation_model import Bed

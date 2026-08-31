@@ -84,6 +84,22 @@ class AppointmentType(str, Enum):
     SCHEDULED = "scheduled"
 
 
+class EmergencyDisposition(str, Enum):
+    ADMIT = "ADMIT"
+    REFER = "REFER"
+    DISCHARGE = "DISCHARGE"
+    OBSERVED = "OBSERVED"
+
+
+class ESITriageLevel:
+    LEVEL_1 = 1  # Resuscitation / Immediate life-threat
+    LEVEL_2 = 2  # Emergent / High risk
+    LEVEL_3 = 3  # Urgent
+    LEVEL_4 = 4  # Less Urgent
+    LEVEL_5 = 5  # Non-Urgent
+    ALLOWED_LEVELS = (1, 2, 3, 4, 5)
+
+
 class BookingSource(str, Enum):
     """How the appointment was booked (channel), distinct from appointment_type."""
     STAFF = "staff"

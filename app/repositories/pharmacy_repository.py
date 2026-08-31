@@ -147,9 +147,9 @@ class MedicineRepository:
         )
         result = await self.db.execute(
             query.order_by(
-                Medicine.expiry_date.asc(),
                 Medicine.created_at.desc(),
                 Medicine.id.desc(),
+                Medicine.expiry_date.asc(),
             ).offset(skip).limit(limit)
         )
         return list(result.scalars().all())

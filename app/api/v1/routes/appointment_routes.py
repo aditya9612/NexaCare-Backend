@@ -25,6 +25,8 @@ from app.schemas.appointment_schema import (
     AdmitRecommendationRequest,
     AdmitRecommendationResponse,
     PendingAdmissionItem,
+    EmergencyTriageRequest,
+    EmergencyDispositionRequest,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -77,6 +79,8 @@ async def list_appointments(
     appointment_date: date | None = None,
     appointment_type: str | None = None,
     booking_source: BookingSource | None = None,
+    triage_level: int | None = None,
+    disposition: str | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
     if appointment_type:
@@ -87,7 +91,7 @@ async def list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
         appointment_type=appointment_type, booking_source=booking_source,
-        admission_status=admission_status,
+        admission_status=admission_status, triage_level=triage_level, disposition=disposition,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 
@@ -353,6 +357,36 @@ async def recommend_admission(
 ):
     result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id)
     return APIResponse(message="Admission recommended successfully", data=result)
+
+
+@router.patch("/{appointment_id}/triage", response_model=APIResponse[AppointmentResponse])
+async def update_appointment_triage(
+    appointment_id: int,
+    data: EmergencyTriageRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.NURSE, UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST)),
+):
+    """
+    Nurse or Doctor records/updates ESI Triage Level (1-5) and triage assessment notes.
+    """
+    result = await AppointmentService(db).update_triage(appointment_id, data, current_user.id)
+    return APIResponse(message="Triage level updated successfully", data=result)
+
+
+@router.patch("/{appointment_id}/disposition", response_model=APIResponse[AppointmentResponse])
+async def update_appointment_disposition(
+    appointment_id: int,
+    data: EmergencyDispositionRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+):
+    """
+    Doctor sets final clinical disposition (ADMIT / REFER / DISCHARGE / OBSERVED) with referral details.
+    """
+    result = await AppointmentService(db).update_disposition(appointment_id, data, current_user.id)
+    return APIResponse(message="Disposition updated successfully", data=result)
 
 
 @router.get("/{appointment_id}/token", response_model=APIResponse[TokenResponse])

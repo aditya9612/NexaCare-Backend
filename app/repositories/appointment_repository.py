@@ -26,6 +26,8 @@ class AppointmentRepository:
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
         admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
         query = self._apply_filters(
@@ -38,6 +40,8 @@ class AppointmentRepository:
             appointment_type,
             booking_source,
             admission_status,
+            triage_level=triage_level,
+            disposition=disposition,
         )
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -54,6 +58,8 @@ class AppointmentRepository:
         appointment_type: str | None = None,
         booking_source: str | None = None,
         admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
         query = self._apply_filters(
@@ -66,6 +72,8 @@ class AppointmentRepository:
             appointment_type,
             booking_source,
             admission_status,
+            triage_level=triage_level,
+            disposition=disposition,
         )
         return await self.db.scalar(query) or 0
 
@@ -80,6 +88,8 @@ class AppointmentRepository:
         appointment_type=None,
         booking_source=None,
         admission_status=None,
+        triage_level=None,
+        disposition=None,
     ):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
@@ -167,6 +177,10 @@ class AppointmentRepository:
             query = query.where(
                 func.lower(Appointment.booking_source) == func.lower(str(booking_source).strip())
             )
+        if triage_level is not None:
+            query = query.where(Appointment.triage_level == triage_level)
+        if disposition:
+            query = query.where(func.lower(Appointment.disposition) == func.lower(str(disposition).strip()))
         return query
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:

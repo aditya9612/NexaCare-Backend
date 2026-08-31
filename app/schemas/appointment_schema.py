@@ -36,6 +36,7 @@ class AppointmentCreate(BaseSchema):
     department_id: int | None = None
     appointment_date: date
     appointment_time: time
+    appointment_type: str | None = None
     booking_source: BookingSource | None = Field(
         default=None,
         description="Booking channel: staff, patient_portal, ai_chat, or ai_voice",
@@ -51,6 +52,18 @@ class AppointmentCreate(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+
+    # Emergency Triage (ESI 1-5) & Disposition
+    triage_level: int | None = Field(None, ge=1, le=5, description="ESI 1 (Resuscitation) to 5 (Non-Urgent)")
+    triage_notes: str | None = None
+    disposition: str | None = None
+    referred_to: str | None = None
+    referral_reason: str | None = None
+
+    @field_validator("appointment_type", mode="before")
+    @classmethod
+    def validate_type(cls, v):
+        return normalize_and_validate_appointment_type(v)
 
     @field_validator("booking_source", mode="before")
     @classmethod
@@ -80,6 +93,13 @@ class AppointmentUpdate(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+
+    # Emergency Triage (ESI 1-5) & Disposition
+    triage_level: int | None = Field(None, ge=1, le=5)
+    triage_notes: str | None = None
+    disposition: str | None = None
+    referred_to: str | None = None
+    referral_reason: str | None = None
 
     @field_validator("appointment_type", mode="before")
     @classmethod
@@ -139,6 +159,13 @@ class AppointmentResponse(BaseSchema):
     expected_los: int | None = None
     recommended_ward: str | None = None
 
+    # Emergency Triage & Disposition fields
+    triage_level: int | None = None
+    triage_notes: str | None = None
+    disposition: str | None = None
+    referred_to: str | None = None
+    referral_reason: str | None = None
+
     cancellation_reason: str | None = None
 
     @field_validator("admission_recommended", mode="before")
@@ -152,6 +179,18 @@ class AppointmentResponse(BaseSchema):
         if self.appointment_status in ("cancelled", AppointmentStatus.CANCELLED):
             self.cancellation_reason = self.notes
         return self
+
+
+class EmergencyTriageRequest(BaseSchema):
+    triage_level: int = Field(..., ge=1, le=5, description="ESI 1 (Resuscitation) to 5 (Non-Urgent)")
+    triage_notes: str | None = None
+
+
+class EmergencyDispositionRequest(BaseSchema):
+    disposition: str = Field(..., description="ADMIT, REFER, DISCHARGE, OBSERVED")
+    referred_to: str | None = None
+    referral_reason: str | None = None
+    notes: str | None = None
 
 
 class AdmitRecommendationRequest(BaseSchema):
@@ -175,6 +214,7 @@ class AdmitRecommendationResponse(BaseSchema):
     recommended_ward: str | None = None
     diagnosis: str | None = None
     notes: str | None = None
+    disposition: str | None = None
 
 
 class PendingAdmissionPatientInfo(BaseSchema):

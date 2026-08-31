@@ -15,6 +15,9 @@ from app.models.patient_model import Patient
 from app.models.pharmacy_model import PharmacyInvoice, Prescription
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.discharge_repository import DischargeRepository
+from app.models.final_bill_model import IPDFinalBill, IPDFinalBillItem
+from app.repositories.final_bill_repository import FinalBillRepository
+from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
 from app.schemas.billing_schema import BillingCreate, BillingUpdate, BillItemCreate, PaymentCreate
 from app.schemas.discharge_schema import (
     ClearBillingRequest,
@@ -42,6 +45,7 @@ class DischargeService:
         self.appointment_repo = AppointmentRepository(db)
         self.room_tariff_service = RoomTariffService(db)
         self.billing_service = BillingService(db)
+        self.final_bill_repo = FinalBillRepository(db)
 
     async def initiate_discharge(
         self, data: DischargeInitiateRequest, doctor_user_id: int
@@ -193,7 +197,7 @@ class DischargeService:
     # --- STEP 4: IPD FINAL BILL GENERATION (Idempotent & Consolidates Pharmacy) ---
     async def generate_ipd_final_bill(
         self, discharge_id: int, data: GenerateIPDBillRequest, user_id: int
-    ) -> dict:
+    ) -> IPDFinalBillResponse:
         discharge = await self.repo.get_by_id(discharge_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
@@ -413,94 +417,136 @@ class DischargeService:
                     )
                 )
 
-        # 4. Check if billing already exists for this discharge or patient & appointment (Idempotency)
-        existing_bill = None
-        if discharge.billing_id:
-            existing_bill = await self.db.get(Billing, discharge.billing_id)
-        elif discharge.appointment_id:
-            existing_bill = await self.billing_service.repo.get_by_patient_and_appointment(
-                discharge.patient_id, discharge.appointment_id
-            )
+        # 4. Component Subtotals Calculation
+        bed_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type in ["bed_charge", "nursing_charge"]), 2)
+        doctor_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "doctor_round"), 2)
+        lab_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "lab_test"), 2)
+        radiology_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "radiology_order"), 2)
+        pharmacy_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "pharmacy_invoice"), 2)
+        procedure_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "procedure_charge"), 2)
+        prior_opd_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "opd_consultation"), 2)
 
-        if existing_bill:
-            bill_update = BillingUpdate(
-                discount_amount=data.discount_amount,
-                gst_rate=gst_rate,
-                notes=f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}",
-                items=bill_items,
-            )
-            created_bill = await self.billing_service.update(existing_bill.id, bill_update, user_id)
-        else:
-            bill_create = BillingCreate(
-                patient_id=discharge.patient_id,
-                appointment_id=discharge.appointment_id,
-                discount_amount=data.discount_amount,
-                gst_rate=gst_rate,
-                notes=f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}",
-                items=bill_items,
-            )
-            created_bill = await self.billing_service.create(bill_create, user_id)
+        gross_total = round(bed_charges + doctor_charges + lab_charges + radiology_charges + pharmacy_charges + procedure_charges + prior_opd_charges, 2)
+        discount_amount = round(data.discount_amount or 0.0, 2)
+        taxable = max(0.0, gross_total - discount_amount)
+        tax_amount = round(taxable * (gst_rate or 0.0) / 100.0, 2)
+        net_total = round(taxable + tax_amount, 2)
 
         # 5. Handle Advance Payments & Refunds on the Final Bill to accurately compute net balance
+        adv_payments_stmt = select(Payment).where(
+            Payment.status != "cancelled",
+            Payment.billing_id.in_(
+                select(Billing.id).where(
+                    Billing.patient_id == discharge.patient_id,
+                    (Billing.appointment_id == discharge.appointment_id) | (Billing.notes.like("%Advance%"))
+                )
+            )
+        )
+        all_adv_records = (await self.db.scalars(adv_payments_stmt)).all()
         total_advances = 0.0
         total_refunds = 0.0
-        if created_bill and getattr(created_bill, "id", None):
-            payments_stmt = select(Payment).where(
-                Payment.billing_id == created_bill.id,
-                Payment.status != "cancelled"
-            )
-            all_payments = (await self.db.scalars(payments_stmt)).all()
-            for p in (all_payments or []):
-                if not p:
-                    continue
-                amt = getattr(p, "amount", 0.0)
-                if isinstance(amt, (int, float)):
-                    if getattr(p, "is_refund", False):
-                        total_refunds += float(amt)
-                    else:
-                        total_advances += float(amt)
-
-        net_paid = max(0.0, total_advances - total_refunds)
-        total_amt = getattr(created_bill, "total_amount", 0.0)
-        tot = float(total_amt) if isinstance(total_amt, (int, float)) else 0.0
-        net_bal = round(max(0.0, tot - net_paid), 2)
-
-        bill_db_obj = await self.db.get(Billing, created_bill.id) if (created_bill and getattr(created_bill, "id", None)) else None
-        if bill_db_obj and hasattr(bill_db_obj, "balance_amount"):
-            try:
-                bill_db_obj.paid_amount = round(net_paid, 2)
-                bill_db_obj.balance_amount = net_bal
-                if net_bal == 0.0 and net_paid > 0:
-                    bill_db_obj.status = "paid"
-                elif net_paid > 0:
-                    bill_db_obj.status = "partial"
+        for p in (all_adv_records or []):
+            amt = getattr(p, "amount", 0.0)
+            if isinstance(amt, (int, float)):
+                if getattr(p, "is_refund", False):
+                    total_refunds += float(amt)
                 else:
-                    bill_db_obj.status = "unpaid" if tot > 0 else "paid"
-                await self.db.flush()
-            except Exception:
-                pass
+                    total_advances += float(amt)
 
-        if hasattr(created_bill, "paid_amount"):
-            created_bill.paid_amount = round(net_paid, 2)
-            created_bill.balance_amount = net_bal
+        net_advance_paid = max(0.0, total_advances - total_refunds)
+        advance_adjusted = min(net_total, net_advance_paid)
+        balance_amount = round(max(0.0, net_total - net_advance_paid), 2)
+        refund_amount = round(max(0.0, net_advance_paid - net_total), 2)
 
-        # Link bill to discharge. NOTE: Do NOT auto-set billing_cleared = True (Stage Separation)
-        discharge.billing_id = created_bill.id
-        discharge.billing_notes = f"Consolidated IPD Bill {created_bill.bill_number} generated for ₹{created_bill.total_amount:,.2f}"
+        # 6. Save or Update in dedicated ipd_final_bills table (Idempotency)
+        existing_final_bill = None
+        if discharge.final_bill_id:
+            existing_final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
+        elif discharge.id:
+            existing_final_bill = await self.final_bill_repo.get_by_discharge_id_with_items(discharge.id)
 
+        if existing_final_bill:
+            existing_final_bill.bed_id = discharge.bed_id
+            existing_final_bill.doctor_id = discharge.doctor_id
+            existing_final_bill.bed_charges = bed_charges
+            existing_final_bill.doctor_charges = doctor_charges
+            existing_final_bill.lab_charges = lab_charges
+            existing_final_bill.radiology_charges = radiology_charges
+            existing_final_bill.pharmacy_charges = pharmacy_charges
+            existing_final_bill.procedure_charges = procedure_charges
+            existing_final_bill.prior_opd_charges = prior_opd_charges
+            existing_final_bill.gross_total = gross_total
+            existing_final_bill.discount_amount = discount_amount
+            existing_final_bill.tax_rate = gst_rate
+            existing_final_bill.tax_amount = tax_amount
+            existing_final_bill.net_total = net_total
+            existing_final_bill.advance_adjusted = advance_adjusted
+            existing_final_bill.balance_amount = balance_amount
+            existing_final_bill.refund_amount = refund_amount
+            existing_final_bill.status = "paid" if balance_amount == 0.0 and net_advance_paid > 0 else "pending"
+            existing_final_bill.notes = data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}"
+
+            existing_final_bill.items.clear()
+            for it in bill_items:
+                existing_final_bill.items.append(
+                    IPDFinalBillItem(
+                        item_type=it.item_type,
+                        item_name=it.description,
+                        quantity=it.quantity,
+                        unit_price=it.unit_price,
+                        tax_rate=it.gst_rate,
+                        total_price=round(it.quantity * it.unit_price, 2),
+                    )
+                )
+            final_bill = await self.final_bill_repo.update(existing_final_bill)
+        else:
+            bill_number = f"IPD-BILL-{utc_now().strftime('%Y%m%d')}-{discharge.id:04d}"
+            final_bill = IPDFinalBill(
+                bill_number=bill_number,
+                discharge_id=discharge.id,
+                patient_id=discharge.patient_id,
+                appointment_id=discharge.appointment_id,
+                doctor_id=discharge.doctor_id,
+                bed_id=discharge.bed_id,
+                bed_charges=bed_charges,
+                doctor_charges=doctor_charges,
+                lab_charges=lab_charges,
+                radiology_charges=radiology_charges,
+                pharmacy_charges=pharmacy_charges,
+                procedure_charges=procedure_charges,
+                prior_opd_charges=prior_opd_charges,
+                gross_total=gross_total,
+                discount_amount=discount_amount,
+                tax_rate=gst_rate,
+                tax_amount=tax_amount,
+                net_total=net_total,
+                advance_adjusted=advance_adjusted,
+                balance_amount=balance_amount,
+                refund_amount=refund_amount,
+                status="paid" if balance_amount == 0.0 and net_advance_paid > 0 else "pending",
+                notes=data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}",
+            )
+            for it in bill_items:
+                final_bill.items.append(
+                    IPDFinalBillItem(
+                        item_type=it.item_type,
+                        item_name=it.description,
+                        quantity=it.quantity,
+                        unit_price=it.unit_price,
+                        tax_rate=it.gst_rate,
+                        total_price=round(it.quantity * it.unit_price, 2),
+                    )
+                )
+            final_bill = await self.final_bill_repo.create(final_bill)
+
+        # Link to discharge
+        discharge.final_bill_id = final_bill.id
+        discharge.billing_notes = f"Consolidated IPD Final Bill #{final_bill.bill_number} generated for ₹{final_bill.net_total:,.2f}"
         await self.repo.update(discharge)
+        await self.db.flush()
 
-        return {
-            "discharge_id": discharge.id,
-            "discharge_number": discharge.discharge_number,
-            "days_stayed": days_stayed,
-            "room_type": room_type,
-            "billing": created_bill,
-            "total_amount": created_bill.total_amount,
-            "paid_amount": created_bill.paid_amount,
-            "balance_amount": created_bill.balance_amount,
-            "billing_cleared": discharge.billing_cleared,
-        }
+        loaded_final_bill = await self.final_bill_repo.get_by_id_with_items(final_bill.id)
+        return IPDFinalBillResponse.model_validate(loaded_final_bill or final_bill)
 
     # --- STEP 5: BILLING CLEARANCE (Separate Verification Stage) ---
     async def clear_billing(
@@ -510,7 +556,7 @@ class DischargeService:
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
-        if not discharge.billing_id:
+        if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before billing clearance.")
 
         discharge.billing_cleared = True
@@ -535,7 +581,17 @@ class DischargeService:
         if not discharge.billing_cleared:
             raise BadRequestException("Billing Clearance must be completed before payment settlement.")
 
-        # 1. Settle main billing balance
+        # 1. Settle dedicated IPD Final Bill
+        if discharge.final_bill_id:
+            final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
+            if final_bill:
+                final_bill.status = "paid"
+                final_bill.payment_mode = data.payment_method
+                final_bill.settled_at = utc_now()
+                final_bill.settled_by = user_id
+                await self.final_bill_repo.update(final_bill)
+
+        # Legacy billing settlement fallback
         if discharge.billing_id:
             billing = await self.db.get(Billing, discharge.billing_id)
             if billing and billing.balance_amount > 0:
@@ -566,19 +622,47 @@ class DischargeService:
             inv.payment_mode = data.payment_method
             await self.db.flush()
 
-        # 3. STRICT OUTSTANDING CHECK: Verify zero balance
-        if discharge.billing_id:
-            billing = await self.db.get(Billing, discharge.billing_id)
-            if billing and billing.balance_amount > 0.0:
-                raise BadRequestException(
-                    f"Cannot clear payment. Outstanding bill balance of ₹{billing.balance_amount:,.2f} is remaining."
-                )
-
         discharge.payment_cleared = True
         discharge.payment_cleared_by = user_id
         discharge.payment_cleared_at = utc_now()
         if data.notes:
             discharge.payment_notes = data.notes
+
+        self._check_and_update_cleared_status(discharge)
+        discharge = await self.repo.update(discharge)
+        return DischargeResponse.model_validate(discharge)
+
+    async def get_final_bill_by_discharge_id(self, discharge_id: int) -> IPDFinalBillResponse:
+        final_bill = await self.final_bill_repo.get_by_discharge_id_with_items(discharge_id)
+        if not final_bill:
+            raise NotFoundException(f"Final bill for discharge {discharge_id} not found")
+        return IPDFinalBillResponse.model_validate(final_bill)
+
+    async def list_final_bills(
+        self, skip: int = 0, limit: int = 50, patient_id: int | None = None, status: str | None = None
+    ) -> list[IPDFinalBillSummaryResponse]:
+        bills = await self.final_bill_repo.list_all_final_bills(skip=skip, limit=limit, patient_id=patient_id, status=status)
+        results = []
+        for b in bills:
+            pat_name = f"{b.patient.first_name} {b.patient.last_name}" if getattr(b, "patient", None) else None
+            results.append(
+                IPDFinalBillSummaryResponse(
+                    id=b.id,
+                    bill_number=b.bill_number,
+                    discharge_id=b.discharge_id,
+                    patient_id=b.patient_id,
+                    patient_name=pat_name,
+                    gross_total=b.gross_total,
+                    discount_amount=b.discount_amount,
+                    net_total=b.net_total,
+                    advance_adjusted=b.advance_adjusted,
+                    balance_amount=b.balance_amount,
+                    refund_amount=b.refund_amount,
+                    status=b.status,
+                    created_at=b.created_at,
+                )
+            )
+        return results
 
         self._check_and_update_cleared_status(discharge)
         discharge = await self.repo.update(discharge)

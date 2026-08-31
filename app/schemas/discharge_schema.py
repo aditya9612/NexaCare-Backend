@@ -49,6 +49,7 @@ class DischargeClearanceStatus(BaseSchema):
     billing_cleared: bool
     billing_cleared_at: datetime | None = None
     billing_id: int | None = None
+    final_bill_id: int | None = None
     payment_cleared: bool
     payment_cleared_at: datetime | None = None
     doctor_approved: bool
@@ -81,6 +82,7 @@ class DischargeResponse(BaseSchema):
     billing_cleared: bool
     billing_cleared_at: datetime | None = None
     billing_id: int | None = None
+    final_bill_id: int | None = None
     billing_notes: str | None = None
     
     payment_cleared: bool

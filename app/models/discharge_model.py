@@ -37,6 +37,7 @@ class Discharge(Base):
     billing_cleared_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     billing_cleared_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     billing_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("billings.id"), nullable=True)
+    final_bill_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("ipd_final_bills.id"), nullable=True)
     billing_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     payment_cleared: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -65,3 +66,4 @@ class Discharge(Base):
     doctor = relationship("Doctor", backref="discharges")
     bed = relationship("Bed", backref="discharges")
     billing = relationship("Billing", backref="discharges")
+    final_bill = relationship("IPDFinalBill", foreign_keys=[final_bill_id], backref="discharge_record")

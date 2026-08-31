@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, status
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse
+from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
 from app.schemas.discharge_schema import (
     ClearBillingRequest,
     ClearPaymentRequest,
@@ -127,7 +128,46 @@ async def clear_pharmacy(
     )
 
 
-@router.post("/{discharge_id}/generate-final-bill")
+@router.get("/final-bills", response_model=APIResponse[list[IPDFinalBillSummaryResponse]])
+async def list_final_bills(
+    db: DbSession,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 50,
+    patient_id: int | None = None,
+    status: str | None = None,
+    _: User = Depends(require_permission("billing", "read")),
+):
+    """
+    List all IPD Final Discharge Bills with search and status filters.
+    """
+    bills = await DischargeService(db).list_final_bills(skip=skip, limit=limit, patient_id=patient_id, status=status)
+    return APIResponse(
+        success=True,
+        message="IPD Final Bills retrieved successfully",
+        data=bills,
+    )
+
+
+@router.get("/{discharge_id}/final-bill", response_model=APIResponse[IPDFinalBillResponse])
+async def get_discharge_final_bill(
+    discharge_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("billing", "read")),
+):
+    """
+    Get detailed IPD Final Bill with all line items and component breakdowns by discharge ID.
+    """
+    final_bill = await DischargeService(db).get_final_bill_by_discharge_id(discharge_id)
+    return APIResponse(
+        success=True,
+        message="IPD Final Bill retrieved successfully",
+        data=final_bill,
+    )
+
+
+@router.post("/{discharge_id}/generate-final-bill", response_model=APIResponse[IPDFinalBillResponse])
 async def generate_final_bill(
     discharge_id: int,
     data: GenerateIPDBillRequest,
@@ -136,7 +176,7 @@ async def generate_final_bill(
     _: User = Depends(require_permission("billing", "create")),
 ):
     """
-    Accountant calculates total stay days and auto-generates final IPD bill based on Room Tariffs and Pharmacy Invoices.
+    Accountant calculates total stay days and auto-generates final IPD bill based on Room Tariffs, Lab, Radiology, and Pharmacy.
     """
     result = await DischargeService(db).generate_ipd_final_bill(discharge_id, data, current_user.id)
     return APIResponse(

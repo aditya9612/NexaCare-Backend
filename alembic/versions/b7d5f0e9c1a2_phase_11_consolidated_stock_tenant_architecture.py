@@ -1,7 +1,7 @@
 """phase 11 consolidated stock tenant architecture
 
 Revision ID: b7d5f0e9c1a2
-Revises: f7a1c2d3e4b5
+Revises: 7f9a1b2c3d4e
 Create Date: 2026-08-26 15:40:00.000000
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = 'b7d5f0e9c1a2'
-down_revision: Union[str, None] = 'f7a1c2d3e4b5'
+down_revision: Union[str, None] = '7f9a1b2c3d4e'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

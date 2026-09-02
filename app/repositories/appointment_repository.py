@@ -104,10 +104,7 @@ class AppointmentRepository:
                 s_lower = str(status).strip().lower().replace("_", "-")
                 if s_lower in ("check-in", "checked-in"):
                     query = query.where(
-                        or_(
-                            Appointment.appointment_status.in_(["Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"]),
-                            Appointment.check_in_time.isnot(None),
-                        )
+                        Appointment.appointment_status.in_(["Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"])
                     )
                 elif s_lower in ("check-out", "checked-out"):
                     query = query.where(

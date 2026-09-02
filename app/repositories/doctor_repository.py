@@ -48,8 +48,8 @@ class DoctorRepository:
 
     async def list_all(
         self,
-        skip: int = 0,
-        limit: int = 20,
+        skip: int | None = None,
+        limit: int | None = None,
         department_id: int | None = None,
         availability_status: str | None = None,
         sort_by: str = "created_at",
@@ -62,7 +62,11 @@ class DoctorRepository:
             query = query.where(Doctor.availability_status == availability_status)
         column = getattr(Doctor, sort_by, Doctor.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
-        result = await self.db.execute(query.offset(skip).limit(limit))
+        if skip is not None:
+            query = query.offset(skip)
+        if limit is not None:
+            query = query.limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def count_all(

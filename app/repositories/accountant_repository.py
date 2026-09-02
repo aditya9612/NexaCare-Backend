@@ -109,14 +109,14 @@ class AccountantRepository:
             "paid_bills": paid_bills,
             "pending_bills": pending_bills,
             "overdue_bills": overdue_bills,
-            "total_revenue": float(total_revenue),
-            "total_billed": float(total_billed),
-            "pending_amount": float(pending_amount),
-            "today_collection": float(today_collection),
-            "monthly_revenue": float(monthly_revenue),
-            "yearly_revenue": float(yearly_revenue),
+            "total_revenue": round(float(total_revenue), 2),
+            "total_billed": round(float(total_billed), 2),
+            "pending_amount": round(float(pending_amount), 2),
+            "today_collection": round(float(today_collection), 2),
+            "monthly_revenue": round(float(monthly_revenue), 2),
+            "yearly_revenue": round(float(yearly_revenue), 2),
             "total_payments": total_payments,
-            "total_refunds": float(total_refunds),
+            "total_refunds": round(float(total_refunds), 2),
             "insurance_claims": insurance_claims,
             "pending_claims": pending_claims,
             "approved_claims": approved_claims,
@@ -139,7 +139,7 @@ class AccountantRepository:
         )
         result = await self.db.execute(query)
         return [
-            {"year": row.year, "month": row.month, "revenue": float(row.revenue)}
+            {"year": row.year, "month": row.month, "revenue": round(float(row.revenue), 2)}
             for row in result.all()
         ]
 
@@ -160,7 +160,7 @@ class AccountantRepository:
         )
         result = await self.db.execute(query)
         return [
-            {"year": row.year, "month": row.month, "expense": float(row.expense)}
+            {"year": row.year, "month": row.month, "expense": round(float(row.expense), 2)}
             for row in result.all()
         ]
 
@@ -172,4 +172,4 @@ class AccountantRepository:
                 Payment.is_refund.is_(False),
             )
         )
-        return float(val or 0.0)
+        return round(float(val or 0.0), 2)

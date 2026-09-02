@@ -198,7 +198,7 @@ class NotificationService:
             prefs = await settings_service.get_user_preferences(user_id)
             if prefs.get("push_notifications", True):
                 from app.tasks.notification_tasks import send_browser_push_async
-                send_browser_push_async.delay(user_id, title, message)
+                send_browser_push_async.apply_async(args=(user_id, title, message), retry=False)
         except Exception as e:
             logger.warning(f"Failed to dispatch Browser Push for user {user_id}: {e}")
 

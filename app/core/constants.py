@@ -50,17 +50,54 @@ class AppointmentStatus:
     PENDING = "Pending"
     CONFIRMED = "Confirmed"
     COMPLETED = "Completed"
+    ADMIT_RECOMMENDED = "Admit Recommended"
+    ADMITTED = "Admitted"
     CANCELLED = "Cancelled"
     NO_SHOW = "No Show"
 
-    ACTIVE = {PENDING, CONFIRMED}
-    TERMINAL = {COMPLETED, CANCELLED, NO_SHOW}
+    ACTIVE = {PENDING, CONFIRMED, ADMIT_RECOMMENDED}
+    TERMINAL = {COMPLETED, ADMITTED, CANCELLED, NO_SHOW}
 
 
-class AppointmentType:
-    """Canonical appointment_type string values (visit modality; free-text column)."""
+class AdmissionStatus:
+    NOT_RECOMMENDED = "Not Recommended"
+    ADMIT_RECOMMENDED = "Admit Recommended"
+    ADMITTED = "Admitted"
+    DISCHARGED = "Discharged"
+    CANCELLED = "Cancelled"
+
+
+class BedStatus(str, Enum):
+    AVAILABLE = "Available"
+    OCCUPIED = "Occupied"
+    RESERVED = "Reserved"
+    CLEANING = "Cleaning"
+    MAINTENANCE = "Maintenance"
+
+
+class AppointmentType(str, Enum):
+    OPD = "OPD"
+    IPD = "IPD"
+    EMERGENCY = "Emergency"
+    FOLLOW_UP = "Follow-up"
     WALK_IN = "walk-in"
     SCHEDULED = "scheduled"
+
+
+class EmergencyDisposition(str, Enum):
+    ADMIT = "ADMIT"
+    REFER = "REFER"
+    DISCHARGE = "DISCHARGE"
+    OBSERVED = "OBSERVED"
+
+
+class ESITriageLevel:
+    LEVEL_1 = 1  # Resuscitation / Immediate life-threat
+    LEVEL_2 = 2  # Emergent / High risk
+    LEVEL_3 = 3  # Urgent
+    LEVEL_4 = 4  # Less Urgent
+    LEVEL_5 = 5  # Non-Urgent
+    ALLOWED_LEVELS = (1, 2, 3, 4, 5)
 
 
 class BookingSource(str, Enum):

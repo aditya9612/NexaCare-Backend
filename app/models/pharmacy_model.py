@@ -20,11 +20,39 @@ class Medicine(Base, TimestampMixin, SoftDeleteMixin):
     unit: Mapped[str] = mapped_column(String(50))
     unit_price: Mapped[float] = mapped_column(Float, default=0.0)
     stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reorder_level: Mapped[int] = mapped_column(Integer, default=10)
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    inventory_item_id: Mapped[int | None] = mapped_column(ForeignKey("inventory_items.id"), nullable=True, index=True)
+
+    batches: Mapped[list["MedicineBatch"]] = relationship(back_populates="medicine", cascade="all, delete-orphan")
+
+    @property
+    def available_quantity(self) -> int:
+        return max(0, (self.stock_quantity or 0) - (self.reserved_quantity or 0))
+
+
+class MedicineBatch(Base, TimestampMixin):
+    __tablename__ = "medicine_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    medicine_id: Mapped[int] = mapped_column(ForeignKey("medicines.id", ondelete="CASCADE"), index=True)
+    batch_number: Mapped[str] = mapped_column(String(100), index=True)
+    expiry_date: Mapped[date] = mapped_column(Date, index=True)
+    stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    medicine: Mapped["Medicine"] = relationship(back_populates="batches")
+
+    @property
+    def available_quantity(self) -> int:
+        return max(0, (self.stock_quantity or 0) - (self.reserved_quantity or 0))
 
 
 class Prescription(Base, TimestampMixin, SoftDeleteMixin):
@@ -51,10 +79,12 @@ class PrescriptionItem(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id"), index=True)
     medicine_id: Mapped[int] = mapped_column(ForeignKey("medicines.id"), index=True)
+    batch_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     dosage: Mapped[str] = mapped_column(String(100))
     frequency: Mapped[str] = mapped_column(String(100))
     duration_days: Mapped[int] = mapped_column(Integer, default=1)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+    dispensed_quantity: Mapped[int] = mapped_column(Integer, default=0)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     prescription: Mapped["Prescription"] = relationship(back_populates="items")
@@ -80,10 +110,10 @@ class PharmacyInvoice(Base, TimestampMixin, SoftDeleteMixin):
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
-
     items: Mapped[list["PharmacyInvoiceItem"]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan"
     )
+    returns: Mapped[list["PharmacyReturn"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
 
 
 class PharmacyInvoiceItem(Base, TimestampMixin):
@@ -92,12 +122,49 @@ class PharmacyInvoiceItem(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     invoice_id: Mapped[int] = mapped_column(ForeignKey("pharmacy_invoices.id"), index=True)
     medicine_id: Mapped[int] = mapped_column(ForeignKey("medicines.id"), index=True)
+    batch_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+    returned_quantity: Mapped[int] = mapped_column(Integer, default=0)
     unit_price: Mapped[float] = mapped_column(Float)
     line_total: Mapped[float] = mapped_column(Float, default=0.0)
 
     invoice: Mapped["PharmacyInvoice"] = relationship(back_populates="items")
     medicine: Mapped["Medicine"] = relationship()
+
+
+class PharmacyReturn(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "pharmacy_returns"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    return_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("pharmacy_invoices.id"), index=True)
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
+    total_refund_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="completed", index=True)
+    processed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    invoice: Mapped["PharmacyInvoice"] = relationship(back_populates="returns")
+    items: Mapped[list["PharmacyReturnItem"]] = relationship(
+        back_populates="pharmacy_return", cascade="all, delete-orphan"
+    )
+
+
+class PharmacyReturnItem(Base, TimestampMixin):
+    __tablename__ = "pharmacy_return_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    return_id: Mapped[int] = mapped_column(ForeignKey("pharmacy_returns.id", ondelete="CASCADE"), index=True)
+    invoice_item_id: Mapped[int] = mapped_column(ForeignKey("pharmacy_invoice_items.id"), index=True)
+    medicine_id: Mapped[int] = mapped_column(ForeignKey("medicines.id"), index=True)
+    batch_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    refund_amount: Mapped[float] = mapped_column(Float, default=0.0)
+
+    pharmacy_return: Mapped["PharmacyReturn"] = relationship(back_populates="items")
+    medicine: Mapped["Medicine"] = relationship()
+    invoice_item: Mapped["PharmacyInvoiceItem"] = relationship()
 
 
 class Supplier(Base, TimestampMixin, SoftDeleteMixin):
@@ -111,6 +178,8 @@ class Supplier(Base, TimestampMixin, SoftDeleteMixin):
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     gst_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    vendor_id: Mapped[int | None] = mapped_column(ForeignKey("vendors.id"), nullable=True, index=True)
 
 
 class Purchase(Base, TimestampMixin, SoftDeleteMixin):

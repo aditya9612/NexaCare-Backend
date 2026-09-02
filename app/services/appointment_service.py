@@ -19,6 +19,13 @@ from app.schemas.appointment_schema import (
     TokenResponse,    
     ConfirmedVisitResponse,
     ScheduledDoctorResponse,
+    AdmitRecommendationRequest,
+    AdmitRecommendationResponse,
+    PendingAdmissionItem,
+    PendingAdmissionPatientInfo,
+    PendingAdmissionDoctorInfo,
+    EmergencyTriageRequest,
+    EmergencyDispositionRequest,
 )
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
@@ -93,6 +100,9 @@ class AppointmentService:
         appointment_date: date | None = None,
         appointment_type: str | None = None,
         booking_source: BookingSource | str | None = None,
+        admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ):
         skip = (page - 1) * size
         source = booking_source.value if isinstance(booking_source, BookingSource) else booking_source
@@ -100,11 +110,13 @@ class AppointmentService:
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             appointment_type=appointment_type, booking_source=source,
+            admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             appointment_type=appointment_type, booking_source=source,
+            admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
 
         # Calculate summary counts independently of pagination and status/date filters where appropriate
@@ -151,6 +163,18 @@ class AppointmentService:
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
             status="Checked-Out", appointment_date=appointment_date
         )
+        admit_recommended = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admit-recommended", appointment_date=appointment_date
+        )
+        admitted = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admitted", appointment_date=appointment_date
+        )
+        waiting = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="waiting", appointment_date=appointment_date
+        )
 
         paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
@@ -163,6 +187,8 @@ class AppointmentService:
             "pages": paginated.pages,
             "total_appointments": total_appointments,
             "today_appointments": today_appointments,
+            "total_today_appointments": today_appointments,
+            "total_today_tokens": today_appointments,
             "total_scheduled": total_scheduled,
             "completed": completed,
             "cancelled": cancelled,
@@ -171,6 +197,9 @@ class AppointmentService:
             "in_progress": in_progress,
             "checked_in": checked_in,
             "checked_out": checked_out,
+            "waiting": waiting,
+            "admit_recommended": admit_recommended,
+            "admitted": admitted,
         }
 
     async def get_by_id(self, appointment_id: int) -> AppointmentResponse:
@@ -185,10 +214,10 @@ class AppointmentService:
         if not appointment:
            raise NotFoundException("Appointment not found")
 
-        return TokenResponse(
-            appointment_id=appointment.id,
-            token_number=appointment.token_number,
-    )     
+        if not appointment.token_number:
+            raise BadRequestException("Token not generated for this appointment")
+
+        return TokenResponse(appointment_id=appointment.id, token_number=appointment.token_number)
 
     async def _notify_confirmation_safely(self, appointment: Appointment, target_user_id: int):
         try:
@@ -268,6 +297,13 @@ class AppointmentService:
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            appointment.queue_status = "CANCELLED"
+        elif appointment.appointment_status in (AppointmentStatus.COMPLETED, "Completed", "completed", "Checked-Out", "checked-out"):
+            if not appointment.queue_status or appointment.queue_status in ("WAITING", "CALLED"):
+                appointment.queue_status = "COMPLETED"
+        elif appointment.appointment_status in (AppointmentStatus.NO_SHOW, "No Show", "no-show", "no_show"):
+            appointment.queue_status = "SKIPPED"
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("update", "appointments", user_id=user_id, resource_id=str(appointment.id))
         return AppointmentResponse.model_validate(appointment)
@@ -301,6 +337,7 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
         appointment.appointment_status = AppointmentStatus.CANCELLED
+        appointment.queue_status = "CANCELLED"
         if data.reason:
             appointment.notes = data.reason
         appointment = await self.repo.update(appointment)
@@ -321,18 +358,47 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(start_date, end_date, doctor_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self):
+    async def get_today(self) -> dict:
         appointments = await self.repo.get_today()
         has_updated = False
         for a in appointments:
             if not a.queue_token:
                 a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
                 if not a.queue_status:
-                    a.queue_status = "WAITING"
+                    a.queue_status = "CANCELLED" if a.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled") else "WAITING"
                 has_updated = True
         if has_updated:
             await self.db.flush()
-        return [AppointmentResponse.model_validate(a) for a in appointments]
+
+        items = [AppointmentResponse.model_validate(a) for a in appointments]
+        total_today = len(items)
+        cancelled_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("cancelled", "canceled", "no show", "no-show") or (a.queue_status or "").upper() == "CANCELLED")
+        waiting_count = sum(1 for a in items if (a.queue_status or "").upper() == "WAITING")
+        completed_count = sum(1 for a in items if (a.appointment_status or "").lower() == "completed" or (a.queue_status or "").upper() == "COMPLETED")
+        checked_in_count = sum(1 for a in items if a.check_in_time is not None or (a.appointment_status or "").lower() in ("checked-in", "checked_in", "check-in"))
+        checked_out_count = sum(1 for a in items if a.check_out_time is not None or (a.appointment_status or "").lower() in ("checked-out", "checked_out", "check-out"))
+        pending_count = sum(1 for a in items if (a.appointment_status or "").lower() == "pending")
+        confirmed_count = sum(1 for a in items if (a.appointment_status or "").lower() == "confirmed")
+        in_progress_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("in-progress", "in_progress") or (a.queue_status or "").upper() in ("CALLED", "IN_PROGRESS", "IN_CONSULTATION"))
+        admitted_count = sum(1 for a in items if (a.admission_status or "").lower() in ("admitted", "admit recommended", "admit-recommended"))
+
+        return {
+            "items": items,
+            "total": total_today,
+            "total_appointments": total_today,
+            "total_today_appointments": total_today,
+            "total_today_tokens": total_today,
+            "today_appointments": total_today,
+            "cancelled": cancelled_count,
+            "waiting": waiting_count,
+            "completed": completed_count,
+            "checked_in": checked_in_count,
+            "checked_out": checked_out_count,
+            "pending": pending_count,
+            "confirmed": confirmed_count,
+            "in_progress": in_progress_count,
+            "admitted": admitted_count,
+        }
 
     async def get_upcoming(self, limit: int = 20):
         appointments = await self.repo.get_upcoming(limit)
@@ -353,7 +419,7 @@ class AppointmentService:
         appointment.check_in_time = datetime.now()
         if not appointment.queue_token:
             appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date)
-        if not appointment.queue_status:
+        if not appointment.queue_status or appointment.queue_status == "CANCELLED":
             appointment.queue_status = "WAITING"
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Patient checked in for appointment {appointment.appointment_number}")
@@ -385,6 +451,8 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            raise BadRequestException("Cannot generate queue token for a cancelled appointment")
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
         
@@ -398,12 +466,18 @@ class AppointmentService:
 
     async def get_today_queue(self) -> list[Appointment]:
         from app.utils.helpers import get_today_ist
-        from sqlalchemy import select
+        from sqlalchemy import select, case
         today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.appointment_date == today)
-            .order_by(Appointment.id.asc())
+            .order_by(
+                case(
+                    (Appointment.triage_level.isnot(None), Appointment.triage_level),
+                    else_=999,
+                ).asc(),
+                Appointment.id.asc(),
+            )
         )
         appointments = list(result.scalars().all())
         has_updated = False
@@ -411,7 +485,7 @@ class AppointmentService:
             if not a.queue_token:
                 a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
                 if not a.queue_status:
-                    a.queue_status = "WAITING"
+                    a.queue_status = "CANCELLED" if a.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled") else "WAITING"
                 has_updated = True
         if has_updated:
             await self.db.flush()
@@ -884,4 +958,209 @@ class AppointmentService:
             )
             
         return response_list
+
+    async def recommend_admission(
+        self,
+        appointment_id: int,
+        data: AdmitRecommendationRequest,
+        user_id: int,
+    ) -> AdmitRecommendationResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+
+        doctor = await self.doctor_repo.get_by_user_id(user_id)
+        if doctor and appointment.doctor_id != doctor.id:
+            from app.models.user_model import User
+            from app.core.constants import UserRole
+            from sqlalchemy import select
+            user_res = await self.db.execute(select(User).where(User.id == user_id))
+            user = user_res.scalar_one_or_none()
+            if user and user.role and user.role.name not in UserRole.ADMIN_ROLES:
+                raise BadRequestException("You can only recommend admission for your own appointments")
+
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW, "Cancelled", "No Show"):
+            raise BadRequestException(f"Cannot recommend admission for an appointment with status: {appointment.appointment_status}")
+
+        if appointment.appointment_status in (AppointmentStatus.PENDING, "Pending"):
+            raise BadRequestException("Cannot recommend admission for an appointment that is pending. Please confirm and check in the patient first.")
+
+        if not appointment.check_in_time and appointment.appointment_status not in (AppointmentStatus.COMPLETED, "Checked-In", "In-Progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
+            raise BadRequestException("Cannot recommend admission for a patient who has not checked in. Please check in the patient first.")
+
+        from app.core.constants import AdmissionStatus, EmergencyDisposition
+        from app.utils.helpers import generate_admission_number
+        appointment.appointment_type = "IPD"
+        appointment.appointment_status = AppointmentStatus.COMPLETED
+        appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
+        appointment.admission_number = appointment.admission_number or generate_admission_number()
+        appointment.admission_recommended = True
+        appointment.admission_reason = data.admission_reason
+        appointment.expected_los = data.expected_los
+        appointment.recommended_ward = data.recommended_ward
+        appointment.disposition = EmergencyDisposition.ADMIT.value
+        if data.notes:
+            appointment.notes = f"{appointment.notes or ''}\n[Admission Notes]: {data.notes}".strip()
+
+        diagnosis_val = data.diagnosis
+        if diagnosis_val:
+            from app.models.clinical_record_model import ClinicalRecord
+            from sqlalchemy import select
+            cr_res = await self.db.execute(
+                select(ClinicalRecord).where(ClinicalRecord.appointment_id == appointment.id)
+            )
+            clinical_record = cr_res.scalar_one_or_none() if hasattr(cr_res, "scalar_one_or_none") else None
+            if hasattr(clinical_record, "__await__"):
+                clinical_record = await clinical_record
+            if isinstance(clinical_record, ClinicalRecord):
+                clinical_record.diagnosis = diagnosis_val
+                if data.notes:
+                    clinical_record.notes = f"{clinical_record.notes or ''}\n[Admission Notes]: {data.notes}".strip()
+            else:
+                clinical_record = ClinicalRecord(
+                    patient_id=appointment.patient_id,
+                    doctor_id=appointment.doctor_id,
+                    appointment_id=appointment.id,
+                    diagnosis=diagnosis_val,
+                    notes=data.notes,
+                )
+                self.db.add(clinical_record)
+
+            if appointment.patient:
+                appointment.patient.diagnosis = diagnosis_val
+
+        await self.db.flush()
+
+        patient_name = appointment.patient_name or f"Patient ID {appointment.patient_id}"
+        await self._create_queue_notification(
+            appointment,
+            f"Admission recommended for {patient_name} (Admission No: {appointment.admission_number}). Please allocate a bed."
+        )
+
+        return AdmitRecommendationResponse(
+            appointment_id=appointment.id,
+            admission_number=appointment.admission_number,
+            patient_id=appointment.patient_id,
+            doctor_id=appointment.doctor_id,
+            appointment_status=appointment.appointment_status,
+            admission_status=appointment.admission_status,
+            admission_recommended=appointment.admission_recommended,
+            admission_reason=appointment.admission_reason,
+            expected_los=appointment.expected_los,
+            recommended_ward=appointment.recommended_ward,
+            diagnosis=diagnosis_val or (appointment.patient.diagnosis if appointment.patient else None),
+            notes=data.notes,
+            disposition=appointment.disposition,
+        )
+
+    async def update_triage(
+        self,
+        appointment_id: int,
+        data: EmergencyTriageRequest,
+        user_id: int,
+    ) -> AppointmentResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        appointment.triage_level = data.triage_level
+        if data.triage_notes is not None:
+            appointment.triage_notes = data.triage_notes
+        appointment = await self.repo.update(appointment)
+        await self.audit_repo.create("update_triage", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        return AppointmentResponse.model_validate(appointment)
+
+    async def update_disposition(
+        self,
+        appointment_id: int,
+        data: EmergencyDispositionRequest,
+        user_id: int,
+    ) -> AppointmentResponse:
+        appointment = await self.repo.get_by_id(appointment_id)
+        if not appointment:
+            raise NotFoundException("Appointment not found")
+        disp_clean = data.disposition.strip().upper()
+        appointment.disposition = disp_clean
+        if data.referred_to is not None:
+            appointment.referred_to = data.referred_to
+        if data.referral_reason is not None:
+            appointment.referral_reason = data.referral_reason
+        if data.notes:
+            appointment.notes = f"{appointment.notes or ''}\n[Disposition Notes]: {data.notes}".strip()
+        appointment = await self.repo.update(appointment)
+        await self.audit_repo.create("update_disposition", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        return AppointmentResponse.model_validate(appointment)
+
+    async def get_pending_admissions(self) -> list[PendingAdmissionItem]:
+        from app.models.bed_allocation_model import Bed
+        from app.core.constants import AdmissionStatus
+        from sqlalchemy import select, and_, not_, exists, or_
+
+        stmt = (
+            select(Appointment)
+            .where(
+                or_(
+                    Appointment.admission_status == AdmissionStatus.ADMIT_RECOMMENDED,
+                    Appointment.appointment_status == AppointmentStatus.ADMIT_RECOMMENDED,
+                    Appointment.admission_recommended.is_(True),
+                ),
+                Appointment.admission_status != AdmissionStatus.ADMITTED,
+                Appointment.appointment_status != AppointmentStatus.ADMITTED,
+                not_(
+                    exists().where(
+                        and_(
+                            Bed.patient_id == Appointment.patient_id,
+                            Bed.status == "Occupied",
+                        )
+                    )
+                )
+            )
+            .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
+        )
+        res = await self.db.execute(stmt)
+        appointments = list(res.scalars().all())
+
+        items: list[PendingAdmissionItem] = []
+        for a in appointments:
+            p = a.patient
+            d = a.doctor
+            dept_name = d.department.name if d and d.department else (a.department.name if a.department else None)
+
+            p_info = PendingAdmissionPatientInfo(
+                id=p.id if p else a.patient_id,
+                patient_code=p.patient_code if p else "",
+                first_name=p.first_name if p else "",
+                last_name=p.last_name if p else "",
+                gender=p.gender if p else None,
+                age=a.age if p else None,
+                phone=p.phone if p else None,
+            )
+            d_info = PendingAdmissionDoctorInfo(
+                id=d.id if d else a.doctor_id,
+                first_name=d.first_name if d else "",
+                last_name=d.last_name if d else "",
+                specialization=d.specialization if d else None,
+                department_name=dept_name,
+            )
+            diagnosis_val = (p.diagnosis if p else None) or (a.clinical_record.diagnosis if a.clinical_record else None)
+            items.append(
+                PendingAdmissionItem(
+                    appointment_id=a.id,
+                    admission_number=a.admission_number,
+                    patient_id=a.patient_id,
+                    appointment_number=a.appointment_number,
+                    appointment_date=a.appointment_date,
+                    appointment_status=a.appointment_status,
+                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if a.admission_recommended else None),
+                    admission_recommended=a.admission_recommended,
+                    admission_reason=a.admission_reason,
+                    expected_los=a.expected_los,
+                    recommended_ward=a.recommended_ward,
+                    diagnosis=diagnosis_val,
+                    patient=p_info,
+                    doctor=d_info,
+                    created_at=a.created_at,
+                )
+            )
+
+        return items
 

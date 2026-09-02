@@ -26,8 +26,11 @@ from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.models.permission_model import Permission
 from app.models.pharmacy_model import (
     Medicine,
+    MedicineBatch,
     PharmacyInvoice,
     PharmacyInvoiceItem,
+    PharmacyReturn,
+    PharmacyReturnItem,
     Prescription,
     PrescriptionItem,
     Purchase,
@@ -65,11 +68,17 @@ from app.models.hospital_voice_model import (
 from app.models.hospital_setting import HospitalSetting
 from app.models.appointment_setting import AppointmentSetting
 from app.models.user_preference import UserPreference
-from app.models.notification_setting import NotificationSetting
 from app.models.billing_setting import BillingSetting
 from app.models.knowledge_embedding_model import KnowledgeEmbedding
+from app.models.discharge_model import Discharge
+from app.models.room_tariff_model import RoomTariff
+from app.models.final_bill_model import IPDFinalBill, IPDFinalBillItem
 
 __all__ = [
+    "Discharge",
+    "RoomTariff",
+    "IPDFinalBill",
+    "IPDFinalBillItem",
     "Notification",
     "Hospital",
     "HospitalVoiceConfig",

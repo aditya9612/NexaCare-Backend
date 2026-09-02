@@ -91,10 +91,8 @@ class DashboardService:
                 pending_lab_reports_count=0
             )
 
-        now = utc_now()
-        today = now.date()
-        tomorrow = today + timedelta(days=1)
-        current_time = now.time()
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
 
         today_appts = await self.appointment_repo.list_all(
             doctor_id=doctor.id, appointment_date=today, limit=100

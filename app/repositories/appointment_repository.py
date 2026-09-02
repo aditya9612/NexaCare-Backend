@@ -25,6 +25,9 @@ class AppointmentRepository:
         booking_source: str | None = None,
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
+        admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
         query = self._apply_filters(
@@ -36,6 +39,9 @@ class AppointmentRepository:
             appointment_date,
             appointment_type,
             booking_source,
+            admission_status,
+            triage_level=triage_level,
+            disposition=disposition,
         )
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -51,6 +57,9 @@ class AppointmentRepository:
         appointment_date: date | None = None,
         appointment_type: str | None = None,
         booking_source: str | None = None,
+        admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
         query = self._apply_filters(
@@ -62,6 +71,9 @@ class AppointmentRepository:
             appointment_date,
             appointment_type,
             booking_source,
+            admission_status,
+            triage_level=triage_level,
+            disposition=disposition,
         )
         return await self.db.scalar(query) or 0
 
@@ -75,6 +87,9 @@ class AppointmentRepository:
         appointment_date,
         appointment_type=None,
         booking_source=None,
+        admission_status=None,
+        triage_level=None,
+        disposition=None,
     ):
         if patient_id:
             query = query.where(Appointment.patient_id == patient_id)
@@ -105,6 +120,8 @@ class AppointmentRepository:
                             Appointment.queue_status.in_(["IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"]),
                         )
                     )
+                elif s_lower == "waiting":
+                    query = query.where(func.upper(Appointment.queue_status) == "WAITING")
                 elif s_lower == "pending":
                     query = query.where(Appointment.appointment_status.in_(["Pending", "pending", "PENDING"]))
                 elif s_lower == "confirmed":
@@ -115,8 +132,41 @@ class AppointmentRepository:
                     query = query.where(Appointment.appointment_status.in_(["Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled"]))
                 elif s_lower in ("no-show", "no show"):
                     query = query.where(Appointment.appointment_status.in_(["No Show", "no show", "NO SHOW", "No-Show", "no-show"]))
+                elif s_lower in ("admit-recommended", "admit recommended", "admit_recommended"):
+                    query = query.where(
+                        or_(
+                            Appointment.admission_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
+                            Appointment.appointment_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
+                            Appointment.admission_recommended.is_(True),
+                        )
+                    )
+                elif s_lower in ("admitted", "admit"):
+                    query = query.where(
+                        or_(
+                            Appointment.admission_status.in_(["Admitted", "admitted", "ADMITTED"]),
+                            Appointment.appointment_status.in_(["Admitted", "admitted", "ADMITTED"]),
+                        )
+                    )
                 else:
                     query = query.where(func.lower(Appointment.appointment_status) == func.lower(status))
+        if admission_status:
+            if isinstance(admission_status, (list, tuple, set)):
+                query = query.where(Appointment.admission_status.in_(admission_status))
+            else:
+                adm_lower = str(admission_status).strip().lower().replace("_", "-")
+                if adm_lower in ("admit-recommended", "admit recommended", "admit_recommended"):
+                    query = query.where(
+                        or_(
+                            Appointment.admission_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
+                            Appointment.admission_recommended.is_(True),
+                        )
+                    )
+                elif adm_lower in ("admitted", "admit"):
+                    query = query.where(
+                        Appointment.admission_status.in_(["Admitted", "admitted", "ADMITTED"])
+                    )
+                else:
+                    query = query.where(func.lower(Appointment.admission_status) == func.lower(admission_status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
         if appointment_type:
@@ -127,6 +177,10 @@ class AppointmentRepository:
             query = query.where(
                 func.lower(Appointment.booking_source) == func.lower(str(booking_source).strip())
             )
+        if triage_level is not None:
+            query = query.where(Appointment.triage_level == triage_level)
+        if disposition:
+            query = query.where(func.lower(Appointment.disposition) == func.lower(str(disposition).strip()))
         return query
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:
@@ -285,14 +339,31 @@ class AppointmentRepository:
         return list(result.scalars().all())
 
     async def get_upcoming_appointments(self, doctor_id: int, limit: int = 10) -> list[Appointment]:
+        from app.utils.helpers import get_today_ist
+        from sqlalchemy.orm import joinedload
+        current_date = get_today_ist()
+        
+        excluded_statuses = [
+            AppointmentStatus.CANCELLED,
+            AppointmentStatus.COMPLETED,
+            "Cancelled",
+            "Completed",
+            "Checked-Out",
+            "checked-out",
+            "No Show",
+            "no-show",
+        ]
         from datetime import timezone, timedelta
         now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
         current_date = now_ist.date()
         current_time = now_ist.time()
         query = (
             select(Appointment)
+            .options(joinedload(Appointment.patient))
             .where(
                 Appointment.doctor_id == doctor_id,
+                Appointment.appointment_date >= current_date,
+                Appointment.appointment_status.notin_(excluded_statuses),
                 Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
                 or_(
                     Appointment.appointment_date > current_date,

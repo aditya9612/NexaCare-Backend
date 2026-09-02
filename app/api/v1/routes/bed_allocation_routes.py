@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -32,8 +32,23 @@ async def list_floors(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
+    status: Optional[str] = Query(None, description="Filter beds by status (e.g. Available, Occupied, Cleaning, Maintenance, Reserved)"),
+    floor_id: Optional[int] = Query(None, description="Filter by Floor ID"),
+    floor_number: Optional[int] = Query(None, description="Filter by Floor Number"),
+    floor_type: Optional[str] = Query(None, description="Filter by Floor Type (e.g. ICU, General, Emergency)"),
+    room_id: Optional[int] = Query(None, description="Filter by Room ID"),
+    room_number: Optional[int] = Query(None, description="Filter by Room Number"),
+    room_type: Optional[str] = Query(None, description="Filter by Room Type (e.g. ICU, General, Deluxe)"),
 ):
-    floors = await BedAllocationService(db).list_floors()
+    floors = await BedAllocationService(db).list_floors(
+        status=status,
+        floor_id=floor_id,
+        floor_number=floor_number,
+        floor_type=floor_type,
+        room_id=room_id,
+        room_number=room_number,
+        room_type=room_type,
+    )
     return APIResponse(message="Floors retrieved successfully", data=floors)
 
 
@@ -210,3 +225,33 @@ async def get_icu_analytics(
 ):
     analytics = await BedAllocationService(db).get_icu_analytics()
     return APIResponse(message="ICU bed analytics retrieved successfully", data=analytics)
+
+
+# 7. Housekeeping & Bed Cleaning Routes
+@router.get("/cleaning-queue", response_model=APIResponse[List[BedResponse]])
+async def get_cleaning_queue(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("bed_allocation", "read")),
+):
+    """
+    List all beds currently in 'Cleaning' status awaiting housekeeping sanitization.
+    """
+    beds = await BedAllocationService(db).get_cleaning_queue()
+    return APIResponse(message="Beds awaiting cleaning retrieved successfully", data=beds)
+
+
+@router.patch("/beds/{bedId}/cleaning-complete", response_model=APIResponse[BedResponse])
+async def mark_cleaning_complete(
+    bedId: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    notes: str | None = Query(None, description="Housekeeping sanitization notes"),
+    _: User = Depends(require_permission("bed_allocation", "assign")),
+):
+    """
+    Housekeeping marks bed sanitization complete. Bed status transitions to 'Available'.
+    """
+    bed = await BedAllocationService(db).mark_cleaning_complete(bedId, current_user.id, notes)
+    return APIResponse(message="Bed cleaning completed and bed is now Available", data=bed)
+

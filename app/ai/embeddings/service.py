@@ -89,11 +89,11 @@ class EmbeddingService:
             elif isinstance(exc, AuthenticationError):
                 error_type = "authentication"
                 client_msg = "AI service configuration unavailable"
-            elif isinstance(exc, APIConnectionError):
-                error_type = "connection"
-                client_msg = "AI service temporarily unavailable"
             elif isinstance(exc, APITimeoutError):
                 error_type = "timeout"
+                client_msg = "AI service temporarily unavailable"
+            elif isinstance(exc, APIConnectionError):
+                error_type = "connection"
                 client_msg = "AI service temporarily unavailable"
             elif isinstance(exc, BadRequestError):
                 error_type = "bad_request"

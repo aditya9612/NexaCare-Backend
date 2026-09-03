@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+﻿from fastapi import APIRouter
 
 from app.api.v1.routes import (
     admin_routes,
@@ -39,6 +39,8 @@ from app.api.v1.routes import (
     notification_routes,
     report_routes,
     share_routes,
+    faq_ai_document_routes,
+    faq_ai_health_routes,
 )
 from app.api import settings
 
@@ -92,3 +94,6 @@ api_router.include_router(notification_routes.router, prefix="/notifications", t
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
 api_router.include_router(report_routes.router, prefix="/reports", tags=["Reports"])
 api_router.include_router(share_routes.router, prefix="/share", tags=["Share Resource"])
+api_router.include_router(faq_ai_document_routes.router, tags=["FAQ AI Documents"])
+api_router.include_router(faq_ai_health_routes.router, tags=["FAQ AI Health"])
+

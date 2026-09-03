@@ -17,6 +17,7 @@ celery_app = Celery(
         "app.tasks.chat_tasks",
         "app.tasks.reminder_tasks",
         "app.tasks.lab_tasks",
+        "app.tasks.faq_ai_tasks",
     ],
 )
 

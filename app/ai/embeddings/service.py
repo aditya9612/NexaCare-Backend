@@ -44,15 +44,73 @@ class EmbeddingService:
 
         try:
             from openai import AsyncOpenAI
+            import time
 
             client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
             # OpenAI rejects empty strings; use a single space placeholder
             payload = [t if t else " " for t in cleaned]
+            
+            start_time = time.perf_counter()
             response = await client.embeddings.create(model=self.model, input=payload)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+            total_tokens = getattr(usage, "total_tokens", None) if usage else None
+            
+            logger.info(
+                "faq_ai_openai_usage",
+                extra={
+                    "event": "faq_ai_openai_usage",
+                    "operation": "embedding",
+                    "model": self.model,
+                    "prompt_tokens": prompt_tokens,
+                    "total_tokens": total_tokens,
+                    "latency_ms": round(latency_ms, 2),
+                    "status": "success",
+                }
+            )
+            
             by_index = {item.index: list(item.embedding) for item in response.data}
             return [by_index[i] for i in range(len(payload))]
         except EmbeddingUnavailableError:
             raise
         except Exception as exc:
-            logger.warning("EmbeddingService failed: %s", exc)
-            raise EmbeddingUnavailableError(str(exc)) from exc
+            latency_ms = (time.perf_counter() - start_time) * 1000 if 'start_time' in locals() else None
+            
+            from openai import RateLimitError, AuthenticationError, APIConnectionError, APITimeoutError, BadRequestError, OpenAIError
+            
+            error_type = "unexpected_error"
+            client_msg = "AI service unavailable"
+            
+            if isinstance(exc, RateLimitError):
+                error_type = "rate_limit"
+                client_msg = "temporary AI service limitation"
+            elif isinstance(exc, AuthenticationError):
+                error_type = "authentication"
+                client_msg = "AI service configuration unavailable"
+            elif isinstance(exc, APIConnectionError):
+                error_type = "connection"
+                client_msg = "AI service temporarily unavailable"
+            elif isinstance(exc, APITimeoutError):
+                error_type = "timeout"
+                client_msg = "AI service temporarily unavailable"
+            elif isinstance(exc, BadRequestError):
+                error_type = "bad_request"
+                client_msg = "AI request could not be processed"
+            elif isinstance(exc, OpenAIError):
+                error_type = "openai_error"
+                client_msg = "AI service unavailable"
+
+            logger.warning(
+                "EmbeddingService failed [%s]: %s", error_type, type(exc).__name__,
+                extra={
+                    "event": "faq_ai_openai_error",
+                    "operation": "embedding",
+                    "model": self.model,
+                    "error_type": error_type,
+                    "latency_ms": round(latency_ms, 2) if latency_ms else None,
+                    "status": "error"
+                }
+            )
+            raise EmbeddingUnavailableError(client_msg) from exc

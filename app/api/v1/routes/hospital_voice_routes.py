@@ -7,6 +7,7 @@ from app.core.constants import UserRole
 from app.core.dependencies import CurrentUser, DbSession, bearer_scheme
 from app.core.exceptions import ForbiddenException
 from app.models.user_model import User
+from app.repositories.audit_repository import AuditRepository
 from app.schemas.common_schema import APIResponse
 from app.schemas.hospital_voice_schema import (
     HospitalFaqCreate,
@@ -127,6 +128,7 @@ async def create_faq(
     hospital_id = _hospital_scope(current_user, hospital_id)
     payload.hospital_id = hospital_id
     data = await HospitalKnowledgeService(db).create_faq(payload)
+    await AuditRepository(db).create("create", "faqs", user_id=current_user.id, resource_id=str(data.id))
     return APIResponse(message="FAQ created", data=data)
 
 
@@ -141,6 +143,7 @@ async def update_faq(
     existing = await HospitalKnowledgeService(db).get_faq(faq_id)
     _hospital_scope(current_user, existing.hospital_id)
     data = await HospitalKnowledgeService(db).update_faq(faq_id, payload)
+    await AuditRepository(db).create("update", "faqs", user_id=current_user.id, resource_id=str(faq_id))
     return APIResponse(message="FAQ updated", data=data)
 
 
@@ -190,6 +193,7 @@ async def create_policy(
     hospital_id = _hospital_scope(current_user, hospital_id)
     payload.hospital_id = hospital_id
     data = await HospitalKnowledgeService(db).create_policy(payload)
+    await AuditRepository(db).create("create", "policies", user_id=current_user.id, resource_id=str(data.id))
     return APIResponse(message="Policy created", data=data)
 
 
@@ -204,6 +208,7 @@ async def update_policy(
     existing = await HospitalKnowledgeService(db).get_policy(policy_id)
     _hospital_scope(current_user, existing.hospital_id)
     data = await HospitalKnowledgeService(db).update_policy(policy_id, payload)
+    await AuditRepository(db).create("update", "policies", user_id=current_user.id, resource_id=str(policy_id))
     return APIResponse(message="Policy updated", data=data)
 
 

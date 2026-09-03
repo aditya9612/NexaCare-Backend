@@ -22,7 +22,7 @@ from app.core.config import settings
 from app.core.logger import logger
 
 _MATCH_PREFIX = re.compile(
-    r"^MATCH:(faq|policy|document):(\d+)\s*$",
+    r"^MATCH:(faq|policy|document|document_chunk):(\d+)\s*$",
     re.IGNORECASE,
 )
 
@@ -61,6 +61,7 @@ class OpenAITop5Selector:
             "MATCH:faq:<id>\n"
             "MATCH:policy:<id>\n"
             "MATCH:document:<id>\n"
+            "MATCH:document_chunk:<id>\n"
             "NO_ANSWER\n"
             "Do not include any other text."
         )
@@ -72,8 +73,11 @@ class OpenAITop5Selector:
         )
         try:
             from openai import AsyncOpenAI
+            import time
 
             client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            
+            start_time = time.perf_counter()
             response = await client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=[
@@ -82,10 +86,68 @@ class OpenAITop5Selector:
                 ],
                 max_completion_tokens=200,
             )
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            
+            # Extract tokens
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+            completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+            total_tokens = getattr(usage, "total_tokens", None) if usage else None
+            
+            logger.info(
+                "faq_ai_openai_usage",
+                extra={
+                    "event": "faq_ai_openai_usage",
+                    "operation": "selector",
+                    "model": settings.OPENAI_MODEL,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "latency_ms": round(latency_ms, 2),
+                    "status": "success",
+                }
+            )
+
             text = (response.choices[0].message.content or "").strip()
         except Exception as exc:
-            logger.warning("OpenAITop5Selector failed: %s", exc)
-            return SelectorResult(kind="error", text=str(exc))
+            latency_ms = (time.perf_counter() - start_time) * 1000 if 'start_time' in locals() else None
+            
+            from openai import RateLimitError, AuthenticationError, APIConnectionError, APITimeoutError, BadRequestError, OpenAIError
+            
+            error_type = "unexpected_error"
+            client_msg = "AI service unavailable"
+            
+            if isinstance(exc, RateLimitError):
+                error_type = "rate_limit"
+                client_msg = "temporary AI service limitation"
+            elif isinstance(exc, AuthenticationError):
+                error_type = "authentication"
+                client_msg = "AI service configuration unavailable"
+            elif isinstance(exc, APIConnectionError):
+                error_type = "connection"
+                client_msg = "AI service temporarily unavailable"
+            elif isinstance(exc, APITimeoutError):
+                error_type = "timeout"
+                client_msg = "AI service temporarily unavailable"
+            elif isinstance(exc, BadRequestError):
+                error_type = "bad_request"
+                client_msg = "AI request could not be processed"
+            elif isinstance(exc, OpenAIError):
+                error_type = "openai_error"
+                client_msg = "AI service unavailable"
+
+            logger.warning(
+                "OpenAITop5Selector failed [%s]: %s", error_type, type(exc).__name__,
+                extra={
+                    "event": "faq_ai_openai_error",
+                    "operation": "selector",
+                    "model": settings.OPENAI_MODEL,
+                    "error_type": error_type,
+                    "latency_ms": round(latency_ms, 2) if latency_ms else None,
+                    "status": "error",
+                }
+            )
+            return SelectorResult(kind="error", text=client_msg)
 
         if text.upper() == "NO_ANSWER":
             return SelectorResult(kind="no_answer")

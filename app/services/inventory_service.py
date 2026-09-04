@@ -261,6 +261,25 @@ class InventoryService:
         ]
         ws.append(headers)
 
+        
+        # Configure Header Row Height
+        ws.row_dimensions[1].height = 32
+        
+        # Header Style definition
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+        header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin_side = Side(style="thin", color="D3D3D3")
+        header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = header_border
+        
         # Add sample row
         sample_row = [
             "Disposable Syringes 10ml",
@@ -279,6 +298,33 @@ class InventoryService:
         ]
         ws.append(sample_row)
 
+        
+        # Freeze panes at A2
+        ws.freeze_panes = "A2"
+        
+        # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
+        ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}2"
+        
+        # Set custom column widths
+        col_widths = {
+            1: 25,  # name
+            2: 20,  # sku
+            3: 18,  # barcode
+            4: 15,  # category
+            5: 12,  # quantity
+            6: 12,  # unit
+            7: 12,  # unit_cost
+            8: 15,  # reorder_level
+            9: 15,  # expiry_date
+            10: 15, # warehouse_id
+            11: 15, # vendor_id
+            12: 15, # department_id
+            13: 30  # description
+        }
+        for col_idx, width in col_widths.items():
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = width
+        
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -474,6 +520,25 @@ class InventoryService:
             ]
             ws.append(headers)
 
+            
+            # Configure Header Row Height
+            ws.row_dimensions[1].height = 32
+            
+            # Header Style definition
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            thin_side = Side(style="thin", color="D3D3D3")
+            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = header_border
+            
             for sr_no, item in enumerate(items, start=1):
                 row = [
                     sr_no,
@@ -494,6 +559,37 @@ class InventoryService:
                 ]
                 ws.append(row)
 
+                
+            # Freeze panes at A2
+            ws.freeze_panes = "A2"
+            
+            # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
+            total_rows = len(items) + 1
+            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
+            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
+            
+            # Set custom column widths
+            col_widths = {
+                1: 8,   # Sr. No.
+                2: 25,  # name
+                3: 20,  # sku
+                4: 18,  # barcode
+                5: 15,  # category
+                6: 12,  # quantity
+                7: 12,  # unit
+                8: 12,  # unit_cost
+                9: 15,  # reorder_level
+                10: 15, # expiry_date
+                11: 15, # warehouse_id
+                12: 15, # vendor_id
+                13: 15, # department_id
+                14: 22, # created_at
+                15: 22  # updated_at
+            }
+            for col_idx, width in col_widths.items():
+                col_letter = openpyxl.utils.get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = width
+                
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)

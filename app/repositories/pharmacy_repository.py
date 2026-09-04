@@ -41,7 +41,7 @@ class MedicineRepository:
         return list(result.scalars().all())
 
     async def get_all_active(self) -> list[Medicine]:
-        query = self._base_query().order_by(Medicine.name.asc())
+        query = self._base_query().order_by(Medicine.created_at.desc())
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

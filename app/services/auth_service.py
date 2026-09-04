@@ -128,6 +128,8 @@ class AuthService:
             role_id=role_id,
             gender=data.gender,
             date_of_birth=data.date_of_birth,
+            address=data.address,
+            profile_image=data.profile_image,
             is_active=False,
             is_verified=False,
         )
@@ -450,6 +452,7 @@ class AuthService:
             profile_image=user.profile_image,
             gender=user.gender,
             date_of_birth=user.date_of_birth,
+            address=user.address,
             is_active=user.is_active,
             is_verified=user.is_verified,
             last_login=user.last_login,
@@ -458,6 +461,12 @@ class AuthService:
         )
 
     async def update_profile(self, user: User, data: ProfileUpdateRequest) -> UserProfileResponse:
+        if data.email is not None and data.email != user.email:
+            email_norm = data.email.strip().lower()
+            existing_user = await self.repo.get_by_email(email_norm)
+            if existing_user:
+                raise ConflictException("Email already exists")
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(user, key, value)
         await self.repo.update(user)

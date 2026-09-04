@@ -104,10 +104,7 @@ class AppointmentRepository:
                 s_lower = str(status).strip().lower().replace("_", "-")
                 if s_lower in ("check-in", "checked-in"):
                     query = query.where(
-                        or_(
-                            Appointment.appointment_status.in_(["Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"]),
-                            Appointment.check_in_time.isnot(None),
-                        )
+                        Appointment.appointment_status.in_(["Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"])
                     )
                 elif s_lower in ("check-out", "checked-out"):
                     query = query.where(
@@ -352,6 +349,10 @@ class AppointmentRepository:
             "No Show",
             "no-show",
         ]
+        from datetime import timezone, timedelta
+        now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+        current_date = now_ist.date()
+        current_time = now_ist.time()
         query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
@@ -359,6 +360,14 @@ class AppointmentRepository:
                 Appointment.doctor_id == doctor_id,
                 Appointment.appointment_date >= current_date,
                 Appointment.appointment_status.notin_(excluded_statuses),
+                Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
+                or_(
+                    Appointment.appointment_date > current_date,
+                    and_(
+                        Appointment.appointment_date == current_date,
+                        Appointment.appointment_time >= current_time,
+                    ),
+                ),
             )
             .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
             .limit(limit)

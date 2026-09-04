@@ -654,6 +654,17 @@ class ExpenseService:
         if not expense:
             raise NotFoundException(f"Expense with ID {data.expense_id} not found")
 
+        # Fetch all existing active/non-deleted vendor payments for the selected expense
+        existing_payments = await self.payment_repo.get_payments_by_expense(expense.id)
+        total_paid = sum(p.amount for p in existing_payments)
+        remaining_amount = round(expense.amount - total_paid, 2)
+
+        if remaining_amount <= 0:
+            raise BadRequestException("Vendor payment has already been fully paid for this expense")
+
+        if data.amount > remaining_amount:
+            raise BadRequestException("Payment amount exceeds remaining expense amount")
+
         payment = VendorPayment(**data.model_dump())
         payment = await self.payment_repo.create(payment)
 
@@ -689,10 +700,26 @@ class ExpenseService:
             if not vendor:
                 raise NotFoundException(f"Vendor with ID {data.vendor_id} not found")
 
-        if data.expense_id is not None:
-            expense = await self.expense_repo.get_by_id(data.expense_id)
-            if not expense:
-                raise NotFoundException(f"Expense with ID {data.expense_id} not found")
+        target_expense_id = data.expense_id if data.expense_id is not None else payment.expense_id
+        target_expense = await self.expense_repo.get_by_id(target_expense_id)
+        if not target_expense:
+            raise NotFoundException(f"Expense with ID {target_expense_id} not found")
+
+        target_amount = data.amount if data.amount is not None else payment.amount
+
+        # Fetch existing payments for target expense
+        existing_payments = await self.payment_repo.get_payments_by_expense(target_expense_id)
+
+        # Exclude the current payment being updated from the total of other payments
+        other_payments_total = sum(
+            p.amount
+            for p in existing_payments
+            if p.id != payment_id
+        )
+
+        remaining_for_current_payment = round(target_expense.amount - other_payments_total, 2)
+        if target_amount > remaining_for_current_payment:
+            raise BadRequestException("Payment amount exceeds remaining expense amount")
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(payment, key, value)
@@ -736,25 +763,74 @@ class ExpenseService:
 
     async def generate_expense_bulk_template(self) -> BytesIO:
         import openpyxl
+        from sqlalchemy import select
+        from app.models.expense_model import ExpenseCategory
+        from app.models.vendor_model import Vendor
+        
+        # Find active category name
+        cat_stmt = select(ExpenseCategory.name).where(ExpenseCategory.is_active == True, ExpenseCategory.is_deleted == False).limit(1)
+        cat_res = await self.db.execute(cat_stmt)
+        cat_name = cat_res.scalar_one_or_none()
+        
+        # Find active vendor name
+        vendor_stmt = select(Vendor.name).where(Vendor.is_active == True, Vendor.is_deleted == False).limit(1)
+        vendor_res = await self.db.execute(vendor_stmt)
+        vendor_name = vendor_res.scalar_one_or_none()
         
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Expenses Bulk Import"
         
         headers = [
-            "category_id", "vendor_id", "amount", "description", "expense_date", "status"
+            "Category Name", "Vendor Name", "amount", "description", "expense_date", "status"
         ]
         ws.append(headers)
         
+        # Configure Header Row Height
+        ws.row_dimensions[1].height = 32
+        
+        # Header Style definition
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+        header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin_side = Side(style="thin", color="D3D3D3")
+        header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = header_border
+        
         # Add one valid sample row
         ws.append([
-            1,
-            2,
+            cat_name,
+            vendor_name,
             1500.50,
             "Office utilities payment",
             "2026-08-15",
             "Paid"
         ])
+        
+        # Freeze panes at A2
+        ws.freeze_panes = "A2"
+        
+        # AutoFilter
+        ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}2"
+        
+        # Set custom column widths
+        widths = {
+            "A": 25, # Category Name
+            "B": 25, # Vendor Name
+            "C": 15, # amount
+            "D": 30, # description
+            "E": 15, # expense_date
+            "F": 15, # status
+        }
+        for col_letter, width in widths.items():
+            ws.column_dimensions[col_letter].width = width
         
         stream = BytesIO()
         wb.save(stream)
@@ -776,7 +852,7 @@ class ExpenseService:
             raise BadRequestException("The uploaded file is empty or has no headers.")
             
         headers = [str(h).strip().lower() for h in header_row if h is not None]
-        required_headers = {"category_id", "amount", "description", "expense_date"}
+        required_headers = {"category name", "amount", "description", "expense_date"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
             
@@ -798,21 +874,32 @@ class ExpenseService:
                     row_dict[header] = val
                     
             try:
-                category_id_raw = row_dict.get("category_id")
-                if category_id_raw is None:
-                    raise BadRequestException("category_id is required.")
-                try:
-                    category_id = int(float(category_id_raw))
-                except ValueError:
-                    raise BadRequestException(f"Invalid category_id value: {category_id_raw}")
+                category_name_raw = row_dict.get("category name")
+                if category_name_raw is None:
+                    raise BadRequestException("Category Name is required.")
+                cat_name_str = str(category_name_raw).strip()
+                if not cat_name_str:
+                    raise BadRequestException("Category Name is required.")
+                
+                from sqlalchemy import select
+                from app.models.expense_model import ExpenseCategory
+                cat_stmt = select(ExpenseCategory.id).where(ExpenseCategory.name == cat_name_str, ExpenseCategory.is_deleted == False)
+                cat_res = await self.db.execute(cat_stmt)
+                category_id = cat_res.scalar_one_or_none()
+                if not category_id:
+                    raise BadRequestException(f"Category '{cat_name_str}' not found")
                     
                 vendor_id = None
-                vendor_id_raw = row_dict.get("vendor_id")
-                if vendor_id_raw is not None:
-                    try:
-                        vendor_id = int(float(vendor_id_raw))
-                    except ValueError:
-                        raise BadRequestException(f"Invalid vendor_id value: {vendor_id_raw}")
+                vendor_name_raw = row_dict.get("vendor name")
+                if vendor_name_raw is not None:
+                    vendor_name_str = str(vendor_name_raw).strip()
+                    if vendor_name_str:
+                        from app.models.vendor_model import Vendor
+                        v_stmt = select(Vendor.id).where(Vendor.name == vendor_name_str, Vendor.is_deleted == False)
+                        v_res = await self.db.execute(v_stmt)
+                        vendor_id = v_res.scalars().first()
+                        if not vendor_id:
+                            raise BadRequestException(f"Vendor '{vendor_name_str}' not found")
                         
                 amount_raw = row_dict.get("amount")
                 if amount_raw is None:
@@ -1012,11 +1099,28 @@ class ExpenseService:
             ws.title = "Expenses Export"
             
             headers = [
-                "Sr. No.", "category_id", "vendor_id", "amount", "description",
-                "expense_date", "status", "category_name", "vendor_name",
-                "created_at", "updated_at", "source"
+                "Sr. No.", "Category Name", "Vendor Name", "amount", "description",
+                "expense_date", "status", "created_at", "updated_at", "source"
             ]
             ws.append(headers)
+            
+            # Configure Header Row Height
+            ws.row_dimensions[1].height = 32
+            
+            # Header Style definition
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            thin_side = Side(style="thin", color="D3D3D3")
+            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = header_border
             
             for sr_no, exp in enumerate(expenses, start=1):
                 cat_name = exp.category.name if exp.category else ""
@@ -1024,20 +1128,43 @@ class ExpenseService:
                 
                 row = [
                     sr_no,
-                    exp.category_id,
-                    exp.vendor_id,
+                    cat_name,
+                    vendor_name,
                     f"₹{exp.amount:.2f}",
                     exp.description or "",
                     exp.expense_date.strftime("%Y-%m-%d") if isinstance(exp.expense_date, (date, datetime)) else str(exp.expense_date),
                     exp.status,
-                    cat_name,
-                    vendor_name,
                     exp.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.created_at, datetime) else str(exp.created_at),
                     exp.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.updated_at, datetime) else str(exp.updated_at),
                     exp.source
                 ]
                 ws.append(row)
                 
+            # Freeze panes at A2
+            ws.freeze_panes = "A2"
+            
+            # AutoFilter
+            total_rows = len(expenses) + 1
+            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
+            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
+            
+            # Set custom column widths
+            col_widths = {
+                1: 8,   # Sr. No.
+                2: 25,  # Category Name
+                3: 25,  # Vendor Name
+                4: 15,  # amount
+                5: 35,  # description
+                6: 15,  # expense_date
+                7: 15,  # status
+                8: 22,  # created_at
+                9: 22,  # updated_at
+                10: 15  # source
+            }
+            for col_idx, width in col_widths.items():
+                col_letter = openpyxl.utils.get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = width
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)

@@ -338,9 +338,13 @@ class LabService:
 
             # Check completed appointments only
             from app.core.constants import AppointmentStatus
-            appointment_status = (appointment.appointment_status or "").strip().lower()
-            completed_status = AppointmentStatus.COMPLETED.strip().lower()
-            if appointment_status != completed_status:
+            is_completed = (
+                appointment.appointment_status == AppointmentStatus.COMPLETED
+                or appointment.appointment_status == "Checked-Out"
+                or appointment.queue_status == "COMPLETED"
+                or appointment.check_out_time is not None
+            )
+            if not is_completed:
                 raise BadRequestException("Can only create test order for completed appointments")
 
         # Resolve doctor profile of logged-in user
@@ -1635,16 +1639,16 @@ class LabService:
         ws.title = "Lab Orders Bulk Import"
         
         headers = [
-            "patient_id", "doctor_id", "lab_test_id", "appointment_id", "priority", "notes"
+            "Patient Name", "Doctor Name", "Lab Test Name", "Appointment Number", "priority", "notes"
         ]
         ws.append(headers)
         
         # One valid sample row
         ws.append([
-            1,
-            2,
-            5,
-            10,
+            "John Doe [PT-0001]",
+            "Dr. Sarah Connor [DOC-0002]",
+            "Complete Blood Count [CBC]",
+            "APT-202608210001",
             "normal",
             "Routine blood sugar test"
         ])
@@ -1668,7 +1672,7 @@ class LabService:
             raise BadRequestException("The uploaded file is empty or has no headers.")
             
         headers = [str(h).strip().lower() for h in header_row if h is not None]
-        required_headers = {"patient_id", "lab_test_id"}
+        required_headers = {"patient name", "lab test name"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
             
@@ -1692,6 +1696,8 @@ class LabService:
                     row_dict[header] = val
                     
             try:
+                import re
+                
                 # Helper function to normalize Excel numeric IDs safely
                 def normalize_id(val, field_name):
                     if val is None:
@@ -1704,16 +1710,56 @@ class LabService:
                     except (ValueError, TypeError):
                         raise BadRequestException(f"Invalid integer value for {field_name}: {val}")
 
-                patient_id = normalize_id(row_dict.get("patient_id"), "patient_id")
+                def extract_code(val, field_name, expected_format, required=False) -> str | None:
+                    if val is None or str(val).strip() == "":
+                        if required:
+                            raise BadRequestException(f"{field_name} is required.")
+                        return None
+                    val_str = str(val).strip()
+                    match = re.search(r"\[(.*?)\]", val_str)
+                    if not match:
+                        raise BadRequestException(f"Invalid {field_name} format. Expected: {expected_format}")
+                    code = match.group(1).strip()
+                    if not code:
+                        raise BadRequestException(f"Invalid {field_name} format. Expected: {expected_format}")
+                    return code
+
+                patient_code = extract_code(row_dict.get("patient name"), "Patient Name", "Name [patient_code]", required=True)
+                from app.models.patient_model import Patient
+                p_stmt = select(Patient.id).where(Patient.patient_code == patient_code, Patient.is_deleted == False)
+                p_res = await self.db.execute(p_stmt)
+                patient_id = p_res.scalar_one_or_none()
                 if patient_id is None:
-                    raise BadRequestException("patient_id is required.")
-                    
-                lab_test_id = normalize_id(row_dict.get("lab_test_id"), "lab_test_id")
+                    raise BadRequestException(f"Patient with code {patient_code} not found")
+
+                lab_test_code = extract_code(row_dict.get("lab test name"), "Lab Test Name", "Test Name [test_code]", required=True)
+                from app.models.lab_model import LabTest
+                lt_stmt = select(LabTest.id).where(LabTest.test_code == lab_test_code, LabTest.is_deleted == False)
+                lt_res = await self.db.execute(lt_stmt)
+                lab_test_id = lt_res.scalar_one_or_none()
                 if lab_test_id is None:
-                    raise BadRequestException("lab_test_id is required.")
-                    
-                doctor_id = normalize_id(row_dict.get("doctor_id"), "doctor_id")
-                appointment_id = normalize_id(row_dict.get("appointment_id"), "appointment_id")
+                    raise BadRequestException(f"Lab Test with code {lab_test_code} not found")
+
+                doctor_code = extract_code(row_dict.get("doctor name"), "Doctor Name", "Name [doctor_code]", required=False)
+                doctor_id = None
+                if doctor_code:
+                    from app.models.doctor_model import Doctor
+                    d_stmt = select(Doctor.id).where(Doctor.doctor_code == doctor_code, Doctor.is_deleted == False)
+                    d_res = await self.db.execute(d_stmt)
+                    doctor_id = d_res.scalar_one_or_none()
+                    if doctor_id is None:
+                        raise BadRequestException(f"Doctor with code {doctor_code} not found")
+
+                appointment_id = None
+                appt_num_raw = row_dict.get("appointment number")
+                if appt_num_raw is not None and str(appt_num_raw).strip() != "":
+                    appt_num = str(appt_num_raw).strip()
+                    from app.models.appointment_model import Appointment
+                    a_stmt = select(Appointment.id).where(Appointment.appointment_number == appt_num)
+                    a_res = await self.db.execute(a_stmt)
+                    appointment_id = a_res.scalar_one_or_none()
+                    if appointment_id is None:
+                        raise BadRequestException(f"Appointment with number {appt_num} not found")
                 
                 priority = "normal"
                 priority_raw = row_dict.get("priority")
@@ -1858,15 +1904,19 @@ class LabService:
 
         # Map patient details
         from app.models.patient_model import Patient
-        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
+        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name, Patient.patient_code).where(Patient.is_deleted == False)
         p_res = await self.db.execute(p_stmt)
-        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
+        patient_data = p_res.all()
+        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in patient_data}
+        patient_codes_map = {row[0]: row[3] for row in patient_data}
 
         # Map doctor details
         from app.models.doctor_model import Doctor
-        d_stmt = select(Doctor.id, Doctor.first_name, Doctor.last_name).where(Doctor.is_deleted == False)
+        d_stmt = select(Doctor.id, Doctor.first_name, Doctor.last_name, Doctor.doctor_code).where(Doctor.is_deleted == False)
         d_res = await self.db.execute(d_stmt)
-        doctors_map = {row[0]: f"Dr. {row[1]} {row[2]}" for row in d_res.all()}
+        doctor_data = d_res.all()
+        doctors_map = {row[0]: f"Dr. {row[1]} {row[2]}" for row in doctor_data}
+        doctor_codes_map = {row[0]: row[3] for row in doctor_data}
 
         # Map appointment numbers
         from app.models.appointment_model import Appointment
@@ -1881,10 +1931,10 @@ class LabService:
             ws.title = "Lab Test Orders"
             
             headers = [
-                "Sr. No.", "order_number", "patient_id", "patient_name", "doctor_id", "doctor_name",
-                "lab_test_id", "department_id", "appointment_id", "appointment_number", "status", "priority", "notes",
+                "Sr. No.", "order_number", "Patient Name", "Doctor Name",
+                "Lab Test Name", "department_id", "Appointment Number", "status", "priority", "notes",
                 "ordered_at", "completed_at", "created_at",
-                "lab_test_test_code", "lab_test_test_name", "lab_test_category",
+                "lab_test_test_code", "lab_test_category",
                 "lab_test_description", "lab_test_price", "lab_test_sample_type",
                 "lab_test_turnaround_hours", "lab_test_normal_range",
                 "lab_test_is_active", "lab_test_department_id", "lab_test_doctor_id"
@@ -1893,17 +1943,19 @@ class LabService:
             
             for sr_no, o in enumerate(orders, start=1):
                 med = o.lab_test
+                p_name_formatted = f"{patients_map.get(o.patient_id, '')} [{patient_codes_map.get(o.patient_id, '')}]" if o.patient_id in patients_map else ""
+                d_name_formatted = f"{doctors_map.get(o.doctor_id, '')} [{doctor_codes_map.get(o.doctor_id, '')}]" if o.doctor_id and o.doctor_id in doctors_map else ""
+                t_name_formatted = f"{med.test_name} [{med.test_code}]" if med else ""
+                appt_num_val = appointments_map.get(o.appointment_id, "") if o.appointment_id else ""
+                
                 row = [
                     sr_no,
                     o.order_number,
-                    o.patient_id,
-                    patients_map.get(o.patient_id, ""),
-                    o.doctor_id,
-                    doctors_map.get(o.doctor_id, "") if o.doctor_id else "",
-                    o.lab_test_id,
+                    p_name_formatted,
+                    d_name_formatted,
+                    t_name_formatted,
                     o.department_id,
-                    o.appointment_id,
-                    appointments_map.get(o.appointment_id, "") if o.appointment_id else "",
+                    appt_num_val,
                     o.status,
                     o.priority,
                     o.notes or "",
@@ -1911,7 +1963,6 @@ class LabService:
                     o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
                     o.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.created_at, datetime) else str(o.created_at),
                     med.test_code if med else "",
-                    med.test_name if med else "",
                     med.category if med else "",
                     med.description or "" if med else "",
                     f"₹{med.price:.2f}" if med and med.price is not None else "",
@@ -1923,6 +1974,73 @@ class LabService:
                     med.doctor_id if med else ""
                 ]
                 ws.append(row)
+
+            # Apply advanced styling & layout improvements
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+            
+            center_alignment = Alignment(horizontal="center", vertical="center")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid") # White background
+            
+            thin_side = Side(style='thin', color='DDDDDD')
+            thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            
+            # 1. Format Header Row (Row 1)
+            ws.row_dimensions[1].height = 32
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = thin_border
+                
+            # 2. Format Data Rows (Row 2 onwards)
+            for row_idx in range(2, len(orders) + 2):
+                ws.row_dimensions[row_idx].height = 22
+                for col_idx in range(1, len(headers) + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.alignment = Alignment(vertical="center")
+                    cell.border = thin_border
+                        
+            # 3. Apply Column Widths
+            column_widths = {
+                1: 8,    # Sr. No.
+                2: 20,   # order_number
+                3: 30,   # Patient Name
+                4: 30,   # Doctor Name
+                5: 30,   # Lab Test Name
+                6: 15,   # department_id
+                7: 22,   # Appointment Number
+                8: 12,   # status
+                9: 10,   # priority
+                10: 25,  # notes
+                11: 20,  # ordered_at
+                12: 20,  # completed_at
+                13: 20,  # created_at
+                14: 20,  # lab_test_test_code
+                15: 18,  # lab_test_category
+                16: 25,  # lab_test_description
+                17: 15,  # lab_test_price
+                18: 18,  # lab_test_sample_type
+                19: 20,  # lab_test_turnaround_hours
+                20: 20,  # lab_test_normal_range
+                21: 15,  # lab_test_is_active
+                22: 22,  # lab_test_department_id
+                23: 18   # lab_test_doctor_id
+            }
+            for col_idx, width in column_widths.items():
+                col_letter = get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = width
+                
+            # 4. Freeze top header row
+            ws.freeze_panes = "A2"
+            
+            # 5. Enable AutoFilter
+            last_col_letter = get_column_letter(len(headers))
+            ws.auto_filter.ref = f"A1:{last_col_letter}{len(orders) + 1}"
                 
             stream = BytesIO()
             wb.save(stream)
@@ -1950,6 +2068,19 @@ class LabService:
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("lab_orders_export_template.html")
             
+            def wrap_unbroken_text(text: str, max_chars: int = 12) -> str:
+                if not text:
+                    return ""
+                words = text.split(" ")
+                processed_words = []
+                for word in words:
+                    if len(word) > max_chars:
+                        chunks = [word[i:i+max_chars] for i in range(0, len(word), max_chars)]
+                        processed_words.append("\u200b".join(chunks))
+                    else:
+                        processed_words.append(word)
+                return " ".join(processed_words)
+
             formatted_orders = []
             for o in orders:
                 med = o.lab_test
@@ -1965,7 +2096,7 @@ class LabService:
                     "department_id": o.department_id,
                     "status": o.status,
                     "priority": o.priority,
-                    "notes": o.notes,
+                    "notes": wrap_unbroken_text(o.notes, max_chars=12) if o.notes else "",
                     "ordered_at": o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
                     "completed_at": o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
                     "lab_test_test_code": med.test_code if med else "",

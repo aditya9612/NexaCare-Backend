@@ -500,6 +500,7 @@ class BedAllocationService:
         from app.core.constants import AdmissionStatus, AppointmentStatus
         appointment.admission_status = AdmissionStatus.ADMITTED
         appointment.appointment_type = "IPD"
+        appointment.queue_status = "COMPLETED"
         if status_norm in ("admit recommended", "admit_recommended"):
             appointment.appointment_status = AppointmentStatus.COMPLETED
 

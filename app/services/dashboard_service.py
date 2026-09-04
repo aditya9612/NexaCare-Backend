@@ -434,6 +434,7 @@ class DashboardService:
             walk_in_patients=walk_in_patients,
             pending_billing=pending_billing,
             rescheduled_appointments=rescheduled_appointments,
+            total_patient_footfall=checked_in_patients,
             queue_waiting=queue_waiting,
             queue_current=queue_current,
             queue_completed=queue_completed,

@@ -85,13 +85,24 @@ class DischargeService:
         if existing and existing.discharge_status in ("PENDING_CLEARANCES", "CLEARED"):
             raise ConflictException(f"Discharge already initiated for appointment {data.appointment_id}")
 
-        # 5. Find bed occupied by patient if any
+        # 5. Find bed occupied or allocated to patient
         bed = await self.db.scalar(
             select(Bed).where(
                 Bed.patient_id == appointment.patient_id,
-                Bed.status == BedStatus.OCCUPIED.value,
-            )
+            ).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
         )
+        if not bed:
+            recent_bed_id = await self.db.scalar(
+                select(BedActivityLog.bed_id)
+                .where(
+                    BedActivityLog.patient_id == appointment.patient_id,
+                    BedActivityLog.bed_id.isnot(None)
+                )
+                .order_by(BedActivityLog.timestamp.desc(), BedActivityLog.id.desc())
+                .limit(1)
+            )
+            if recent_bed_id:
+                bed = await self.db.get(Bed, recent_bed_id)
 
         admission_time = appointment.check_in_time or (
             datetime.combine(appointment.appointment_date, appointment.appointment_time)
@@ -173,6 +184,9 @@ class DischargeService:
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
+        if discharge.discharge_status == "DISCHARGED":
+            raise BadRequestException("Cannot modify clearance for an already discharged patient.")
+
         # Verify all prescriptions & pharmacy invoices for this appointment
         rx_stmt = select(Prescription).where(
             Prescription.appointment_id == discharge.appointment_id,
@@ -202,6 +216,9 @@ class DischargeService:
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
+        if discharge.discharge_status == "DISCHARGED":
+            raise BadRequestException("Cannot generate or modify final bill for an already discharged patient.")
+
         # STEP 3 Precondition: Pharmacy clearance must happen BEFORE final IPD bill generation
         if not discharge.pharmacy_cleared:
             raise BadRequestException("Pharmacy Clearance must be completed before generating IPD final bill.")
@@ -217,7 +234,34 @@ class DischargeService:
         stay_days = (discharge.discharge_date.date() - discharge.admission_date.date()).days
         days_stayed = max(1, stay_days)
 
-        # 2. Get Bed / Room information
+        # 2. Get Bed / Room information & resolve bed_id
+        effective_bed_id = discharge.bed_id
+        if not effective_bed_id:
+            bed_row = await self.db.scalar(
+                select(Bed).where(Bed.patient_id == discharge.patient_id).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
+            )
+            if bed_row:
+                effective_bed_id = bed_row.id
+                discharge.bed_id = effective_bed_id
+                discharge.bed = bed_row
+            else:
+                recent_bed_id = await self.db.scalar(
+                    select(BedActivityLog.bed_id)
+                    .where(
+                        BedActivityLog.patient_id == discharge.patient_id,
+                        BedActivityLog.bed_id.isnot(None)
+                    )
+                    .order_by(BedActivityLog.timestamp.desc(), BedActivityLog.id.desc())
+                    .limit(1)
+                )
+                if recent_bed_id:
+                    effective_bed_id = recent_bed_id
+                    discharge.bed_id = effective_bed_id
+                    discharge.bed = await self.db.get(Bed, effective_bed_id)
+
+        if not discharge.bed and effective_bed_id:
+            discharge.bed = await self.db.get(Bed, effective_bed_id)
+
         room_type = "General Ward"
         ward_name = "General Ward"
         if discharge.bed:
@@ -232,7 +276,7 @@ class DischargeService:
             ward_name = discharge.appointment.recommended_ward
 
         tariff = await self.room_tariff_service.get_by_room_type(room_type)
-        gst_rate = min(max(data.gst_rate, 0.0), 18.0)
+        gst_rate = min(max(data.gst_rate, 0.0), 28.0)
 
         # 3. Build Bill Items
         bill_items: list[BillItemCreate] = []
@@ -427,7 +471,12 @@ class DischargeService:
         prior_opd_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "opd_consultation"), 2)
 
         gross_total = round(bed_charges + doctor_charges + lab_charges + radiology_charges + pharmacy_charges + procedure_charges + prior_opd_charges, 2)
+        
+        # Validation: Discount cannot exceed gross total
         discount_amount = round(data.discount_amount or 0.0, 2)
+        if discount_amount > gross_total:
+            raise BadRequestException(f"Discount amount (₹{discount_amount:,.2f}) cannot exceed gross bill total (₹{gross_total:,.2f}).")
+
         taxable = max(0.0, gross_total - discount_amount)
         tax_amount = round(taxable * (gst_rate or 0.0) / 100.0, 2)
         net_total = round(taxable + tax_amount, 2)
@@ -448,25 +497,23 @@ class DischargeService:
         for p in (all_adv_records or []):
             amt = getattr(p, "amount", 0.0)
             if isinstance(amt, (int, float)):
-                if getattr(p, "is_refund", False):
-                    total_refunds += float(amt)
-                else:
+                if amt >= 0:
                     total_advances += float(amt)
+                else:
+                    total_refunds += abs(float(amt))
 
         net_advance_paid = max(0.0, total_advances - total_refunds)
-        advance_adjusted = min(net_total, net_advance_paid)
-        balance_amount = round(max(0.0, net_total - net_advance_paid), 2)
-        refund_amount = round(max(0.0, net_advance_paid - net_total), 2)
+        advance_adjusted = min(net_advance_paid, net_total)
+        balance_amount = max(0.0, round(net_total - advance_adjusted, 2))
+        refund_amount = max(0.0, round(net_advance_paid - net_total, 2)) if net_advance_paid > net_total else 0.0
 
-        # 6. Save or Update in dedicated ipd_final_bills table (Idempotency)
+        # 6. Save or Update Dedicated IPD Final Bill
         existing_final_bill = None
         if discharge.final_bill_id:
             existing_final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
-        elif discharge.id:
-            existing_final_bill = await self.final_bill_repo.get_by_discharge_id_with_items(discharge.id)
 
         if existing_final_bill:
-            existing_final_bill.bed_id = discharge.bed_id
+            existing_final_bill.bed_id = effective_bed_id or discharge.bed_id
             existing_final_bill.doctor_id = discharge.doctor_id
             existing_final_bill.bed_charges = bed_charges
             existing_final_bill.doctor_charges = doctor_charges
@@ -483,9 +530,11 @@ class DischargeService:
             existing_final_bill.advance_adjusted = advance_adjusted
             existing_final_bill.balance_amount = balance_amount
             existing_final_bill.refund_amount = refund_amount
-            existing_final_bill.status = "paid" if balance_amount == 0.0 and net_advance_paid > 0 else "pending"
+            if balance_amount == 0.0 and net_advance_paid > 0:
+                existing_final_bill.status = "paid"
             existing_final_bill.notes = data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}"
 
+            # Replace items
             existing_final_bill.items.clear()
             for it in bill_items:
                 existing_final_bill.items.append(
@@ -500,14 +549,13 @@ class DischargeService:
                 )
             final_bill = await self.final_bill_repo.update(existing_final_bill)
         else:
-            bill_number = f"IPD-BILL-{utc_now().strftime('%Y%m%d')}-{discharge.id:04d}"
             final_bill = IPDFinalBill(
-                bill_number=bill_number,
+                bill_number=f"IPD-BILL-{utc_now().strftime('%Y%m%d')}-{discharge.id:04d}",
                 discharge_id=discharge.id,
                 patient_id=discharge.patient_id,
                 appointment_id=discharge.appointment_id,
                 doctor_id=discharge.doctor_id,
-                bed_id=discharge.bed_id,
+                bed_id=effective_bed_id or discharge.bed_id,
                 bed_charges=bed_charges,
                 doctor_charges=doctor_charges,
                 lab_charges=lab_charges,
@@ -556,6 +604,12 @@ class DischargeService:
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
+        if discharge.discharge_status == "DISCHARGED":
+            raise BadRequestException("Cannot modify clearance for an already discharged patient.")
+
+        if not discharge.pharmacy_cleared:
+            raise BadRequestException("Pharmacy Clearance must be completed before billing clearance.")
+
         if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before billing clearance.")
 
@@ -577,6 +631,9 @@ class DischargeService:
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
+        if discharge.discharge_status == "DISCHARGED":
+            raise BadRequestException("Cannot modify payment for an already discharged patient.")
+
         # STEP 8 Precondition: Payment happens ONLY after Billing Clearance
         if not discharge.billing_cleared:
             raise BadRequestException("Billing Clearance must be completed before payment settlement.")
@@ -586,6 +643,7 @@ class DischargeService:
             final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
             if final_bill:
                 final_bill.status = "paid"
+                final_bill.balance_amount = 0.0
                 final_bill.payment_mode = data.payment_method
                 final_bill.settled_at = utc_now()
                 final_bill.settled_by = user_id
@@ -664,10 +722,6 @@ class DischargeService:
             )
         return results
 
-        self._check_and_update_cleared_status(discharge)
-        discharge = await self.repo.update(discharge)
-        return DischargeResponse.model_validate(discharge)
-
     # --- STEP 8: DOCTOR FINAL APPROVAL ---
     async def doctor_approve_discharge(
         self, discharge_id: int, doctor_user_id: int
@@ -675,6 +729,10 @@ class DischargeService:
         discharge = await self.repo.get_by_id(discharge_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
+
+        # Idempotent: If already discharged, return immediately
+        if discharge.discharge_status == "DISCHARGED":
+            return DischargeResponse.model_validate(discharge)
 
         # Strict Check 1: All 3 clearances must be True
         missing = []
@@ -690,7 +748,14 @@ class DischargeService:
                 f"Cannot approve discharge. Pending clearances: {', '.join(missing)}"
             )
 
-        # Strict Check 2: Outstanding Balance must be exactly 0
+        # Strict Check 2: Outstanding Balance must be exactly 0 for both IPD Final Bill and Billing
+        if discharge.final_bill_id:
+            final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
+            if final_bill and final_bill.balance_amount > 0.0 and final_bill.status != "paid":
+                raise BadRequestException(
+                    f"Cannot approve discharge. Outstanding IPD final bill #{final_bill.bill_number} balance of ₹{final_bill.balance_amount:,.2f} must be fully paid first."
+                )
+
         if discharge.billing_id:
             billing = await self.db.get(Billing, discharge.billing_id)
             if billing and billing.balance_amount > 0.0:

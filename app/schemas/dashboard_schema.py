@@ -70,6 +70,7 @@ class ReceptionDashboardResponse(BaseModel):
     walk_in_patients: int
     pending_billing: int
     rescheduled_appointments: int
+    total_patient_footfall: int = 0
     
     # Receptionist Queue statistics
     queue_waiting: int = 0

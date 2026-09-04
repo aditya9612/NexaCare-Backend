@@ -359,11 +359,23 @@ class AppointmentService:
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
     async def get_today(self) -> dict:
+        from app.utils.helpers import get_today_ist
         appointments = await self.repo.get_today()
         has_updated = False
+        today = get_today_ist()
+        next_num = None
         for a in appointments:
             if not a.queue_token:
-                a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
+                if next_num is None:
+                    next_tok = await self.repo.get_next_queue_token(a.appointment_date or today)
+                    try:
+                        next_num = int(next_tok.replace("T-", ""))
+                    except (ValueError, AttributeError):
+                        next_num = 1
+                a.queue_token = f"T-{next_num}"
+                if not a.token_number:
+                    a.token_number = next_num
+                next_num += 1
                 if not a.queue_status:
                     a.queue_status = "CANCELLED" if a.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled") else "WAITING"
                 has_updated = True
@@ -408,17 +420,19 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        if appointment.appointment_status not in (AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED):
-            if appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in"):
-                raise BadRequestException("Appointment already checked in")
-            elif appointment.appointment_status in (AppointmentStatus.COMPLETED, "Checked-Out"):
-                raise BadRequestException("Cannot check in a completed or checked-out appointment")
-            else:
-                raise BadRequestException(f"Cannot check in appointment with status: {appointment.appointment_status}")
+        if appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in"):
+            raise BadRequestException("Appointment already checked in")
+        if appointment.appointment_status not in (AppointmentStatus.CONFIRMED, "Confirmed", "confirmed"):
+            raise BadRequestException("Appointment must be confirmed before check-in.")
         appointment.appointment_status = "Checked-In"
         appointment.check_in_time = datetime.now()
         if not appointment.queue_token:
             appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date)
+            if not appointment.token_number:
+                try:
+                    appointment.token_number = int(appointment.queue_token.replace("T-", ""))
+                except (ValueError, AttributeError):
+                    pass
         if not appointment.queue_status or appointment.queue_status == "CANCELLED":
             appointment.queue_status = "WAITING"
         await self.db.flush()
@@ -429,11 +443,30 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        if appointment.appointment_status != "Checked-In":
+
+        # 1. Reject if already checked out
+        if appointment.check_out_time is not None or appointment.appointment_status in ("Checked-Out", "Checked_Out", "checked-out", "checked_out"):
+            raise BadRequestException("Appointment already checked out")
+
+        # 2. Reject if cancelled
+        if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            raise BadRequestException("Cannot check out a cancelled appointment")
+
+        # 3. Verify that appointment was checked in
+        is_checked_in = (
+            appointment.check_in_time is not None
+            or appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in", "checked-in", "In-Progress", "in-progress", "Completed", "completed", AppointmentStatus.COMPLETED)
+        )
+        if not is_checked_in:
             raise BadRequestException("Appointment must be checked in first")
 
-        # Enforce that patient cannot check out before the appointment start time
-        if appointment.appointment_date and appointment.appointment_time:
+        # Enforce that patient cannot check out before the appointment start time (unless already completed by doctor)
+        if (
+            appointment.appointment_date 
+            and appointment.appointment_time 
+            and appointment.queue_status != "COMPLETED" 
+            and appointment.appointment_status not in ("Completed", "completed")
+        ):
             from datetime import timezone, timedelta
             ist_tz = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist_tz).replace(tzinfo=None)
@@ -443,6 +476,9 @@ class AppointmentService:
 
         appointment.appointment_status = "Checked-Out"
         appointment.check_out_time = datetime.now()
+        if not appointment.queue_status or appointment.queue_status in ("WAITING", "CALLED", "IN_PROGRESS"):
+            appointment.queue_status = "COMPLETED"
+
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Patient checked out for appointment {appointment.appointment_number}")
         return appointment
@@ -459,6 +495,11 @@ class AppointmentService:
         next_token = await self.repo.get_next_queue_token(appointment.appointment_date)
         
         appointment.queue_token = next_token
+        if not appointment.token_number:
+            try:
+                appointment.token_number = int(next_token.replace("T-", ""))
+            except (ValueError, AttributeError):
+                pass
         appointment.queue_status = "WAITING"
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Queue token {next_token} has been generated.")
@@ -467,9 +508,11 @@ class AppointmentService:
     async def get_today_queue(self) -> list[Appointment]:
         from app.utils.helpers import get_today_ist
         from sqlalchemy import select, case
+        from sqlalchemy.orm import joinedload
         today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
+            .options(joinedload(Appointment.patient))
             .where(Appointment.appointment_date == today)
             .order_by(
                 case(
@@ -479,11 +522,21 @@ class AppointmentService:
                 Appointment.id.asc(),
             )
         )
-        appointments = list(result.scalars().all())
+        appointments = list(result.scalars().unique().all())
         has_updated = False
+        next_num = None
         for a in appointments:
             if not a.queue_token:
-                a.queue_token = await self.repo.get_next_queue_token(a.appointment_date)
+                if next_num is None:
+                    next_tok = await self.repo.get_next_queue_token(a.appointment_date or today)
+                    try:
+                        next_num = int(next_tok.replace("T-", ""))
+                    except (ValueError, AttributeError):
+                        next_num = 1
+                a.queue_token = f"T-{next_num}"
+                if not a.token_number:
+                    a.token_number = next_num
+                next_num += 1
                 if not a.queue_status:
                     a.queue_status = "CANCELLED" if a.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled") else "WAITING"
                 has_updated = True
@@ -492,12 +545,13 @@ class AppointmentService:
         return appointments
 
     async def get_current_queue(self) -> Appointment | None:
-        from datetime import timezone, timedelta
+        from app.utils.helpers import get_today_ist
         from sqlalchemy import select
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        today = datetime.now(ist_tz).date()
+        from sqlalchemy.orm import joinedload
+        today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
+            .options(joinedload(Appointment.patient))
             .where(
                 Appointment.appointment_date == today,
                 Appointment.queue_status.in_(["CALLED", "IN_PROGRESS"])
@@ -505,12 +559,30 @@ class AppointmentService:
             .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
             .limit(1)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def call_next_token(self, appointment_id: int, user_id: int) -> Appointment:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+
+        status = str(appointment.appointment_status or "").strip()
+        if status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            raise BadRequestException("Cannot call token for a cancelled appointment.")
+
+        if status in ("Checked-Out", "Checked_Out", "checked-out", "checked_out") or appointment.check_out_time is not None:
+            raise BadRequestException("Cannot call token for an appointment that has already checked out.")
+
+        if status in (AppointmentStatus.COMPLETED, "Completed", "completed") or appointment.queue_status == "COMPLETED":
+            raise BadRequestException("Cannot call token for an appointment that is already completed.")
+
+        # Require Confirmed & Checked-In
+        if status in (AppointmentStatus.PENDING, "Pending", "pending"):
+            raise BadRequestException("Appointment must be confirmed and checked in before calling token.")
+
+        if not appointment.check_in_time or not appointment.queue_token:
+            raise BadRequestException("Appointment must be checked in before calling token.")
+
         appointment.queue_status = "CALLED"
         await self.db.flush()
         await self._create_queue_notification(appointment, f"Doctor is calling patient (Token {appointment.queue_token})")
@@ -520,6 +592,14 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+
+        status = str(appointment.appointment_status or "").strip()
+        if status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            raise BadRequestException("Cannot complete token for a cancelled appointment.")
+
+        if not appointment.check_in_time or not appointment.queue_token:
+            raise BadRequestException("Appointment must be checked in before completing token.")
+
         appointment.queue_status = "COMPLETED"
         await self.db.flush()
         return appointment
@@ -528,6 +608,14 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+
+        status = str(appointment.appointment_status or "").strip()
+        if status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+            raise BadRequestException("Cannot skip token for a cancelled appointment.")
+
+        if not appointment.check_in_time or not appointment.queue_token:
+            raise BadRequestException("Appointment must be checked in before skipping token.")
+
         appointment.queue_status = "SKIPPED"
         await self.db.flush()
         return appointment
@@ -992,6 +1080,7 @@ class AppointmentService:
         from app.utils.helpers import generate_admission_number
         appointment.appointment_type = "IPD"
         appointment.appointment_status = AppointmentStatus.COMPLETED
+        appointment.queue_status = "COMPLETED"
         appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
         appointment.admission_number = appointment.admission_number or generate_admission_number()
         appointment.admission_recommended = True

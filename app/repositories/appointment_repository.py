@@ -209,10 +209,9 @@ class AppointmentRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none() is not None
 
-    async def get_next_token(self, doctor_id: int, appointment_date: date) -> int:
+    async def get_next_token(self, doctor_id: int | None, appointment_date: date) -> int:
         result = await self.db.scalar(
             select(func.max(Appointment.token_number)).where(
-                Appointment.doctor_id == doctor_id,
                 Appointment.appointment_date == appointment_date,
             )
         )

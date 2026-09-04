@@ -103,6 +103,14 @@ async def init_db():
             await _seed_lab_technician_permissions(session)
             await _seed_doctor_and_pharmacist_lab_permissions(session)
 
+            # Ensure any missing columns (e.g. patient_vitals.notes) are created
+            from sqlalchemy import text
+            try:
+                await session.execute(text("ALTER TABLE patient_vitals ADD COLUMN notes TEXT NULL"))
+                await session.commit()
+            except Exception:
+                await session.rollback()
+
             await session.commit()
         except Exception as e:
             import traceback

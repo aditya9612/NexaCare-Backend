@@ -1,13 +1,13 @@
 from datetime import date, datetime
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema
 
 
 class DischargeInitiateRequest(BaseSchema):
-    appointment_id: int
+    appointment_id: int = Field(..., gt=0, description="ID of the admitted IPD appointment")
     diagnosis_at_discharge: str = Field(..., min_length=2, description="Final confirmed diagnosis at discharge")
-    treatment_summary: str = Field(..., min_length=5, description="Summary of clinical procedures and treatments given")
+    treatment_summary: str = Field(..., min_length=3, description="Summary of clinical procedures and treatments given")
     condition_on_discharge: str = Field(default="Stable", description="Condition of patient: Stable, Recovered, Relieved, etc.")
     post_medications: str | None = Field(default=None, description="Discharge prescription: medicine name, dosage, frequency, duration")
     home_care_instructions: str | None = Field(default=None, description="Wound care, diet, physical activity precautions")
@@ -27,7 +27,7 @@ class ProcedureChargeItem(BaseSchema):
 class GenerateIPDBillRequest(BaseSchema):
     discount_amount: float = Field(default=0.0, ge=0.0, description="Any approved hospital discount")
     additional_doctor_visits: int = Field(default=0, ge=0, description="Additional specialist/visiting consultant visits")
-    gst_rate: float = Field(default=0.0, ge=0.0, description="GST rate percentage if applicable")
+    gst_rate: float = Field(default=0.0, ge=0.0, le=28.0, description="GST rate percentage (0 - 28%)")
     procedure_charges: list[ProcedureChargeItem] | None = Field(default=None, description="Optional procedure / surgery charges")
     include_prior_opd_balance: bool = Field(default=False, description="Include unpaid prior OPD charges from this admission episode")
     notes: str | None = None
@@ -38,9 +38,18 @@ class ClearBillingRequest(BaseSchema):
 
 
 class ClearPaymentRequest(BaseSchema):
-    payment_method: str = Field(default="cash", description="cash, upi, card, net_banking, or insurance")
+    payment_method: str = Field(default="cash", description="cash, upi, card, net_banking, insurance, cheque, or neft_rtgs")
     transaction_ref: str | None = Field(default=None, description="UPI reference / Cheque / Card transaction ID")
     notes: str | None = None
+
+    @field_validator("payment_method")
+    @classmethod
+    def validate_payment_method(cls, v: str) -> str:
+        allowed = {"cash", "upi", "card", "net_banking", "insurance", "cheque", "neft_rtgs", "credit_card", "debit_card"}
+        cleaned = (v or "cash").strip().lower()
+        if cleaned not in allowed:
+            raise ValueError(f"Invalid payment method '{v}'. Allowed methods: {', '.join(sorted(allowed))}")
+        return cleaned
 
 
 class DischargeClearanceStatus(BaseSchema):

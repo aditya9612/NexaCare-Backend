@@ -131,6 +131,7 @@ async def get_clearance_status(
 
 
 @router.patch("/{discharge_id}/clear-pharmacy", response_model=APIResponse[DischargeResponse])
+@router.post("/{discharge_id}/clear-pharmacy", response_model=APIResponse[DischargeResponse])
 async def clear_pharmacy(
     discharge_id: int,
     db: DbSession,
@@ -168,6 +169,7 @@ async def get_discharge_final_bill(
 
 
 @router.post("/{discharge_id}/generate-final-bill", response_model=APIResponse[IPDFinalBillResponse])
+@router.post("/{discharge_id}/generate-bill", response_model=APIResponse[IPDFinalBillResponse])
 async def generate_final_bill(
     discharge_id: int,
     data: GenerateIPDBillRequest,
@@ -187,6 +189,7 @@ async def generate_final_bill(
 
 
 @router.patch("/{discharge_id}/clear-billing", response_model=APIResponse[DischargeResponse])
+@router.post("/{discharge_id}/clear-billing", response_model=APIResponse[DischargeResponse])
 async def clear_billing(
     discharge_id: int,
     data: ClearBillingRequest,
@@ -206,6 +209,7 @@ async def clear_billing(
 
 
 @router.patch("/{discharge_id}/clear-payment", response_model=APIResponse[DischargeResponse])
+@router.post("/{discharge_id}/clear-payment", response_model=APIResponse[DischargeResponse])
 async def clear_payment(
     discharge_id: int,
     data: ClearPaymentRequest,
@@ -225,6 +229,7 @@ async def clear_payment(
 
 
 @router.post("/{discharge_id}/approve", response_model=APIResponse[DischargeResponse])
+@router.post("/{discharge_id}/doctor-approval", response_model=APIResponse[DischargeResponse])
 async def approve_discharge(
     discharge_id: int,
     db: DbSession,

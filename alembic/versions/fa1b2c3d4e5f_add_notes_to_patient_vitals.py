@@ -1,7 +1,7 @@
 """add_notes_to_patient_vitals
 
 Revision ID: fa1b2c3d4e5f
-Revises: 9c2d3e4f5a6b
+Revises: 405fd210ac69
 Create Date: 2026-09-03 14:05:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "fa1b2c3d4e5f"
-down_revision: Union[str, None] = "9c2d3e4f5a6b"
+down_revision: Union[str, None] = "405fd210ac69"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

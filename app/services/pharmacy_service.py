@@ -1711,16 +1711,16 @@ class PharmacyService:
             )
         )) or 0
 
-        # 4. Today Sales (Invoice/billing amount created today, OR in the filtered period)
+        # 4. Today Sales (Strictly today's sales from 00:00:00 to 23:59:59 IST)
+        today_start = datetime.combine(today_ist, time.min)
+        tomorrow_start = today_start + timedelta(days=1)
+
         today_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
+            PharmacyInvoice.created_at >= today_start,
+            PharmacyInvoice.created_at < tomorrow_start,
         )
-        if start_dt:
-            today_sales_query = today_sales_query.where(PharmacyInvoice.created_at >= start_dt)
-        if end_dt:
-            today_sales_query = today_sales_query.where(PharmacyInvoice.created_at <= end_dt)
-
         today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
         # 5. Monthly Sales (Invoice/billing amount for current month, OR in the filtered period)
@@ -1901,10 +1901,8 @@ class PharmacyService:
             monthly_sales=monthly_sales,
             pending_purchases=pending_purchases,
             total_suppliers=total_suppliers,
-            prescriptions=prescriptions,
             prescriptions_count=prescriptions,
             expired_medicines_alerts=expired_medicines_alerts,
-            daily_sales=today_sales,
             low_stock_items=low_stock_items,
             today_sales_trend=today_sales_trend,
             monthly_sales_trend=monthly_sales_trend,

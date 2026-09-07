@@ -60,18 +60,58 @@ class LabService:
             if not dept:
                 raise NotFoundException(f"Department with ID {department_id} not found")
 
+    async def _is_admin_user(self, user_id: int) -> bool:
+        from app.models.user_model import User
+        from app.models.role_model import Role
+        from app.core.constants import UserRole
+        from sqlalchemy import select
+        from sqlalchemy.orm import joinedload
+
+        user = await self.db.scalar(
+            select(User).options(joinedload(User.role)).where(User.id == user_id)
+        )
+        if not user:
+            return False
+
+        role_name = ""
+        if user.role and user.role.name:
+            role_name = user.role.name
+        elif user.role_id:
+            role = await self.db.get(Role, user.role_id)
+            if role and role.name:
+                role_name = role.name
+
+        if not role_name:
+            return False
+
+        clean_role = role_name.strip().lower().replace("_", " ")
+        admin_roles_clean = {r.strip().lower().replace("_", " ") for r in UserRole.ADMIN_ROLES} | {"admin", "superadmin", "hospitaladmin", "super admin", "hospital admin"}
+        return role_name in UserRole.ADMIN_ROLES or clean_role in admin_roles_clean
+
     async def _validate_doctor_department(self, user_id: int, department_id: int) -> None:
+        if await self._is_admin_user(user_id):
+            return
+
         from sqlalchemy import select
         from app.models.doctor_model import Doctor
         from app.models.user_model import User
+        from app.models.role_model import Role
         from app.core.constants import UserRole
         from sqlalchemy.orm import joinedload
 
         user = await self.db.scalar(
             select(User).options(joinedload(User.role)).where(User.id == user_id)
         )
-        if user and user.role and user.role.name in UserRole.ADMIN_ROLES:
-            return
+        role_name = ""
+        if user and user.role and user.role.name:
+            role_name = user.role.name
+        elif user and user.role_id:
+            role = await self.db.get(Role, user.role_id)
+            if role and role.name:
+                role_name = role.name
+
+        clean_role = role_name.strip().lower().replace("_", " ")
+        is_doctor = clean_role in {"doctor"} or role_name == UserRole.DOCTOR
 
         result = await self.db.execute(
             select(Doctor).where(
@@ -80,7 +120,7 @@ class LabService:
             )
         )
         doctor = result.scalar_one_or_none()
-        if doctor and (not user or not user.role or user.role.name == UserRole.DOCTOR):
+        if doctor and is_doctor:
             if doctor.department_id != department_id:
                 raise ForbiddenException("Doctors can only create/update lab tests for their own department")
 
@@ -92,21 +132,17 @@ class LabService:
         await self._validate_doctor_department(user_id, data.department_id)
         
         from app.models.doctor_model import Doctor
-        from app.models.user_model import User
-        from app.core.constants import UserRole
-        from sqlalchemy.orm import joinedload
         from sqlalchemy import select
 
-        user = await self.db.scalar(
-            select(User).options(joinedload(User.role)).where(User.id == user_id)
-        )
-        is_admin = user and user.role and user.role.name in UserRole.ADMIN_ROLES
-
-        result = await self.db.execute(
-            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
-        )
-        doctor = result.scalar_one_or_none()
-        doctor_id = doctor.id if (doctor and not is_admin) else None
+        is_admin = await self._is_admin_user(user_id)
+        doctor_id = None
+        if not is_admin:
+            result = await self.db.execute(
+                select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
+            )
+            doctor = result.scalar_one_or_none()
+            if doctor:
+                doctor_id = doctor.id
 
         test = LabTest(test_code=generate_lab_test_code(), doctor_id=doctor_id, **data.model_dump())
         test = await self.test_repo.create(test)
@@ -243,22 +279,16 @@ class LabService:
             raise NotFoundException("Lab test not found")
 
         from app.models.doctor_model import Doctor
-        from app.models.user_model import User
-        from app.core.constants import UserRole
-        from sqlalchemy.orm import joinedload
         from sqlalchemy import select
 
-        user = await self.db.scalar(
-            select(User).options(joinedload(User.role)).where(User.id == user_id)
-        )
-        is_admin = user and user.role and user.role.name in UserRole.ADMIN_ROLES
-
-        result = await self.db.execute(
-            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
-        )
-        doctor = result.scalar_one_or_none()
-        if not is_admin and doctor and (not user or not user.role or user.role.name == UserRole.DOCTOR) and test.doctor_id != doctor.id:
-            raise ForbiddenException("Doctors can only update lab tests generated by themselves")
+        is_admin = await self._is_admin_user(user_id)
+        if not is_admin:
+            result = await self.db.execute(
+                select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
+            )
+            doctor = result.scalar_one_or_none()
+            if doctor and test.doctor_id and test.doctor_id != doctor.id:
+                raise ForbiddenException("Doctors can only update lab tests generated by themselves")
 
         if not data.department_id:
             raise BadRequestException("Department ID is required to update lab test.")
@@ -276,22 +306,16 @@ class LabService:
             raise NotFoundException("Lab test not found")
 
         from app.models.doctor_model import Doctor
-        from app.models.user_model import User
-        from app.core.constants import UserRole
-        from sqlalchemy.orm import joinedload
         from sqlalchemy import select
 
-        user = await self.db.scalar(
-            select(User).options(joinedload(User.role)).where(User.id == user_id)
-        )
-        is_admin = user and user.role and user.role.name in UserRole.ADMIN_ROLES
-
-        result = await self.db.execute(
-            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
-        )
-        doctor = result.scalar_one_or_none()
-        if not is_admin and doctor and (not user or not user.role or user.role.name == UserRole.DOCTOR) and test.doctor_id != doctor.id:
-            raise ForbiddenException("Doctors can only delete lab tests generated by themselves")
+        is_admin = await self._is_admin_user(user_id)
+        if not is_admin:
+            result = await self.db.execute(
+                select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
+            )
+            doctor = result.scalar_one_or_none()
+            if doctor and test.doctor_id and test.doctor_id != doctor.id:
+                raise ForbiddenException("Doctors can only delete lab tests generated by themselves")
 
         await self.test_repo.soft_delete(test)
         await self.audit_repo.create("delete", "lab", user_id=user_id, resource_id=str(test.id))

@@ -13,6 +13,7 @@ from app.models.doctor_model import Doctor
 from app.models.lab_model import LabTest, TestOrder
 from app.models.patient_model import Patient
 from app.models.pharmacy_model import PharmacyInvoice, Prescription
+from app.models.user_model import User
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.discharge_repository import DischargeRepository
 from app.models.final_bill_model import IPDFinalBill, IPDFinalBillItem
@@ -86,11 +87,15 @@ class DischargeService:
             raise ConflictException(f"Discharge already initiated for appointment {data.appointment_id}")
 
         # 5. Find bed occupied or allocated to patient
-        bed = await self.db.scalar(
-            select(Bed).where(
-                Bed.patient_id == appointment.patient_id,
-            ).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
-        )
+        bed = None
+        if getattr(data, "bed_id", None):
+            bed = await self.db.get(Bed, data.bed_id)
+        if not bed:
+            bed = await self.db.scalar(
+                select(Bed).where(
+                    Bed.patient_id == appointment.patient_id,
+                ).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
+            )
         if not bed:
             recent_bed_id = await self.db.scalar(
                 select(BedActivityLog.bed_id)
@@ -103,6 +108,17 @@ class DischargeService:
             )
             if recent_bed_id:
                 bed = await self.db.get(Bed, recent_bed_id)
+        if not bed and getattr(appointment, "recommended_ward", None):
+            from app.models.bed_allocation_model import Room
+            bed = await self.db.scalar(
+                select(Bed)
+                .join(Bed.room)
+                .where(Room.type.ilike(f"%{appointment.recommended_ward}%") | Bed.type.ilike(f"%{appointment.recommended_ward}%"))
+                .order_by(Bed.id.asc())
+                .limit(1)
+            )
+        if not bed:
+            bed = await self.db.scalar(select(Bed).order_by(Bed.id.asc()).limit(1))
 
         admission_time = appointment.check_in_time or (
             datetime.combine(appointment.appointment_date, appointment.appointment_time)
@@ -235,7 +251,7 @@ class DischargeService:
         days_stayed = max(1, stay_days)
 
         # 2. Get Bed / Room information & resolve bed_id
-        effective_bed_id = discharge.bed_id
+        effective_bed_id = getattr(data, "bed_id", None) or discharge.bed_id
         if not effective_bed_id:
             bed_row = await self.db.scalar(
                 select(Bed).where(Bed.patient_id == discharge.patient_id).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
@@ -258,6 +274,26 @@ class DischargeService:
                     effective_bed_id = recent_bed_id
                     discharge.bed_id = effective_bed_id
                     discharge.bed = await self.db.get(Bed, effective_bed_id)
+                elif discharge.appointment and getattr(discharge.appointment, "recommended_ward", None):
+                    from app.models.bed_allocation_model import Room
+                    ward_bed = await self.db.scalar(
+                        select(Bed)
+                        .join(Bed.room)
+                        .where(Room.type.ilike(f"%{discharge.appointment.recommended_ward}%") | Bed.type.ilike(f"%{discharge.appointment.recommended_ward}%"))
+                        .order_by(Bed.id.asc())
+                        .limit(1)
+                    )
+                    if ward_bed:
+                        effective_bed_id = ward_bed.id
+                        discharge.bed_id = effective_bed_id
+                        discharge.bed = ward_bed
+
+                if not effective_bed_id:
+                    any_bed = await self.db.scalar(select(Bed).order_by(Bed.id.asc()).limit(1))
+                    if any_bed:
+                        effective_bed_id = any_bed.id
+                        discharge.bed_id = effective_bed_id
+                        discharge.bed = any_bed
 
         if not discharge.bed and effective_bed_id:
             discharge.bed = await self.db.get(Bed, effective_bed_id)
@@ -387,7 +423,7 @@ class DischargeService:
         rx_ids = [r if isinstance(r, int) else getattr(r, "id", None) for r in (rx_ids_raw or [])]
         rx_ids = [r for r in rx_ids if isinstance(r, int)]
 
-        from sqlalchemy import or_
+        from sqlalchemy import or_, func
         pharm_conditions = [PharmacyInvoice.patient_id == discharge.patient_id]
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
@@ -395,7 +431,7 @@ class DischargeService:
         unpaid_pharm_stmt = select(PharmacyInvoice).where(
             or_(*pharm_conditions),
             PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.status != "paid"
+            (func.lower(PharmacyInvoice.status) != "paid") | (PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount)
         )
         unpaid_pharm = (await self.db.scalars(unpaid_pharm_stmt)).all()
 
@@ -415,6 +451,7 @@ class DischargeService:
                         quantity=1,
                         unit_price=inv_balance,
                         gst_rate=0.0,
+                        reference_id=inv.id,
                     )
                 )
 
@@ -545,6 +582,7 @@ class DischargeService:
                         unit_price=it.unit_price,
                         tax_rate=it.gst_rate,
                         total_price=round(it.quantity * it.unit_price, 2),
+                        reference_id=getattr(it, "reference_id", None),
                     )
                 )
             final_bill = await self.final_bill_repo.update(existing_final_bill)
@@ -583,6 +621,7 @@ class DischargeService:
                         unit_price=it.unit_price,
                         tax_rate=it.gst_rate,
                         total_price=round(it.quantity * it.unit_price, 2),
+                        reference_id=getattr(it, "reference_id", None),
                     )
                 )
             final_bill = await self.final_bill_repo.create(final_bill)
@@ -638,6 +677,9 @@ class DischargeService:
         if not discharge.billing_cleared:
             raise BadRequestException("Billing Clearance must be completed before payment settlement.")
 
+        from app.services.transaction_history_service import TransactionHistoryService
+        tx_service = TransactionHistoryService(self.db)
+
         # 1. Settle dedicated IPD Final Bill
         if discharge.final_bill_id:
             final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
@@ -649,36 +691,132 @@ class DischargeService:
                 final_bill.settled_by = user_id
                 await self.final_bill_repo.update(final_bill)
 
-        # Legacy billing settlement fallback
-        if discharge.billing_id:
-            billing = await self.db.get(Billing, discharge.billing_id)
-            if billing and billing.balance_amount > 0:
-                payment_create = PaymentCreate(
-                    amount=billing.balance_amount,
+                # Record transaction history for final bill
+                if final_bill.net_total > 0:
+                    try:
+                        await tx_service.create_event(
+                            event_type="PAYMENT_RECEIVED",
+                            reference_no=data.transaction_ref or f"PAY-IPD-{final_bill.id}",
+                            description=f"IPD Final Bill #{final_bill.bill_number} settled via {data.payment_method}",
+                            amount=final_bill.net_total,
+                            source_module="final_bills",
+                            source_id=final_bill.id,
+                            status="completed",
+                            user_id=user_id,
+                        )
+                    except Exception:
+                        pass
+
+        # 2. Settle ALL associated Billing records (discharge.billing_id, appointment billings, and prior OPD/advance billings)
+        from sqlalchemy import or_
+        billing_query = select(Billing).where(
+            Billing.is_deleted == False,
+            Billing.status != "paid",
+            or_(
+                Billing.appointment_id == discharge.appointment_id,
+                (Billing.patient_id == discharge.patient_id) & (Billing.created_at >= discharge.admission_date),
+                (Billing.id == discharge.billing_id) if discharge.billing_id else False,
+            )
+        )
+        unpaid_billings = (await self.db.scalars(billing_query)).all()
+        for billing in (unpaid_billings or []):
+            if not billing or not hasattr(billing, "total_amount"):
+                continue
+            bal_due = max(0.0, round((billing.total_amount or 0.0) - (billing.paid_amount or 0.0), 2))
+            if bal_due > 0:
+                payment_rec = Payment(
+                    billing_id=billing.id,
+                    amount=bal_due,
                     payment_method=data.payment_method,
                     transaction_ref=data.transaction_ref,
+                    payment_date=utc_now(),
+                    status="completed",
+                    received_by=user_id,
                 )
-                await self.billing_service.collect_payment(billing.id, payment_create, user_id)
-                await self.db.refresh(billing)
+                self.db.add(payment_rec)
+                billing.paid_amount = billing.total_amount
+                billing.balance_amount = 0.0
+                billing.status = "paid"
+                await self.db.flush()
 
-        # 2. Settle linked pharmacy invoices for this IPD appointment
+                try:
+                    await tx_service.create_event(
+                        event_type="PAYMENT_RECEIVED",
+                        reference_no=data.transaction_ref or f"PAY-BILL-{billing.id}",
+                        description=f"Payment Received on bill {billing.bill_number} via {data.payment_method} during discharge",
+                        amount=bal_due,
+                        source_module="payments",
+                        source_id=billing.id,
+                        status="completed",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    pass
+            else:
+                billing.status = "paid"
+                billing.balance_amount = 0.0
+                await self.db.flush()
+
+        # 3. Settle linked pharmacy invoices for this IPD appointment & patient
+        pharm_invoice_ids = set()
+
+        # 3a. Extract pharmacy invoice IDs directly from final bill items (if available)
+        if discharge.final_bill_id:
+            fb = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
+            if fb and fb.items:
+                for item in fb.items:
+                    if item.item_type == "pharmacy_invoice" and item.reference_id:
+                        pharm_invoice_ids.add(item.reference_id)
+
+        # 3b. Gather prescription IDs for this appointment
         rx_stmt = select(Prescription.id).where(
             Prescription.appointment_id == discharge.appointment_id,
             Prescription.is_deleted == False
         )
-        rx_ids = (await self.db.scalars(rx_stmt)).all()
+        rx_ids_raw = (await self.db.scalars(rx_stmt)).all()
+        rx_ids = [r if isinstance(r, int) else getattr(r, "id", None) for r in (rx_ids_raw or [])]
+        rx_ids = [r for r in rx_ids if isinstance(r, int)]
 
-        unpaid_pharm_stmt = select(PharmacyInvoice).where(
-            (PharmacyInvoice.patient_id == discharge.patient_id) | (PharmacyInvoice.prescription_id.in_(rx_ids)),
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.status != "paid"
-        )
-        unpaid_pharm = (await self.db.scalars(unpaid_pharm_stmt)).all()
-        for inv in unpaid_pharm:
-            inv.paid_amount = inv.total_amount
-            inv.status = "paid"
-            inv.payment_mode = data.payment_method
-            await self.db.flush()
+        # 3c. Build comprehensive conditions for all patient/appointment pharmacy invoices
+        pharm_conditions = []
+        if pharm_invoice_ids:
+            pharm_conditions.append(PharmacyInvoice.id.in_(list(pharm_invoice_ids)))
+        if discharge.patient_id:
+            pharm_conditions.append(PharmacyInvoice.patient_id == discharge.patient_id)
+        if rx_ids:
+            pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
+
+        if pharm_conditions:
+            from sqlalchemy import or_, func
+            unpaid_pharm_stmt = select(PharmacyInvoice).where(
+                or_(*pharm_conditions),
+                PharmacyInvoice.is_deleted == False,
+                (func.lower(PharmacyInvoice.status) != "paid") | (PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount)
+            )
+            unpaid_pharm = (await self.db.scalars(unpaid_pharm_stmt)).all()
+            seen_inv_ids = set()
+            for inv in (unpaid_pharm or []):
+                if not inv or not hasattr(inv, "id") or inv.id in seen_inv_ids:
+                    continue
+                seen_inv_ids.add(inv.id)
+                inv.paid_amount = inv.total_amount
+                inv.status = "paid"
+                inv.payment_mode = data.payment_method
+                await self.db.flush()
+
+                try:
+                    await tx_service.create_event(
+                        event_type="PAYMENT_RECEIVED",
+                        reference_no=data.transaction_ref or f"PAY-PHR-{inv.id}",
+                        description=f"Pharmacy Invoice #{getattr(inv, 'invoice_number', inv.id)} settled via {data.payment_method} during IPD discharge",
+                        amount=inv.total_amount,
+                        source_module="pharmacy_billing",
+                        source_id=inv.id,
+                        status="completed",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    pass
 
         discharge.payment_cleared = True
         discharge.payment_cleared_by = user_id
@@ -811,6 +949,14 @@ class DischargeService:
         ward_name = discharge.bed.room.name if (discharge.bed and discharge.bed.room) else "IPD Ward"
         bed_num = discharge.bed.name if discharge.bed else "N/A"
 
+        # Resolve Approving Doctor Name
+        approving_doctor_name = doctor_name
+        if discharge.doctor_approved_by:
+            approver_user = await self.db.get(User, discharge.doctor_approved_by)
+            if approver_user and approver_user.full_name:
+                u_name = approver_user.full_name.strip()
+                approving_doctor_name = u_name if u_name.lower().startswith("dr") else f"Dr. {u_name}"
+
         return DischargeGatePassResponse(
             gate_pass_number=discharge.gate_pass_number or generate_gate_pass_number(),
             discharge_number=discharge.discharge_number,
@@ -822,9 +968,349 @@ class DischargeService:
             ward_name=ward_name,
             bed_number=bed_num,
             payment_status="CLEARED & SETTLED",
-            authorized_by="Medical Superintendent / Duty Doctor",
+            authorized_by=approving_doctor_name,
             issued_at=discharge.doctor_approved_at or utc_now(),
         )
+
+    async def download_gate_pass_pdf(self, discharge_id: int) -> bytes:
+        import io
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+
+        discharge = await self.repo.get_by_id(discharge_id)
+        if not discharge:
+            raise NotFoundException(f"Discharge with id {discharge_id} not found")
+
+        if discharge.discharge_status != "DISCHARGED":
+            raise BadRequestException("Gate pass is only available after final doctor approval and discharge completion.")
+
+        gate_pass_no = discharge.gate_pass_number or generate_gate_pass_number()
+        discharge_no = discharge.discharge_number
+        patient_name = f"{discharge.patient.first_name} {discharge.patient.last_name}" if discharge.patient else "Patient"
+        patient_code = discharge.patient.patient_code if discharge.patient else "N/A"
+        gender_age = f"{discharge.patient.gender or 'N/A'}"
+        if discharge.patient and discharge.patient.dob:
+            age = (datetime.utcnow().date() - discharge.patient.dob).days // 365
+            gender_age += f" / {age} yrs"
+        
+        doctor_name = f"Dr. {discharge.doctor.first_name} {discharge.doctor.last_name}" if discharge.doctor else "Doctor"
+        doctor_dept = "General Medicine"
+        if discharge.doctor:
+            if getattr(discharge.doctor, "department", None) and hasattr(discharge.doctor.department, "department_name"):
+                doctor_dept = discharge.doctor.department.department_name
+            elif discharge.doctor.specialization:
+                doctor_dept = discharge.doctor.specialization
+        ward_name = discharge.bed.room.name if (discharge.bed and discharge.bed.room) else "IPD Ward"
+        bed_num = discharge.bed.name if discharge.bed else "N/A"
+        
+        # Resolve Approving Doctor Name
+        approving_doctor_name = doctor_name
+        if discharge.doctor_approved_by:
+            approver_user = await self.db.get(User, discharge.doctor_approved_by)
+            if approver_user and approver_user.full_name:
+                u_name = approver_user.full_name.strip()
+                approving_doctor_name = u_name if u_name.lower().startswith("dr") else f"Dr. {u_name}"
+        
+        adm_date_str = discharge.admission_date.strftime("%d-%b-%Y %I:%M %p") if discharge.admission_date else "N/A"
+        dis_date_str = discharge.discharge_date.strftime("%d-%b-%Y %I:%M %p") if discharge.discharge_date else "N/A"
+        issued_date_str = (discharge.doctor_approved_at or utc_now()).strftime("%d-%b-%Y %I:%M %p")
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=letter,
+            rightMargin=36,
+            leftMargin=36,
+            topMargin=32,
+            bottomMargin=38
+        )
+        elements = []
+        styles = getSampleStyleSheet()
+
+        h_hospital_style = ParagraphStyle(
+            'HPHospital',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=11.5,
+            leading=14,
+            textColor=colors.HexColor('#0F3A66')
+        )
+        h_tagline_style = ParagraphStyle(
+            'HPTagline',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=6.8,
+            leading=8.5,
+            textColor=colors.HexColor('#64748B')
+        )
+        h_badge_style = ParagraphStyle(
+            'HPBadge',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=7,
+            leading=9.5,
+            alignment=2,
+            textColor=colors.HexColor('#0D9488')
+        )
+        subtitle_style = ParagraphStyle(
+            'GPSubTitle',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor('#0F766E'),
+            alignment=1,
+            spaceBefore=2,
+            spaceAfter=4
+        )
+        sec_header = ParagraphStyle(
+            'GPSecHeader',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor('#1E293B'),
+            spaceBefore=5,
+            spaceAfter=3
+        )
+        lbl_style = ParagraphStyle(
+            'GPLbl',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=8.5,
+            leading=11,
+            textColor=colors.HexColor('#475569')
+        )
+        val_style = ParagraphStyle(
+            'GPVal',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=8.5,
+            leading=11,
+            textColor=colors.HexColor('#0F172A')
+        )
+        val_bold = ParagraphStyle(
+            'GPValBold',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=8.5,
+            leading=11,
+            textColor=colors.HexColor('#0F172A')
+        )
+        th_style = ParagraphStyle(
+            'GPTh',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=8.5,
+            leading=11,
+            textColor=colors.white
+        )
+        notice_style = ParagraphStyle(
+            'GPNotice',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=8,
+            leading=11,
+            textColor=colors.HexColor('#334155')
+        )
+
+        # 1. Hospital Header Section
+        header_table_data = [
+            [
+                Paragraph("<b>NEXACARE MULTISPECIALITY HOSPITAL</b><br/>"
+                          "<font color='#64748B' size='6.8'>123 Healthcare Boulevard, Medical Enclave, Pune, MH - 411001 • Ph: +91 20 6789 0000 • Web: www.nexacare.com</font>", h_hospital_style),
+                Paragraph("<b>24x7 EMERGENCY & IPD</b><br/>"
+                          "<font color='#059669'><b>NABH ACCREDITED</b></font><br/>"
+                          "<font color='#64748B'>ISO 9001:2015</font>", h_badge_style),
+            ]
+        ]
+        header_table = Table(header_table_data, colWidths=[410, 130])
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 0),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ('LEFTPADDING', (0,0), (-1,-1), 0),
+            ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ]))
+        elements.append(header_table)
+        elements.append(HRFlowable(width="100%", thickness=1.2, color=colors.HexColor('#0F3A66'), spaceAfter=2, spaceBefore=2))
+        elements.append(Paragraph("PATIENT DISCHARGE & SECURITY EXIT GATE PASS", subtitle_style))
+
+        # 2. Gate Pass Meta Box
+        meta_table_data = [
+            [
+                Paragraph(f"<b>GATE PASS NO:</b> {gate_pass_no}", val_bold),
+                Paragraph(f"<b>DISCHARGE NO:</b> {discharge_no}", val_bold),
+                Paragraph("<b>STATUS:</b> <font color='#059669'><b>CLEARED & DISCHARGED</b></font>", val_bold),
+            ],
+            [
+                Paragraph(f"<b>ISSUED DATE & TIME:</b> {issued_date_str}", val_style),
+                Paragraph(f"<b>PAYMENT STATUS:</b> <font color='#059669'><b>SETTLED (NIL DUES)</b></font>", val_bold),
+                Paragraph(f"<b>AUTHORIZED BY:</b> {approving_doctor_name}", val_style),
+            ]
+        ]
+        meta_table = Table(meta_table_data, colWidths=[180, 180, 180])
+        meta_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F1F5F9')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ]))
+        elements.append(meta_table)
+        elements.append(Spacer(1, 6))
+
+        # 3. Patient & Stay Information
+        elements.append(Paragraph("1. PATIENT & ADMISSION DETAILS", sec_header))
+        patient_info_data = [
+            [
+                Paragraph("Patient Name:", lbl_style), Paragraph(patient_name, val_bold),
+                Paragraph("UHID / Patient Code:", lbl_style), Paragraph(patient_code, val_bold)
+            ],
+            [
+                Paragraph("Gender / Age:", lbl_style), Paragraph(gender_age, val_style),
+                Paragraph("Contact No:", lbl_style), Paragraph(discharge.patient.phone if discharge.patient and discharge.patient.phone else "N/A", val_style)
+            ],
+            [
+                Paragraph("Admission Date:", lbl_style), Paragraph(adm_date_str, val_style),
+                Paragraph("Discharge Date:", lbl_style), Paragraph(dis_date_str, val_style)
+            ],
+            [
+                Paragraph("Treating Consultant:", lbl_style), Paragraph(doctor_name, val_bold),
+                Paragraph("Department / Specialty:", lbl_style), Paragraph(doctor_dept, val_style)
+            ],
+            [
+                Paragraph("Ward / Unit:", lbl_style), Paragraph(ward_name, val_style),
+                Paragraph("Bed Number:", lbl_style), Paragraph(bed_num, val_bold)
+            ],
+            [
+                Paragraph("Diagnosis on Discharge:", lbl_style), Paragraph(discharge.diagnosis_at_discharge or "N/A", val_style),
+                Paragraph("Condition on Exit:", lbl_style), Paragraph(discharge.condition_on_discharge or "Stable", val_style)
+            ]
+        ]
+        p_table = Table(patient_info_data, colWidths=[120, 150, 120, 150])
+        p_table.setStyle(TableStyle([
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#F1F5F9')),
+            ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#F8FAFC')),
+            ('BACKGROUND', (2,0), (2,-1), colors.HexColor('#F8FAFC')),
+            ('TOPPADDING', (0,0), (-1,-1), 3.5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ]))
+        elements.append(p_table)
+        elements.append(Spacer(1, 6))
+
+        # 4. Mandatory Clearances Verification Checklist
+        elements.append(Paragraph("2. MULTI-STAGE CLEARANCE VERIFICATION CHECKLIST", sec_header))
+        clearances_data = [
+            [
+                Paragraph("Stage / Department", th_style),
+                Paragraph("Status", th_style),
+                Paragraph("Cleared Date & Time", th_style),
+                Paragraph("Verification Remarks", th_style),
+            ],
+            [
+                Paragraph("Pharmacy Clearance", val_style),
+                Paragraph("<font color='#059669'><b>CLEARED</b></font>", val_style),
+                Paragraph(discharge.pharmacy_cleared_at.strftime("%d-%b-%Y %I:%M %p") if discharge.pharmacy_cleared_at else "Verified", val_style),
+                Paragraph(discharge.pharmacy_notes or "Medications returned / settled", val_style),
+            ],
+            [
+                Paragraph("Billing Clearance", val_style),
+                Paragraph("<font color='#059669'><b>CLEARED</b></font>", val_style),
+                Paragraph(discharge.billing_cleared_at.strftime("%d-%b-%Y %I:%M %p") if discharge.billing_cleared_at else "Verified", val_style),
+                Paragraph(discharge.billing_notes or "IPD final bill verified & generated", val_style),
+            ],
+            [
+                Paragraph("Payment Clearance (Cashier)", val_style),
+                Paragraph("<font color='#059669'><b>PAID & SETTLED</b></font>", val_style),
+                Paragraph(discharge.payment_cleared_at.strftime("%d-%b-%Y %I:%M %p") if discharge.payment_cleared_at else "Verified", val_style),
+                Paragraph(discharge.payment_notes or "Nil outstanding balance (Paid in Full)", val_style),
+            ],
+            [
+                Paragraph("Doctor Final Sign-off", val_style),
+                Paragraph("<font color='#059669'><b>APPROVED</b></font>", val_style),
+                Paragraph(discharge.doctor_approved_at.strftime("%d-%b-%Y %I:%M %p") if discharge.doctor_approved_at else "Approved", val_style),
+                Paragraph(f"Approved by: <b>{approving_doctor_name}</b><br/>{discharge.discharge_notes or 'Patient successfully stabilized and cleared for discharge.'}", val_style),
+            ],
+        ]
+        c_table = Table(clearances_data, colWidths=[140, 95, 125, 180])
+        c_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#0F766E')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
+            ('TOPPADDING', (0,0), (-1,-1), 3.5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
+            ('LEFTPADDING', (0,0), (-1,-1), 5),
+            ('RIGHTPADDING', (0,0), (-1,-1), 5),
+        ]))
+        elements.append(c_table)
+        elements.append(Spacer(1, 6))
+
+        # 5. Security Instructions & Notice
+        elements.append(Paragraph("3. SECURITY CHECKPOINT INSTRUCTIONS", sec_header))
+        security_text = (
+            "<b>Notice to Security Personnel:</b> "
+            "1. Verify the Patient Name, UHID, and Gate Pass Number against the patient's ID wristband before exit. "
+            "2. Ensure all 3 clearances (Pharmacy, Billing, Payment) and Doctor Approval are stamped as <b>CLEARED</b>. "
+            "3. Collect the patient's hospital wristband and record actual departure time at the security gate."
+        )
+        elements.append(Paragraph(security_text, notice_style))
+        elements.append(Spacer(1, 8))
+
+        # 6. Signatures and Stamp Box
+        sig_data = [
+            [
+                Paragraph("<b>Prepared / Issued By</b><br/><br/><br/>_______________________<br/>Discharge Coordinator", val_style),
+                Paragraph("<b>Billing / Accounts Dept</b><br/><br/><br/>_______________________<br/>Authorized Cashier Sign", val_style),
+                Paragraph(f"<b>Approved By Doctor</b><br/><b>{approving_doctor_name}</b><br/><br/>_______________________<br/>Signature & Reg No.", val_style),
+                Paragraph("<b>Security Checkpoint</b><br/><br/><br/>_______________________<br/>Guard Sign & Exit Time", val_style),
+            ]
+        ]
+        sig_table = Table(sig_data, colWidths=[135, 135, 135, 135])
+        sig_table.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F8FAFC')),
+            ('TOPPADDING', (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ]))
+        elements.append(sig_table)
+
+        # Canvas Footer Callback
+        def add_header_footer(canvas, doc_obj):
+            canvas.saveState()
+            # Bottom Decorative Footer line
+            canvas.setStrokeColor(colors.HexColor('#CBD5E1'))
+            canvas.setLineWidth(0.75)
+            canvas.line(36, 30, 576, 30)
+
+            # Footer Text
+            canvas.setFont("Helvetica", 7.5)
+            canvas.setFillColor(colors.HexColor('#64748B'))
+            canvas.drawString(36, 18, "NexaCare Multispeciality Hospital • Patient Discharge & Security Clearance System")
+            
+            right_text = f"Issued: {issued_date_str} | Page {doc_obj.page}"
+            canvas.drawRightString(576, 18, right_text)
+            
+            center_text = "CONFIDENTIAL MEDICAL RECORD • VALID FOR SINGLE EXIT ONLY"
+            canvas.setFont("Helvetica-Bold", 6.5)
+            canvas.setFillColor(colors.HexColor('#94A3B8'))
+            canvas.drawCentredString(306, 8, center_text)
+            
+            canvas.restoreState()
+
+        doc.build(elements, onFirstPage=add_header_footer, onLaterPages=add_header_footer)
+        buffer.seek(0)
+        return buffer.getvalue()
 
     def _check_and_update_cleared_status(self, discharge: Discharge) -> None:
         if (

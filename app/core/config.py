@@ -102,13 +102,14 @@ class Settings(BaseSettings):
     )
 
     # Exotel (India-primary telephony). Per-hospital overrides live in HospitalVoiceConfig.
-    EXOTEL_SID: str = ""
-    EXOTEL_API_KEY: str = ""
-    EXOTEL_API_TOKEN: str = ""
+    EXOTEL_SID: str = "shekrulabsindia1"
+    EXOTEL_API_KEY: str = "db788244d602b810de29398f921ea8124bf2193a45ef557c"
+    EXOTEL_API_TOKEN: str = "424d15729be1e02b75b1dce39aab9d9570d8bdb6735db6f7"
     EXOTEL_SUBDOMAIN: str = "api.exotel.com"
-    EXOTEL_PHONE_NUMBER: str = ""
+    EXOTEL_PHONE_NUMBER: str = "02048565100"
+    EXOTEL_WHATSAPP_NUMBER: str = "09513886363"
     EXOTEL_WEBHOOK_SECRET: str = ""
-    DEFAULT_TELEPHONY_PROVIDER: str = "twilio"
+    DEFAULT_TELEPHONY_PROVIDER: str = "exotel"
     # When true, skip Twilio/Exotel signature checks (local tests only).
     SKIP_VOICE_WEBHOOK_AUTH: bool = False
 

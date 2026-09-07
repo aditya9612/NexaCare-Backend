@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -131,7 +131,6 @@ async def get_clearance_status(
 
 
 @router.patch("/{discharge_id}/clear-pharmacy", response_model=APIResponse[DischargeResponse])
-@router.post("/{discharge_id}/clear-pharmacy", response_model=APIResponse[DischargeResponse])
 async def clear_pharmacy(
     discharge_id: int,
     db: DbSession,
@@ -169,7 +168,6 @@ async def get_discharge_final_bill(
 
 
 @router.post("/{discharge_id}/generate-final-bill", response_model=APIResponse[IPDFinalBillResponse])
-@router.post("/{discharge_id}/generate-bill", response_model=APIResponse[IPDFinalBillResponse])
 async def generate_final_bill(
     discharge_id: int,
     data: GenerateIPDBillRequest,
@@ -189,7 +187,6 @@ async def generate_final_bill(
 
 
 @router.patch("/{discharge_id}/clear-billing", response_model=APIResponse[DischargeResponse])
-@router.post("/{discharge_id}/clear-billing", response_model=APIResponse[DischargeResponse])
 async def clear_billing(
     discharge_id: int,
     data: ClearBillingRequest,
@@ -209,7 +206,6 @@ async def clear_billing(
 
 
 @router.patch("/{discharge_id}/clear-payment", response_model=APIResponse[DischargeResponse])
-@router.post("/{discharge_id}/clear-payment", response_model=APIResponse[DischargeResponse])
 async def clear_payment(
     discharge_id: int,
     data: ClearPaymentRequest,
@@ -229,7 +225,6 @@ async def clear_payment(
 
 
 @router.post("/{discharge_id}/approve", response_model=APIResponse[DischargeResponse])
-@router.post("/{discharge_id}/doctor-approval", response_model=APIResponse[DischargeResponse])
 async def approve_discharge(
     discharge_id: int,
     db: DbSession,
@@ -264,3 +259,24 @@ async def get_gate_pass(
         message="Gate pass retrieved successfully",
         data=gate_pass,
     )
+
+
+@router.get("/{discharge_id}/gate-pass/download")
+async def download_gate_pass(
+    discharge_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    """
+    Download official Security Gate Pass PDF for discharged patient.
+    """
+    pdf_bytes = await DischargeService(db).download_gate_pass_pdf(discharge_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=gate_pass_{discharge_id}.pdf"
+        },
+    )
+

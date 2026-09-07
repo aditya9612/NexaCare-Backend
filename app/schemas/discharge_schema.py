@@ -6,6 +6,7 @@ from app.schemas.common_schema import BaseSchema
 
 class DischargeInitiateRequest(BaseSchema):
     appointment_id: int = Field(..., gt=0, description="ID of the admitted IPD appointment")
+    bed_id: int | None = Field(default=None, gt=0, description="Optional Bed ID override")
     diagnosis_at_discharge: str = Field(..., min_length=2, description="Final confirmed diagnosis at discharge")
     treatment_summary: str = Field(..., min_length=3, description="Summary of clinical procedures and treatments given")
     condition_on_discharge: str = Field(default="Stable", description="Condition of patient: Stable, Recovered, Relieved, etc.")
@@ -25,6 +26,7 @@ class ProcedureChargeItem(BaseSchema):
 
 
 class GenerateIPDBillRequest(BaseSchema):
+    bed_id: int | None = Field(default=None, gt=0, description="Optional Bed ID override")
     discount_amount: float = Field(default=0.0, ge=0.0, description="Any approved hospital discount")
     additional_doctor_visits: int = Field(default=0, ge=0, description="Additional specialist/visiting consultant visits")
     gst_rate: float = Field(default=0.0, ge=0.0, le=28.0, description="GST rate percentage (0 - 28%)")

@@ -774,9 +774,6 @@ class PharmacyService:
 
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
-        from app.models.inventory_model import Warehouse
-        from app.services.stock_movement_service import StockMovementService
-
         return await self._create_invoice_internal(data, user_id, deduct_stock=True)
 
     async def _create_invoice_internal(
@@ -785,6 +782,9 @@ class PharmacyService:
         user_id: int,
         deduct_stock: bool = True
     ) -> PharmacyInvoiceResponse:
+        from app.models.inventory_model import Warehouse
+        from app.services.stock_movement_service import StockMovementService
+
         if data.patient_id is not None:
             patient = await self.patient_repo.get_by_id(data.patient_id)
             if not patient:
@@ -1783,7 +1783,7 @@ class PharmacyService:
 
         today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
-        # 5. Monthly Sales (Invoice/billing amount for current month, OR in the filtered period)
+        # 5. Monthly Sales (Invoice/billing amount for current month)
         month_start = datetime.combine(today_ist.replace(day=1), time.min)
         if month_start.month == 12:
             next_month_start = month_start.replace(year=month_start.year + 1, month=1)
@@ -1793,26 +1793,22 @@ class PharmacyService:
         monthly_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
+            PharmacyInvoice.created_at >= month_start,
+            PharmacyInvoice.created_at < next_month_start
         )
-        if time_filter in ("overall", "30_days", "7_days", "3_month", "custom"):
-            if start_dt:
-                monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at >= start_dt)
-            if end_dt:
-                monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at <= end_dt)
-        else:
-            monthly_sales_query = monthly_sales_query.where(
-                PharmacyInvoice.created_at >= month_start,
-                PharmacyInvoice.created_at < next_month_start
-            )
 
         monthly_sales = (await self.db.scalar(monthly_sales_query)) or 0.0
 
         # 6. Pending Purchases (Count status: Pending, Ordered)
-        pending_purchases = (await self.db.scalar(
-            select(func.count(Purchase.id)).where(
-                Purchase.status.in_(["Pending", "Ordered"])
-            )
-        )) or 0
+        pending_purchases_query = select(func.count(Purchase.id)).where(
+            Purchase.status.in_(["Pending", "Ordered"])
+        )
+        if start_dt:
+            pending_purchases_query = pending_purchases_query.where(Purchase.created_at >= start_dt)
+        if end_dt:
+            pending_purchases_query = pending_purchases_query.where(Purchase.created_at <= end_dt)
+            
+        pending_purchases = (await self.db.scalar(pending_purchases_query)) or 0
 
         # 7. Total Suppliers (Count active suppliers)
         total_suppliers = (await self.db.scalar(

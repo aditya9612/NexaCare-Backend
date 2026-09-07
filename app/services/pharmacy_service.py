@@ -148,6 +148,22 @@ class PharmacyService:
             if existing:
                 raise ConflictException("Medicine with this barcode already exists")
 
+        from sqlalchemy import select, func
+        
+        target_name = data.name.lower()
+        target_manufacturer = data.manufacturer.lower() if data.manufacturer else ""
+        target_batch = data.batch_number.lower()
+
+        dup_query = select(Medicine).where(
+            func.lower(Medicine.name) == target_name,
+            func.coalesce(func.lower(Medicine.manufacturer), "") == target_manufacturer,
+            func.lower(Medicine.batch_number) == target_batch,
+            Medicine.is_deleted.is_(False)
+        )
+        existing_dup = await self.db.scalar(dup_query)
+        if existing_dup:
+            raise ConflictException("Medicine with this name, manufacturer, and batch number already exists")
+
         sku = generate_medicine_sku()
         inv_item = InventoryItem(
             name=data.name,
@@ -1806,12 +1822,16 @@ class PharmacyService:
         )) or 0
 
         # 8. Prescriptions (Count active prescriptions pending to be dispensed)
-        prescriptions = (await self.db.scalar(
-            select(func.count(Prescription.id)).where(
-                Prescription.is_deleted.is_(False),
-                Prescription.status == "pending"
-            )
-        )) or 0
+        prescriptions_query = select(func.count(Prescription.id)).where(
+            Prescription.is_deleted.is_(False),
+            Prescription.status == "pending"
+        )
+        if start_dt:
+            prescriptions_query = prescriptions_query.where(Prescription.created_at >= start_dt)
+        if end_dt:
+            prescriptions_query = prescriptions_query.where(Prescription.created_at <= end_dt)
+            
+        prescriptions = (await self.db.scalar(prescriptions_query)) or 0
 
         # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
         low_stock_query = (

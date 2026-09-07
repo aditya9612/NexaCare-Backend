@@ -2,8 +2,32 @@ from datetime import date, datetime, time
 
 from pydantic import Field, field_validator, model_validator
 
-from app.core.constants import BookingSource
+from app.core.constants import BookingSource, AppointmentType
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
+
+
+def normalize_and_validate_appointment_type(v: str | None) -> str | None:
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if isinstance(v, str):
+        clean = v.strip()
+        lower = clean.lower().replace("_", "-")
+        if lower == "opd":
+            return AppointmentType.OPD.value
+        elif lower == "ipd":
+            return AppointmentType.IPD.value
+        elif lower == "emergency":
+            return AppointmentType.EMERGENCY.value
+        elif lower in ("follow-up", "followup", "follow up"):
+            return AppointmentType.FOLLOW_UP.value
+        elif lower in ("walk-in", "walkin", "walk in"):
+            return AppointmentType.WALK_IN.value
+        elif lower in ("scheduled", "routine", "consultation"):
+            return AppointmentType.SCHEDULED.value
+        else:
+            allowed = ["OPD", "IPD", "Emergency", "Follow-up"]
+            raise ValueError(f"Invalid appointment_type: '{clean}'. Allowed types are: {', '.join(allowed)}")
+    return v
 
 
 class AppointmentCreate(BaseSchema):
@@ -23,6 +47,23 @@ class AppointmentCreate(BaseSchema):
     patient_name: str | None = None
     age: int | None = None
     patient_mobile_number: str | None = None
+    admission_status: str | None = None
+    admission_recommended: bool | None = False
+    admission_reason: str | None = None
+    expected_los: int | None = None
+    recommended_ward: str | None = None
+
+    # Emergency Triage (ESI 1-5) & Disposition
+    triage_level: int | None = Field(None, ge=1, le=5, description="ESI 1 (Resuscitation) to 5 (Non-Urgent)")
+    triage_notes: str | None = None
+    disposition: str | None = None
+    referred_to: str | None = None
+    referral_reason: str | None = None
+
+    @field_validator("appointment_type", mode="before")
+    @classmethod
+    def validate_type(cls, v):
+        return normalize_and_validate_appointment_type(v)
 
     @field_validator("booking_source", mode="before")
     @classmethod
@@ -47,6 +88,23 @@ class AppointmentUpdate(BaseSchema):
     symptoms: str | None = None
     notes: str | None = None
     consultation_type: str | None = None
+    admission_status: str | None = None
+    admission_recommended: bool | None = None
+    admission_reason: str | None = None
+    expected_los: int | None = None
+    recommended_ward: str | None = None
+
+    # Emergency Triage (ESI 1-5) & Disposition
+    triage_level: int | None = Field(None, ge=1, le=5)
+    triage_notes: str | None = None
+    disposition: str | None = None
+    referred_to: str | None = None
+    referral_reason: str | None = None
+
+    @field_validator("appointment_type", mode="before")
+    @classmethod
+    def validate_type(cls, v):
+        return normalize_and_validate_appointment_type(v)
 
     @field_validator("booking_source", mode="before")
     @classmethod
@@ -93,7 +151,27 @@ class AppointmentResponse(BaseSchema):
     queue_token: str | None = None
     queue_status: str | None = None
 
+    # Admission Recommendation fields
+    admission_status: str | None = None
+    admission_number: str | None = None
+    admission_recommended: bool = False
+    admission_reason: str | None = None
+    expected_los: int | None = None
+    recommended_ward: str | None = None
+
+    # Emergency Triage & Disposition fields
+    triage_level: int | None = None
+    triage_notes: str | None = None
+    disposition: str | None = None
+    referred_to: str | None = None
+    referral_reason: str | None = None
+
     cancellation_reason: str | None = None
+
+    @field_validator("admission_recommended", mode="before")
+    @classmethod
+    def coerce_admission_recommended(cls, v):
+        return bool(v) if v is not None else False
 
     @model_validator(mode="after")
     def populate_cancellation_reason(self) -> "AppointmentResponse":
@@ -101,6 +179,78 @@ class AppointmentResponse(BaseSchema):
         if self.appointment_status in ("cancelled", AppointmentStatus.CANCELLED):
             self.cancellation_reason = self.notes
         return self
+
+
+class EmergencyTriageRequest(BaseSchema):
+    triage_level: int = Field(..., ge=1, le=5, description="ESI 1 (Resuscitation) to 5 (Non-Urgent)")
+    triage_notes: str | None = None
+
+
+class EmergencyDispositionRequest(BaseSchema):
+    disposition: str = Field(..., description="ADMIT, REFER, DISCHARGE, OBSERVED")
+    referred_to: str | None = None
+    referral_reason: str | None = None
+    notes: str | None = None
+
+
+class AdmitRecommendationRequest(BaseSchema):
+    diagnosis: str | None = None
+    admission_reason: str = Field(..., min_length=1)
+    expected_los: int | None = Field(None, ge=1)
+    recommended_ward: str | None = None
+    notes: str | None = None
+
+
+class AdmitRecommendationResponse(BaseSchema):
+    appointment_id: int
+    admission_number: str
+    patient_id: int
+    doctor_id: int
+    appointment_status: str
+    admission_status: str | None = None
+    admission_recommended: bool
+    admission_reason: str | None = None
+    expected_los: int | None = None
+    recommended_ward: str | None = None
+    diagnosis: str | None = None
+    notes: str | None = None
+    disposition: str | None = None
+
+
+class PendingAdmissionPatientInfo(BaseSchema):
+    id: int
+    patient_code: str
+    first_name: str
+    last_name: str
+    gender: str | None = None
+    age: int | None = None
+    phone: str | None = None
+
+
+class PendingAdmissionDoctorInfo(BaseSchema):
+    id: int
+    first_name: str
+    last_name: str
+    specialization: str | None = None
+    department_name: str | None = None
+
+
+class PendingAdmissionItem(BaseSchema):
+    appointment_id: int
+    admission_number: str | None = None
+    patient_id: int
+    appointment_number: str
+    appointment_date: date
+    appointment_status: str
+    admission_status: str | None = None
+    admission_recommended: bool
+    admission_reason: str | None = None
+    expected_los: int | None = None
+    recommended_ward: str | None = None
+    diagnosis: str | None = None
+    patient: PendingAdmissionPatientInfo
+    doctor: PendingAdmissionDoctorInfo
+    created_at: datetime
 
 
 
@@ -162,11 +312,17 @@ class AppointmentFilterQuery(BaseSchema):
     doctor_id: int | None = None
     department_id: int | None = None
     status: str | None = None
+    admission_status: str | None = None
     appointment_date: date | None = None
     appointment_type: str | None = None
     booking_source: BookingSource | None = None
     page: int = 1
     size: int = 20
+
+    @field_validator("appointment_type", mode="before")
+    @classmethod
+    def validate_type(cls, v):
+        return normalize_and_validate_appointment_type(v)
 
 
 AppointmentListResponse = PaginatedResponse[AppointmentResponse]
@@ -189,6 +345,28 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     in_progress: int = 0
     checked_in: int = 0
     checked_out: int = 0
+    admitted: int = 0
+    waiting: int = 0
+    total_today_appointments: int = 0
+    total_today_tokens: int = 0
+
+
+class TodayAppointmentsResponse(BaseSchema):
+    items: list[AppointmentResponse] = []
+    total: int = 0
+    total_appointments: int = 0
+    total_today_appointments: int = 0
+    total_today_tokens: int = 0
+    today_appointments: int = 0
+    cancelled: int = 0
+    waiting: int = 0
+    completed: int = 0
+    checked_in: int = 0
+    checked_out: int = 0
+    pending: int = 0
+    confirmed: int = 0
+    in_progress: int = 0
+    admitted: int = 0
 
 class ConfirmedVisitResponse(BaseSchema):
     appointment_id: int

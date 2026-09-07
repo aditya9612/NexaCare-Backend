@@ -273,6 +273,7 @@ class FloorResponse(BaseSchema):
 # Bed Allocation Operations
 class BedAllocationRequest(BaseModel):
     patientId: int = Field(..., gt=0)
+    appointmentId: Optional[int] = Field(None, gt=0, description="Specific appointment ID for admission")
     admissionDate: datetime
     notes: Optional[str] = None
 

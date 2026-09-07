@@ -24,17 +24,19 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceResponse,
     PharmacyDashboardResponse,
     PharmacyInventoryOverviewResponse,
+    PharmacyReturnCreate,
+    PharmacyReturnResponse,
     PrescriptionCreate,
+    PrescriptionDispenseRequest,
     PrescriptionResponse,
-    PrescriptionUpdate,
     PrescriptionStatusUpdate,
+    PrescriptionUpdate,
     PurchaseCreate,
     PurchaseResponse,
     SalesReport,
     SupplierCreate,
     SupplierResponse,
     SupplierUpdate,
-    PharmacyDashboardResponse,
 )
 
 from app.services.pharmacy_service import PharmacyService
@@ -332,6 +334,22 @@ async def update_prescription_status(
 
 
 
+@router.post("/prescriptions/{prescription_id}/dispense", response_model=APIResponse[dict])
+async def dispense_prescription(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    data: PrescriptionDispenseRequest | None = None,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    result = await PharmacyService(db).dispense_prescription(
+        prescription_id=prescription_id,
+        user_id=current_user.id,
+        data=data,
+    )
+    return APIResponse(message="Prescription dispensed and invoice generated successfully", data=result)
+
+
 @router.delete("/prescriptions/{prescription_id}", response_model=APIResponse[MessageResponse])
 async def delete_prescription(
     prescription_id: int,
@@ -351,9 +369,6 @@ async def delete_prescription(
         user_id=current_user.id
     )
     return APIResponse(message="Prescription deleted", data=MessageResponse(message="Deleted successfully"))
-
-
-# --- Invoices ---
 
 
 # --- Invoices ---
@@ -379,6 +394,7 @@ async def list_pharmacy_invoices(
     result = await PharmacyService(db).list_invoices(page=page, size=size)
     return APIResponse(message="Pharmacy invoices retrieved", data=result)
 
+
 @router.get("/invoices/{invoice_id}", response_model=APIResponse[PharmacyInvoiceResponse])
 async def get_pharmacy_invoice(
     invoice_id: int,
@@ -401,6 +417,44 @@ async def update_pharmacy_invoice(
     invoice = await PharmacyService(db).update_invoice(invoice_id, data)
     return APIResponse(message="Pharmacy invoice updated", data=invoice)
 
+
+@router.post("/invoices/{invoice_id}/return", response_model=APIResponse[PharmacyReturnResponse])
+async def return_pharmacy_invoice_items(
+    invoice_id: int,
+    data: PharmacyReturnCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "update")),
+):
+    return_obj = await PharmacyService(db).process_return(
+        invoice_id=invoice_id,
+        data=data,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Medicine return processed and inventory restocked successfully", data=return_obj)
+
+
+@router.get("/returns", response_model=APIResponse[PaginatedResult[PharmacyReturnResponse]])
+async def list_pharmacy_returns(
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    result = await PharmacyService(db).list_returns(page=page, size=size)
+    return APIResponse(message="Pharmacy returns retrieved", data=result)
+
+
+@router.get("/returns/{return_id}", response_model=APIResponse[PharmacyReturnResponse])
+async def get_pharmacy_return(
+    return_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    return_obj = await PharmacyService(db).get_return_by_id(return_id)
+    return APIResponse(message="Pharmacy return retrieved", data=return_obj)
 
 
 @router.get("/invoices/{invoice_id}/download")

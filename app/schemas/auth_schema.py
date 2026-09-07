@@ -89,6 +89,7 @@ class RegisterRequest(BaseModel):
                     "role_name": "Patient",
                     "gender": "Male",
                     "date_of_birth": "2001-08-15",
+                    "address": "123 Main St",
                 }
             ]
         }
@@ -119,6 +120,14 @@ class RegisterRequest(BaseModel):
     date_of_birth: date | None = Field(
         default=None,
         description="Date of birth (YYYY-MM-DD). Must be in the past.",
+    )
+    address: str | None = Field(
+        default=None,
+        description="Physical address of the user",
+    )
+    profile_image: str | None = Field(
+        default=None,
+        description="Path of saved profile image",
     )
 
     @field_validator("full_name")
@@ -213,12 +222,16 @@ class ActivateAccountRequest(EmailOrPhoneRequest):
     otp: str
 
 
+
+
 class ProfileUpdateRequest(BaseModel):
     full_name: str | None = None
     phone: str | None = Field(default=None, min_length=10, max_length=20)
     gender: GenderOption | None = None
     date_of_birth: date | None = None
     profile_image: str | None = None
+    email: EmailStr | None = None
+    address: str | None = None
 
     @field_validator("full_name")
     @classmethod
@@ -262,6 +275,7 @@ class UserProfileResponse(BaseSchema):
     profile_image: str | None
     gender: str | None
     date_of_birth: date | None
+    address: str | None = None
     is_active: bool
     is_verified: bool
     last_login: datetime | None

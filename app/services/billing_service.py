@@ -185,11 +185,17 @@ class BillingService:
                     "Billing cannot be created for a cancelled appointment."
                 )
 
+            is_ipd = (
+                (appointment.appointment_type or "").upper() == "IPD"
+                or (appointment.admission_status or "") in ("Admitted", "Discharged", "Admit Recommended")
+                or bool(appointment.admission_recommended)
+            )
             is_completed = (
                 appointment.appointment_status == AppointmentStatus.COMPLETED
                 or appointment.appointment_status == "Checked-Out"
                 or appointment.queue_status == "COMPLETED"
                 or appointment.check_out_time is not None
+                or is_ipd
             )
             if not is_completed:
                 raise BadRequestException(
@@ -969,7 +975,7 @@ class BillingService:
         
         headers = [
             "group_key", "Patient Name", "discount_percent", "discount_amount", "due_date", "notes",
-            "appointment_id", "item_description", "item_quantity", "item_unit_price", "item_gst_rate", "item_type"
+            "Appointment Number", "item_description", "item_quantity", "item_unit_price", "item_gst_rate", "item_type"
         ]
         ws.append(headers)
         
@@ -981,7 +987,7 @@ class BillingService:
             0.0,
             "2026-08-30 12:00:00",
             "Routine clinic visit",
-            2,
+            "APT-20260825E57D0B",
             "Consultation Fee",
             1,
             500.00,
@@ -995,7 +1001,7 @@ class BillingService:
             0.0,
             "2026-08-30 12:00:00",
             "Routine clinic visit",
-            2,
+            "APT-20260825E57D0B",
             "Disposable Syringe",
             2,
             25.00,
@@ -1066,7 +1072,7 @@ class BillingService:
             discount_amount_raw = first_row.get("discount_amount")
             due_date_raw = first_row.get("due_date")
             notes_raw = first_row.get("notes")
-            appointment_id_raw = first_row.get("appointment_id")
+            appointment_number_raw = first_row.get("appointment number")
             
             def val_to_str(val):
                 if val is None:
@@ -1080,7 +1086,7 @@ class BillingService:
                     val_to_str(r.get("discount_amount")) != val_to_str(discount_amount_raw) or
                     val_to_str(r.get("due_date")) != val_to_str(due_date_raw) or
                     val_to_str(r.get("notes")) != val_to_str(notes_raw) or
-                    val_to_str(r.get("appointment_id")) != val_to_str(appointment_id_raw)):
+                    val_to_str(r.get("appointment number")) != val_to_str(appointment_number_raw)):
                     conflict_found = True
                     conflict_idx = idx
                     break
@@ -1132,18 +1138,16 @@ class BillingService:
                     
                 patient_id = matching_patients[0].id
                 
-                def normalize_id(val, name):
-                    if val is None:
-                        return None
-                    try:
-                        f_val = float(val)
-                        if not f_val.is_integer():
-                            raise ValueError()
-                        return int(f_val)
-                    except (ValueError, TypeError):
-                        raise BadRequestException(f"Invalid integer value for {name}: {val}")
-                        
-                appointment_id = normalize_id(appointment_id_raw, "appointment_id")
+                appointment_id = None
+                if appointment_number_raw is not None:
+                    appt_num_str = str(appointment_number_raw).strip()
+                    if appt_num_str:
+                        from app.models.appointment_model import Appointment
+                        appt_stmt = select(Appointment.id).where(Appointment.appointment_number == appt_num_str)
+                        appt_res = await self.db.execute(appt_stmt)
+                        appointment_id = appt_res.scalar_one_or_none()
+                        if not appointment_id:
+                            raise BadRequestException(f"Appointment with number {appt_num_str} not found")
                 
                 # 2. discount_percent
                 discount_percent = 0.0
@@ -1414,6 +1418,12 @@ class BillingService:
         p_res = await self.db.execute(p_stmt)
         patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
 
+        # Map appointment numbers
+        from app.models.appointment_model import Appointment
+        a_stmt = select(Appointment.id, Appointment.appointment_number)
+        a_res = await self.db.execute(a_stmt)
+        appointments_map = {row[0]: row[1] for row in a_res.all()}
+
         if format_type == "excel":
             import openpyxl
             wb = openpyxl.Workbook()
@@ -1424,7 +1434,7 @@ class BillingService:
                 "Sr. No.", "Patient Name", "bill_number", "subtotal", "discount_percent",
                 "discount_amount", "gst_rate", "gst_amount", "tax_amount", "total_amount",
                 "paid_amount", "balance_amount", "status", "due_date", "notes", "invoice_path",
-                "appointment_id", "created_at", "updated_at", "source",
+                "Appointment Number", "created_at", "updated_at", "source",
                 "item_id", "item_description", "item_quantity", "item_unit_price",
                 "item_gst_rate", "item_gst_amount", "item_line_total", "item_type"
             ]
@@ -1432,6 +1442,7 @@ class BillingService:
             
             for sr_no, b in enumerate(ordered_items, start=1):
                 p_name = patients_map.get(b.patient_id, "")
+                appt_num_str = appointments_map.get(b.appointment_id, "") if b.appointment_id else ""
                 
                 # Check if there are items to export. If not, output one row with empty item columns
                 if not b.items:
@@ -1440,7 +1451,7 @@ class BillingService:
                         f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
                         f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
                         b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                        b.notes or "", b.invoice_path or "", b.appointment_id or "",
+                        b.notes or "", b.invoice_path or "", appt_num_str,
                         b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
                         b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
                         b.source,
@@ -1454,7 +1465,7 @@ class BillingService:
                             f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
                             f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
                             b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                            b.notes or "", b.invoice_path or "", b.appointment_id or "",
+                            b.notes or "", b.invoice_path or "", appt_num_str,
                             b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
                             b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
                             b.source,

@@ -16,6 +16,8 @@ from app.schemas.auth_schema import (
     ProfileUpdateRequest,
     RefreshTokenRequest,
     RegisterRequest,
+    RegisterRoleName,
+    GenderOption,
     RegistrationRoleOption,
     ResetPasswordRequest,
     SendOTPRequest,
@@ -41,7 +43,45 @@ async def list_registration_roles(db: DbSession):
 
 
 @router.post("/register", response_model=APIResponse[MessageResponse], status_code=201)
-async def register(data: RegisterRequest, db: DbSession):
+async def register(
+    db: DbSession,
+    email: str = Form(..., description="Valid email address (used for login and OTP email)"),
+    password: str = Form(..., description="At least 8 characters"),
+    full_name: str = Form(..., description="Full legal name"),
+    phone: Optional[str] = Form(None, description="Mobile number for SMS OTP"),
+    role_name: RegisterRoleName = Form(RegisterRoleName.PATIENT, description="Role from dropdown"),
+    role_id: Optional[int] = Form(None, description="Deprecated - use role_name instead"),
+    gender: Optional[GenderOption] = Form(None, description="Male, Female, or Other"),
+    date_of_birth: Optional[date] = Form(None, description="Date of birth (YYYY-MM-DD). Must be in the past."),
+    address: Optional[str] = Form(None, description="Physical address of the user"),
+    profile_image: Optional[UploadFile] = File(None, description="Optional profile image upload"),
+):
+    try:
+        update_dict = {
+            "email": email,
+            "password": password,
+            "full_name": full_name,
+            "role_name": role_name,
+        }
+        if phone is not None:
+            update_dict["phone"] = phone
+        if role_id is not None:
+            update_dict["role_id"] = role_id
+        if gender is not None:
+            update_dict["gender"] = gender
+        if date_of_birth is not None:
+            update_dict["date_of_birth"] = date_of_birth
+        if address is not None:
+            update_dict["address"] = address
+
+        if profile_image and profile_image.filename:
+            profile_image_path = await save_profile_image(profile_image)
+            update_dict["profile_image"] = profile_image_path
+
+        data = RegisterRequest(**update_dict)
+    except ValidationError as e:
+        raise RequestValidationError(e.errors())
+
     await AuthService(db).register(data)
     return APIResponse(
         message="Registration successful. Please verify OTP to activate account.",
@@ -176,6 +216,8 @@ async def update_profile(
     phone: Optional[str] = Form(None),
     gender: Optional[str] = Form(None),
     date_of_birth: Optional[date] = Form(None),
+    email: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
     profile_image: Optional[UploadFile] = File(None)
 ):
     content_type = request.headers.get("content-type", "")
@@ -202,6 +244,10 @@ async def update_profile(
             update_dict["gender"] = gender
         if "date_of_birth" in form_data:
             update_dict["date_of_birth"] = date_of_birth
+        if "email" in form_data:
+            update_dict["email"] = email
+        if "address" in form_data:
+            update_dict["address"] = address
             
         if profile_image and profile_image.filename:
             profile_image_path = await save_profile_image(profile_image)

@@ -229,8 +229,8 @@ async def onboard_doctor(
 async def list_doctors(
     db: DbSession,
     current_user: CurrentUser,
-    page: int = 1,
-    size: int = 20,
+    page: int | None = None,
+    size: int | None = None,
     department_id: int | None = None,
     availability_status: str | None = None,
     sort_by: str = "created_at",

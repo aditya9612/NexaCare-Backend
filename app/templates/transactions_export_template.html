@@ -43,7 +43,7 @@
     <thead>
       <tr>
         <th class="short-col" style="width: 5%;">Sr. No.</th>
-        <th class="wrap-col" style="width: 13%;">Billing Info</th>
+        <th class="wrap-col" style="width: 13%;">Bill Number</th>
         <th class="short-col" style="width: 7%;">Type</th>
         <th class="short-col" style="width: 9%;">Amount</th>
         <th class="short-col" style="width: 8%;">Method</th>
@@ -57,8 +57,7 @@
       <tr>
         <td class="short-col">{{ loop.index }}</td>
         <td class="wrap-col">
-          Bill ID: {{ item.billing_id }}<br/>
-          Bill No: {{ item.bill_number or "-" }}
+          {{ item.bill_number or "-" }}
         </td>
         <td class="short-col">
           {% if item.is_refund %}

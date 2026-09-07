@@ -29,12 +29,24 @@ class BedAllocationRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def list_floors(self) -> List[Floor]:
+    async def list_floors(
+        self,
+        floor_id: Optional[int] = None,
+        floor_number: Optional[int] = None,
+        floor_type: Optional[str] = None,
+    ) -> List[Floor]:
         query = (
             select(Floor)
             .options(selectinload(Floor.rooms).selectinload(Room.beds).selectinload(Bed.patient))
             .order_by(Floor.number.asc())
         )
+        if floor_id is not None:
+            query = query.where(Floor.id == floor_id)
+        if floor_number is not None:
+            query = query.where(Floor.number == floor_number)
+        if floor_type is not None:
+            query = query.where(func.lower(Floor.type) == floor_type.strip().lower())
+
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

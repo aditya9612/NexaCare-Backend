@@ -34,6 +34,20 @@ class Appointment(Base, TimestampMixin):
     queue_token: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     queue_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
 
+    admission_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    admission_number: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True, index=True)
+    admission_recommended: Mapped[bool] = mapped_column(Boolean, default=False)
+    admission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_los: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recommended_ward: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Emergency Triage & Disposition Fields (ESI 1-5 & Disposition: ADMIT / REFER / DISCHARGE)
+    triage_level: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    triage_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disposition: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    referred_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    referral_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     patient = relationship("Patient", back_populates="appointments")
     doctor = relationship("Doctor", back_populates="appointments")
     department = relationship("Department", back_populates="appointments")

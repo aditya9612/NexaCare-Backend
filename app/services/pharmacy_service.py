@@ -687,6 +687,9 @@ class PharmacyService:
         user_id: int,
         data: PrescriptionDispenseRequest | None = None,
     ) -> dict:
+        if not data or not data.payment_mode or not data.payment_mode.strip():
+            raise BadRequestException("Payment mode is required")
+
         prescription = await self.prescription_repo.get_by_id(prescription_id)
         if not prescription:
             raise NotFoundException("Prescription not found")
@@ -723,15 +726,14 @@ class PharmacyService:
         await self.prescription_repo.update(prescription)
 
         # Generate PharmacyInvoice
-        disp_req = data or PrescriptionDispenseRequest()
         invoice_create = PharmacyInvoiceCreate(
             patient_id=prescription.patient_id,
             prescription_id=prescription.id,
-            payment_mode=disp_req.payment_mode or "Cash",
-            payment_status=disp_req.payment_status,
-            discount_amount=disp_req.discount_amount,
-            discount_percentage=disp_req.discount_percentage,
-            tax_percentage=disp_req.tax_percentage,
+            payment_mode=data.payment_mode.strip(),
+            payment_status=data.payment_status,
+            discount_amount=data.discount_amount,
+            discount_percentage=data.discount_percentage,
+            tax_percentage=data.tax_percentage,
             items=invoice_items_create,
         )
         invoice_res = await self._create_invoice_internal(invoice_create, user_id, deduct_stock=False)

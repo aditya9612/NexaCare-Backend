@@ -339,7 +339,7 @@ async def dispense_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    data: PrescriptionDispenseRequest | None = None,
+    data: PrescriptionDispenseRequest,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     result = await PharmacyService(db).dispense_prescription(

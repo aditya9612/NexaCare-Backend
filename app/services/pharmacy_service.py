@@ -152,12 +152,12 @@ class PharmacyService:
         
         target_name = data.name.lower()
         target_manufacturer = data.manufacturer.lower() if data.manufacturer else ""
-        target_batch = data.batch_number.lower()
+        target_batch = data.batch_number.lower() if data.batch_number else ""
 
         dup_query = select(Medicine).where(
             func.lower(Medicine.name) == target_name,
             func.coalesce(func.lower(Medicine.manufacturer), "") == target_manufacturer,
-            func.lower(Medicine.batch_number) == target_batch,
+            func.coalesce(func.lower(Medicine.batch_number), "") == target_batch,
             Medicine.is_deleted.is_(False)
         )
         existing_dup = await self.db.scalar(dup_query)

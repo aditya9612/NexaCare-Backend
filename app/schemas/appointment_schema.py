@@ -450,10 +450,3 @@ class ScheduledDoctorResponse(BaseSchema):
     is_available: bool
 
 
-
-class TodayAppointmentsResponse(BaseSchema):
-    total_appointments: int = 0
-    pending: int = 0
-    completed: int = 0
-    cancelled: int = 0
-

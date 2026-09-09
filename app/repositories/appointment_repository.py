@@ -33,18 +33,17 @@ class AppointmentRepository:
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
         query = self._apply_filters(
-            query, patient_id, doctor_id, department_id, status, appointment_date, start_date, end_date
-        )
-        query = self._apply_filters(
-            query,
-            patient_id,
-            doctor_id,
-            department_id,
-            status,
-            appointment_date,
-            appointment_type,
-            booking_source,
-            admission_status,
+            query=query,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            status=status,
+            appointment_date=appointment_date,
+            start_date=start_date,
+            end_date=end_date,
+            appointment_type=appointment_type,
+            booking_source=booking_source,
+            admission_status=admission_status,
             triage_level=triage_level,
             disposition=disposition,
         )
@@ -70,35 +69,32 @@ class AppointmentRepository:
     ) -> int:
         query = select(func.count()).select_from(Appointment)
         query = self._apply_filters(
-            query, patient_id, doctor_id, department_id, status, appointment_date, start_date, end_date
-        )
-        query = self._apply_filters(
-            query,
-            patient_id,
-            doctor_id,
-            department_id,
-            status,
-            appointment_date,
-            appointment_type,
-            booking_source,
-            admission_status,
+            query=query,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            status=status,
+            appointment_date=appointment_date,
+            start_date=start_date,
+            end_date=end_date,
+            appointment_type=appointment_type,
+            booking_source=booking_source,
+            admission_status=admission_status,
             triage_level=triage_level,
             disposition=disposition,
         )
         return await self.db.scalar(query) or 0
 
     def _apply_filters(
-        self, query, patient_id, doctor_id, department_id, status, appointment_date,
-        start_date: date | None = None, end_date: date | None = None
-    ):
-    def _apply_filters(
         self,
         query,
-        patient_id,
-        doctor_id,
-        department_id,
-        status,
-        appointment_date,
+        patient_id=None,
+        doctor_id=None,
+        department_id=None,
+        status=None,
+        appointment_date=None,
+        start_date: date | None = None,
+        end_date: date | None = None,
         appointment_type=None,
         booking_source=None,
         admission_status=None,
@@ -305,12 +301,8 @@ class AppointmentRepository:
 
     async def get_today(self, on_date: date | None = None) -> list[Appointment]:
         if on_date is None:
-            from zoneinfo import ZoneInfo
-            from datetime import datetime
-            on_date = datetime.now(ZoneInfo("Asia/Kolkata")).date()
-    async def get_today(self) -> list[Appointment]:
-        from app.utils.helpers import get_today_ist
-        today = get_today_ist()
+            from app.utils.helpers import get_today_ist
+            on_date = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .options(joinedload(Appointment.patient))

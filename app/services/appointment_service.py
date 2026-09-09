@@ -103,6 +103,11 @@ class AppointmentService:
         date_filter: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: BookingSource | str | None = None,
+        admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
     ):
         if date_filter is not None:
             valid_filters = {"today", "yesterday", "last_7_days", "last_30_days", "last_3_months", "overall", "custom"}
@@ -151,25 +156,19 @@ class AppointmentService:
                 filter_end = end_date
             # For "overall", filter_start and filter_end remain None
 
-        appointment_type: str | None = None,
-        booking_source: BookingSource | str | None = None,
-        admission_status: str | None = None,
-        triage_level: int | None = None,
-        disposition: str | None = None,
-    ):
         skip = (page - 1) * size
         source = booking_source.value if isinstance(booking_source, BookingSource) else booking_source
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
-            start_date=filter_start, end_date=filter_end
+            start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
         total = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
-            start_date=filter_start, end_date=filter_end
+            start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
@@ -464,38 +463,13 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(start_date, end_date, doctor_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self, on_date: date | None = None) -> dict[str, int]:
-        from zoneinfo import ZoneInfo
-        from datetime import datetime
-        if on_date is None:
-            on_date = datetime.now(ZoneInfo("Asia/Kolkata")).date()
-
-        appointments = await self.repo.get_today(on_date)
-
-        pending_count = 0
-        completed_count = 0
-        cancelled_count = 0
-
-        for appt in appointments:
-            status = appt.appointment_status
-            if status == AppointmentStatus.PENDING or (isinstance(status, str) and status.lower() == AppointmentStatus.PENDING.lower()):
-                pending_count += 1
-            elif status == AppointmentStatus.COMPLETED or (isinstance(status, str) and status.lower() == AppointmentStatus.COMPLETED.lower()):
-                completed_count += 1
-            elif status == AppointmentStatus.CANCELLED or (isinstance(status, str) and status.lower() == AppointmentStatus.CANCELLED.lower()):
-                cancelled_count += 1
-
-        return {
-            "total_appointments": len(appointments),
-            "pending": pending_count,
-            "completed": completed_count,
-            "cancelled": cancelled_count,
-        }
-    async def get_today(self) -> dict:
+    async def get_today(self, on_date: date | None = None) -> dict:
         from app.utils.helpers import get_today_ist
-        appointments = await self.repo.get_today()
+        if on_date is None:
+            on_date = get_today_ist()
+        appointments = await self.repo.get_today(on_date)
         has_updated = False
-        today = get_today_ist()
+        today = on_date
         next_num = None
         for a in appointments:
             if not a.queue_token:

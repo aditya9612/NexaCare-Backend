@@ -186,7 +186,7 @@ class InventoryService:
             transaction_type=data.transaction_type,
             direction=direction,
             quantity=abs(quantity),
-            batch_id=data.batch_id,
+            batch_id=getattr(data, "batch_id", None),
             unit_cost=data.unit_cost,
             reference_type=data.reference_type,
             reference_id=data.reference_id,
@@ -198,9 +198,9 @@ class InventoryService:
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:
         data = StockTransactionResponse.model_validate(transaction)
         data.type = transaction.transaction_type
-        if hasattr(transaction, "item") and transaction.item:
+        if "item" in transaction.__dict__ and transaction.item:
             data.item_name = transaction.item.name
-        if hasattr(transaction, "warehouse") and transaction.warehouse:
+        if "warehouse" in transaction.__dict__ and transaction.warehouse:
             data.warehouse_name = transaction.warehouse.name
         data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
         return data
@@ -754,4 +754,44 @@ class InventoryService:
             inactive_warehouse_units=0,
             total_vendors=0
         )
+
+    async def get_consumption_report(
+        self, period: str = "monthly", hospital_id: int | None = None
+    ) -> list[ConsumptionReport]:
+        normalized_period = (period or "monthly").strip().lower()
+        valid_periods = {"daily", "weekly", "monthly", "yearly", "all", "overall"}
+        if normalized_period not in valid_periods:
+            raise BadRequestException(
+                f"Invalid period parameter. Allowed values: {', '.join(sorted(valid_periods))}"
+            )
+
+        from datetime import timedelta
+        now = utc_now()
+        start = None
+        end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        if normalized_period == "daily":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "weekly":
+            start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "monthly":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "yearly":
+            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period in ("all", "overall"):
+            start = None
+            end = None
+
+        raw_data = await self.transaction_repo.get_consumption_report(start, end)
+        return [
+            ConsumptionReport(
+                period=normalized_period,
+                item_id=item["item_id"],
+                item_name=item["item_name"],
+                sku=item["sku"],
+                total_consumed=item["total_consumed"],
+                total_value=item["total_value"],
+            )
+            for item in raw_data
+        ]
 

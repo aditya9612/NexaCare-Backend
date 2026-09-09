@@ -158,6 +158,7 @@ class StockTransactionCreate(BaseSchema):
     reference_id: Optional[int] = Field(None, gt=0)
     notes: Optional[str] = None
     target_warehouse_id: Optional[int] = Field(None, gt=0)
+    batch_id: Optional[int] = Field(None, gt=0)
 
     @model_validator(mode="before")
     @classmethod
@@ -174,7 +175,7 @@ class StockTransactionCreate(BaseSchema):
     def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             v_lower = str(v).strip().lower()
-            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            allowed = {"inward", "outward", "transfer", "adjustment", "return", "consumption"}
             if v_lower not in allowed:
                 raise ValueError(f"transaction_type must be one of {allowed}")
             return v_lower
@@ -256,7 +257,7 @@ class StockTransactionUpdate(BaseSchema):
     def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             v_lower = str(v).strip().lower()
-            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            allowed = {"inward", "outward", "transfer", "adjustment", "return", "consumption"}
             if v_lower not in allowed:
                 raise ValueError(f"transaction_type must be one of {allowed}")
             return v_lower

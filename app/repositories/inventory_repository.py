@@ -231,8 +231,8 @@ class StockTransactionRepository:
         await self.db.delete(transaction)
         await self.db.flush()
 
-    async def get_consumption_report(self, start, end) -> list[dict]:
-        result = await self.db.execute(
+    async def get_consumption_report(self, start=None, end=None) -> list[dict]:
+        query = (
             select(
                 StockTransaction.item_id,
                 InventoryItem.name,
@@ -242,19 +242,24 @@ class StockTransactionRepository:
             )
             .join(InventoryItem, InventoryItem.id == StockTransaction.item_id)
             .where(
-                StockTransaction.transaction_type == "consumption",
-                StockTransaction.transaction_date >= start,
-                StockTransaction.transaction_date <= end,
+                func.lower(StockTransaction.transaction_type) == "consumption",
+                InventoryItem.is_deleted.is_(False),
             )
-            .group_by(StockTransaction.item_id, InventoryItem.name, InventoryItem.sku)
         )
+        if start is not None:
+            query = query.where(StockTransaction.transaction_date >= start)
+        if end is not None:
+            query = query.where(StockTransaction.transaction_date <= end)
+
+        query = query.group_by(StockTransaction.item_id, InventoryItem.name, InventoryItem.sku)
+        result = await self.db.execute(query)
         return [
             {
                 "item_id": row[0],
                 "item_name": row[1],
                 "sku": row[2],
-                "total_consumed": int(row[3]),
-                "total_value": float(row[4] or 0),
+                "total_consumed": int(row[3] or 0),
+                "total_value": round(float(row[4] or 0), 2),
             }
             for row in result.all()
         ]

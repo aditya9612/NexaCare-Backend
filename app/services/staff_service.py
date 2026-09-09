@@ -248,6 +248,9 @@ class StaffService:
         if staff.status != 1:
             raise BadRequestException("Cannot create schedule for an inactive staff member")
             
+        if data.start_time >= data.end_time:
+            raise BadRequestException("Start time must be before end time")
+            
         # Check for overlaps
         existing_schedules = await self.db.scalars(
             select(StaffSchedule)

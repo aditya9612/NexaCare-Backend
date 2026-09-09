@@ -734,18 +734,8 @@ class LabService:
         document_url = None
 
         if document:
-            upload_dir = "uploads/lab_results"
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_ext = os.path.splitext(document.filename)[1]
-            file_name = f"{uuid4()}{file_ext}"
-            file_path = os.path.join(upload_dir, file_name)
-
-            async with aiofiles.open(file_path, "wb") as f:
-                while content := await document.read(1024 * 1024):
-                    await f.write(content)
-
-            document_url = file_path
+            from app.utils.file_upload import save_upload
+            document_url = await save_upload(document, "lab_results")
 
         dump_data = data.model_dump()
         dump_data.pop("sample_id", None)
@@ -819,21 +809,8 @@ class LabService:
             raise NotFoundException("Test result not found")
 
         if document:
-            from uuid import uuid4
-            import aiofiles
-            import os
-            upload_dir = "uploads/lab_results"
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_ext = os.path.splitext(document.filename)[1]
-            file_name = f"{uuid4()}{file_ext}"
-            file_path = os.path.join(upload_dir, file_name)
-
-            async with aiofiles.open(file_path, "wb") as f:
-                while content := await document.read(1024 * 1024):
-                    await f.write(content)
-
-            result.document_url = file_path
+            from app.utils.file_upload import save_upload
+            result.document_url = await save_upload(document, "lab_results")
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(result, key, value)

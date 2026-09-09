@@ -119,61 +119,104 @@ class AppointmentService:
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
 
-        # Calculate summary counts independently of pagination and status/date filters where appropriate
+        # --- Optimized summary counts via grouped SQL (replaces 10 sequential count_all calls) ---
         from app.utils.helpers import utc_now
+        from sqlalchemy import and_, case, func, or_, select, text
         today = utc_now().date()
 
-        total_appointments = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
-        )
-        today_appointments = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            appointment_date=today
-        )
-        total_scheduled = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date
-        )
-        completed = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date
-        )
-        cancelled = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date
-        )
-        pending = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.PENDING, appointment_date=appointment_date
-        )
-        confirmed = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
-        )
+        def _base_filter(q):
+            """Apply patient/doctor/dept scope filters — no status/date filter."""
+            if patient_id:
+                q = q.where(Appointment.patient_id == patient_id)
+            if doctor_id:
+                q = q.where(Appointment.doctor_id == doctor_id)
+            if department_id:
+                q = q.where(Appointment.department_id == department_id)
+            return q
 
-        in_progress = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="In-Progress", appointment_date=appointment_date
+        # Query 1: aggregate over all appointments (no date/status filter) — total + today
+        q_all = _base_filter(
+            select(
+                func.count().label("total"),
+                func.sum(case((Appointment.appointment_date == today, 1), else_=0)).label("today"),
+            ).select_from(Appointment)
         )
-        checked_in = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Check-in", appointment_date=appointment_date
+        all_row = (await self.db.execute(q_all)).one()
+        total_appointments = all_row.total or 0
+        today_appointments = all_row.today or 0
+
+        # Query 2: aggregate status breakdown scoped by date & other optional filters
+        q_status = _base_filter(
+            select(
+                Appointment.appointment_status,
+                Appointment.queue_status,
+                Appointment.admission_status,
+                Appointment.admission_recommended,
+                func.count().label("cnt"),
+            ).select_from(Appointment)
         )
-        checked_out = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Checked-Out", appointment_date=appointment_date
-        )
-        admit_recommended = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admit-recommended", appointment_date=appointment_date
-        )
-        admitted = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admitted", appointment_date=appointment_date
-        )
-        waiting = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="waiting", appointment_date=appointment_date
+        if appointment_date:
+            q_status = q_status.where(Appointment.appointment_date == appointment_date)
+
+        rows = (await self.db.execute(q_status.group_by(
+            Appointment.appointment_status,
+            Appointment.queue_status,
+            Appointment.admission_status,
+            Appointment.admission_recommended,
+        ))).all()
+
+        # Python-side bucketing — matches the semantics of the original count_all filter branches
+        _CONFIRMED_SET = {"Confirmed", "confirmed", "CONFIRMED"}
+        _PENDING_SET = {"Pending", "pending", "PENDING"}
+        _COMPLETED_SET = {"Completed", "completed", "COMPLETED"}
+        _CANCELLED_SET = {"Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled", "No Show", "no show", "NO SHOW", "No-Show", "no-show"}
+        _CHECKED_IN_SET = {"Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"}
+        _CHECKED_OUT_SET = {"Checked-Out", "Checked-out", "checked-out", "Check-out", "Check-Out"}
+        _IN_PROGRESS_STATUS = {"In-Progress", "in-progress", "In-progress", "in_progress", "In_Progress"}
+        _IN_PROGRESS_QUEUE = {"IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"}
+        _WAITING_QUEUE = {"WAITING"}
+        _ADMIT_REC_STATUS = {"Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"}
+        _ADMITTED_STATUS = {"Admitted", "admitted", "ADMITTED"}
+
+        completed = pending = confirmed = in_progress = checked_in = checked_out = 0
+        waiting = admit_recommended = admitted = 0
+        total_scheduled = 0
+
+        for row in rows:
+            appt_status = row.appointment_status or ""
+            queue_status = row.queue_status or ""
+            adm_status = row.admission_status or ""
+            adm_rec = bool(row.admission_recommended)
+            cnt = row.cnt
+
+            if appt_status in _COMPLETED_SET:
+                completed += cnt
+            elif appt_status in _PENDING_SET:
+                pending += cnt
+                total_scheduled += cnt
+            elif appt_status in _CONFIRMED_SET:
+                confirmed += cnt
+                total_scheduled += cnt
+            elif appt_status in _CHECKED_IN_SET:
+                checked_in += cnt
+            elif appt_status in _CHECKED_OUT_SET:
+                checked_out += cnt
+            elif appt_status in _CANCELLED_SET:
+                cancelled_no_show_cnt = cnt  # counted below in total
+                pass
+            elif appt_status in _IN_PROGRESS_STATUS or queue_status in _IN_PROGRESS_QUEUE:
+                in_progress += cnt
+            elif queue_status.upper() in _WAITING_QUEUE:
+                waiting += cnt
+            if appt_status in _ADMIT_REC_STATUS or adm_status in _ADMIT_REC_STATUS or adm_rec:
+                admit_recommended += cnt
+            if appt_status in _ADMITTED_STATUS or adm_status in _ADMITTED_STATUS:
+                admitted += cnt
+
+        # cancelled = CANCELLED + NO_SHOW statuses combined
+        cancelled = sum(
+            row.cnt for row in rows
+            if (row.appointment_status or "") in _CANCELLED_SET
         )
 
         paginated = build_paginated_result(

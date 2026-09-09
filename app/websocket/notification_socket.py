@@ -31,11 +31,18 @@ class NotificationManager:
             conns.remove(websocket)
 
     async def _send_local(self, user_id: int, message: dict):
-        for ws in self.user_connections.get(user_id, []):
+        conns = self.user_connections.get(user_id, [])
+        dead: list = []
+        for ws in conns:
             try:
                 await ws.send_json(message)
             except Exception:
-                pass
+                dead.append(ws)
+        for ws in dead:
+            if ws in conns:
+                conns.remove(ws)
+        if not conns and user_id in self.user_connections:
+            del self.user_connections[user_id]
 
     async def send_to_user(self, user_id: int, message: dict):
         await self._send_local(user_id, message)
@@ -54,12 +61,24 @@ class NotificationManager:
             logger.warning("Failed to publish notification to Redis Pub/Sub: %s", e)
 
     async def broadcast(self, message: dict):
-        for conns in self.user_connections.values():
+        dead_by_user: dict[int, list] = {}
+        for uid, conns in self.user_connections.items():
+            dead: list = []
             for ws in conns:
                 try:
                     await ws.send_json(message)
                 except Exception:
-                    pass
+                    dead.append(ws)
+            if dead:
+                dead_by_user[uid] = dead
+
+        for uid, dead in dead_by_user.items():
+            conns = self.user_connections.get(uid, [])
+            for ws in dead:
+                if ws in conns:
+                    conns.remove(ws)
+            if not conns and uid in self.user_connections:
+                del self.user_connections[uid]
 
         if not settings.REDIS_URL or not self._redis_client:
             return
@@ -123,12 +142,7 @@ class NotificationManager:
                                 message = data.get("message")
 
                                 if user_id is None:
-                                    for conns in self.user_connections.values():
-                                        for ws in conns:
-                                            try:
-                                                await ws.send_json(message)
-                                            except Exception:
-                                                pass
+                                    await self.broadcast(message)
                                 else:
                                     await self._send_local(user_id, message)
 

@@ -37,3 +37,4 @@ async def _refresh_cache() -> None:
         except Exception as exc:
             await db.rollback()
             logger.error("Dashboard cache refresh failed: %s", exc)
+            raise

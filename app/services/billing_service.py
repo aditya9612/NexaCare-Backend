@@ -576,7 +576,65 @@ class BillingService:
     async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int) -> PaymentResponse:
         billing = await self.repo.get_by_id_for_update(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).with_for_update()
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            if invoice.status == "cancelled":
+                raise BadRequestException("Cannot collect payment on cancelled bill")
+            total_amt = invoice.total_amount or 0.0
+            paid_amt = invoice.paid_amount or 0.0
+            balance_due = round(total_amt - paid_amt, 2)
+            if data.amount > balance_due:
+                raise BadRequestException("Payment amount exceeds balance due")
+
+            method = data.payment_method.strip().lower()
+            if method == "cheques":
+                method = "cheque"
+            data.payment_method = method
+
+            txn_ref = data.transaction_ref.strip() if data.transaction_ref else f"PAY-PHR-{invoice.id}"
+            invoice.paid_amount = round(paid_amt + data.amount, 2)
+            invoice.payment_mode = data.payment_method
+            if invoice.paid_amount >= total_amt:
+                invoice.status = "paid"
+            else:
+                invoice.status = "partially_paid"
+
+            await self.db.flush()
+            await self.audit_repo.create("payment", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+
+            from app.services.transaction_history_service import TransactionHistoryService
+            await TransactionHistoryService(self.db).create_event(
+                event_type="PAYMENT_RECEIVED",
+                reference_no=txn_ref,
+                description=f"Payment Received on pharmacy bill {invoice.invoice_number} via {data.payment_method}",
+                amount=data.amount,
+                source_module="payments",
+                source_id=invoice.id,
+                status="completed",
+                user_id=user_id
+            )
+
+            return PaymentResponse(
+                id=invoice.id,
+                billing_id=invoice.id,
+                amount=data.amount,
+                payment_method=data.payment_method,
+                transaction_ref=txn_ref,
+                payment_date=utc_now(),
+                status="completed",
+                is_refund=False,
+                refund_reason=None,
+                created_at=utc_now(),
+            )
+
         if billing.status == BillingStatus.CANCELLED:
             raise BadRequestException("Cannot collect payment on cancelled bill")
         total_amt = billing.total_amount or 0.0
@@ -626,7 +684,66 @@ class BillingService:
     async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int) -> PaymentResponse:
         billing = await self.repo.get_by_id_for_update(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
+            from app.utils.helpers import generate_code
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).with_for_update()
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            if data.amount > (invoice.paid_amount or 0.0):
+                raise BadRequestException("Refund amount exceeds paid amount")
+
+            return_number = generate_code("RET")
+            return_record = PharmacyReturn(
+                return_number=return_number,
+                invoice_id=invoice.id,
+                patient_id=invoice.patient_id,
+                total_refund_amount=data.amount,
+                reason=data.refund_reason,
+                status="completed",
+                processed_by=user_id,
+            )
+            self.db.add(return_record)
+
+            invoice.paid_amount = round(max((invoice.paid_amount or 0.0) - data.amount, 0.0), 2)
+            if invoice.paid_amount == 0 and invoice.total_amount > 0:
+                invoice.status = "refunded"
+            elif invoice.paid_amount < invoice.total_amount:
+                invoice.status = "partially_refunded"
+
+            await self.db.flush()
+            await self.audit_repo.create("refund", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+
+            from app.services.transaction_history_service import TransactionHistoryService
+            await TransactionHistoryService(self.db).create_event(
+                event_type="REFUND_ISSUED",
+                reference_no=return_number,
+                description=f"Refund Issued for pharmacy bill {invoice.invoice_number}: {data.refund_reason or ''}",
+                amount=data.amount,
+                source_module="refunds",
+                source_id=return_record.id,
+                status="completed",
+                user_id=user_id
+            )
+
+            return PaymentResponse(
+                id=return_record.id or invoice.id,
+                billing_id=invoice.id,
+                amount=data.amount,
+                payment_method="refund",
+                transaction_ref=return_number,
+                payment_date=utc_now(),
+                status="completed",
+                is_refund=True,
+                refund_reason=data.refund_reason,
+                created_at=utc_now(),
+            )
+
         if data.amount > billing.paid_amount:
             raise BadRequestException("Refund amount exceeds paid amount")
 
@@ -664,7 +781,60 @@ class BillingService:
     async def generate_invoice(self, billing_id: int, user_id: int) -> tuple[str, bytes]:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
-            raise NotFoundException("Billing record not found")
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+
+            patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
+            patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+            patient_phone = patient.phone if patient else "-"
+            patient_email = patient.email if patient else "-"
+
+            items = [
+                {
+                    "description": (item.medicine.name if item.medicine else f"Medicine #{item.medicine_id}"),
+                    "quantity": item.quantity,
+                    "unit_price": f"{item.unit_price:.2f}",
+                    "gst_rate": f"{invoice.tax_percentage:.1f}",
+                    "line_total": f"{item.line_total:.2f}",
+                }
+                for item in (invoice.items or [])
+            ]
+
+            path, pdf_bytes = await generate_invoice_pdf(
+                invoice.invoice_number,
+                {
+                    "patient_name": patient_name,
+                    "patient_phone": patient_phone,
+                    "patient_email": patient_email,
+                    "date": (invoice.created_at or utc_now()).strftime("%Y-%m-%d"),
+                    "items": items,
+                    "subtotal": f"{invoice.subtotal:.2f}",
+                    "discount_percent": f"{invoice.discount_percentage:.1f}",
+                    "discount_amount": f"{invoice.discount_amount:.2f}",
+                    "gst_rate": f"{invoice.tax_percentage:.1f}",
+                    "gst_amount": f"{invoice.gst_amount:.2f}",
+                    "tax_amount": f"{invoice.tax_amount:.2f}",
+                    "total_amount": f"{invoice.total_amount:.2f}",
+                    "paid_amount": f"{invoice.paid_amount:.2f}",
+                    "balance_amount": f"{max((invoice.total_amount or 0.0) - (invoice.paid_amount or 0.0), 0.0):.2f}",
+                    "status": (invoice.status or "").title(),
+                    "notes": f"Pharmacy Invoice (Prescription #{invoice.prescription_id or '-'})",
+                },
+            )
+            await self.audit_repo.create("export", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return path, pdf_bytes
+
         patient = await self.patient_repo.get_by_id(billing.patient_id)
         patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
         patient_phone = patient.phone if patient else "-"

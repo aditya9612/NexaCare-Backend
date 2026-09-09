@@ -1098,9 +1098,7 @@ class AppointmentService:
             cr_res = await self.db.execute(
                 select(ClinicalRecord).where(ClinicalRecord.appointment_id == appointment.id)
             )
-            clinical_record = cr_res.scalar_one_or_none() if hasattr(cr_res, "scalar_one_or_none") else None
-            if hasattr(clinical_record, "__await__"):
-                clinical_record = await clinical_record
+            clinical_record = cr_res.scalar_one_or_none()
             if isinstance(clinical_record, ClinicalRecord):
                 clinical_record.diagnosis = diagnosis_val
                 if data.notes:

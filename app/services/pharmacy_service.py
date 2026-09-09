@@ -21,7 +21,9 @@ from app.models.pharmacy_model import (
     PurchaseItem,
     Supplier,
 )
+from app.models.inventory_model import Warehouse
 from app.models.user_model import User
+from app.services.stock_movement_service import StockMovementService
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
 from app.repositories.pharmacy_repository import (

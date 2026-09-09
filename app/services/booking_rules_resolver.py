@@ -35,18 +35,51 @@ class BookingRulesResolver:
         and returns the consolidated booking rules.
         """
         
-        # 1. Enforce reserved operation modes
-        if settings.operation_mode in (OperationMode.SHIFT_BASED, OperationMode.CUSTOM):
-            from fastapi import HTTPException
-            raise HTTPException(status_code=501, detail=f"{settings.operation_mode.value.upper()} mode is reserved for a future release.")
+        # 1. Normalize settings attributes
+        if isinstance(settings, dict):
+            op_mode = settings.get("operation_mode", OperationMode.FIXED_HOURS)
+            ws_time = settings.get("working_start_time", time(9, 0))
+            we_time = settings.get("working_end_time", time(18, 0))
+            lunch_enabled = settings.get("lunch_break_enabled", False)
+            lunch_start = settings.get("lunch_start_time")
+            lunch_end = settings.get("lunch_end_time")
+            slot_dur = settings.get("slot_duration_minutes", 30)
+            buf = settings.get("buffer_between_slots_minutes", 0)
+            allow_overlap = settings.get("allow_overlapping", False)
+            max_adv = settings.get("max_advance_booking_days", 30)
+            weekend_enabled = settings.get("weekend_booking_enabled", False)
+        else:
+            op_mode = settings.operation_mode
+            ws_time = settings.working_start_time
+            we_time = settings.working_end_time
+            lunch_enabled = settings.lunch_break_enabled
+            lunch_start = settings.lunch_start_time
+            lunch_end = settings.lunch_end_time
+            slot_dur = settings.slot_duration_minutes
+            buf = settings.buffer_between_slots_minutes
+            allow_overlap = settings.allow_overlapping
+            max_adv = settings.max_advance_booking_days
+            weekend_enabled = settings.weekend_booking_enabled
 
-        # 2. Determine base working hours
-        if settings.operation_mode == OperationMode.TWENTY_FOUR_SEVEN:
+        if isinstance(op_mode, str):
+            try:
+                op_mode = OperationMode(op_mode)
+            except ValueError:
+                pass
+
+        # 2. Enforce reserved operation modes
+        if op_mode in (OperationMode.SHIFT_BASED, OperationMode.CUSTOM, "shift_based", "custom"):
+            from fastapi import HTTPException
+            mode_val = op_mode.value if hasattr(op_mode, "value") else str(op_mode)
+            raise HTTPException(status_code=501, detail=f"{mode_val.upper()} mode is reserved for a future release.")
+
+        # 3. Determine base working hours
+        if op_mode in (OperationMode.TWENTY_FOUR_SEVEN, "twenty_four_seven"):
             base_start = time(0, 0)
             base_end = time(23, 59, 59)
         else:
-            base_start = settings.working_start_time
-            base_end = settings.working_end_time
+            base_start = ws_time
+            base_end = we_time
             
         from datetime import timedelta, time as dt_time, datetime
         
@@ -61,48 +94,27 @@ class BookingRulesResolver:
         base_start = to_time(base_start)
         base_end = to_time(base_end)
 
-        # 3. Trim to doctor's schedule (Hospital boundaries win)
-        effective_start = base_start
-        effective_end = base_end
-        
+        # 4. Determine working hours and slot duration (Doctor's schedule takes precedence if provided)
+        slot_duration = slot_dur
         if doctor_schedule:
-            # Doctor schedule is trimmed to the hospital's base working hours.
-            # If Doctor starts earlier than hospital, they start when hospital opens.
-            doc_start = doctor_schedule.start_time
-            doc_end = doctor_schedule.end_time
-            
-            from datetime import timedelta, time as dt_time, datetime
-            if isinstance(doc_start, timedelta):
-                doc_start = (datetime.min + doc_start).time()
-            elif isinstance(doc_start, str):
-                parts = doc_start.split(":")
-                doc_start = dt_time(int(parts[0]), int(parts[1]), int(parts[2][:2]) if len(parts)>2 else 0)
-                
-            if isinstance(doc_end, timedelta):
-                doc_end = (datetime.min + doc_end).time()
-            elif isinstance(doc_end, str):
-                parts = doc_end.split(":")
-                doc_end = dt_time(int(parts[0]), int(parts[1]), int(parts[2][:2]) if len(parts)>2 else 0)
-            
-            # Find intersection
-            effective_start = max(base_start, doc_start)
-            effective_end = min(base_end, doc_end)
-            
-            # If there is no overlap, effective_start > effective_end, which means no slots.
-            if effective_start > effective_end:
-                effective_start = base_start
-                effective_end = base_start  # 0 duration
+            effective_start = to_time(doctor_schedule.start_time)
+            effective_end = to_time(doctor_schedule.end_time)
+            if doctor_schedule.slot_duration_minutes:
+                slot_duration = doctor_schedule.slot_duration_minutes
+        else:
+            effective_start = base_start
+            effective_end = base_end
             
         return AppointmentBookingRules(
-            slot_duration_minutes=settings.slot_duration_minutes,
+            slot_duration_minutes=slot_duration,
             working_start_time=effective_start,
             working_end_time=effective_end,
-            lunch_break_enabled=settings.lunch_break_enabled,
-            lunch_start_time=to_time(settings.lunch_start_time),
-            lunch_end_time=to_time(settings.lunch_end_time),
-            buffer_between_slots_minutes=settings.buffer_between_slots_minutes,
-            allow_overlapping=settings.allow_overlapping,
-            max_advance_booking_days=settings.max_advance_booking_days,
-            weekend_booking_enabled=settings.weekend_booking_enabled,
-            operation_mode=settings.operation_mode,
+            lunch_break_enabled=lunch_enabled,
+            lunch_start_time=to_time(lunch_start),
+            lunch_end_time=to_time(lunch_end),
+            buffer_between_slots_minutes=buf,
+            allow_overlapping=allow_overlap,
+            max_advance_booking_days=max_adv,
+            weekend_booking_enabled=weekend_enabled,
+            operation_mode=op_mode if isinstance(op_mode, OperationMode) else OperationMode.FIXED_HOURS,
         )

@@ -25,11 +25,16 @@ class AppointmentRepository:
         booking_source: str | None = None,
         sort_by: str = "appointment_date",
         sort_order: str = "desc",
+        start_date: date | None = None,
+        end_date: date | None = None,
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
+        query = self._apply_filters(
+            query, patient_id, doctor_id, department_id, status, appointment_date, start_date, end_date
+        )
         query = self._apply_filters(
             query,
             patient_id,
@@ -55,6 +60,8 @@ class AppointmentRepository:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
         appointment_type: str | None = None,
         booking_source: str | None = None,
         admission_status: str | None = None,
@@ -62,6 +69,9 @@ class AppointmentRepository:
         disposition: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
+        query = self._apply_filters(
+            query, patient_id, doctor_id, department_id, status, appointment_date, start_date, end_date
+        )
         query = self._apply_filters(
             query,
             patient_id,
@@ -77,6 +87,10 @@ class AppointmentRepository:
         )
         return await self.db.scalar(query) or 0
 
+    def _apply_filters(
+        self, query, patient_id, doctor_id, department_id, status, appointment_date,
+        start_date: date | None = None, end_date: date | None = None
+    ):
     def _apply_filters(
         self,
         query,
@@ -166,6 +180,10 @@ class AppointmentRepository:
                     query = query.where(func.lower(Appointment.admission_status) == func.lower(admission_status))
         if appointment_date:
             query = query.where(Appointment.appointment_date == appointment_date)
+        if start_date:
+            query = query.where(Appointment.appointment_date >= start_date)
+        if end_date:
+            query = query.where(Appointment.appointment_date <= end_date)
         if appointment_type:
             query = query.where(
                 func.lower(Appointment.appointment_type) == func.lower(appointment_type.strip())
@@ -285,13 +303,18 @@ class AppointmentRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_today(self, on_date: date | None = None) -> list[Appointment]:
+        if on_date is None:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime
+            on_date = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     async def get_today(self) -> list[Appointment]:
         from app.utils.helpers import get_today_ist
         today = get_today_ist()
         result = await self.db.execute(
             select(Appointment)
             .options(joinedload(Appointment.patient))
-            .where(Appointment.appointment_date == today)
+            .where(Appointment.appointment_date == on_date)
             .order_by(Appointment.appointment_time)
         )
         return list(result.scalars().all())

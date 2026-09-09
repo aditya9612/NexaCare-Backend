@@ -104,9 +104,7 @@ class BillingService:
         if "items" in state.unloaded and billing.id is not None:
             billing = await self.repo.get_by_id(billing.id)
 
-        subtotal = sum(
-            (item.quantity * item.unit_price) for item in billing.items
-        ) if billing.items else billing.subtotal
+        subtotal = sum((item.quantity * item.unit_price) for item in billing.items)
         totals = calculate_bill_totals(
             subtotal=subtotal,
             discount_percent=billing.discount_percent,

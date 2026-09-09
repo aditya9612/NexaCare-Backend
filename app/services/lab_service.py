@@ -391,9 +391,8 @@ class LabService:
             raise NotFoundException("Lab test not found or inactive")
 
         if doctor:
-            # 4. It Should be Possible For Doctor to Only Put Lab Test Id of Lab Tests Created by Him in lab_test_id Field.
-            if test.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only order lab tests created by themselves")
+            # Doctors can order any active lab test
+            pass
 
         # Resolve doctor_id to store in the order
         resolved_doctor_id = data.doctor_id
@@ -435,10 +434,7 @@ class LabService:
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
             if role_name == "doctor":
-                from app.repositories.doctor_repository import DoctorRepository
-                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
-                if doctor:
-                    doctor_id = doctor.id
+                pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
                 result = await self.db.execute(
@@ -952,14 +948,7 @@ class LabService:
             department_id = staff.department_id
             generated_by = current_user.id
         elif role_name == "doctor":
-            from app.models.doctor_model import Doctor
-            doctor_res = await self.db.execute(
-                select(Doctor).where(Doctor.user_id == current_user.id, Doctor.is_deleted == False)
-            )
-            doctor = doctor_res.scalar_one_or_none()
-            if not doctor:
-                raise ForbiddenException("Doctor profile not found")
-            doctor_id = doctor.id
+            pass
         elif role_name == "pharmacist" or role_name in [r.lower() for r in UserRole.ADMIN_ROLES]:
             # Pharmacists and Admins can view all lab reports (no filter applied)
             pass
@@ -1885,10 +1874,7 @@ class LabService:
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
             if role_name == "doctor":
-                from app.repositories.doctor_repository import DoctorRepository
-                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
-                if doctor:
-                    resolved_doctor_id = doctor.id
+                pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
                 result = await self.db.execute(

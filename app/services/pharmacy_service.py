@@ -22,6 +22,7 @@ from app.models.pharmacy_model import (
     PurchaseItem,
     Supplier,
 )
+from app.models.inventory_model import Warehouse
 from app.models.user_model import User
 from app.services.stock_movement_service import StockMovementService
 from app.utils.helpers import generate_code, utc_now

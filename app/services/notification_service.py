@@ -185,12 +185,16 @@ class NotificationService:
             except Exception as e:
                 logger.warning(f"Failed to dispatch email notification to {email}: {e}")
 
-        # 4. SMS Channel (Async & Fault-Tolerant)
+        # 4. SMS & WhatsApp Channel (Async & Fault-Tolerant)
         if phone:
             try:
                 send_sms_async.delay(phone, message)
             except Exception as e:
                 logger.warning(f"Failed to dispatch SMS notification to {phone}: {e}")
+            try:
+                asyncio.create_task(send_whatsapp(phone, message))
+            except Exception as e:
+                logger.warning(f"Failed to dispatch WhatsApp notification to {phone}: {e}")
 
         # 5. Browser Push Channel (Async & Fault-Tolerant via Celery)
         try:

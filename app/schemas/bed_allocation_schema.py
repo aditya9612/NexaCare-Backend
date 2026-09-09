@@ -335,3 +335,19 @@ class ICUAnalyticsResponse(BaseModel):
     occupied_icu_beds: int
     available_icu_beds: int
     icu_utilization_percentage: float
+
+
+class BedExportResponse(BaseSchema):
+    floor: str = Field(..., description="Floor Name or Number")
+    room_number: int = Field(..., description="Room Number")
+    room_type: str = Field(..., description="Room Type")
+    bed_id: int = Field(..., description="Bed ID")
+    bed_name: Optional[str] = Field(None, description="Bed Name")
+    bed_type: str = Field(..., description="Bed Type")
+    status: str = Field(..., description="Bed Status (Available, Occupied, Cleaning, Maintenance, Reserved)")
+    patient_id: Optional[int] = Field(None, description="Patient ID")
+    patient_code: Optional[str] = Field(None, description="Patient UHID / Code")
+    patient_name: Optional[str] = Field(None, description="Patient Full Name")
+    disease: Optional[str] = Field(None, description="Patient Disease / Diagnosis")
+    admission_date: Optional[datetime] = Field(None, description="Admission Date and Time")
+

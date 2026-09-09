@@ -317,6 +317,7 @@ class PublicService:
             
         # 3. Create appointment
         token = await self.repo.get_next_token(data.doctor_id, data.date)
+        queue_tok = await self.repo.get_next_queue_token(data.date)
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             patient_id=patient.id,
@@ -326,6 +327,8 @@ class PublicService:
             appointment_time=data.time_slot,
             symptoms=data.symptoms,
             token_number=token,
+            queue_token=queue_tok,
+            queue_status="WAITING",
             appointment_status=AppointmentStatus.PENDING,
         )
         appointment = await self.repo.create(appointment)
@@ -492,6 +495,7 @@ class PublicService:
                 
         # 5. Create appointment
         token = await self.repo.get_next_token(data.doctor_id, data.booking_date)
+        queue_tok = await self.repo.get_next_queue_token(data.booking_date)
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             patient_id=patient.id,
@@ -502,6 +506,8 @@ class PublicService:
             symptoms=f"Symptom Specialty: {data.specialty}",
             notes=notes,
             token_number=token,
+            queue_token=queue_tok,
+            queue_status="WAITING",
             appointment_status=AppointmentStatus.PENDING,
         )
         appointment = await self.repo.create(appointment)

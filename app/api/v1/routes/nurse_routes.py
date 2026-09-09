@@ -105,7 +105,7 @@ async def search_nurses(
 async def get_nurse_dashboard(
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("nurse", "read")),
+    _: User = Depends(require_permission("nurses", "read")),
 ):
     result = await NurseService(db).get_dashboard_overview(current_user)
     return APIResponse(message="Nurse dashboard summary retrieved", data=result)

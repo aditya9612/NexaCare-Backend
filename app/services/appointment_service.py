@@ -7,6 +7,7 @@ from app.core.exceptions import BadRequestException, ConflictException, NotFound
 from app.models.appointment_model import Appointment
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.discharge_repository import DischargeRepository
 from app.repositories.doctor_repository import DoctorRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.appointment_schema import (
@@ -41,6 +42,7 @@ class AppointmentService:
         self.validation_service = BookingValidationService(db)
         self.audit_repo = AuditRepository(db)
         self.doctor_repo = DoctorRepository(db)
+        self.discharge_repo = DischargeRepository(db)
 
     def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> tuple[date, time]:
         from datetime import timezone, timedelta
@@ -120,8 +122,9 @@ class AppointmentService:
         )
 
         # Calculate summary counts independently of pagination and status/date filters where appropriate
-        from app.utils.helpers import utc_now
+        from app.utils.helpers import get_today_ist, utc_now
         today = utc_now().date()
+        today_ist = get_today_ist()
         
         total_appointments = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
@@ -130,6 +133,7 @@ class AppointmentService:
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
             appointment_date=today
         )
+        total_today_discharged = await self.discharge_repo.count_today_discharged(on_date=today_ist)
         total_scheduled = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
             status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date
@@ -189,6 +193,7 @@ class AppointmentService:
             "today_appointments": today_appointments,
             "total_today_appointments": today_appointments,
             "total_today_tokens": today_appointments,
+            "total_today_discharged": total_today_discharged,
             "total_scheduled": total_scheduled,
             "completed": completed,
             "cancelled": cancelled,

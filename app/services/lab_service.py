@@ -80,17 +80,34 @@ class LabService:
             raise BadRequestException("Department ID is required to create lab test.")
         await self._validate_department(data.department_id)
         await self._validate_doctor_department(user_id, data.department_id)
+
+        normalized_name = (data.test_name or "").strip()
+        if not normalized_name:
+            raise BadRequestException("Test name cannot be blank.")
+
+        existing_test = await self.test_repo.get_by_name(normalized_name)
+        if existing_test:
+            raise BadRequestException("Lab test with this name already exists.")
         
         from app.models.doctor_model import Doctor
         from sqlalchemy import select
+        from sqlalchemy.exc import IntegrityError
+
         result = await self.db.execute(
             select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
         )
         doctor = result.scalar_one_or_none()
         doctor_id = doctor.id if doctor else None
 
-        test = LabTest(test_code=generate_lab_test_code(), doctor_id=doctor_id, **data.model_dump())
-        test = await self.test_repo.create(test)
+        dump = data.model_dump()
+        dump["test_name"] = normalized_name
+        test = LabTest(test_code=generate_lab_test_code(), doctor_id=doctor_id, **dump)
+        try:
+            test = await self.test_repo.create(test)
+        except IntegrityError:
+            await self.db.rollback()
+            raise BadRequestException("Lab test with this name already exists.")
+
         await self.audit_repo.create("create", "lab", user_id=user_id, resource_id=str(test.id))
         return LabTestResponse.model_validate(test)
 
@@ -343,6 +360,14 @@ class LabService:
                 resolved_doctor_id = appointment.doctor_id
 
         await self._validate_department(test.department_id)
+
+        # Check for existing active/valid order for this patient and lab test
+        existing_order = await self.order_repo.get_active_order_by_patient_and_test(
+            patient_id=data.patient_id,
+            lab_test_id=data.lab_test_id,
+        )
+        if existing_order:
+            raise BadRequestException("Lab test order already exists for this patient.")
 
         # Prepare the TestOrder data dictionary
         order_data = data.model_dump()
@@ -670,6 +695,11 @@ class LabService:
                 raise BadRequestException(
                     "You can enter test results only for test orders of your department"
             )     
+
+        existing_result = await self.result_repo.get_by_test_order(sample.test_order_id)
+        if existing_result:
+            raise BadRequestException("Test result already exists for this test order.")
+
         document_url = None
 
         if document:
@@ -831,6 +861,59 @@ class LabService:
         return alerts        
     
     # --- Reports ---
+    async def _generate_report_pdf(self, report: LabReport, order) -> str:
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from sqlalchemy import select
+
+        patient = await self.db.get(Patient, order.patient_id)
+        doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
+
+        result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
+        results = list(result_objs.scalars().all())
+
+        columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
+        rows = [
+            [
+                r.parameter_name,
+                r.result_value,
+                r.unit or "-",
+                r.normal_range or "-",
+                "Yes" if r.is_critical else "No"
+            ]
+            for r in results
+        ]
+
+        if report.approved_at:
+            generated_at_str = report.approved_at.strftime("%Y-%m-%d %H:%M:%S")
+        elif report.generated_at:
+            generated_at_str = report.generated_at.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            generated_at_str = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+
+        report_data = {
+            "order_number": order.order_number,
+            "status": report.status,
+            "generated_at": generated_at_str,
+            "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
+            "patient_code": patient.patient_code if patient else "Unknown",
+            "patient_gender": patient.gender if patient else "Unknown",
+            "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
+            "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
+            "doctor_code": doctor.doctor_code if doctor else "",
+            "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
+            "test_category": order.lab_test.category if order.lab_test else "Unknown",
+            "summary": report.summary or report.remarks or "",
+            "columns": columns,
+            "rows": rows,
+        }
+
+        path = await generate_lab_report_html(
+            report.report_number,
+            report_data,
+        )
+        return path
+
     async def create_report(self, data: LabReportCreate, current_user) -> LabReportResponse:
         result = await self.result_repo.get_by_id(data.test_result_id)
         if not result:
@@ -876,14 +959,27 @@ class LabService:
                     "You can create lab reports only for test orders of your department"
                 )        
                
+        remarks = getattr(data, "remarks", None) or data.summary or result.remark
+        summary = data.summary or result.remark
+
         report = LabReport(
             test_order_id=result.test_order_id,
             report_number=generate_lab_report_number(),
-            summary=data.summary,
+            summary=summary,
+            remarks=remarks,
             status=LabReportStatus.DRAFT,
             generated_at=utc_now(),
             generated_by=current_user.id,
-            )
+            approved_by=None,
+            approved_at=None,
+        )
+
+        try:
+            report.report_path = await self._generate_report_pdf(report, order)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to generate report PDF during create_report: {e}")
+
         report = await self.report_repo.create(report)
         await self.audit_repo.create("create", "lab_report", user_id=current_user.id, resource_id=str(report.id))
         return LabReportResponse.model_validate(report)
@@ -1019,8 +1115,12 @@ class LabService:
         report.status = LabReportStatus.APPROVED if data.approved else LabReportStatus.REJECTED
         report.approved_by = current_user.id
         report.approved_at = utc_now()
-        if data.remark:
-            report.summary = data.remark
+
+        approval_remark = getattr(data, "remarks", None) or data.remark or report.remarks
+        if approval_remark:
+            report.remarks = approval_remark
+            if not report.summary or (getattr(data, "remarks", None) or data.remark):
+                report.summary = approval_remark
 
         order = await self.order_repo.get_by_id(report.test_order_id)
         if order and data.approved:
@@ -1028,50 +1128,11 @@ class LabService:
             order.completed_at = utc_now()
             await self.order_repo.update(order)
 
-            from app.models.patient_model import Patient
-            from app.models.doctor_model import Doctor
-            from sqlalchemy import select
-
-            patient = await self.db.get(Patient, order.patient_id)
-            doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
-            
-            result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
-            results = list(result_objs.scalars().all())
-
-            columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
-            rows = [
-                [
-                    r.parameter_name,
-                    r.result_value,
-                    r.unit or "-",
-                    r.normal_range or "-",
-                    "Yes" if r.is_critical else "No"
-                ]
-                for r in results
-            ]
-
-            report_data = {
-                "order_number": order.order_number,
-                "status": report.status,
-                "generated_at": report.approved_at.strftime("%Y-%m-%d %H:%M:%S") if report.approved_at else utc_now().strftime("%Y-%m-%d %H:%M:%S"),
-                "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
-                "patient_code": patient.patient_code if patient else "Unknown",
-                "patient_gender": patient.gender if patient else "Unknown",
-                "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
-                "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
-                "doctor_code": doctor.doctor_code if doctor else "",
-                "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
-                "test_category": order.lab_test.category if order.lab_test else "Unknown",
-                "summary": report.summary or "",
-                "columns": columns,
-                "rows": rows,
-            }
-
-            path = await generate_lab_report_html(
-                report.report_number,
-                report_data,
-            )
-            report.report_path = path
+            try:
+                report.report_path = await self._generate_report_pdf(report, order)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to regenerate report PDF during approve_report: {e}")
 
         report = await self.report_repo.update(report)
         await self.audit_repo.create(

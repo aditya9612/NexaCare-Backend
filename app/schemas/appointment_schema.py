@@ -349,6 +349,7 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     waiting: int = 0
     total_today_appointments: int = 0
     total_today_tokens: int = 0
+    total_today_discharged: int = 0
 
 
 class TodayAppointmentsResponse(BaseSchema):

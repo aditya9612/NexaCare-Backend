@@ -1,4 +1,5 @@
-from sqlalchemy import desc, select
+from datetime import date
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -66,3 +67,18 @@ class DischargeRepository:
         await self.db.flush()
         await self.db.refresh(discharge)
         return discharge
+
+    async def count_today_discharged(self, on_date: date | None = None) -> int:
+        from app.utils.helpers import get_today_ist
+        target_date = on_date or get_today_ist()
+        query = (
+            select(func.count(func.distinct(Discharge.patient_id)))
+            .where(
+                func.date(Discharge.discharge_date) == target_date,
+                or_(
+                    Discharge.discharge_status.is_(None),
+                    func.upper(Discharge.discharge_status) != "CANCELLED",
+                ),
+            )
+        )
+        return await self.db.scalar(query) or 0

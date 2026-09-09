@@ -147,11 +147,13 @@ class TestResultResponse(BaseSchema):
 class LabReportCreate(BaseSchema):
     test_result_id: int
     summary: str | None = None
+    remarks: str | None = None
 
 
 class LabReportApprove(BaseSchema):
     approved: bool = True
     remark: str | None = None
+    remarks: str | None = None
 
 
 class RejectLabReportRequest(BaseSchema):

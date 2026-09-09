@@ -112,6 +112,33 @@ class BedAllocationRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    async def list_beds(
+        self,
+        status: Optional[str] = None,
+        bed_type: Optional[str] = None,
+        room_id: Optional[int] = None,
+        floor_id: Optional[int] = None,
+    ) -> List[Bed]:
+        query = (
+            select(Bed)
+            .join(Bed.room)
+            .options(
+                selectinload(Bed.patient),
+                selectinload(Bed.room).selectinload(Room.floor),
+            )
+        )
+        if status:
+            query = query.where(func.lower(Bed.status) == status.strip().lower())
+        if bed_type:
+            query = query.where(func.lower(Bed.type) == bed_type.strip().lower())
+        if room_id is not None:
+            query = query.where(Bed.room_id == room_id)
+        if floor_id is not None:
+            query = query.where(Room.floor_id == floor_id)
+        query = query.order_by(Bed.id.asc())
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def list_icu_beds(self) -> List[Bed]:
         query = (
             select(Bed)

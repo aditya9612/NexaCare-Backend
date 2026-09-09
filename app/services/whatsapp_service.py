@@ -21,6 +21,8 @@ from app.schemas.whatsapp_schema import (
     WhatsAppAnalyticsResponse,
     WhatsAppMessageResponse,
 )
+from app.core.config import settings
+from app.utils.exotel_client import exotel_client
 from app.utils.helpers import generate_campaign_code, utc_now
 from app.utils.pagination import build_paginated_result
 from app.utils.redis_service import cache_get, cache_set
@@ -159,7 +161,19 @@ class WhatsAppService:
 
         sent = False
         provider_id = None
-        if twilio_client.is_configured:
+        provider_name = (settings.DEFAULT_TELEPHONY_PROVIDER or "").lower()
+
+        if provider_name == "exotel" and exotel_client.is_configured:
+            try:
+                result = await exotel_client.send_whatsapp(
+                    message.phone_number, message.message_content, message.media_url
+                )
+                provider_id = result.get("sid")
+                sent = True
+            except Exception as exc:
+                logger.error("Exotel WhatsApp failed: %s", exc)
+                message.failure_reason = str(exc)
+        elif twilio_client.is_configured:
             try:
                 result = await twilio_client.send_whatsapp(
                     message.phone_number, message.message_content, message.media_url
@@ -168,6 +182,16 @@ class WhatsAppService:
                 sent = True
             except Exception as exc:
                 logger.error("Twilio WhatsApp failed: %s", exc)
+                message.failure_reason = str(exc)
+        elif exotel_client.is_configured:
+            try:
+                result = await exotel_client.send_whatsapp(
+                    message.phone_number, message.message_content, message.media_url
+                )
+                provider_id = result.get("sid")
+                sent = True
+            except Exception as exc:
+                logger.error("Exotel WhatsApp failed: %s", exc)
                 message.failure_reason = str(exc)
         else:
             sent = await send_whatsapp(message.phone_number, message.message_content)

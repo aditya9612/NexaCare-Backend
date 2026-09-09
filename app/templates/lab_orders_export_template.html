@@ -84,8 +84,8 @@
       <tr>
         <th class="short-col" style="width: 4%;">Sr. No.</th>
         <th class="wrap-col" style="width: 9%;">Order Number</th>
-        <th class="wrap-col" style="width: 13%;">Patient Info</th>
-        <th class="wrap-col" style="width: 13%;">Doctor Info</th>
+        <th class="wrap-col" style="width: 13%;">Patient Name</th>
+        <th class="wrap-col" style="width: 13%;">Doctor Name</th>
         <th class="wrap-col" style="width: 22%;">Lab Test Details</th>
         <th class="wrap-col" style="width: 14%;">Appointment / Dept</th>
         <th class="wrap-col" style="width: 8%;">Status / Priority</th>
@@ -98,9 +98,8 @@
       <tr>
         <td class="short-col">{{ loop.index }}</td>
         <td class="wrap-col">{{ item.order_number }}</td>
-        <td class="wrap-col">ID: {{ item.patient_id }}<br />{{ item.patient_name or "" }}</td>
-        <td class="wrap-col">{% if item.doctor_id %}ID: {{ item.doctor_id }}<br />{{ item.doctor_name or "" }}{% else
-          %}-{% endif %}</td>
+        <td class="wrap-col">{{ item.patient_name or "" }}</td>
+        <td class="wrap-col">{% if item.doctor_id %}{{ item.doctor_name or "" }}{% else %}-{% endif %}</td>
         <td class="wrap-col">
           Code: {{ item.lab_test_test_code or "-" }}<br />
           Name: {{ item.lab_test_test_name or "-" }}<br />

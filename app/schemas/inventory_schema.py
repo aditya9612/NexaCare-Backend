@@ -150,6 +150,7 @@ class InventoryItemResponse(BaseSchema):
 class StockTransactionCreate(BaseSchema):
     item_id: int = Field(..., gt=0)
     warehouse_id: Optional[int] = Field(None, gt=0)
+    batch_id: Optional[int] = Field(None, gt=0)
     transaction_type: Optional[str] = None
     type: Optional[str] = None
     quantity: int = Field(..., ge=1)

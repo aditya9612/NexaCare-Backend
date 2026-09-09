@@ -21,7 +21,9 @@ from app.models.pharmacy_model import (
     PurchaseItem,
     Supplier,
 )
+from app.models.inventory_model import Warehouse
 from app.models.user_model import User
+from app.services.stock_movement_service import StockMovementService
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
 from app.repositories.pharmacy_repository import (
@@ -1026,10 +1028,21 @@ class PharmacyService:
         resp.items = [PharmacyReturnItemResponse.model_validate(i) for i in ret.items]
         return resp
 
-    async def list_invoices(self, page: int = 1, size: int = 20):
+    async def list_invoices(
+        self,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None,
+        patient_name: str | None = None,
+        invoice_date: date | None = None,
+    ):
         skip = (page - 1) * size
-        items = await self.invoice_repo.list_all(skip=skip, limit=size)
-        total = await self.invoice_repo.count_all()
+        items = await self.invoice_repo.list_all(
+            skip=skip, limit=size, status=status, patient_name=patient_name, invoice_date=invoice_date
+        )
+        total = await self.invoice_repo.count_all(
+            status=status, patient_name=patient_name, invoice_date=invoice_date
+        )
         return build_paginated_result([self._invoice_response(i) for i in items], total, page, size)
 
     def _invoice_response(self, invoice: PharmacyInvoice) -> PharmacyInvoiceResponse:

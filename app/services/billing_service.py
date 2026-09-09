@@ -601,6 +601,11 @@ class BillingService:
             raise BadRequestException("Cannot collect payment on cancelled bill")
         total_amt = billing.total_amount or 0.0
         paid_amt = billing.paid_amount or 0.0
+
+        b_status = str(billing.status).strip().lower() if billing.status else ""
+        if b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt):
+            raise BadRequestException("Payment record already exists for this bill")
+
         balance_due = round(total_amt - paid_amt, 2)
         if data.amount > balance_due:
             raise BadRequestException("Payment amount exceeds balance due")

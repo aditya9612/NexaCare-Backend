@@ -39,6 +39,10 @@ class TransactionService:
                     raise BadRequestException("Refund amount exceeds paid amount")
                 billing.paid_amount = round(paid_amt - data.amount, 2)
             else:
+                b_status = str(billing.status).strip().lower() if billing.status else ""
+                if b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt):
+                    raise BadRequestException("Payment record already exists for this bill")
+
                 balance_due = round(total_amt - paid_amt, 2)
                 if data.amount > balance_due:
                     raise BadRequestException("Payment amount exceeds balance due")

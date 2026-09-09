@@ -242,7 +242,7 @@ class StockTransactionRepository:
             )
             .join(InventoryItem, InventoryItem.id == StockTransaction.item_id)
             .where(
-                StockTransaction.transaction_type == "consumption",
+                func.lower(StockTransaction.transaction_type) == "consumption",
                 StockTransaction.transaction_date >= start,
                 StockTransaction.transaction_date <= end,
             )
@@ -335,6 +335,7 @@ class ReorderAlertRepository:
     async def list_active(self, skip: int = 0, limit: int = 50) -> list[ReorderAlert]:
         result = await self.db.execute(
             select(ReorderAlert)
+            .options(selectinload(ReorderAlert.item))
             .where(ReorderAlert.status == "active")
             .order_by(ReorderAlert.created_at.desc())
             .offset(skip)

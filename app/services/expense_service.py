@@ -656,11 +656,13 @@ class ExpenseService:
 
         # Fetch all existing active/non-deleted vendor payments for the selected expense
         existing_payments = await self.payment_repo.get_payments_by_expense(expense.id)
+
+        exp_status = str(expense.status).strip().lower() if expense.status else ""
+        if existing_payments or exp_status == "paid":
+            raise BadRequestException("Payment record already exists for this expense")
+
         total_paid = sum(p.amount for p in existing_payments)
         remaining_amount = round(expense.amount - total_paid, 2)
-
-        if remaining_amount <= 0:
-            raise BadRequestException("Vendor payment has already been fully paid for this expense")
 
         if data.amount > remaining_amount:
             raise BadRequestException("Payment amount exceeds remaining expense amount")

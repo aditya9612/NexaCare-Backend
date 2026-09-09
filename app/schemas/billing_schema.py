@@ -18,6 +18,7 @@ class BillItemCreate(BaseSchema):
     unit_price: float = Field(..., ge=0)
     gst_rate: float = Field(18.0, ge=0, le=18.0)
     item_type: str = "service"
+    reference_id: Optional[int] = None
 
 
 class BillItemResponse(BaseSchema):

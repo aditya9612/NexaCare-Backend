@@ -5,6 +5,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.bed_allocation_model import Bed
 from app.models.discharge_model import Discharge
+from app.models.doctor_model import Doctor
 
 
 class DischargeRepository:
@@ -18,7 +19,7 @@ class DischargeRepository:
             .options(
                 selectinload(Discharge.appointment),
                 selectinload(Discharge.patient),
-                selectinload(Discharge.doctor),
+                selectinload(Discharge.doctor).selectinload(Doctor.department),
                 selectinload(Discharge.bed).selectinload(Bed.room),
                 selectinload(Discharge.billing),
             )
@@ -34,7 +35,7 @@ class DischargeRepository:
             .options(
                 selectinload(Discharge.appointment),
                 selectinload(Discharge.patient),
-                selectinload(Discharge.doctor),
+                selectinload(Discharge.doctor).selectinload(Doctor.department),
                 selectinload(Discharge.bed).selectinload(Bed.room),
                 selectinload(Discharge.billing),
             )
@@ -50,7 +51,7 @@ class DischargeRepository:
             .options(
                 selectinload(Discharge.appointment),
                 selectinload(Discharge.patient),
-                selectinload(Discharge.doctor),
+                selectinload(Discharge.doctor).selectinload(Doctor.department),
                 selectinload(Discharge.bed).selectinload(Bed.room),
             )
         )

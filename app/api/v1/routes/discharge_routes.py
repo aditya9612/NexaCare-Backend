@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -259,3 +259,24 @@ async def get_gate_pass(
         message="Gate pass retrieved successfully",
         data=gate_pass,
     )
+
+
+@router.get("/{discharge_id}/gate-pass/download")
+async def download_gate_pass(
+    discharge_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    """
+    Download official Security Gate Pass PDF for discharged patient.
+    """
+    pdf_bytes = await DischargeService(db).download_gate_pass_pdf(discharge_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=gate_pass_{discharge_id}.pdf"
+        },
+    )
+

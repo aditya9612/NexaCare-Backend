@@ -55,26 +55,35 @@ class Appointment(Base, TimestampMixin):
 
     @property
     def patient_name(self) -> str | None:
-        if not self.patient:
+        try:
+            if "patient" not in self.__dict__ or not self.patient:
+                return None
+            return f"{self.patient.first_name or ''} {self.patient.last_name or ''}".strip() or None
+        except Exception:
             return None
-        return f"{self.patient.first_name or ''} {self.patient.last_name or ''}".strip() or None
 
     @property
     def age(self) -> int | None:
-        if not self.patient or not self.patient.dob:
+        try:
+            if "patient" not in self.__dict__ or not self.patient or not self.patient.dob:
+                return None
+            today = date.today()
+            dob = self.patient.dob
+            return (
+                today.year
+                - dob.year
+                - ((today.month, today.day) < (dob.month, dob.day))
+            )
+        except Exception:
             return None
-        today = date.today()
-        dob = self.patient.dob
-        return (
-            today.year
-            - dob.year
-            - ((today.month, today.day) < (dob.month, dob.day))
-        )
 
     @property
     def patient_mobile_number(self) -> str | None:
-        if not self.patient:
+        try:
+            if "patient" not in self.__dict__ or not self.patient:
+                return None
+            return self.patient.phone
+        except Exception:
             return None
-        return self.patient.phone
 
 

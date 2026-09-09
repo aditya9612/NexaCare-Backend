@@ -1,5 +1,6 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
@@ -20,6 +21,7 @@ from app.schemas.bed_allocation_schema import (
     BedActivityLogResponse,
     BedAnalyticsSummaryResponse,
     ICUAnalyticsResponse,
+    BedExportResponse,
 )
 from app.services.bed_allocation_service import BedAllocationService
 
@@ -50,6 +52,17 @@ async def list_floors(
         room_type=room_type,
     )
     return APIResponse(message="Floors retrieved successfully", data=floors)
+
+
+@router.get("/floors/{floorId}", response_model=APIResponse[FloorResponse])
+async def get_floor(
+    floorId: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("bed_allocation", "read")),
+):
+    floor = await BedAllocationService(db).get_floor(floorId)
+    return APIResponse(message="Floor retrieved successfully", data=floor)
 
 
 @router.post("/floors", response_model=APIResponse[FloorResponse], status_code=201)
@@ -123,6 +136,36 @@ async def delete_room(
 
 
 # 3. Bed Routes
+@router.get("/beds", response_model=APIResponse[List[BedResponse]])
+async def list_beds(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("bed_allocation", "read")),
+    status: Optional[str] = Query(None, description="Filter beds by status (e.g. Available, Occupied, Cleaning, Maintenance, Reserved)"),
+    bed_type: Optional[str] = Query(None, description="Filter beds by type (e.g. ICU, General, Ventilator, Deluxe)"),
+    room_id: Optional[int] = Query(None, description="Filter beds by Room ID"),
+    floor_id: Optional[int] = Query(None, description="Filter beds by Floor ID"),
+):
+    beds = await BedAllocationService(db).list_beds(
+        status=status,
+        bed_type=bed_type,
+        room_id=room_id,
+        floor_id=floor_id,
+    )
+    return APIResponse(message="Beds retrieved successfully", data=beds)
+
+
+@router.get("/beds/{bedId}", response_model=APIResponse[BedResponse])
+async def get_bed(
+    bedId: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("bed_allocation", "read")),
+):
+    bed = await BedAllocationService(db).get_bed(bedId)
+    return APIResponse(message="Bed retrieved successfully", data=bed)
+
+
 @router.post("/rooms/{roomId}/beds", response_model=APIResponse[BedResponse], status_code=201)
 async def create_bed(
     roomId: int,
@@ -254,4 +297,59 @@ async def mark_cleaning_complete(
     """
     bed = await BedAllocationService(db).mark_cleaning_complete(bedId, current_user.id, notes)
     return APIResponse(message="Bed cleaning completed and bed is now Available", data=bed)
+
+
+# 8. Export Bed Allocation Data Routes
+@router.get("/export", response_model=APIResponse[List[BedExportResponse]])
+async def export_bed_allocation(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("bed_allocation", "read")),
+    format: Optional[str] = Query("json", description="Export format: 'json', 'csv', or 'excel'"),
+    floor_id: Optional[int] = Query(None, description="Filter by Floor ID"),
+    status: Optional[str] = Query(None, description="Filter by Bed Status (Available, Occupied, Cleaning, Maintenance, Reserved)"),
+    room_id: Optional[int] = Query(None, description="Filter by Room ID"),
+    bed_type: Optional[str] = Query(None, description="Filter by Bed Type"),
+):
+    """
+    Export Bed Allocation Management data including Floor, Room Number, Room Type,
+    Bed ID, Bed Type, Status, Patient ID, Patient Name, Disease, and Admission Date.
+    Supports JSON, CSV, and Excel formats.
+    """
+    service = BedAllocationService(db)
+    fmt_lower = (format or "json").strip().lower()
+
+    if fmt_lower == "csv":
+        csv_data = await service.export_bed_data_csv(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+        )
+        return Response(
+            content=csv_data,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=bed_allocation_export.csv"},
+        )
+    elif fmt_lower == "excel":
+        excel_io = await service.export_bed_data_excel(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+        )
+        return StreamingResponse(
+            excel_io,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=bed_allocation_export.xlsx"},
+        )
+    else:
+        items = await service.export_bed_data(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+        )
+        return APIResponse(message="Bed allocation export data retrieved successfully", data=items)
+
 

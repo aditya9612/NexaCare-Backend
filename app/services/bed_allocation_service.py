@@ -1,3 +1,4 @@
+import io
 from typing import List, Optional
 from fastapi import HTTPException
 from sqlalchemy import desc, select
@@ -28,6 +29,7 @@ from app.schemas.bed_allocation_schema import (
     BedTransferRequest,
     BedAnalyticsSummaryResponse,
     ICUAnalyticsResponse,
+    BedExportResponse,
 )
 from app.utils.helpers import generate_admission_number, utc_now
 
@@ -304,6 +306,28 @@ class BedAllocationService:
             bed.admission_date = None
         return bed
 
+    async def list_beds(
+        self,
+        status: Optional[str] = None,
+        bed_type: Optional[str] = None,
+        room_id: Optional[int] = None,
+        floor_id: Optional[int] = None,
+    ) -> List[Bed]:
+        beds = await self.repo.list_beds(
+            status=status,
+            bed_type=bed_type,
+            room_id=room_id,
+            floor_id=floor_id,
+        )
+        for bed in beds:
+            if bed.patient and getattr(bed.patient, "is_deleted", False):
+                bed.status = "Available"
+                bed.patient_id = None
+                bed.patient = None
+                bed.allocation_time = None
+                bed.admission_date = None
+        return beds
+
     async def create_bed(self, room_id: int, data: BedCreate) -> Bed:
         room = await self.get_room(room_id)
 
@@ -515,6 +539,8 @@ class BedAllocationService:
 
         # Execute Bed Allocation
         appointment.admission_status = AdmissionStatus.ADMITTED
+        appointment.appointment_type = "IPD"
+        appointment.queue_status = "COMPLETED"
         appointment.appointment_type = AppointmentType.IPD.value
         appointment.admission_recommended = True
         appointment.admission_number = appointment.admission_number or generate_admission_number()
@@ -742,4 +768,196 @@ class BedAllocationService:
         await self.repo.create_activity_log(log)
         await self.db.flush()
         return bed
+
+    # Export Bed Allocation Data
+    async def export_bed_data(
+        self,
+        floor_id: Optional[int] = None,
+        status: Optional[str] = None,
+        room_id: Optional[int] = None,
+        bed_type: Optional[str] = None,
+    ) -> List[BedExportResponse]:
+        beds = await self.repo.list_beds(
+            status=status,
+            bed_type=bed_type,
+            room_id=room_id,
+            floor_id=floor_id,
+        )
+
+        export_items: List[BedExportResponse] = []
+        for bed in beds:
+            floor_label = "N/A"
+            room_num = 0
+            room_typ = "N/A"
+
+            if bed.room:
+                room_num = bed.room.number
+                room_typ = bed.room.type or "N/A"
+                if bed.room.floor:
+                    if bed.room.floor.name and bed.room.floor.name != f"Floor {bed.room.floor.number}":
+                        floor_label = f"Floor {bed.room.floor.number} - {bed.room.floor.name}"
+                    else:
+                        floor_label = f"Floor {bed.room.floor.number}"
+
+            p_id = None
+            p_code = None
+            p_name = None
+            disease = None
+            adm_date = None
+
+            if bed.patient and not getattr(bed.patient, "is_deleted", False) and bed.status == "Occupied":
+                p_id = bed.patient.id
+                p_code = getattr(bed.patient, "patient_code", None)
+                p_name = f"{bed.patient.first_name} {bed.patient.last_name}".strip()
+                disease = bed.patient.diagnosis or bed.patient.chronic_disease or None
+                adm_date = bed.admission_date or bed.allocation_time
+
+            export_items.append(
+                BedExportResponse(
+                    floor=floor_label,
+                    room_number=room_num,
+                    room_type=room_typ,
+                    bed_id=bed.id,
+                    bed_name=bed.name,
+                    bed_type=bed.type or "General",
+                    status=bed.status or "Available",
+                    patient_id=p_id,
+                    patient_code=p_code,
+                    patient_name=p_name,
+                    disease=disease,
+                    admission_date=adm_date,
+                )
+            )
+        return export_items
+
+    async def export_bed_data_csv(
+        self,
+        floor_id: Optional[int] = None,
+        status: Optional[str] = None,
+        room_id: Optional[int] = None,
+        bed_type: Optional[str] = None,
+    ) -> str:
+        import csv
+        import io
+
+        items = await self.export_bed_data(floor_id=floor_id, status=status, room_id=room_id, bed_type=bed_type)
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write Header
+        writer.writerow([
+            "Floor",
+            "Room Number",
+            "Room Type",
+            "Bed ID",
+            "Bed Name",
+            "Bed Type",
+            "Status",
+            "Patient ID",
+            "Patient Name",
+            "Disease",
+            "Admission Date",
+        ])
+
+        for item in items:
+            adm_str = item.admission_date.strftime("%Y-%m-%d %H:%M:%S") if item.admission_date else ""
+            writer.writerow([
+                item.floor,
+                item.room_number,
+                item.room_type,
+                item.bed_id,
+                item.bed_name or "",
+                item.bed_type,
+                item.status,
+                item.patient_id or "",
+                item.patient_name or "",
+                item.disease or "",
+                adm_str,
+            ])
+
+        return output.getvalue()
+
+    async def export_bed_data_excel(
+        self,
+        floor_id: Optional[int] = None,
+        status: Optional[str] = None,
+        room_id: Optional[int] = None,
+        bed_type: Optional[str] = None,
+    ) -> io.BytesIO:
+        import io
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        items = await self.export_bed_data(floor_id=floor_id, status=status, room_id=room_id, bed_type=bed_type)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Bed Allocation Data"
+
+        headers = [
+            "Floor",
+            "Room Number",
+            "Room Type",
+            "Bed ID",
+            "Bed Name",
+            "Bed Type",
+            "Status",
+            "Patient ID",
+            "Patient Name",
+            "Disease",
+            "Admission Date",
+        ]
+
+        ws.append(headers)
+
+        header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        header_align = Alignment(horizontal="center", vertical="center")
+        thin_border = Border(
+            left=Side(style="thin", color="CBD5E1"),
+            right=Side(style="thin", color="CBD5E1"),
+            top=Side(style="thin", color="CBD5E1"),
+            bottom=Side(style="thin", color="CBD5E1"),
+        )
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+            cell.border = thin_border
+
+        for item in items:
+            adm_str = item.admission_date.strftime("%Y-%m-%d %H:%M") if item.admission_date else "-"
+            ws.append([
+                item.floor,
+                item.room_number,
+                item.room_type,
+                item.bed_id,
+                item.bed_name or "-",
+                item.bed_type,
+                item.status,
+                item.patient_id or "-",
+                item.patient_name or "-",
+                item.disease or "-",
+                adm_str,
+            ])
+
+        data_font = Font(name="Arial", size=10)
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=len(headers)):
+            for cell in row:
+                cell.font = data_font
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="center")
+
+        for col_idx in range(1, len(headers) + 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = max(len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(1, ws.max_row + 1))
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
 

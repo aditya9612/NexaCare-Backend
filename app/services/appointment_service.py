@@ -1192,9 +1192,7 @@ class AppointmentService:
             cr_res = await self.db.execute(
                 select(ClinicalRecord).where(ClinicalRecord.appointment_id == appointment.id)
             )
-            clinical_record = cr_res.scalar_one_or_none() if hasattr(cr_res, "scalar_one_or_none") else None
-            if hasattr(clinical_record, "__await__"):
-                clinical_record = await clinical_record
+            clinical_record = cr_res.scalar_one_or_none()
             if isinstance(clinical_record, ClinicalRecord):
                 clinical_record.diagnosis = diagnosis_val
                 if data.notes:
@@ -1275,11 +1273,20 @@ class AppointmentService:
 
     async def get_pending_admissions(self) -> list[PendingAdmissionItem]:
         from app.models.bed_allocation_model import Bed
+        from app.models.doctor_model import Doctor
+        from app.models.patient_model import Patient
         from app.core.constants import AdmissionStatus
         from sqlalchemy import select, and_, not_, exists, or_
+        from sqlalchemy.orm import selectinload
 
         stmt = (
             select(Appointment)
+            .options(
+                selectinload(Appointment.patient),
+                selectinload(Appointment.doctor).selectinload(Doctor.department),
+                selectinload(Appointment.department),
+                selectinload(Appointment.clinical_record),
+            )
             .where(
                 or_(
                     Appointment.admission_status == AdmissionStatus.ADMIT_RECOMMENDED,
@@ -1304,9 +1311,56 @@ class AppointmentService:
 
         items: list[PendingAdmissionItem] = []
         for a in appointments:
-            p = a.patient
-            d = a.doctor
-            dept_name = d.department.name if d and d.department else (a.department.name if a.department else None)
+            p = None
+            if hasattr(a, "__dict__") and "patient" in a.__dict__:
+                p = a.__dict__["patient"]
+            elif hasattr(a, "patient") and not hasattr(a, "__table__"):
+                p = a.patient
+            if not p and a.patient_id:
+                p = await self.db.get(Patient, a.patient_id)
+
+            d = None
+            if hasattr(a, "__dict__") and "doctor" in a.__dict__:
+                d = a.__dict__["doctor"]
+            elif hasattr(a, "doctor") and not hasattr(a, "__table__"):
+                d = a.doctor
+            if not d and a.doctor_id:
+                d = await self.db.get(Doctor, a.doctor_id)
+
+            dept_name = None
+            if d:
+                dept_obj = None
+                if hasattr(d, "__dict__") and "department" in d.__dict__:
+                    dept_obj = d.__dict__["department"]
+                elif hasattr(d, "department") and not hasattr(d, "__table__"):
+                    dept_obj = d.department
+                if dept_obj and hasattr(dept_obj, "name") and isinstance(getattr(dept_obj, "name", None), str):
+                    dept_name = dept_obj.name
+                elif dept_obj and hasattr(dept_obj, "department_name") and isinstance(getattr(dept_obj, "department_name", None), str):
+                    dept_name = dept_obj.department_name
+
+            if not dept_name:
+                appt_dept = None
+                if hasattr(a, "__dict__") and "department" in a.__dict__:
+                    appt_dept = a.__dict__["department"]
+                elif hasattr(a, "department") and not hasattr(a, "__table__"):
+                    appt_dept = a.department
+                if appt_dept and hasattr(appt_dept, "name") and isinstance(getattr(appt_dept, "name", None), str):
+                    dept_name = appt_dept.name
+                elif appt_dept and hasattr(appt_dept, "department_name") and isinstance(getattr(appt_dept, "department_name", None), str):
+                    dept_name = appt_dept.department_name
+
+            cr_obj = None
+            if hasattr(a, "__dict__") and "clinical_record" in a.__dict__:
+                cr_obj = a.__dict__["clinical_record"]
+            elif hasattr(a, "clinical_record") and not hasattr(a, "__table__"):
+                cr_obj = a.clinical_record
+
+            p_age = None
+            if p and getattr(p, "dob", None) and hasattr(p.dob, "year"):
+                today = date.today()
+                dob = p.dob
+                p_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
             p_info = PendingAdmissionPatientInfo(
                 id=p.id if p else a.patient_id,
@@ -1314,7 +1368,7 @@ class AppointmentService:
                 first_name=p.first_name if p else "",
                 last_name=p.last_name if p else "",
                 gender=p.gender if p else None,
-                age=a.age if p else None,
+                age=p_age,
                 phone=p.phone if p else None,
             )
             d_info = PendingAdmissionDoctorInfo(
@@ -1324,7 +1378,7 @@ class AppointmentService:
                 specialization=d.specialization if d else None,
                 department_name=dept_name,
             )
-            diagnosis_val = (p.diagnosis if p else None) or (a.clinical_record.diagnosis if a.clinical_record else None)
+            diagnosis_val = (p.diagnosis if p else None) or (cr_obj.diagnosis if cr_obj else None)
             items.append(
                 PendingAdmissionItem(
                     appointment_id=a.id,

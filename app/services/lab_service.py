@@ -1305,7 +1305,8 @@ class LabService:
         from google import genai
         from google.genai import types
 
-        api_key = (settings.GEMINI_API_KEY or "").strip()
+        import os
+        api_key = (settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY") or "").strip()
         if not api_key:
             raise BadRequestException("GEMINI_API_KEY environment variable is not set.")
         

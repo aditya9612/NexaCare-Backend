@@ -5,6 +5,7 @@ from app.schemas.common_schema import BaseSchema
 
 
 class DischargeInitiateRequest(BaseSchema):
+    patient_id: int | None = Field(default=None, gt=0, description="ID of the patient being discharged")
     appointment_id: int = Field(..., gt=0, description="ID of the admitted IPD appointment")
     bed_id: int | None = Field(default=None, gt=0, description="Optional Bed ID override")
     diagnosis_at_discharge: str = Field(..., min_length=2, description="Final confirmed diagnosis at discharge")

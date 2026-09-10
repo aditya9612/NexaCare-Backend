@@ -243,7 +243,7 @@ import calendar
 async def get_pharmacy_sales(
     db: DbSession, 
     current_user: CurrentUser, 
-    period: str | None = Query(None, description="daily | monthly | yearly"),
+    period: str | None = Query(None, description="daily | monthly | yearly | all"),
     start_date: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="End date (YYYY-MM-DD)"),
     format: ReportFormat = Query(ReportFormat.JSON), 
@@ -266,7 +266,7 @@ async def get_pharmacy_sales(
             s_date = today
             e_date = today
         else:
-            raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, or yearly.")
+            raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, yearly, or all.")
 
     data = await ReportService(db).get_pharmacy_sales(s_date, e_date)
     return export_response(ReportService.build_export_payload("Pharmacy Sales", data), format, download, "pharmacy-sales", data)

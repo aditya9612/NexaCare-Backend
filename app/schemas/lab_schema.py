@@ -56,7 +56,6 @@ class TestOrderCreate(BaseSchema):
 
 class TestOrderUpdate(BaseSchema):
     lab_test_id: int | None = None
-    status: str | None = None
     priority: str | None = None
     notes: str | None = None
 
@@ -89,7 +88,6 @@ class SampleCreate(BaseSchema):
 class SampleUpdate(BaseSchema):
     sample_type: str | None = None
     collection_date: datetime | None = None
-    status: str | None = None
     volume: str | None = None
     notes: str | None = None
 

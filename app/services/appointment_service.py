@@ -321,6 +321,10 @@ class AppointmentService:
 
         update_data = data.model_dump(exclude_unset=True)
 
+        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+            # allow purely notes update if status isn't changing to a non-terminal state
+            if "appointment_status" in update_data and update_data["appointment_status"] != appointment.appointment_status:
+                raise BadRequestException("Cannot change status of a terminal appointment")
         # Prevent updating status directly to Completed without Check-In and Check-Out
         if update_data.get("appointment_status") == AppointmentStatus.COMPLETED:
             if not appointment.check_in_time or not appointment.check_out_time:
@@ -365,6 +369,8 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+            raise BadRequestException("Cannot reschedule a terminal appointment")
         new_date, new_time = self._validate_future_datetime(data.appointment_date, data.appointment_time)
         rules = await self.validation_service.validate(
             appointment.doctor_id, new_date, new_time, exclude_id=appointment.id
@@ -405,6 +411,8 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+            raise BadRequestException("Cannot cancel a terminal appointment")
         appointment.appointment_status = AppointmentStatus.CANCELLED
         appointment.queue_status = "CANCELLED"
         if data.reason:

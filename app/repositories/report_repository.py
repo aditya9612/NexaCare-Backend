@@ -210,19 +210,22 @@ class ReportRepository:
             "reorder_alerts": reorder_alerts
         }
 
-    async def get_pharmacy_sales(self, start_date: date, end_date: date) -> dict:
-        start_of_period = datetime.combine(start_date, datetime.min.time())
-        end_of_period = datetime.combine(end_date, datetime.max.time())
+    async def get_pharmacy_sales(self, start_date: date | None, end_date: date | None) -> dict:
+        filters = [
+            PharmacyInvoice.status != "cancelled",
+            PharmacyInvoice.is_deleted == False
+        ]
+        
+        if start_date and end_date:
+            start_of_period = datetime.combine(start_date, datetime.min.time())
+            end_of_period = datetime.combine(end_date, datetime.max.time())
+            filters.append(PharmacyInvoice.created_at >= start_of_period)
+            filters.append(PharmacyInvoice.created_at <= end_of_period)
 
         sales_query = select(
             func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0).label("total_sales"),
             func.count(PharmacyInvoice.id).label("total_invoices")
-        ).where(
-            PharmacyInvoice.status != "cancelled",
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.created_at >= start_of_period,
-            PharmacyInvoice.created_at <= end_of_period
-        )
+        ).where(*filters)
 
         res = await self.db.execute(sales_query)
         row = res.fetchone()

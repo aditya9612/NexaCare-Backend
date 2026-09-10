@@ -557,6 +557,8 @@ class LabService:
             raise NotFoundException("Test order not found")
 
         # Check if sample already exists for this test order
+        if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+            raise BadRequestException("Cannot collect sample for a completed or cancelled test order")
         existing_sample = await self.sample_repo.get_by_test_order(data.test_order_id)
         if existing_sample:
             raise ConflictException("Sample has already been collected for this test order")
@@ -711,6 +713,8 @@ class LabService:
         order = await self.order_repo.get_by_id(sample.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
+        if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+            raise BadRequestException("Cannot enter result for a completed or cancelled test order")
 
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 

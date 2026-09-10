@@ -149,7 +149,7 @@ class PharmacyService:
                 raise ConflictException("Medicine with this barcode already exists")
 
         from sqlalchemy import select, func
-        
+
         target_name = data.name.lower()
         target_manufacturer = data.manufacturer.lower() if data.manufacturer else ""
         target_batch = data.batch_number.lower() if data.batch_number else ""
@@ -210,8 +210,25 @@ class PharmacyService:
         medicine = await self.medicine_repo.get_by_id(medicine_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
-        for key, value in data.model_dump(exclude_unset=True).items():
+
+        update_data = data.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
             setattr(medicine, key, value)
+
+        # Synchronize denormalized fields to InventoryItem if it exists
+        if medicine.inventory_item_id:
+            from app.repositories.inventory_repository import InventoryRepository
+            inv_repo = InventoryRepository(self.db)
+            inv_item = await inv_repo.get_by_id(medicine.inventory_item_id)
+            if inv_item:
+                if "name" in update_data: inv_item.name = update_data["name"]
+                if "category" in update_data: inv_item.category = update_data["category"]
+                if "unit" in update_data: inv_item.unit = update_data["unit"]
+                if "unit_price" in update_data: inv_item.unit_cost = update_data["unit_price"]
+                if "reorder_level" in update_data: inv_item.reorder_level = update_data["reorder_level"]
+                if "expiry_date" in update_data: inv_item.expiry_date = update_data["expiry_date"]
+                if "barcode" in update_data: inv_item.barcode = update_data["barcode"]
+
         medicine = await self.medicine_repo.update(medicine)
         await self.audit_repo.create("update", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
         return MedicineResponse.model_validate(medicine)
@@ -723,6 +740,12 @@ class PharmacyService:
             await self.medicine_repo.update_stock(medicine.id, -item.quantity)
             item.dispensed_quantity = item.quantity
 
+            if item.batch_number:
+                batch = await self.batch_repo.get_by_batch_number(medicine.id, item.batch_number)
+                if batch:
+                    await self.batch_repo.update_batch_reserved_stock(batch.id, -item.quantity)
+                    await self.batch_repo.update_batch_stock(batch.id, -item.quantity)
+
             invoice_items_create.append(
                 PharmacyInvoiceItemCreate(
                     medicine_id=item.medicine_id,
@@ -823,6 +846,13 @@ class PharmacyService:
                 if medicine.expiry_date and medicine.expiry_date < date.today():
                     raise BadRequestException(f"Medicine {medicine.name} has expired")
                 await self.medicine_repo.update_stock(item_data.medicine_id, -item_data.quantity)
+
+                # Deduct from batch
+                batch_num = item_data.batch_number or medicine.batch_number
+                if batch_num:
+                    batch = await self.batch_repo.get_by_batch_number(medicine.id, batch_num)
+                    if batch:
+                        await self.batch_repo.update_batch_stock(batch.id, -item_data.quantity)
 
             unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
             line_total = round(item_data.quantity * unit_price, 2)
@@ -1807,7 +1837,7 @@ class PharmacyService:
             pending_purchases_query = pending_purchases_query.where(Purchase.created_at >= start_dt)
         if end_dt:
             pending_purchases_query = pending_purchases_query.where(Purchase.created_at <= end_dt)
-            
+
         pending_purchases = (await self.db.scalar(pending_purchases_query)) or 0
 
         # 7. Total Suppliers (Count active suppliers)
@@ -1826,7 +1856,7 @@ class PharmacyService:
             prescriptions_query = prescriptions_query.where(Prescription.created_at >= start_dt)
         if end_dt:
             prescriptions_query = prescriptions_query.where(Prescription.created_at <= end_dt)
-            
+
         prescriptions = (await self.db.scalar(prescriptions_query)) or 0
 
         # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
@@ -2190,7 +2220,7 @@ class PharmacyService:
 
             header_font = Font(name="Calibri", size=11, bold=True, color="000000")
             header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid") # White background
-            
+
             thin_side = Side(style='thin', color='DDDDDD')
             thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
             zebra_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid") # subtle shading
@@ -2241,7 +2271,7 @@ class PharmacyService:
                     cell.border = thin_border
                     if is_shaded_row:
                         cell.fill = zebra_fill
-                    
+
                     # Alignments and wrapping
                     # Center: Sr. No. (1), SKU (2), Category (5), Barcode (6), Batch (7), Expiry (8), Unit (10), Price (11), Stock (12), Reorder (13)
                     # Left: Name (3), Generic Name (4), Manufacturer (9), Description (14)
@@ -2487,7 +2517,7 @@ class PharmacyService:
         if format_type == "excel":
             import openpyxl
             from openpyxl.styles import Font
-            
+
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Suppliers Export"
@@ -2498,12 +2528,12 @@ class PharmacyService:
             ]
             ws.append(headers)
 
-            
+
             # Apply styling to the header row (Bold, Size 12)
             header_font = Font(name="Calibri", size=12, bold=True)
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=1, column=col_idx).font = header_font
-            
+
             for sr_no, s in enumerate(suppliers, start=1):
                 row = [
                     sr_no,

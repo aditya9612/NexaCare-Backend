@@ -120,9 +120,12 @@ class InventoryRepository:
 
 
     async def update_quantity(self, item_id: int, delta: int) -> InventoryItem | None:
-        item = await self.get_by_id(item_id)
+        item = await self.get_by_id_for_update(item_id)
         if item:
-            item.quantity = max(0, item.quantity + delta)
+            new_qty = item.quantity + delta
+            if new_qty < 0:
+                raise ValueError("Insufficient inventory quantity")
+            item.quantity = new_qty
             await self.db.flush()
             await self.db.refresh(item)
         return item

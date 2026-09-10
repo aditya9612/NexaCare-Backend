@@ -1,6 +1,7 @@
 import math
 from datetime import datetime, timezone
 from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus, BedStatus
@@ -55,6 +56,10 @@ class DischargeService:
         appointment = await self.appointment_repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException(f"Appointment with id {data.appointment_id} not found")
+
+        effective_patient_id = data.patient_id or appointment.patient_id
+        if data.patient_id and appointment.patient_id and data.patient_id != appointment.patient_id:
+            raise BadRequestException("Provided patient_id does not match the patient linked to this appointment.")
 
         # 2. Check IPD eligibility: appointment_type == "IPD" and admission_status in ("Admitted", "Admit Recommended")
         appt_type = (appointment.appointment_type or "").strip().upper()
@@ -129,7 +134,7 @@ class DischargeService:
         discharge = Discharge(
             discharge_number=generate_discharge_number(),
             appointment_id=appointment.id,
-            patient_id=appointment.patient_id,
+            patient_id=effective_patient_id,
             doctor_id=doctor.id,
             bed_id=bed.id if bed else None,
             admission_date=admission_time,
@@ -302,10 +307,19 @@ class DischargeService:
         ward_name = "General Ward"
         if discharge.bed:
             bed_obj = discharge.bed
-            if bed_obj.room:
-                ward_name = getattr(bed_obj.room, "name", "Ward")
-                room_type = getattr(bed_obj.room, "type", None) or getattr(bed_obj.room, "name", "General Ward")
-            elif getattr(bed_obj, "type", None):
+            room_obj = None
+            if hasattr(bed_obj, "__dict__") and "room" in bed_obj.__dict__:
+                room_obj = bed_obj.__dict__["room"]
+            elif hasattr(bed_obj, "room") and not hasattr(bed_obj, "__table__"):
+                room_obj = bed_obj.room
+            elif getattr(bed_obj, "room_id", None):
+                from app.models.bed_allocation_model import Room
+                room_obj = await self.db.get(Room, bed_obj.room_id)
+
+            if room_obj and hasattr(room_obj, "name") and isinstance(getattr(room_obj, "name", None), str):
+                ward_name = getattr(room_obj, "name", "Ward")
+                room_type = getattr(room_obj, "type", None) or getattr(room_obj, "name", "General Ward")
+            elif getattr(bed_obj, "type", None) and isinstance(bed_obj.type, str):
                 room_type = bed_obj.type
         elif discharge.appointment and getattr(discharge.appointment, "recommended_ward", None):
             room_type = discharge.appointment.recommended_ward
@@ -342,16 +356,24 @@ class DischargeService:
 
         # 3c. Doctor visits & daily rounds
         total_doctor_visits = days_stayed + data.additional_doctor_visits
-        doctor_obj = discharge.doctor
-        if not doctor_obj and discharge.doctor_id:
+        doctor_obj = None
+        if hasattr(discharge, "__dict__") and "doctor" in discharge.__dict__:
+            doctor_obj = discharge.__dict__["doctor"]
+        elif hasattr(discharge, "doctor") and not hasattr(discharge, "__table__"):
+            doctor_obj = discharge.doctor
+        elif getattr(discharge, "doctor_id", None):
             doctor_obj = await self.db.get(Doctor, discharge.doctor_id)
 
         doctor_fee = None
         doctor_name_str = ""
         if doctor_obj:
-            doctor_name_str = f"Dr. {doctor_obj.first_name} {doctor_obj.last_name}".strip()
-            if doctor_obj.consultation_fee and doctor_obj.consultation_fee > 0:
-                doctor_fee = float(doctor_obj.consultation_fee)
+            first_name = getattr(doctor_obj, "first_name", "") or ""
+            last_name = getattr(doctor_obj, "last_name", "") or ""
+            if isinstance(first_name, str) and isinstance(last_name, str) and (first_name or last_name):
+                doctor_name_str = f"Dr. {first_name} {last_name}".strip()
+            c_fee = getattr(doctor_obj, "consultation_fee", None)
+            if isinstance(c_fee, (int, float)) and c_fee > 0:
+                doctor_fee = float(c_fee)
 
         if doctor_fee is None:
             doctor_fee = float(tariff.doctor_visit_charge) if tariff.doctor_visit_charge else 0.0
@@ -375,6 +397,7 @@ class DischargeService:
         # 3d. Integrate Applicable Lab & Radiology Charges (avoid double-counting)
         lab_stmt = (
             select(TestOrder)
+            .options(selectinload(TestOrder.lab_test))
             .where(
                 TestOrder.is_deleted == False,
                 (
@@ -395,21 +418,30 @@ class DischargeService:
             if order.id in seen_test_orders:
                 continue
             seen_test_orders.add(order.id)
-            test = getattr(order, "lab_test", None)
+            test = None
+            if hasattr(order, "__dict__") and "lab_test" in order.__dict__:
+                test = order.__dict__["lab_test"]
+            elif hasattr(order, "lab_test") and not hasattr(order, "__table__"):
+                test = getattr(order, "lab_test", None)
+
             if not test and getattr(order, "lab_test_id", None):
                 test = await self.db.get(LabTest, order.lab_test_id)
-            if not test or not getattr(test, "price", 0) or test.price <= 0:
+
+            test_price = getattr(test, "price", 0) if test else 0
+            if not isinstance(test_price, (int, float)) or test_price <= 0:
                 continue
-            cat = (test.category or "").lower()
+            cat = str(getattr(test, "category", "") or "").lower()
             is_radiology = any(r in cat for r in ["radiology", "imaging", "x-ray", "xray", "mri", "ct", "ultrasound", "usg", "scan"])
             item_type = "radiology_order" if is_radiology else "lab_test"
             prefix = "Radiology" if is_radiology else "Lab Test"
+            test_name = getattr(test, "test_name", "Test")
+            order_num = getattr(order, "order_number", order.id)
             bill_items.append(
                 BillItemCreate(
                     item_type=item_type,
-                    description=f"{prefix}: {test.test_name} (Order #{order.order_number})",
+                    description=f"{prefix}: {test_name} (Order #{order_num})",
                     quantity=1,
-                    unit_price=float(test.price),
+                    unit_price=float(test_price),
                     gst_rate=0.0,
                 )
             )

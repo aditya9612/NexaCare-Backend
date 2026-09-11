@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import List, Dict, Any
 
-from sqlalchemy import func, select, case, or_
+from sqlalchemy import func, select, case, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.billing_model import Billing, Payment, InsuranceClaim
@@ -14,69 +14,38 @@ class AccountantRepository:
         self.db = db
 
     async def get_dashboard_stats(self) -> Dict[str, Any]:
+        now = datetime.now()
+        current_month = now.month
+        current_year = now.year
+        today = now.date()
+
         # 1. OPD Billings Counts & Amounts
-        b_total = await self.db.scalar(
-            select(func.count()).select_from(Billing).where(Billing.is_deleted.is_(False))
-        ) or 0
-
-        b_paid = await self.db.scalar(
-            select(func.count())
-            .select_from(Billing)
-            .where(Billing.is_deleted.is_(False), Billing.status == "paid")
-        ) or 0
-
-        b_pending = await self.db.scalar(
-            select(func.count())
-            .select_from(Billing)
-            .where(Billing.is_deleted.is_(False), Billing.status.in_(["pending", "partial"]))
-        ) or 0
-
-        b_overdue = await self.db.scalar(
-            select(func.count())
-            .select_from(Billing)
-            .where(Billing.is_deleted.is_(False), Billing.status == "overdue")
-        ) or 0
-
-        b_billed = await self.db.scalar(
-            select(func.coalesce(func.sum(Billing.total_amount), 0))
-            .where(Billing.is_deleted.is_(False))
-        ) or 0
-
-        b_pending_amount = await self.db.scalar(
-            select(func.coalesce(func.sum(Billing.balance_amount), 0))
-            .where(Billing.is_deleted.is_(False))
-        ) or 0
+        b_stats_res = await self.db.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(case((Billing.status == "paid", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Billing.status.in_(["pending", "partial"]), 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Billing.status == "overdue", 1), else_=0)), 0),
+                func.coalesce(func.sum(Billing.total_amount), 0),
+                func.coalesce(func.sum(Billing.balance_amount), 0)
+            ).where(Billing.is_deleted.is_(False))
+        )
+        b_total, b_paid, b_pending, b_overdue, b_billed, b_pending_amount = b_stats_res.one()
 
         # 2. IPD Final Bills Counts & Amounts
-        ipd_total = await self.db.scalar(
-            select(func.count()).select_from(IPDFinalBill).where(IPDFinalBill.is_deleted.is_(False))
-        ) or 0
-
-        ipd_paid = await self.db.scalar(
-            select(func.count())
-            .select_from(IPDFinalBill)
-            .where(IPDFinalBill.is_deleted.is_(False), IPDFinalBill.status == "paid")
-        ) or 0
-
-        ipd_pending = await self.db.scalar(
-            select(func.count())
-            .select_from(IPDFinalBill)
-            .where(IPDFinalBill.is_deleted.is_(False), IPDFinalBill.status == "pending")
-        ) or 0
-
-        ipd_billed = await self.db.scalar(
-            select(func.coalesce(func.sum(IPDFinalBill.net_total), 0))
-            .where(IPDFinalBill.is_deleted.is_(False))
-        ) or 0
-
-        ipd_pending_amount = await self.db.scalar(
+        ipd_stats_res = await self.db.execute(
             select(
+                func.count(),
+                func.coalesce(func.sum(case((IPDFinalBill.status == "paid", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((IPDFinalBill.status == "pending", 1), else_=0)), 0),
+                func.coalesce(func.sum(IPDFinalBill.net_total), 0),
                 func.coalesce(
                     func.sum(case((IPDFinalBill.status == "paid", 0.0), else_=IPDFinalBill.balance_amount)),
-                    0.0,
+                    0.0
                 )
             ).where(IPDFinalBill.is_deleted.is_(False))
-        ) or 0
+        )
+        ipd_total, ipd_paid, ipd_pending, ipd_billed, ipd_pending_amount = ipd_stats_res.one()
 
         # 3. Combined Bills & Billed
         total_bills = b_total + ipd_total
@@ -86,144 +55,69 @@ class AccountantRepository:
         total_billed = b_billed + ipd_billed
         pending_amount = b_pending_amount + ipd_pending_amount
 
-        # 4. Revenue & Collections
-        b_revenue = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(Payment.is_refund.is_(False))
-        ) or 0
-
-        ipd_revenue = await self.db.scalar(
+        # 4. OPD Payments (Revenue, Refunds, Collections)
+        p_stats_res = await self.db.execute(
             select(
-                func.coalesce(
-                    func.sum(case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)),
-                    0.0,
-                )
+                func.coalesce(func.sum(case((Payment.is_refund.is_(False), Payment.amount), else_=0)), 0),
+                func.coalesce(func.sum(case((Payment.is_refund.is_(True), Payment.amount), else_=0)), 0),
+                func.count(),
+                func.coalesce(func.sum(case((
+                    and_(Payment.is_refund.is_(False), func.month(Payment.payment_date) == current_month, func.year(Payment.payment_date) == current_year),
+                    Payment.amount
+                ), else_=0)), 0),
+                func.coalesce(func.sum(case((
+                    and_(Payment.is_refund.is_(False), func.year(Payment.payment_date) == current_year),
+                    Payment.amount
+                ), else_=0)), 0),
+                func.coalesce(func.sum(case((
+                    and_(Payment.is_refund.is_(False), func.date(Payment.payment_date) == today),
+                    Payment.amount
+                ), else_=0)), 0)
+            )
+        )
+        b_revenue, b_refunds, b_payments_count, b_monthly_revenue, b_yearly_revenue, b_today_collection = p_stats_res.one()
+
+        # 5. IPD Revenue & Refunds
+        ipd_dt = func.coalesce(IPDFinalBill.settled_at, IPDFinalBill.updated_at, IPDFinalBill.created_at)
+        ipd_amount_expr = case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)
+        
+        ipd_rev_res = await self.db.execute(
+            select(
+                func.coalesce(func.sum(ipd_amount_expr), 0.0),
+                func.coalesce(func.sum(IPDFinalBill.refund_amount), 0.0),
+                func.coalesce(func.sum(case((or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0), 1), else_=0)), 0),
+                func.coalesce(func.sum(case((
+                    and_(func.month(ipd_dt) == current_month, func.year(ipd_dt) == current_year, or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0)),
+                    ipd_amount_expr
+                ), else_=0.0)), 0.0),
+                func.coalesce(func.sum(case((
+                    and_(func.year(ipd_dt) == current_year, or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0)),
+                    ipd_amount_expr
+                ), else_=0.0)), 0.0),
+                func.coalesce(func.sum(case((
+                    and_(func.date(ipd_dt) == today, or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0)),
+                    ipd_amount_expr
+                ), else_=0.0)), 0.0)
             ).where(IPDFinalBill.is_deleted.is_(False))
-        ) or 0
+        )
+        ipd_revenue, ipd_refunds, ipd_payments_count, ipd_monthly_revenue, ipd_yearly_revenue, ipd_today_collection = ipd_rev_res.one()
 
         total_revenue = b_revenue + ipd_revenue
-
-        b_refunds = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(Payment.is_refund.is_(True))
-        ) or 0
-
-        ipd_refunds = await self.db.scalar(
-            select(func.coalesce(func.sum(IPDFinalBill.refund_amount), 0.0))
-            .where(IPDFinalBill.is_deleted.is_(False))
-        ) or 0
-
         total_refunds = b_refunds + ipd_refunds
-
-        b_payments_count = await self.db.scalar(
-            select(func.count()).select_from(Payment)
-        ) or 0
-
-        ipd_payments_count = await self.db.scalar(
-            select(func.count())
-            .select_from(IPDFinalBill)
-            .where(
-                IPDFinalBill.is_deleted.is_(False),
-                or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0),
-            )
-        ) or 0
-
         total_payments = b_payments_count + ipd_payments_count
-
-        insurance_claims = await self.db.scalar(
-            select(func.count()).select_from(InsuranceClaim)
-        ) or 0
-
-        pending_claims = await self.db.scalar(
-            select(func.count())
-            .select_from(InsuranceClaim)
-            .where(InsuranceClaim.status.in_(["submitted", "pending"]))
-        ) or 0
-
-        approved_claims = await self.db.scalar(
-            select(func.count())
-            .select_from(InsuranceClaim)
-            .where(InsuranceClaim.status == "approved")
-        ) or 0
-
-        now = datetime.now()
-        current_month = now.month
-        current_year = now.year
-        ipd_dt = func.coalesce(IPDFinalBill.settled_at, IPDFinalBill.updated_at, IPDFinalBill.created_at)
-
-        # Monthly Revenue
-        b_monthly_revenue = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(
-                func.month(Payment.payment_date) == current_month,
-                func.year(Payment.payment_date) == current_year,
-                Payment.is_refund.is_(False)
-            )
-        ) or 0
-
-        ipd_monthly_revenue = await self.db.scalar(
-            select(
-                func.coalesce(
-                    func.sum(case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)),
-                    0.0,
-                )
-            ).where(
-                IPDFinalBill.is_deleted.is_(False),
-                func.month(ipd_dt) == current_month,
-                func.year(ipd_dt) == current_year,
-                or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0),
-            )
-        ) or 0
-
         monthly_revenue = b_monthly_revenue + ipd_monthly_revenue
-
-        # Yearly Revenue
-        b_yearly_revenue = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(
-                func.year(Payment.payment_date) == current_year,
-                Payment.is_refund.is_(False)
-            )
-        ) or 0
-
-        ipd_yearly_revenue = await self.db.scalar(
-            select(
-                func.coalesce(
-                    func.sum(case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)),
-                    0.0,
-                )
-            ).where(
-                IPDFinalBill.is_deleted.is_(False),
-                func.year(ipd_dt) == current_year,
-                or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0),
-            )
-        ) or 0
-
         yearly_revenue = b_yearly_revenue + ipd_yearly_revenue
-
-        # Today Collection
-        b_today_collection = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(
-                func.date(Payment.payment_date) == now.date(),
-                Payment.is_refund.is_(False)
-            )
-        ) or 0
-
-        ipd_today_collection = await self.db.scalar(
-            select(
-                func.coalesce(
-                    func.sum(case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)),
-                    0.0,
-                )
-            ).where(
-                IPDFinalBill.is_deleted.is_(False),
-                func.date(ipd_dt) == now.date(),
-                or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0),
-            )
-        ) or 0
-
         today_collection = b_today_collection + ipd_today_collection
+
+        # 6. Insurance Claims
+        ins_res = await self.db.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(case((InsuranceClaim.status.in_(["submitted", "pending"]), 1), else_=0)), 0),
+                func.coalesce(func.sum(case((InsuranceClaim.status == "approved", 1), else_=0)), 0)
+            )
+        )
+        insurance_claims, pending_claims, approved_claims = ins_res.one()
 
         return {
             "total_bills": total_bills,

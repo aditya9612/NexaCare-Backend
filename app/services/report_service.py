@@ -110,8 +110,8 @@ class ReportService:
         return PharmacyInventoryResponse(**stats)
 
     async def get_pharmacy_sales(self, start_date: date | None = None, end_date: date | None = None) -> PharmacySalesResponse:
-        s_date = start_date or date.today()
-        e_date = end_date or s_date
+        s_date = start_date
+        e_date = end_date
         
         stats = await self.repo.get_pharmacy_sales(s_date, e_date)
         return PharmacySalesResponse(**stats)

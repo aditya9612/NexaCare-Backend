@@ -113,9 +113,9 @@ async def init_db():
 
             await session.commit()
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(e)
+            import asyncio
+            from app.core.logger import logger
+            await asyncio.to_thread(logger.error, "DB Init failed: %s", e, exc_info=True)
             await session.rollback()
             raise
 

@@ -391,9 +391,8 @@ class LabService:
             raise NotFoundException("Lab test not found or inactive")
 
         if doctor:
-            # 4. It Should be Possible For Doctor to Only Put Lab Test Id of Lab Tests Created by Him in lab_test_id Field.
-            if test.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only order lab tests created by themselves")
+            # Doctors can order any active lab test
+            pass
 
         # Resolve doctor_id to store in the order
         resolved_doctor_id = data.doctor_id
@@ -435,10 +434,7 @@ class LabService:
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
             if role_name == "doctor":
-                from app.repositories.doctor_repository import DoctorRepository
-                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
-                if doctor:
-                    doctor_id = doctor.id
+                pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
                 result = await self.db.execute(
@@ -561,6 +557,8 @@ class LabService:
             raise NotFoundException("Test order not found")
 
         # Check if sample already exists for this test order
+        if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+            raise BadRequestException("Cannot collect sample for a completed or cancelled test order")
         existing_sample = await self.sample_repo.get_by_test_order(data.test_order_id)
         if existing_sample:
             raise ConflictException("Sample has already been collected for this test order")
@@ -715,6 +713,8 @@ class LabService:
         order = await self.order_repo.get_by_id(sample.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
+        if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+            raise BadRequestException("Cannot enter result for a completed or cancelled test order")
 
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
@@ -734,18 +734,8 @@ class LabService:
         document_url = None
 
         if document:
-            upload_dir = "uploads/lab_results"
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_ext = os.path.splitext(document.filename)[1]
-            file_name = f"{uuid4()}{file_ext}"
-            file_path = os.path.join(upload_dir, file_name)
-
-            async with aiofiles.open(file_path, "wb") as f:
-                while content := await document.read(1024 * 1024):
-                    await f.write(content)
-
-            document_url = file_path
+            from app.utils.file_upload import save_upload
+            document_url = await save_upload(document, "lab_results")
 
         dump_data = data.model_dump()
         dump_data.pop("sample_id", None)
@@ -819,21 +809,8 @@ class LabService:
             raise NotFoundException("Test result not found")
 
         if document:
-            from uuid import uuid4
-            import aiofiles
-            import os
-            upload_dir = "uploads/lab_results"
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_ext = os.path.splitext(document.filename)[1]
-            file_name = f"{uuid4()}{file_ext}"
-            file_path = os.path.join(upload_dir, file_name)
-
-            async with aiofiles.open(file_path, "wb") as f:
-                while content := await document.read(1024 * 1024):
-                    await f.write(content)
-
-            result.document_url = file_path
+            from app.utils.file_upload import save_upload
+            result.document_url = await save_upload(document, "lab_results")
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(result, key, value)
@@ -975,14 +952,7 @@ class LabService:
             department_id = staff.department_id
             generated_by = current_user.id
         elif role_name == "doctor":
-            from app.models.doctor_model import Doctor
-            doctor_res = await self.db.execute(
-                select(Doctor).where(Doctor.user_id == current_user.id, Doctor.is_deleted == False)
-            )
-            doctor = doctor_res.scalar_one_or_none()
-            if not doctor:
-                raise ForbiddenException("Doctor profile not found")
-            doctor_id = doctor.id
+            pass
         elif role_name == "pharmacist" or role_name in [r.lower() for r in UserRole.ADMIN_ROLES]:
             # Pharmacists and Admins can view all lab reports (no filter applied)
             pass
@@ -1133,6 +1103,41 @@ class LabService:
                 report_data,
             )
             report.report_path = path
+
+            try:
+                notif_service = NotificationService(self.db)
+                test_name = order.lab_test.test_name if order.lab_test else "Lab Test"
+
+                # Notify Patient
+                if patient and patient.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Lab Report Approved",
+                        message=f"Your lab report {report.report_number} for {test_name} has been approved and is now available.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=patient.email,
+                        phone=patient.phone,
+                    )
+
+                # Notify Doctor
+                if doctor and doctor.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=doctor.user_id,
+                        title="Lab Report Approved",
+                        message=f"Lab report {report.report_number} for {patient.first_name} {patient.last_name} has been approved.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                    )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch lab report approval notification: %s", exc)
 
         report = await self.report_repo.update(report)
         await self.audit_repo.create(
@@ -1874,10 +1879,7 @@ class LabService:
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
             if role_name == "doctor":
-                from app.repositories.doctor_repository import DoctorRepository
-                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
-                if doctor:
-                    resolved_doctor_id = doctor.id
+                pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
                 result = await self.db.execute(

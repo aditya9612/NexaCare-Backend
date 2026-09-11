@@ -113,17 +113,23 @@ class MedicineRepository:
         await self.db.flush()
 
     async def update_stock(self, medicine_id: int, delta: int) -> Medicine | None:
-        medicine = await self.get_by_id(medicine_id)
+        medicine = await self.get_by_id_for_update(medicine_id)
         if medicine:
-            medicine.stock_quantity = max(0, (medicine.stock_quantity or 0) + delta)
+            new_qty = (medicine.stock_quantity or 0) + delta
+            if new_qty < 0:
+                raise ValueError("Insufficient stock")
+            medicine.stock_quantity = new_qty
             await self.db.flush()
             await self.db.refresh(medicine)
         return medicine
 
     async def update_reserved_stock(self, medicine_id: int, delta: int) -> Medicine | None:
-        medicine = await self.get_by_id(medicine_id)
+        medicine = await self.get_by_id_for_update(medicine_id)
         if medicine:
-            medicine.reserved_quantity = max(0, (medicine.reserved_quantity or 0) + delta)
+            new_qty = (medicine.reserved_quantity or 0) + delta
+            if new_qty < 0:
+                raise ValueError("Insufficient reserved stock")
+            medicine.reserved_quantity = new_qty
             await self.db.flush()
             await self.db.refresh(medicine)
         return medicine
@@ -908,6 +914,13 @@ class MedicineBatchRepository:
 
     async def get_by_id_for_update(self, batch_id: int) -> MedicineBatch | None:
         stmt = select(MedicineBatch).where(MedicineBatch.id == batch_id).with_for_update()
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def get_by_batch_number(self, medicine_id: int, batch_number: str) -> MedicineBatch | None:
+        stmt = select(MedicineBatch).where(
+            MedicineBatch.medicine_id == medicine_id,
+            MedicineBatch.batch_number == batch_number
+        ).with_for_update()
         return (await self.db.execute(stmt)).scalar_one_or_none()
 
     async def get_available_batches_fefo(self, medicine_id: int) -> list[MedicineBatch]:

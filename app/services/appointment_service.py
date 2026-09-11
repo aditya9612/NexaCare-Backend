@@ -16,7 +16,7 @@ from app.schemas.appointment_schema import (
     CancelRequest,
     ConfirmRequest,
     RescheduleRequest,
-    TokenResponse,    
+    TokenResponse,
     ConfirmedVisitResponse,
     ScheduledDoctorResponse,
     AdmitRecommendationRequest,
@@ -74,7 +74,7 @@ class AppointmentService:
         patient = await self.patient_repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
-        
+
         from app.core.constants import PatientStatus
         if patient.status == PatientStatus.INACTIVE:
             raise BadRequestException(
@@ -119,61 +119,104 @@ class AppointmentService:
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
 
-        # Calculate summary counts independently of pagination and status/date filters where appropriate
+        # --- Optimized summary counts via grouped SQL (replaces 10 sequential count_all calls) ---
         from app.utils.helpers import utc_now
+        from sqlalchemy import and_, case, func, or_, select, text
         today = utc_now().date()
-        
-        total_appointments = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
-        )
-        today_appointments = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            appointment_date=today
-        )
-        total_scheduled = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date
-        )
-        completed = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date
-        )
-        cancelled = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date
-        )
-        pending = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.PENDING, appointment_date=appointment_date
-        )
-        confirmed = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
-        )
 
-        in_progress = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="In-Progress", appointment_date=appointment_date
+        def _base_filter(q):
+            """Apply patient/doctor/dept scope filters — no status/date filter."""
+            if patient_id:
+                q = q.where(Appointment.patient_id == patient_id)
+            if doctor_id:
+                q = q.where(Appointment.doctor_id == doctor_id)
+            if department_id:
+                q = q.where(Appointment.department_id == department_id)
+            return q
+
+        # Query 1: aggregate over all appointments (no date/status filter) — total + today
+        q_all = _base_filter(
+            select(
+                func.count().label("total"),
+                func.sum(case((Appointment.appointment_date == today, 1), else_=0)).label("today"),
+            ).select_from(Appointment)
         )
-        checked_in = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Check-in", appointment_date=appointment_date
+        all_row = (await self.db.execute(q_all)).one()
+        total_appointments = all_row.total or 0
+        today_appointments = all_row.today or 0
+
+        # Query 2: aggregate status breakdown scoped by date & other optional filters
+        q_status = _base_filter(
+            select(
+                Appointment.appointment_status,
+                Appointment.queue_status,
+                Appointment.admission_status,
+                Appointment.admission_recommended,
+                func.count().label("cnt"),
+            ).select_from(Appointment)
         )
-        checked_out = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Checked-Out", appointment_date=appointment_date
-        )
-        admit_recommended = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admit-recommended", appointment_date=appointment_date
-        )
-        admitted = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admitted", appointment_date=appointment_date
-        )
-        waiting = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="waiting", appointment_date=appointment_date
+        if appointment_date:
+            q_status = q_status.where(Appointment.appointment_date == appointment_date)
+
+        rows = (await self.db.execute(q_status.group_by(
+            Appointment.appointment_status,
+            Appointment.queue_status,
+            Appointment.admission_status,
+            Appointment.admission_recommended,
+        ))).all()
+
+        # Python-side bucketing — matches the semantics of the original count_all filter branches
+        _CONFIRMED_SET = {"Confirmed", "confirmed", "CONFIRMED"}
+        _PENDING_SET = {"Pending", "pending", "PENDING"}
+        _COMPLETED_SET = {"Completed", "completed", "COMPLETED"}
+        _CANCELLED_SET = {"Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled", "No Show", "no show", "NO SHOW", "No-Show", "no-show"}
+        _CHECKED_IN_SET = {"Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"}
+        _CHECKED_OUT_SET = {"Checked-Out", "Checked-out", "checked-out", "Check-out", "Check-Out"}
+        _IN_PROGRESS_STATUS = {"In-Progress", "in-progress", "In-progress", "in_progress", "In_Progress"}
+        _IN_PROGRESS_QUEUE = {"IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"}
+        _WAITING_QUEUE = {"WAITING"}
+        _ADMIT_REC_STATUS = {"Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"}
+        _ADMITTED_STATUS = {"Admitted", "admitted", "ADMITTED"}
+
+        completed = pending = confirmed = in_progress = checked_in = checked_out = 0
+        waiting = admit_recommended = admitted = 0
+        total_scheduled = 0
+
+        for row in rows:
+            appt_status = row.appointment_status or ""
+            queue_status = row.queue_status or ""
+            adm_status = row.admission_status or ""
+            adm_rec = bool(row.admission_recommended)
+            cnt = row.cnt
+
+            if appt_status in _COMPLETED_SET:
+                completed += cnt
+            elif appt_status in _PENDING_SET:
+                pending += cnt
+                total_scheduled += cnt
+            elif appt_status in _CONFIRMED_SET:
+                confirmed += cnt
+                total_scheduled += cnt
+            elif appt_status in _CHECKED_IN_SET:
+                checked_in += cnt
+            elif appt_status in _CHECKED_OUT_SET:
+                checked_out += cnt
+            elif appt_status in _CANCELLED_SET:
+                cancelled_no_show_cnt = cnt  # counted below in total
+                pass
+            elif appt_status in _IN_PROGRESS_STATUS or queue_status in _IN_PROGRESS_QUEUE:
+                in_progress += cnt
+            elif queue_status.upper() in _WAITING_QUEUE:
+                waiting += cnt
+            if appt_status in _ADMIT_REC_STATUS or adm_status in _ADMIT_REC_STATUS or adm_rec:
+                admit_recommended += cnt
+            if appt_status in _ADMITTED_STATUS or adm_status in _ADMITTED_STATUS:
+                admitted += cnt
+
+        # cancelled = CANCELLED + NO_SHOW statuses combined
+        cancelled = sum(
+            row.cnt for row in rows
+            if (row.appointment_status or "") in _CANCELLED_SET
         )
 
         paginated = build_paginated_result(
@@ -217,7 +260,10 @@ class AppointmentService:
         if not appointment.token_number:
             raise BadRequestException("Token not generated for this appointment")
 
-        return TokenResponse(appointment_id=appointment.id, token_number=appointment.token_number)
+        return TokenResponse(
+            appointment_id=appointment.id,
+            token_number=appointment.token_number,
+        )
 
     async def _notify_confirmation_safely(self, appointment: Appointment, target_user_id: int):
         try:
@@ -275,6 +321,10 @@ class AppointmentService:
 
         update_data = data.model_dump(exclude_unset=True)
 
+        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+            # allow purely notes update if status isn't changing to a non-terminal state
+            if "appointment_status" in update_data and update_data["appointment_status"] != appointment.appointment_status:
+                raise BadRequestException("Cannot change status of a terminal appointment")
         # Prevent updating status directly to Completed without Check-In and Check-Out
         if update_data.get("appointment_status") == AppointmentStatus.COMPLETED:
             if not appointment.check_in_time or not appointment.check_out_time:
@@ -284,7 +334,7 @@ class AppointmentService:
 
         new_date = update_data.get("appointment_date", appointment.appointment_date)
         new_time = update_data.get("appointment_time", appointment.appointment_time)
-        
+
         if "appointment_date" in update_data or "appointment_time" in update_data:
             new_date, new_time = self._validate_future_datetime(new_date, new_time)
             if "appointment_date" in update_data:
@@ -319,6 +369,8 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+            raise BadRequestException("Cannot reschedule a terminal appointment")
         new_date, new_time = self._validate_future_datetime(data.appointment_date, data.appointment_time)
         rules = await self.validation_service.validate(
             appointment.doctor_id, new_date, new_time, exclude_id=appointment.id
@@ -330,18 +382,66 @@ class AppointmentService:
             appointment.notes = data.notes
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("reschedule", "appointments", user_id=user_id, resource_id=str(appointment.id))
+
+        try:
+            patient = await self.patient_repo.get_by_id(appointment.patient_id)
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+            user_target = (patient.user_id if patient and patient.user_id else None) or user_id
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).dispatch_notification(
+                user_id=user_target,
+                title="Appointment Rescheduled",
+                message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been rescheduled to {new_date} at {new_time}.",
+                notification_type="APPOINTMENT_RESCHEDULE",
+                reference_type="APPOINTMENT",
+                reference_id=appointment.id,
+                priority="NORMAL",
+                email=patient.email if patient else None,
+                phone=patient.phone if patient else None,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch reschedule notification: %s", exc)
+
         return AppointmentResponse.model_validate(appointment)
 
     async def cancel(self, data: CancelRequest, user_id: int) -> AppointmentResponse:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+            raise BadRequestException("Cannot cancel a terminal appointment")
         appointment.appointment_status = AppointmentStatus.CANCELLED
         appointment.queue_status = "CANCELLED"
         if data.reason:
             appointment.notes = data.reason
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("cancel", "appointments", user_id=user_id, resource_id=str(appointment.id))
+
+        try:
+            patient = await self.patient_repo.get_by_id(appointment.patient_id)
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+            user_target = (patient.user_id if patient and patient.user_id else None) or user_id
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).dispatch_notification(
+                user_id=user_target,
+                title="Appointment Cancelled",
+                message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been cancelled.",
+                notification_type="APPOINTMENT_CANCELLATION",
+                reference_type="APPOINTMENT",
+                reference_id=appointment.id,
+                priority="NORMAL",
+                email=patient.email if patient else None,
+                phone=patient.phone if patient else None,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch cancellation notification: %s", exc)
+
         return AppointmentResponse.model_validate(appointment)
 
     async def confirm(self, data: ConfirmRequest, user_id: int) -> AppointmentResponse:
@@ -491,9 +591,9 @@ class AppointmentService:
             raise BadRequestException("Cannot generate queue token for a cancelled appointment")
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
-        
+
         next_token = await self.repo.get_next_queue_token(appointment.appointment_date)
-        
+
         appointment.queue_token = next_token
         if not appointment.token_number:
             try:
@@ -621,46 +721,40 @@ class AppointmentService:
         return appointment
 
     async def _create_queue_notification(self, appointment: Appointment, message: str) -> None:
-        from app.models.notification_model import Notification
         from app.models.doctor_model import Doctor
         from app.models.patient_model import Patient
+        from app.services.notification_service import NotificationService
         from sqlalchemy import select
-        
-        # Find doctor user_id
+
         doc_user_id = await self.db.scalar(
             select(Doctor.user_id).where(Doctor.id == appointment.doctor_id)
         )
-        # Find patient user_id
         pat_user_id = await self.db.scalar(
             select(Patient.user_id).where(Patient.id == appointment.patient_id)
         )
-        
+
+        notif_service = NotificationService(self.db)
         if doc_user_id:
-            doc_notif = Notification(
+            await notif_service.dispatch_notification(
                 user_id=doc_user_id,
                 title="Appointment Queue Alert",
                 message=message,
                 notification_type="QUEUE_ALERT",
                 reference_type="APPOINTMENT",
                 reference_id=appointment.id,
-                priority="NORMAL",
-                is_read=False
+                priority="NORMAL"
             )
-            self.db.add(doc_notif)
-            
+
         if pat_user_id:
-            pat_notif = Notification(
+            await notif_service.dispatch_notification(
                 user_id=pat_user_id,
                 title="Appointment Queue Alert",
                 message=message,
                 notification_type="QUEUE_ALERT",
                 reference_type="APPOINTMENT",
                 reference_id=appointment.id,
-                priority="NORMAL",
-                is_read=False
+                priority="NORMAL"
             )
-            self.db.add(pat_notif)
-        await self.db.flush()
 
     async def get_confirmed_visit_list(
             self,
@@ -680,13 +774,13 @@ class AppointmentService:
                 search=search, doctor_id=doctor_id,
                 department_id=department_id, appointment_date=appointment_date,
             )
-            
+
             responses = []
             for appt in items:
                 p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else ""
                 doc_name = f"Dr. {appt.doctor.first_name} {appt.doctor.last_name}" if appt.doctor else ""
                 dept_name = appt.department.department_name if appt.department else None
-                
+
                 responses.append(
                     ConfirmedVisitResponse(
                         appointment_id=appt.id,
@@ -704,7 +798,7 @@ class AppointmentService:
                         queue_status=appt.queue_status
                     )
                 )
-                
+
             return build_paginated_result(responses, total, page, limit)
 
     async def download_appointment_pdf(self, appointment_id: int) -> bytes:
@@ -984,10 +1078,10 @@ class AppointmentService:
         from app.models.doctor_model import Doctor, DoctorSchedule
         from sqlalchemy import select
         from datetime import time as dt_time
-        
+
         # 1. Convert appointment_date to weekday (0 = Monday, 6 = Sunday)
         day_of_week = appointment_date.weekday()
-        
+
         # 2. Base query: Join DoctorSchedule with Doctor
         query = (
             select(Doctor, DoctorSchedule)
@@ -998,20 +1092,20 @@ class AppointmentService:
                 DoctorSchedule.is_active.is_(True)
             )
         )
-        
+
         # Apply filters
         if department_id is not None:
             query = query.where(Doctor.department_id == department_id)
         if specialization is not None and specialization.strip() != "":
             query = query.where(Doctor.specialization.ilike(f"%{specialization.strip()}%"))
-            
+
         result = await self.db.execute(query)
         rows = result.all()
-        
+
         response_list = []
         for doctor, sched in rows:
             is_available = True
-            
+
             # If appointment_time is provided, evaluate availability for the exact slot
             if appointment_time is not None:
                 if doctor.availability_status in ("onleave", "on_leave"):
@@ -1028,7 +1122,7 @@ class AppointmentService:
                         is_available = True
                     except Exception:
                         is_available = False
-                        
+
             response_list.append(
                 ScheduledDoctorResponse(
                     doctor_id=doctor.id,
@@ -1044,7 +1138,7 @@ class AppointmentService:
                     is_available=is_available
                 )
             )
-            
+
         return response_list
 
     async def recommend_admission(

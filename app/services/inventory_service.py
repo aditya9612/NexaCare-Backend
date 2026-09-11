@@ -679,6 +679,7 @@ class InventoryService:
             name=data.name,
             code=data.code if hasattr(data, 'code') and data.code else generate_code('WH'),
             location=data.location,
+            capacity=data.capacity,
             hospital_id=hospital_id
         )
         self.db.add(warehouse)
@@ -755,3 +756,31 @@ class InventoryService:
             total_vendors=0
         )
 
+    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
+        skip = (page - 1) * size
+        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
+        result = []
+        for alert in alerts:
+            item = await self.item_repo.get_by_id(alert.item_id)
+            result.append(ReorderAlertResponse(
+                id=alert.id,
+                item_id=alert.item_id,
+                item_name=item.name if item else "",
+                sku=item.sku if item else "",
+                current_quantity=alert.current_quantity,
+                reorder_level=alert.reorder_level,
+                status=alert.status,
+                created_at=alert.created_at,
+            ))
+        return result
+
+    async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:
+        now = utc_now()
+        if period == "daily":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "yearly":
+            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        rows = await self.transaction_repo.get_consumption_report(start, now)
+        return [ConsumptionReport(period=period, **row) for row in rows]

@@ -104,9 +104,7 @@ class BillingService:
         if "items" in state.unloaded and billing.id is not None:
             billing = await self.repo.get_by_id(billing.id)
 
-        subtotal = sum(
-            (item.quantity * item.unit_price) for item in billing.items
-        ) if billing.items else billing.subtotal
+        subtotal = sum((item.quantity * item.unit_price) for item in billing.items)
         totals = calculate_bill_totals(
             subtotal=subtotal,
             discount_percent=billing.discount_percent,
@@ -267,6 +265,26 @@ class BillingService:
             status="completed",
             user_id=user_id
         )
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+
+            if patient and patient.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Invoice Generated",
+                    message=f"An invoice ({billing.bill_number}) of {billing.total_amount} has been generated.",
+                    notification_type="INVOICE_CREATED",
+                    reference_type="BILLING",
+                    reference_id=billing.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
 
         return self._to_response(billing)
 
@@ -678,6 +696,28 @@ class BillingService:
             status="completed",
             user_id=user_id
         )
+
+        try:
+            from app.services.notification_service import NotificationService
+            from app.models.patient_model import Patient
+            import logging
+
+            patient = await self.db.get(Patient, billing.patient_id)
+            if patient and patient.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Payment Received",
+                    message=f"A payment of {payment.amount} has been received for bill {billing.bill_number}.",
+                    notification_type="PAYMENT_RECEIVED",
+                    reference_type="PAYMENT",
+                    reference_id=payment.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
 
         return PaymentResponse.model_validate(payment)
 

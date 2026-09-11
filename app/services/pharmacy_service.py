@@ -164,6 +164,22 @@ class PharmacyService:
             if existing:
                 raise ConflictException("Medicine with this barcode already exists")
 
+        from sqlalchemy import select, func
+
+        target_name = data.name.lower()
+        target_manufacturer = data.manufacturer.lower() if data.manufacturer else ""
+        target_batch = data.batch_number.lower() if data.batch_number else ""
+
+        dup_query = select(Medicine).where(
+            func.lower(Medicine.name) == target_name,
+            func.coalesce(func.lower(Medicine.manufacturer), "") == target_manufacturer,
+            func.coalesce(func.lower(Medicine.batch_number), "") == target_batch,
+            Medicine.is_deleted.is_(False)
+        )
+        existing_dup = await self.db.scalar(dup_query)
+        if existing_dup:
+            raise ConflictException("Medicine with this name, manufacturer, and batch number already exists")
+
         sku = generate_medicine_sku()
         inv_item = InventoryItem(
             name=data.name,
@@ -210,8 +226,25 @@ class PharmacyService:
         medicine = await self.medicine_repo.get_by_id(medicine_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
-        for key, value in data.model_dump(exclude_unset=True).items():
+
+        update_data = data.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
             setattr(medicine, key, value)
+
+        # Synchronize denormalized fields to InventoryItem if it exists
+        if medicine.inventory_item_id:
+            from app.repositories.inventory_repository import InventoryRepository
+            inv_repo = InventoryRepository(self.db)
+            inv_item = await inv_repo.get_by_id(medicine.inventory_item_id)
+            if inv_item:
+                if "name" in update_data: inv_item.name = update_data["name"]
+                if "category" in update_data: inv_item.category = update_data["category"]
+                if "unit" in update_data: inv_item.unit = update_data["unit"]
+                if "unit_price" in update_data: inv_item.unit_cost = update_data["unit_price"]
+                if "reorder_level" in update_data: inv_item.reorder_level = update_data["reorder_level"]
+                if "expiry_date" in update_data: inv_item.expiry_date = update_data["expiry_date"]
+                if "barcode" in update_data: inv_item.barcode = update_data["barcode"]
+
         medicine = await self.medicine_repo.update(medicine)
         await self.audit_repo.create("update", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
         return MedicineResponse.model_validate(medicine)
@@ -378,6 +411,26 @@ class PharmacyService:
             user_id=user_id,
             resource_id=str(prescription.id)
         )
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+            if patient_exists and patient_exists.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient_exists.user_id,
+                    title="Prescription Issued",
+                    message=f"Your prescription {prescription.prescription_number} has been issued and is ready for review.",
+                    notification_type="PRESCRIPTION_ISSUED",
+                    reference_type="PRESCRIPTION",
+                    reference_id=prescription.id,
+                    priority="NORMAL",
+                    email=patient_exists.email,
+                    phone=patient_exists.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch prescription issued notification: %s", exc)
+
         return self._prescription_response(prescription)
     async def list_prescriptions(
         self,
@@ -568,6 +621,30 @@ class PharmacyService:
             user_id=user_id,
             resource_id=str(prescription.id)
         )
+
+        if target_status == "dispensed" and current_status != "dispensed":
+            try:
+                from app.services.notification_service import NotificationService
+                from app.models.patient_model import Patient
+                import logging
+
+                patient = await self.db.get(Patient, prescription.patient_id)
+                if patient and patient.user_id:
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Prescription Dispensed",
+                        message=f"Your prescription ({prescription.prescription_number}) has been dispensed and is ready for pickup/use.",
+                        notification_type="PRESCRIPTION_DISPENSED",
+                        reference_type="PHARMACY_PRESCRIPTION",
+                        reference_id=prescription.id,
+                        priority="NORMAL",
+                        email=patient.email,
+                        phone=patient.phone,
+                    )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch prescription dispensed notification: %s", exc)
+
         return self._prescription_response(prescription)
 
     async def return_prescription(self, prescription_id: int, user_id: int) -> PrescriptionResponse:
@@ -679,6 +756,12 @@ class PharmacyService:
             await self.medicine_repo.update_stock(medicine.id, -item.quantity)
             item.dispensed_quantity = item.quantity
 
+            if item.batch_number:
+                batch = await self.batch_repo.get_by_batch_number(medicine.id, item.batch_number)
+                if batch:
+                    await self.batch_repo.update_batch_reserved_stock(batch.id, -item.quantity)
+                    await self.batch_repo.update_batch_stock(batch.id, -item.quantity)
+
             invoice_items_create.append(
                 PharmacyInvoiceItemCreate(
                     medicine_id=item.medicine_id,
@@ -730,9 +813,6 @@ class PharmacyService:
 
     # --- Invoices ---
     async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int) -> PharmacyInvoiceResponse:
-        from app.models.inventory_model import Warehouse
-        from app.services.stock_movement_service import StockMovementService
-
         return await self._create_invoice_internal(data, user_id, deduct_stock=True)
 
     async def _create_invoice_internal(
@@ -741,6 +821,9 @@ class PharmacyService:
         user_id: int,
         deduct_stock: bool = True
     ) -> PharmacyInvoiceResponse:
+        from app.models.inventory_model import Warehouse
+        from app.services.stock_movement_service import StockMovementService
+
         if data.patient_id is not None:
             patient = await self.patient_repo.get_by_id(data.patient_id)
             if not patient:
@@ -779,6 +862,13 @@ class PharmacyService:
                 if medicine.expiry_date and medicine.expiry_date < date.today():
                     raise BadRequestException(f"Medicine {medicine.name} has expired")
                 await self.medicine_repo.update_stock(item_data.medicine_id, -item_data.quantity)
+
+                # Deduct from batch
+                batch_num = item_data.batch_number or medicine.batch_number
+                if batch_num:
+                    batch = await self.batch_repo.get_by_batch_number(medicine.id, batch_num)
+                    if batch:
+                        await self.batch_repo.update_batch_stock(batch.id, -item_data.quantity)
 
             unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
             line_total = round(item_data.quantity * unit_price, 2)
@@ -1755,15 +1845,19 @@ class PharmacyService:
         )
         today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
-        # 5. Monthly / Period Sales (Invoice amount in the filtered period)
+        # 5. Monthly Sales (Invoice/billing amount for current month)
+        month_start = datetime.combine(today_ist.replace(day=1), time.min)
+        if month_start.month == 12:
+            next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            next_month_start = month_start.replace(month=month_start.month + 1)
+
         monthly_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
+            PharmacyInvoice.created_at >= month_start,
+            PharmacyInvoice.created_at < next_month_start
         )
-        if start_dt:
-            monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at >= start_dt)
-        if end_dt:
-            monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at <= end_dt)
 
         monthly_sales = (await self.db.scalar(monthly_sales_query)) or 0.0
 
@@ -1775,6 +1869,7 @@ class PharmacyService:
             pending_purchases_query = pending_purchases_query.where(Purchase.created_at >= start_dt)
         if end_dt:
             pending_purchases_query = pending_purchases_query.where(Purchase.created_at <= end_dt)
+
         pending_purchases = (await self.db.scalar(pending_purchases_query)) or 0
 
         # 7. Total Suppliers (Count active suppliers)
@@ -1796,6 +1891,7 @@ class PharmacyService:
             prescriptions_query = prescriptions_query.where(Prescription.created_at >= start_dt)
         if end_dt:
             prescriptions_query = prescriptions_query.where(Prescription.created_at <= end_dt)
+
         prescriptions = (await self.db.scalar(prescriptions_query)) or 0
 
         # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
@@ -2159,7 +2255,7 @@ class PharmacyService:
 
             header_font = Font(name="Calibri", size=11, bold=True, color="000000")
             header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid") # White background
-            
+
             thin_side = Side(style='thin', color='DDDDDD')
             thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
             zebra_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid") # subtle shading
@@ -2210,7 +2306,7 @@ class PharmacyService:
                     cell.border = thin_border
                     if is_shaded_row:
                         cell.fill = zebra_fill
-                    
+
                     # Alignments and wrapping
                     # Center: Sr. No. (1), SKU (2), Category (5), Barcode (6), Batch (7), Expiry (8), Unit (10), Price (11), Stock (12), Reorder (13)
                     # Left: Name (3), Generic Name (4), Manufacturer (9), Description (14)
@@ -2456,7 +2552,7 @@ class PharmacyService:
         if format_type == "excel":
             import openpyxl
             from openpyxl.styles import Font
-            
+
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Suppliers Export"
@@ -2467,12 +2563,12 @@ class PharmacyService:
             ]
             ws.append(headers)
 
-            
+
             # Apply styling to the header row (Bold, Size 12)
             header_font = Font(name="Calibri", size=12, bold=True)
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=1, column=col_idx).font = header_font
-            
+
             for sr_no, s in enumerate(suppliers, start=1):
                 row = [
                     sr_no,

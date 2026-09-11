@@ -103,7 +103,16 @@ class StockMovementService:
 
             batch.quantity = batch.quantity + quantity if direction == "IN" else batch.quantity - quantity
 
-        # 3. Create Ledger Entry
+        # 3. Update global InventoryItem.quantity
+        from app.repositories.inventory_repository import InventoryRepository
+        inv_repo = InventoryRepository(db)
+        inv_delta = quantity if direction == "IN" else -quantity
+        try:
+            await inv_repo.update_quantity(item_id, inv_delta)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # 4. Create Ledger Entry
         tx_number = f"TX-{uuid.uuid4().hex[:8].upper()}"
 
         transaction = StockTransaction(

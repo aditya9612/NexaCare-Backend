@@ -231,8 +231,9 @@ class LabDashboardRepository:
     async def get_average_turnaround_hours(
         self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
     ) -> float:
+        from sqlalchemy import text
         query = (
-            select(TestOrder.ordered_at, TestOrder.completed_at)
+            select(func.avg(func.timestampdiff(text('SECOND'), TestOrder.ordered_at, TestOrder.completed_at) / 3600.0))
             .where(
                 TestOrder.is_deleted.is_(False),
                 TestOrder.completed_at.is_not(None)
@@ -241,12 +242,10 @@ class LabDashboardRepository:
         if department_id is not None:
             query = query.where(TestOrder.department_id == department_id)
         query = self._apply_date_filter(query, TestOrder.completed_at, start_date, end_date)
-        res = await self.db.execute(query)
-        rows = res.all()
-        if not rows:
+        avg_hours = await self.db.scalar(query)
+        if avg_hours is None:
             return 2.4
-        total_hours = sum((row[1] - row[0]).total_seconds() / 3600.0 for row in rows if row[1] and row[0])
-        return round(total_hours / len(rows), 1) if rows else 2.4
+        return round(float(avg_hours), 1)
 
     async def get_abnormal_detect_rate(
         self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None

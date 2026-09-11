@@ -52,7 +52,7 @@ class BillingUpdate(BaseSchema):
     due_date: datetime | None = None
     notes: str | None = None
     status: str | None = None
-    items: List[BillItemCreate] | None = None
+    items: List[BillItemCreate] | None = Field(None, min_length=1)
 
 
 class BillingResponse(BaseSchema):

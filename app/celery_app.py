@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.tasks.reminder_tasks",
         "app.tasks.lab_tasks",
         "app.tasks.notification_tasks",
+        "app.tasks.faq_ai_tasks",
     ],
 )
 
@@ -53,7 +54,7 @@ celery_app.conf.update(
         },
         "refresh-analytics-cache": {
             "task": "app.tasks.analytics_tasks.refresh_dashboard_cache",
-            "schedule": 600.0,
+            "schedule": 280.0,  # Must be < ANALYTICS_CACHE_TTL_SECONDS (300s) to prevent stale reads
         },
         "schedule-voice-reminders": {
             "task": "app.tasks.reminder_tasks.schedule_appointment_voice_reminders",

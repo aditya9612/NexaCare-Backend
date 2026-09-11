@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -71,7 +71,10 @@ class AnalyticsService:
             select(func.coalesce(func.sum(Billing.paid_amount), 0.0)).where(Billing.is_deleted.is_(False))
         ) or 0.0
         appointments_today = await self.db.scalar(
-            select(func.count()).select_from(Appointment).where(Appointment.appointment_date == today)
+            select(func.count()).select_from(Appointment).where(
+                Appointment.appointment_date == today,
+                Appointment.appointment_status.notin_([AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW])
+            )
         ) or 0
         total_patients = await self.db.scalar(
             select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
@@ -191,6 +194,7 @@ class AnalyticsService:
             .where(
                 Appointment.created_at >= start,
                 Appointment.created_at <= end,
+                Appointment.appointment_status.notin_([AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW])
             )
             .group_by(Department.department_id, Department.department_name)
         )
@@ -222,7 +226,14 @@ class AnalyticsService:
         ) or 0
         appt_counts = await self.db.execute(
             select(Doctor.id, Doctor.first_name, Doctor.last_name, func.count(Appointment.id))
-            .join(Appointment, Appointment.doctor_id == Doctor.id, isouter=True)
+            .join(
+                Appointment,
+                and_(
+                    Appointment.doctor_id == Doctor.id,
+                    Appointment.appointment_status.notin_([AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW])
+                ),
+                isouter=True
+            )
             .where(Doctor.is_deleted.is_(False))
             .group_by(Doctor.id)
             .order_by(func.count(Appointment.id).desc())
@@ -471,7 +482,10 @@ class AnalyticsService:
         for i in range(days - 1, -1, -1):
             d = date.today() - timedelta(days=i)
             count = await self.db.scalar(
-                select(func.count()).select_from(Appointment).where(Appointment.appointment_date == d)
+                select(func.count()).select_from(Appointment).where(
+                    Appointment.appointment_date == d,
+                    Appointment.appointment_status.notin_([AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW])
+                )
             ) or 0
             points.append(ChartDataPoint(label=d.isoformat(), value=float(count)))
         return points

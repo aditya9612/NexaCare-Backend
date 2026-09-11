@@ -26,7 +26,7 @@ class LabTestUpdate(BaseSchema):
     turnaround_hours: int | None = Field(None, ge=1)
     normal_range: str | None = None
     is_active: bool | None = None
-    department_id: int
+    department_id: int | None = None
 
 
 class LabTestResponse(BaseSchema):
@@ -56,7 +56,6 @@ class TestOrderCreate(BaseSchema):
 
 class TestOrderUpdate(BaseSchema):
     lab_test_id: int | None = None
-    status: str | None = None
     priority: str | None = None
     notes: str | None = None
 
@@ -89,7 +88,6 @@ class SampleCreate(BaseSchema):
 class SampleUpdate(BaseSchema):
     sample_type: str | None = None
     collection_date: datetime | None = None
-    status: str | None = None
     volume: str | None = None
     notes: str | None = None
 

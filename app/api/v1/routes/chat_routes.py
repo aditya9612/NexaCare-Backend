@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 
+from app.core.chat_auth import verify_chat_hospital_scope
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.schemas.chat_schema import (
@@ -29,6 +30,7 @@ async def start_session(
     current_user: CurrentUser,
     _: User = Depends(require_permission("ai_chat", "create")),
 ):
+    verify_chat_hospital_scope(current_user, data.hospital_id)
     session = await ChatService(db).start_session(data)
     return APIResponse(message="Chat session started", data=session)
 

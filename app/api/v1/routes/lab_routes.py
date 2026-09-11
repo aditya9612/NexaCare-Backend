@@ -62,8 +62,13 @@ async def list_lab_tests(
     from app.core.exceptions import BadRequestException
     from sqlalchemy import select
 
-    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
-    doctor_id = doctor.id if doctor else None
+    service = LabService(db)
+    is_admin = await service._is_admin_user(current_user.id)
+
+    doctor_id = None
+    if not is_admin:
+        doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+        doctor_id = doctor.id if doctor else None
 
     # Resolve department_id for Lab Technician
     role_name = current_user.role.name.lower() if current_user and current_user.role else ""

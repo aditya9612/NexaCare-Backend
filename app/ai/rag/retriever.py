@@ -31,6 +31,7 @@ from app.repositories.hospital_voice_repository import (
     HospitalPolicyRepository,
     HospitalVoiceDocumentRepository,
 )
+from app.repositories.hospital_voice_document_chunk_repository import HospitalVoiceDocumentChunkRepository
 
 # Source reliability for active KB rows (not a tiebreaker — used in fusion).
 SOURCE_AUTHORITY_SCORE = {"faq": 1.0, "policy": 0.85, "document": 0.70}
@@ -1221,6 +1222,7 @@ class KnowledgeRetriever:
         self.faq_repo = HospitalFaqRepository(db)
         self.policy_repo = HospitalPolicyRepository(db)
         self.doc_repo = HospitalVoiceDocumentRepository(db)
+        self.chunk_repo = HospitalVoiceDocumentChunkRepository(db)
 
     async def diagnose(
         self,
@@ -1545,6 +1547,21 @@ class KnowledgeRetriever:
                 "source_type": "document",
                 "source_id": d.id,
             }
+            
+        chunks = await self.chunk_repo.list_for_hospital(hospital_id)
+        for c in chunks:
+            ref = f"document_chunk:{c.id}"
+            title = c.document.title if c.document else ""
+            lookup[ref] = {
+                "text": c.text,
+                "label": f"[document_chunk:{c.id}] Title: {title}\nContent: {c.text}",
+                "embed_text": f"{title}\n{c.text}".strip(),
+                "language": c.document.language if c.document else language,
+                "hospital_id": c.document.hospital_id if c.document else hospital_id,
+                "source_type": "document_chunk",
+                "source_id": c.id,
+            }
+            
         return lookup
 
     async def _backfill_missing(

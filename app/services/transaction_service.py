@@ -40,7 +40,44 @@ class TransactionService:
                 billing.paid_amount = round(paid_amt - data.amount, 2)
             else:
                 b_status = str(billing.status).strip().lower() if billing.status else ""
-                if b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt):
+                is_fully_paid = b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt)
+
+                from sqlalchemy import select
+                existing_payments_res = await self.db.scalars(
+                    select(Payment).where(
+                        Payment.billing_id == data.billing_id,
+                        Payment.is_refund.is_(False),
+                        Payment.status == "completed",
+                    )
+                )
+                existing_payments = list(existing_payments_res.all())
+
+                req_method = (data.payment_method or "").strip().lower()
+                if req_method == "cheques":
+                    req_method = "cheque"
+                req_ref = data.transaction_ref.strip() if data.transaction_ref and data.transaction_ref.strip() else None
+
+                is_duplicate = is_fully_paid
+                if not is_duplicate:
+                    for p in existing_payments:
+                        p_ref = p.transaction_ref.strip() if p.transaction_ref and p.transaction_ref.strip() else None
+                        p_method = (p.payment_method or "").strip().lower()
+                        if p_method == "cheques":
+                            p_method = "cheque"
+
+                        if req_ref and p_ref and req_ref.lower() == p_ref.lower():
+                            is_duplicate = True
+                            break
+
+                        if (
+                            round(p.amount, 2) == round(data.amount, 2)
+                            and p_method == req_method
+                            and (p_ref == req_ref or (p_ref is None and req_ref is None))
+                        ):
+                            is_duplicate = True
+                            break
+
+                if is_duplicate:
                     raise BadRequestException("Payment record already exists for this bill")
 
                 balance_due = round(total_amt - paid_amt, 2)

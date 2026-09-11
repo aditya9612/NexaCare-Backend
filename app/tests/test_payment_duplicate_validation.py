@@ -20,6 +20,8 @@ async def test_payment_duplicate_validation_service_flow():
         bill = Billing(
             bill_number=generate_bill_number(),
             patient_id=1,
+            subtotal=500.0,
+            gst_rate=0.0,
             total_amount=500.0,
             paid_amount=0.0,
             status=BillingStatus.PENDING,
@@ -68,6 +70,8 @@ async def test_payment_duplicate_validation_service_flow():
         unpaid_bill = Billing(
             bill_number=generate_bill_number(),
             patient_id=1,
+            subtotal=200.0,
+            gst_rate=0.0,
             total_amount=200.0,
             paid_amount=0.0,
             status=BillingStatus.PENDING,
@@ -90,6 +94,8 @@ async def test_payment_duplicate_validation_service_flow():
         cancelled_bill = Billing(
             bill_number=generate_bill_number(),
             patient_id=1,
+            subtotal=100.0,
+            gst_rate=0.0,
             total_amount=100.0,
             paid_amount=0.0,
             status=BillingStatus.CANCELLED,
@@ -103,3 +109,55 @@ async def test_payment_duplicate_validation_service_flow():
         with pytest.raises(BadRequestException) as exc_cancel:
             await billing_service.collect_payment(cancelled_bill.id, payment_data, user_id=1)
         assert exc_cancel.value.detail == "Cannot collect payment on cancelled bill"
+
+        # 6. Partial payment followed by duplicate request rejection
+        partial_bill = Billing(
+            bill_number=generate_bill_number(),
+            patient_id=1,
+            subtotal=500.0,
+            gst_rate=0.0,
+            total_amount=500.0,
+            paid_amount=0.0,
+            status=BillingStatus.PENDING,
+            is_deleted=False,
+            created_at=utc_now(),
+        )
+        session.add(partial_bill)
+        await session.commit()
+        await session.refresh(partial_bill)
+
+        # First partial payment: amount = 1.0, CASH
+        req1 = PaymentCreate(amount=1.0, payment_method="CASH")
+        resp1 = await billing_service.collect_payment(partial_bill.id, req1, user_id=1)
+        assert resp1 is not None
+        assert resp1.amount == 1.0
+
+        await session.refresh(partial_bill)
+        assert partial_bill.paid_amount == 1.0
+
+        # Duplicate request (exact same parameters: amount = 1.0, CASH) -> MUST fail with "Payment record already exists for this bill"
+        req_dup = PaymentCreate(amount=1.0, payment_method="CASH")
+        with pytest.raises(BadRequestException) as exc_dup:
+            await billing_service.collect_payment(partial_bill.id, req_dup, user_id=1)
+        assert exc_dup.value.detail == "Payment record already exists for this bill"
+        assert exc_dup.value.detail != "Payment amount exceeds balance due"
+
+        # Verify bill paid_amount is still 1.0 and no 2nd payment was added
+        await session.refresh(partial_bill)
+        assert partial_bill.paid_amount == 1.0
+
+        # Legitimate non-duplicate partial payment: amount = 50.0, CARD -> SUCCEEDS
+        req_valid_partial = PaymentCreate(amount=50.0, payment_method="CARD", transaction_ref="TXN_CARD_001")
+        resp2 = await billing_service.collect_payment(partial_bill.id, req_valid_partial, user_id=1)
+        assert resp2 is not None
+        assert resp2.amount == 50.0
+
+        await session.refresh(partial_bill)
+        assert partial_bill.paid_amount == 51.0
+
+        # Over-balance non-duplicate payment: amount = 1000.0, UPI -> fails with "Payment amount exceeds balance due"
+        req_over_partial = PaymentCreate(amount=1000.0, payment_method="UPI", transaction_ref="TXN_UPI_999")
+        with pytest.raises(BadRequestException) as exc_over_p:
+            await billing_service.collect_payment(partial_bill.id, req_over_partial, user_id=1)
+        assert exc_over_p.value.detail == "Payment amount exceeds balance due"
+

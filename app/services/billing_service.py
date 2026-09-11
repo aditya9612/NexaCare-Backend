@@ -657,17 +657,6 @@ class BillingService:
 
         if billing.status == BillingStatus.CANCELLED:
             raise BadRequestException("Cannot collect payment on cancelled bill")
-        total_amt = billing.total_amount or 0.0
-        paid_amt = billing.paid_amount or 0.0
-
-        b_status = str(billing.status).strip().lower() if billing.status else ""
-        if b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt):
-            raise BadRequestException("Payment record already exists for this bill")
-
-        balance_due = round(total_amt - paid_amt, 2)
-        if data.amount > balance_due:
-            raise BadRequestException("Payment amount exceeds balance due")
-
         # Defensive normalization
         method = data.payment_method.strip().lower()
         if method == "cheques":
@@ -678,6 +667,51 @@ class BillingService:
             data.transaction_ref = data.transaction_ref.strip()
             if not data.transaction_ref:
                 data.transaction_ref = None
+
+        total_amt = billing.total_amount or 0.0
+        paid_amt = billing.paid_amount or 0.0
+
+        b_status = str(billing.status).strip().lower() if billing.status else ""
+        is_fully_paid = b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt)
+
+        from app.models.billing_model import Payment
+        from sqlalchemy import select
+
+        existing_payments_res = await self.db.scalars(
+            select(Payment).where(
+                Payment.billing_id == billing_id,
+                Payment.is_refund.is_(False),
+                Payment.status == "completed",
+            )
+        )
+        existing_payments = list(existing_payments_res.all())
+
+        is_duplicate = is_fully_paid
+        if not is_duplicate:
+            for p in existing_payments:
+                p_ref = p.transaction_ref.strip() if p.transaction_ref and p.transaction_ref.strip() else None
+                p_method = (p.payment_method or "").strip().lower()
+                if p_method == "cheques":
+                    p_method = "cheque"
+
+                if data.transaction_ref and p_ref and data.transaction_ref.lower() == p_ref.lower():
+                    is_duplicate = True
+                    break
+
+                if (
+                    round(p.amount, 2) == round(data.amount, 2)
+                    and p_method == data.payment_method
+                    and (p_ref == data.transaction_ref or (p_ref is None and data.transaction_ref is None))
+                ):
+                    is_duplicate = True
+                    break
+
+        if is_duplicate:
+            raise BadRequestException("Payment record already exists for this bill")
+
+        balance_due = round(total_amt - paid_amt, 2)
+        if data.amount > balance_due:
+            raise BadRequestException("Payment amount exceeds balance due")
 
         payment = Payment(
             billing_id=billing_id,

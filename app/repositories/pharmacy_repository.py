@@ -869,7 +869,12 @@ class PharmacyDashboardRepository:
         ]
         return weeks
 
-    async def get_inventory_status_mix(self, reference_date: date) -> dict:
+    async def get_inventory_status_mix(
+        self,
+        reference_date: date,
+        start_dt: Optional[datetime] = None,
+        end_dt: Optional[datetime] = None,
+    ) -> dict:
         thirty_days_later = reference_date + timedelta(days=30)
 
         query = select(
@@ -878,6 +883,11 @@ class PharmacyDashboardRepository:
             func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
             func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
         ).where(Medicine.is_deleted.is_(False))
+
+        if start_dt:
+            query = query.where(Medicine.created_at >= start_dt)
+        if end_dt:
+            query = query.where(Medicine.created_at <= end_dt)
 
         res = await self.db.execute(query)
         row = res.fetchone()

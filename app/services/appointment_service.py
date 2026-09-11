@@ -1185,6 +1185,36 @@ class AppointmentService:
         from sqlalchemy import select, and_, not_, exists, or_
         from sqlalchemy.orm import selectinload
 
+        admit_rec_variants = [
+            "Admit Recommended",
+            "admit recommended",
+            "Admit-Recommended",
+            "admit-recommended",
+            "admit_recommended",
+            "ADMIT_RECOMMENDED",
+        ]
+
+        excluded_adm_variants = [
+            "Admitted",
+            "admitted",
+            "ADMITTED",
+            "Discharged",
+            "discharged",
+            "DISCHARGED",
+            "Cancelled",
+            "cancelled",
+            "CANCELLED",
+        ]
+
+        excluded_appt_variants = [
+            "Admitted",
+            "admitted",
+            "ADMITTED",
+            "Cancelled",
+            "cancelled",
+            "CANCELLED",
+        ]
+
         stmt = (
             select(Appointment)
             .options(
@@ -1195,12 +1225,23 @@ class AppointmentService:
             )
             .where(
                 or_(
-                    Appointment.admission_status == AdmissionStatus.ADMIT_RECOMMENDED,
-                    Appointment.appointment_status == AppointmentStatus.ADMIT_RECOMMENDED,
-                    Appointment.admission_recommended.is_(True),
+                    Appointment.admission_status.in_(admit_rec_variants),
+                    and_(
+                        Appointment.admission_recommended.is_(True),
+                        or_(
+                            Appointment.admission_status.is_(None),
+                            Appointment.admission_status.in_(admit_rec_variants),
+                        ),
+                    ),
                 ),
-                Appointment.admission_status != AdmissionStatus.ADMITTED,
-                Appointment.appointment_status != AppointmentStatus.ADMITTED,
+                or_(
+                    Appointment.admission_status.is_(None),
+                    Appointment.admission_status.notin_(excluded_adm_variants),
+                ),
+                or_(
+                    Appointment.appointment_status.is_(None),
+                    Appointment.appointment_status.notin_(excluded_appt_variants),
+                ),
                 not_(
                     exists().where(
                         and_(
@@ -1208,7 +1249,7 @@ class AppointmentService:
                             Bed.status == "Occupied",
                         )
                     )
-                )
+                ),
             )
             .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
         )

@@ -106,37 +106,49 @@ class PharmacyService:
         now_dt = utc_now()
         today_date = now_dt.date()
 
-        if time_filter == "today":
+        if start_date or end_date or time_filter == "custom":
+            s_date = start_date or (end_date - timedelta(days=7) if end_date else today_date - timedelta(days=7))
+            e_date = end_date or today_date
+            start = datetime.combine(s_date, time.min)
+            end = datetime.combine(e_date, time.max)
+            return start, end
+
+        tf = (time_filter or "").lower()
+        if tf == "today":
             start = datetime.combine(today_date, time.min)
             end = datetime.combine(today_date, time.max)
             return start, end
-        elif time_filter in ("7_days", "last_7_days"):
+        elif tf in ("7_days", "last_7_days", "week", "this_week"):
             start_date_val = today_date - timedelta(days=7)
             start = datetime.combine(start_date_val, time.min)
             end = now_dt
             return start, end
-        elif time_filter in ("30_days", "last_30_days"):
+        elif tf in ("30_days", "last_30_days"):
             start_date_val = today_date - timedelta(days=30)
             start = datetime.combine(start_date_val, time.min)
             end = now_dt
             return start, end
-        elif time_filter in ("month", "month_to_date"):
+        elif tf in ("month", "month_to_date", "this_month"):
             start = datetime.combine(today_date.replace(day=1), time.min)
             end = now_dt
             return start, end
-        elif time_filter == "3_month":
+        elif tf in ("3_month", "3_months", "90_days"):
             start_date_val = today_date - timedelta(days=90)
             start = datetime.combine(start_date_val, time.min)
             end = now_dt
             return start, end
-        elif time_filter == "custom":
-            if not start_date or not end_date:
-                start = datetime.combine(today_date, time.min)
-                end = datetime.combine(today_date, time.max)
-                return start, end
-            start = datetime.combine(start_date, time.min)
-            end = datetime.combine(end_date, time.max)
+        elif tf in ("6_month", "6_months", "180_days"):
+            start_date_val = today_date - timedelta(days=180)
+            start = datetime.combine(start_date_val, time.min)
+            end = now_dt
             return start, end
+        elif tf in ("1_year", "year", "12_months", "365_days"):
+            start_date_val = today_date - timedelta(days=365)
+            start = datetime.combine(start_date_val, time.min)
+            end = now_dt
+            return start, end
+        elif tf in ("overall", "all", "all_time"):
+            return None, None
         else:
             return None, None
 
@@ -1675,45 +1687,61 @@ class PharmacyService:
 
         today_ist = get_today_ist()
 
-        # 1. Total Medicines (active, i.e., is_deleted=False and is_active=True)
-        total_medicines = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True)
-            )
-        )) or 0
+        # 1. Total Medicines (active, created in period if filtered)
+        total_medicines_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True)
+        )
+        if start_dt:
+            total_medicines_query = total_medicines_query.where(Medicine.created_at >= start_dt)
+        if end_dt:
+            total_medicines_query = total_medicines_query.where(Medicine.created_at <= end_dt)
+        total_medicines = (await self.db.scalar(total_medicines_query)) or 0
 
-        # 2. Low Stock Alerts (Medicine.stock_quantity <= Medicine.reorder_level)
-        low_stock_alerts = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity <= Medicine.reorder_level
-            )
-        )) or 0
+        # 2. Low Stock Alerts (Medicine.stock_quantity <= Medicine.reorder_level, created in period if filtered)
+        low_stock_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity <= Medicine.reorder_level
+        )
+        if start_dt:
+            low_stock_query = low_stock_query.where(Medicine.created_at >= start_dt)
+        if end_dt:
+            low_stock_query = low_stock_query.where(Medicine.created_at <= end_dt)
+        low_stock_alerts = (await self.db.scalar(low_stock_query)) or 0
 
-        # 3. Expired Alerts (Near expiry and expired: Medicine.expiry_date <= today_ist + 30 days, stock_quantity > 0)
-        threshold_date = today_ist + timedelta(days=30)
-        expired_alerts = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity > 0,
-                Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date <= threshold_date
+        # 3. Expired Alerts (Medicine.expiry_date in period or near expiry, stock_quantity > 0)
+        expired_alerts_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity > 0,
+            Medicine.expiry_date.isnot(None),
+        )
+        if start_dt and end_dt:
+            expired_alerts_query = expired_alerts_query.where(
+                Medicine.expiry_date >= start_dt.date(),
+                Medicine.expiry_date <= end_dt.date()
             )
-        )) or 0
+        else:
+            threshold_date = today_ist + timedelta(days=30)
+            expired_alerts_query = expired_alerts_query.where(Medicine.expiry_date <= threshold_date)
+        expired_alerts = (await self.db.scalar(expired_alerts_query)) or 0
 
-        # Expired medicines count (strictly expired: Medicine.expiry_date < today_ist, stock_quantity > 0)
-        expired_medicines_alerts = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity > 0,
-                Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date < today_ist
+        # Expired medicines count (strictly expired in period)
+        expired_medicines_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity > 0,
+            Medicine.expiry_date.isnot(None),
+        )
+        if start_dt and end_dt:
+            expired_medicines_query = expired_medicines_query.where(
+                Medicine.expiry_date >= start_dt.date(),
+                Medicine.expiry_date <= end_dt.date()
             )
-        )) or 0
+        else:
+            expired_medicines_query = expired_medicines_query.where(Medicine.expiry_date < today_ist)
+        expired_medicines_alerts = (await self.db.scalar(expired_medicines_query)) or 0
 
         # 4. Today Sales (Strictly today's sales from 00:00:00 to 23:59:59 IST)
         today_start = datetime.combine(today_ist, time.min)
@@ -1727,64 +1755,64 @@ class PharmacyService:
         )
         today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
-        # 5. Monthly Sales (Invoice/billing amount for current month, OR in the filtered period)
-        month_start = datetime.combine(today_ist.replace(day=1), time.min)
-        if month_start.month == 12:
-            next_month_start = month_start.replace(year=month_start.year + 1, month=1)
-        else:
-            next_month_start = month_start.replace(month=month_start.month + 1)
-
+        # 5. Monthly / Period Sales (Invoice amount in the filtered period)
         monthly_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
         )
-        if time_filter in ("overall", "30_days", "7_days", "3_month", "custom"):
-            if start_dt:
-                monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at >= start_dt)
-            if end_dt:
-                monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at <= end_dt)
-        else:
-            monthly_sales_query = monthly_sales_query.where(
-                PharmacyInvoice.created_at >= month_start,
-                PharmacyInvoice.created_at < next_month_start
-            )
+        if start_dt:
+            monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at >= start_dt)
+        if end_dt:
+            monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.created_at <= end_dt)
 
         monthly_sales = (await self.db.scalar(monthly_sales_query)) or 0.0
 
         # 6. Pending Purchases (Count status: Pending, Ordered)
-        pending_purchases = (await self.db.scalar(
-            select(func.count(Purchase.id)).where(
-                Purchase.status.in_(["Pending", "Ordered"])
-            )
-        )) or 0
+        pending_purchases_query = select(func.count(Purchase.id)).where(
+            Purchase.status.in_(["Pending", "Ordered"])
+        )
+        if start_dt:
+            pending_purchases_query = pending_purchases_query.where(Purchase.created_at >= start_dt)
+        if end_dt:
+            pending_purchases_query = pending_purchases_query.where(Purchase.created_at <= end_dt)
+        pending_purchases = (await self.db.scalar(pending_purchases_query)) or 0
 
         # 7. Total Suppliers (Count active suppliers)
-        total_suppliers = (await self.db.scalar(
-            select(func.count(Supplier.id)).where(
-                Supplier.is_deleted.is_(False)
-            )
-        )) or 0
+        total_suppliers_query = select(func.count(Supplier.id)).where(
+            Supplier.is_deleted.is_(False)
+        )
+        if start_dt:
+            total_suppliers_query = total_suppliers_query.where(Supplier.created_at >= start_dt)
+        if end_dt:
+            total_suppliers_query = total_suppliers_query.where(Supplier.created_at <= end_dt)
+        total_suppliers = (await self.db.scalar(total_suppliers_query)) or 0
 
         # 8. Prescriptions (Count active prescriptions pending to be dispensed)
-        prescriptions = (await self.db.scalar(
-            select(func.count(Prescription.id)).where(
-                Prescription.is_deleted.is_(False),
-                Prescription.status == "pending"
-            )
-        )) or 0
+        prescriptions_query = select(func.count(Prescription.id)).where(
+            Prescription.is_deleted.is_(False),
+            Prescription.status == "pending"
+        )
+        if start_dt:
+            prescriptions_query = prescriptions_query.where(Prescription.created_at >= start_dt)
+        if end_dt:
+            prescriptions_query = prescriptions_query.where(Prescription.created_at <= end_dt)
+        prescriptions = (await self.db.scalar(prescriptions_query)) or 0
 
         # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
-        low_stock_query = (
+        low_stock_items_query = (
             select(Medicine)
             .where(
                 Medicine.is_deleted.is_(False),
                 Medicine.is_active.is_(True),
                 Medicine.stock_quantity <= Medicine.reorder_level
             )
-            .order_by(Medicine.stock_quantity.asc())
-            .limit(10)
         )
-        low_stock_res = await self.db.execute(low_stock_query)
+        if start_dt:
+            low_stock_items_query = low_stock_items_query.where(Medicine.created_at >= start_dt)
+        if end_dt:
+            low_stock_items_query = low_stock_items_query.where(Medicine.created_at <= end_dt)
+        low_stock_items_query = low_stock_items_query.order_by(Medicine.stock_quantity.asc()).limit(10)
+        low_stock_res = await self.db.execute(low_stock_items_query)
         low_stock_items = [
             {
                 "medicine_id": m.id,
@@ -1849,9 +1877,6 @@ class PharmacyService:
             monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at >= start_dt)
         if end_dt:
             monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at <= end_dt)
-        else:
-            # Fallback to current month if no dates (e.g. if overall is somehow not returning None)
-            pass
 
         monthly_trend_query = (
             monthly_trend_query
@@ -1870,7 +1895,7 @@ class PharmacyService:
 
         today_sales = round(float(today_sales or 0.0), 2)
         monthly_sales = round(float(monthly_sales or 0.0), 2)
-        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(reference_date=today_ist)
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(reference_date=today_ist, start_dt=start_dt, end_dt=end_dt)
         inventory_status_mix = InventoryStatusMix(**status_mix_raw)
 
         total_mix = (

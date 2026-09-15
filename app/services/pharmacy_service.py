@@ -23,9 +23,11 @@ from app.models.pharmacy_model import (
     Supplier,
 )
 from app.models.inventory_model import Warehouse
+from app.models.inventory_model import Warehouse
 from app.models.user_model import User
 from app.services.stock_movement_service import StockMovementService
 from app.utils.helpers import generate_code, utc_now
+from app.services.stock_movement_service import StockMovementService
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
 from app.repositories.pharmacy_repository import (
@@ -734,6 +736,9 @@ class PharmacyService:
         user_id: int,
         data: PrescriptionDispenseRequest | None = None,
     ) -> dict:
+        if not data or not data.payment_mode or not data.payment_mode.strip():
+            raise BadRequestException("Payment mode is required")
+
         prescription = await self.prescription_repo.get_by_id(prescription_id)
         if not prescription:
             raise NotFoundException("Prescription not found")
@@ -776,15 +781,14 @@ class PharmacyService:
         await self.prescription_repo.update(prescription)
 
         # Generate PharmacyInvoice
-        disp_req = data or PrescriptionDispenseRequest()
         invoice_create = PharmacyInvoiceCreate(
             patient_id=prescription.patient_id,
             prescription_id=prescription.id,
-            payment_mode=disp_req.payment_mode or "Cash",
-            payment_status=disp_req.payment_status,
-            discount_amount=disp_req.discount_amount,
-            discount_percentage=disp_req.discount_percentage,
-            tax_percentage=disp_req.tax_percentage,
+            payment_mode=data.payment_mode.strip(),
+            payment_status=data.payment_status,
+            discount_amount=data.discount_amount,
+            discount_percentage=data.discount_percentage,
+            tax_percentage=data.tax_percentage,
             items=invoice_items_create,
         )
         invoice_res = await self._create_invoice_internal(invoice_create, user_id, deduct_stock=False)
@@ -1088,10 +1092,21 @@ class PharmacyService:
         resp.items = [PharmacyReturnItemResponse.model_validate(i) for i in ret.items]
         return resp
 
-    async def list_invoices(self, page: int = 1, size: int = 20):
+    async def list_invoices(
+        self,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None,
+        patient_name: str | None = None,
+        invoice_date: date | None = None,
+    ):
         skip = (page - 1) * size
-        items = await self.invoice_repo.list_all(skip=skip, limit=size)
-        total = await self.invoice_repo.count_all()
+        items = await self.invoice_repo.list_all(
+            skip=skip, limit=size, status=status, patient_name=patient_name, invoice_date=invoice_date
+        )
+        total = await self.invoice_repo.count_all(
+            status=status, patient_name=patient_name, invoice_date=invoice_date
+        )
         return build_paginated_result([self._invoice_response(i) for i in items], total, page, size)
 
     def _invoice_response(self, invoice: PharmacyInvoice) -> PharmacyInvoiceResponse:

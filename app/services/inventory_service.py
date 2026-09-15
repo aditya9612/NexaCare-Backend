@@ -1,4 +1,5 @@
-from sqlalchemy import select, func
+from datetime import timedelta
+from sqlalchemy import select, func, inspect
 from app.models.inventory_model import WarehouseStock
 from fastapi import HTTPException
 from io import BytesIO
@@ -164,29 +165,56 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
+    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
+        skip = (page - 1) * size
+        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
+        res = []
+        for alert in alerts:
+            item_name = alert.item.name if hasattr(alert, "item") and alert.item else ""
+            sku = alert.item.sku if hasattr(alert, "item") and alert.item else ""
+            status_val = alert.status if isinstance(alert.status, str) else getattr(alert.status, "value", str(alert.status))
+            res.append(
+                ReorderAlertResponse(
+                    id=alert.id,
+                    item_id=alert.item_id,
+                    item_name=item_name,
+                    sku=sku,
+                    current_quantity=alert.current_quantity,
+                    reorder_level=alert.reorder_level,
+                    status=status_val,
+                    created_at=alert.created_at,
+                )
+            )
+        return res
+
     async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
 
+        tx_type = data.transaction_type or data.type or "INWARD"
+        warehouse_id = data.warehouse_id or item.warehouse_id
+        if not warehouse_id:
+            raise BadRequestException("Warehouse ID is required for stock transaction")
+
         # Use StockMovementService for all physical mutations
         direction = "IN"
-        if data.transaction_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION, StockTransactionType.TRANSFER):
+        if tx_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION, StockTransactionType.TRANSFER):
             direction = "OUT"
 
         quantity = data.quantity
-        if data.transaction_type == StockTransactionType.ADJUSTMENT:
+        if tx_type == StockTransactionType.ADJUSTMENT:
             # We must reject direct API usage of adjustment here, it's safer to only allow explicit references
             raise BadRequestException("Direct adjustment transactions are not supported. Use physical IN/OUT.")
 
         transaction = await StockMovementService.create_movement(
             db=self.db,
             item_id=data.item_id,
-            warehouse_id=data.warehouse_id,
-            transaction_type=data.transaction_type,
+            warehouse_id=warehouse_id,
+            transaction_type=tx_type,
             direction=direction,
             quantity=abs(quantity),
-            batch_id=data.batch_id,
+            batch_id=getattr(data, "batch_id", None),
             unit_cost=data.unit_cost,
             reference_type=data.reference_type,
             reference_id=data.reference_id,
@@ -198,9 +226,10 @@ class InventoryService:
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:
         data = StockTransactionResponse.model_validate(transaction)
         data.type = transaction.transaction_type
-        if hasattr(transaction, "item") and transaction.item:
+        state = inspect(transaction)
+        if "item" in state.dict and transaction.item:
             data.item_name = transaction.item.name
-        if hasattr(transaction, "warehouse") and transaction.warehouse:
+        if "warehouse" in state.dict and transaction.warehouse:
             data.warehouse_name = transaction.warehouse.name
         data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
         return data
@@ -775,12 +804,27 @@ class InventoryService:
         return result
 
     async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:
+        normalized_period = (period or "monthly").strip().lower()
         now = utc_now()
-        if period == "daily":
+        if normalized_period == "daily":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "yearly":
-            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "weekly":
+            start = now - timedelta(days=7)
+        elif normalized_period == "yearly":
+            start = now - timedelta(days=365)
         else:
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        rows = await self.transaction_repo.get_consumption_report(start, now)
-        return [ConsumptionReport(period=period, **row) for row in rows]
+            start = now - timedelta(days=30)
+            normalized_period = "monthly"
+
+        report_data = await self.transaction_repo.get_consumption_report(start, now)
+        return [
+            ConsumptionReport(
+                period=normalized_period,
+                item_id=item["item_id"],
+                item_name=item["item_name"],
+                sku=item["sku"],
+                total_consumed=item["total_consumed"],
+                total_value=item["total_value"],
+            )
+            for item in report_data
+        ]

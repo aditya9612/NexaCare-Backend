@@ -1665,8 +1665,8 @@ class LabService:
         
         # One valid sample row
         ws.append([
-            "John Doe [PT-0001]",
-            "Dr. Sarah Connor [DOC-0002]",
+            "John Doe",
+            "Dr. Sarah Connor",
             "Complete Blood Count [CBC]",
             "APT-202608210001",
             "normal",
@@ -1730,27 +1730,46 @@ class LabService:
                     except (ValueError, TypeError):
                         raise BadRequestException(f"Invalid integer value for {field_name}: {val}")
 
-                def extract_code(val, field_name, expected_format, required=False) -> str | None:
+                def parse_name_and_code(val, field_name, required=False):
                     if val is None or str(val).strip() == "":
                         if required:
                             raise BadRequestException(f"{field_name} is required.")
-                        return None
+                        return None, None
                     val_str = str(val).strip()
                     match = re.search(r"\[(.*?)\]", val_str)
-                    if not match:
-                        raise BadRequestException(f"Invalid {field_name} format. Expected: {expected_format}")
-                    code = match.group(1).strip()
-                    if not code:
+                    if match:
+                        code = match.group(1).strip()
+                        name = val_str[:match.start()].strip()
+                        return name, code
+                    return val_str, None
+
+                def extract_code(val, field_name, expected_format, required=False) -> str | None:
+                    _, code = parse_name_and_code(val, field_name, required=required)
+                    if val is not None and str(val).strip() != "" and not code:
                         raise BadRequestException(f"Invalid {field_name} format. Expected: {expected_format}")
                     return code
 
-                patient_code = extract_code(row_dict.get("patient name"), "Patient Name", "Name [patient_code]", required=True)
+                p_name, patient_code = parse_name_and_code(row_dict.get("patient name"), "Patient Name", required=True)
                 from app.models.patient_model import Patient
-                p_stmt = select(Patient.id).where(Patient.patient_code == patient_code, Patient.is_deleted == False)
-                p_res = await self.db.execute(p_stmt)
-                patient_id = p_res.scalar_one_or_none()
-                if patient_id is None:
-                    raise BadRequestException(f"Patient with code {patient_code} not found")
+                patient_id = None
+                if patient_code:
+                    p_stmt = select(Patient.id).where(Patient.patient_code == patient_code, Patient.is_deleted == False)
+                    p_res = await self.db.execute(p_stmt)
+                    patient_id = p_res.scalar_one_or_none()
+                    if patient_id is None:
+                        raise BadRequestException(f"Patient with code {patient_code} not found")
+                else:
+                    p_stmt = select(Patient.id).where(
+                        func.lower(func.concat(Patient.first_name, " ", Patient.last_name)) == p_name.lower(),
+                        Patient.is_deleted == False
+                    )
+                    p_res = await self.db.execute(p_stmt)
+                    p_ids = p_res.scalars().all()
+                    if not p_ids:
+                        raise BadRequestException(f"Patient with name '{p_name}' not found")
+                    if len(p_ids) > 1:
+                        raise BadRequestException(f"Multiple active patients found with name '{p_name}'. Please specify patient code.")
+                    patient_id = p_ids[0]
 
                 lab_test_code = extract_code(row_dict.get("lab test name"), "Lab Test Name", "Test Name [test_code]", required=True)
                 from app.models.lab_model import LabTest
@@ -1760,7 +1779,7 @@ class LabService:
                 if lab_test_id is None:
                     raise BadRequestException(f"Lab Test with code {lab_test_code} not found")
 
-                doctor_code = extract_code(row_dict.get("doctor name"), "Doctor Name", "Name [doctor_code]", required=False)
+                d_name, doctor_code = parse_name_and_code(row_dict.get("doctor name"), "Doctor Name", required=False)
                 doctor_id = None
                 if doctor_code:
                     from app.models.doctor_model import Doctor
@@ -1769,6 +1788,25 @@ class LabService:
                     doctor_id = d_res.scalar_one_or_none()
                     if doctor_id is None:
                         raise BadRequestException(f"Doctor with code {doctor_code} not found")
+                elif d_name:
+                    clean_d_name = d_name
+                    if clean_d_name.lower().startswith("dr."):
+                        clean_d_name = clean_d_name[3:].strip()
+                    elif clean_d_name.lower().startswith("dr "):
+                        clean_d_name = clean_d_name[3:].strip()
+
+                    from app.models.doctor_model import Doctor
+                    d_stmt = select(Doctor.id).where(
+                        func.lower(func.concat(Doctor.first_name, " ", Doctor.last_name)) == clean_d_name.lower(),
+                        Doctor.is_deleted == False
+                    )
+                    d_res = await self.db.execute(d_stmt)
+                    d_ids = d_res.scalars().all()
+                    if not d_ids:
+                        raise BadRequestException(f"Doctor with name '{d_name}' not found")
+                    if len(d_ids) > 1:
+                        raise BadRequestException(f"Multiple active doctors found with name '{d_name}'. Please specify doctor code.")
+                    doctor_id = d_ids[0]
 
                 appointment_id = None
                 appt_num_raw = row_dict.get("appointment number")
@@ -1960,8 +1998,8 @@ class LabService:
             
             for sr_no, o in enumerate(orders, start=1):
                 med = o.lab_test
-                p_name_formatted = f"{patients_map.get(o.patient_id, '')} [{patient_codes_map.get(o.patient_id, '')}]" if o.patient_id in patients_map else ""
-                d_name_formatted = f"{doctors_map.get(o.doctor_id, '')} [{doctor_codes_map.get(o.doctor_id, '')}]" if o.doctor_id and o.doctor_id in doctors_map else ""
+                p_name_formatted = patients_map.get(o.patient_id, "") if o.patient_id in patients_map else ""
+                d_name_formatted = doctors_map.get(o.doctor_id, "") if o.doctor_id and o.doctor_id in doctors_map else ""
                 t_name_formatted = f"{med.test_name} [{med.test_code}]" if med else ""
                 appt_num_val = appointments_map.get(o.appointment_id, "") if o.appointment_id else ""
                 

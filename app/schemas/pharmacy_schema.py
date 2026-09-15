@@ -250,12 +250,19 @@ class PrescriptionResponse(BaseSchema):
 
 
 class PrescriptionDispenseRequest(BaseSchema):
-    payment_mode: Optional[str] = Field("Cash", description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
+    payment_mode: str = Field(..., min_length=1, description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
     payment_status: PharmacyPaymentStatus = Field(PharmacyPaymentStatus.PAID, description="Payment status of generated invoice")
     discount_amount: float = Field(0.0, ge=0)
     discount_percentage: float = Field(0.0, ge=0, le=100)
     tax_percentage: float = Field(0.0, ge=0, le=100)
     notes: Optional[str] = None
+
+    @field_validator("payment_mode")
+    @classmethod
+    def validate_payment_mode(cls, v: str) -> str:
+        if v is None or not str(v).strip():
+            raise ValueError("payment_mode cannot be empty or whitespace")
+        return str(v).strip()
 
 
 class PrescriptionUpdate(BaseSchema):

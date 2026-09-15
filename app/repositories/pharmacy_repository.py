@@ -18,6 +18,7 @@ from app.models.pharmacy_model import (
     PurchaseItem,
     Supplier,
 )
+from app.models.patient_model import Patient
 from app.utils.helpers import utc_now
 
 
@@ -371,16 +372,57 @@ class PharmacyInvoiceRepository:
             .options(selectinload(PharmacyInvoice.items))
         )
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[PharmacyInvoice]:
+    def _apply_filters(
+        self,
+        query,
+        status: str | None = None,
+        patient_name: str | None = None,
+        invoice_date: date | None = None,
+    ):
+        if status is not None and status.strip():
+            query = query.where(func.lower(PharmacyInvoice.status) == status.strip().lower())
+
+        if patient_name is not None and patient_name.strip():
+            query = query.outerjoin(Patient, PharmacyInvoice.patient_id == Patient.id)
+            pattern = f"%{patient_name.strip().lower()}%"
+            query = query.where(
+                or_(
+                    func.lower(Patient.first_name).like(pattern),
+                    func.lower(Patient.last_name).like(pattern),
+                    (func.lower(Patient.first_name) + " " + func.lower(Patient.last_name)).like(pattern),
+                )
+            )
+
+        if invoice_date is not None:
+            query = query.where(func.date(PharmacyInvoice.created_at) == invoice_date)
+
+        return query
+
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        patient_name: str | None = None,
+        invoice_date: date | None = None,
+    ) -> list[PharmacyInvoice]:
+        query = self._apply_filters(
+            self._base_query(), status=status, patient_name=patient_name, invoice_date=invoice_date
+        )
         result = await self.db.execute(
-            self._base_query().order_by(PharmacyInvoice.created_at.desc()).offset(skip).limit(limit)
+            query.order_by(PharmacyInvoice.created_at.desc()).offset(skip).limit(limit)
         )
         return list(result.scalars().unique().all())
 
-    async def count_all(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(PharmacyInvoice).where(PharmacyInvoice.is_deleted.is_(False))
-        )) or 0
+    async def count_all(
+        self,
+        status: str | None = None,
+        patient_name: str | None = None,
+        invoice_date: date | None = None,
+    ) -> int:
+        query = select(func.count(PharmacyInvoice.id)).select_from(PharmacyInvoice).where(PharmacyInvoice.is_deleted.is_(False))
+        query = self._apply_filters(query, status=status, patient_name=patient_name, invoice_date=invoice_date)
+        return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, invoice_id: int) -> PharmacyInvoice | None:
         result = await self.db.execute(self._base_query().where(PharmacyInvoice.id == invoice_id))

@@ -255,7 +255,7 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
 
         if not appointment:
-           raise NotFoundException("Appointment not found")
+            raise NotFoundException("Appointment not found")
 
         if not appointment.token_number:
             raise BadRequestException("Token not generated for this appointment")

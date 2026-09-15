@@ -410,7 +410,7 @@ async def dispense_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    data: PrescriptionDispenseRequest | None = None,
+    data: PrescriptionDispenseRequest,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     result = await PharmacyService(db).dispense_prescription(
@@ -458,11 +458,20 @@ async def create_pharmacy_invoice(
 async def list_pharmacy_invoices(
     db: DbSession,
     current_user: CurrentUser,
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(20, ge=1, le=100, description="Page size"),
+    status: Optional[str] = Query(None, description="Filter by invoice status (e.g. PAID, PENDING, CANCELLED)"),
+    patient_name: Optional[str] = Query(None, description="Filter by patient name (case-insensitive search)"),
+    invoice_date: Optional[date] = Query(None, alias="date", description="Filter by invoice date (YYYY-MM-DD)"),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    result = await PharmacyService(db).list_invoices(page=page, size=size)
+    result = await PharmacyService(db).list_invoices(
+        page=page,
+        size=size,
+        status=status,
+        patient_name=patient_name,
+        invoice_date=invoice_date,
+    )
     return APIResponse(message="Pharmacy invoices retrieved", data=result)
 
 

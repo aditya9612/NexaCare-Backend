@@ -128,6 +128,7 @@ class StaffService:
         total_staff = await self.repo.count_all()
         active_staff = await self.repo.count_all(status=1)
         inactive_staff = await self.repo.count_all(status=0)
+        role_counts = await self.repo.get_role_counts()
 
         paginated = build_paginated_result(
             [StaffResponse.model_validate(item) for item in items],
@@ -144,6 +145,7 @@ class StaffService:
             "total_staff": total_staff,
             "active_staff": active_staff,
             "inactive_staff": inactive_staff,
+            "role_counts": role_counts,
         }
 
     async def get_dashboard_stats(self) -> dict:

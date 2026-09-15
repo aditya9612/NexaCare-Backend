@@ -415,19 +415,6 @@ class ReorderAlertResponse(BaseSchema):
     created_at: datetime
 
 
-class StockSummary(BaseSchema):
-    total_items: int
-    total_quantity: int
-    low_stock_count: int
-    expired_count: int
-    total_value: float
-    total_registered_items: int
-    stock_alerts: int
-    active_warehouse_units: int
-    inactive_warehouse_units: int
-    total_vendors: int
-
-
 class ConsumptionReport(BaseSchema):
     period: str
     item_id: int
@@ -441,6 +428,12 @@ class InventoryDashboardResponse(BaseSchema):
     total_registered_items: int
     stock_alerts: int
     active_warehouse_units: int
+    inactive_warehouse_units: int
     total_vendors: int
+    total_items: int
+    total_quantity: int
+    low_stock_count: int
+    expired_count: int
+    total_value: float
 
 

@@ -25,7 +25,6 @@ from app.schemas.inventory_schema import (
     InventoryItemResponse,
     InventoryItemUpdate,
     ReorderAlertResponse,
-    StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
     StockTransactionUpdate,
@@ -264,16 +263,25 @@ class InventoryService:
             raise NotFoundException("Stock transaction not found")
         return StockTransactionResponse.model_validate(transaction)
 
-    async def get_dashboard_summary(self) -> InventoryDashboardResponse:
+    async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
         total_registered_items = await self.item_repo.count_all()
         stock_alerts = await self.alert_repo.count_active()
         active_warehouse_units = await self.warehouse_repo.count_active()
+        inactive_warehouse_units = await self.warehouse_repo.count_inactive()
         total_vendors = await self.vendor_repo.count_all()
+        stock_summary = await self.item_repo.get_stock_summary()
+
         return InventoryDashboardResponse(
             total_registered_items=total_registered_items,
             stock_alerts=stock_alerts,
             active_warehouse_units=active_warehouse_units,
+            inactive_warehouse_units=inactive_warehouse_units,
             total_vendors=total_vendors,
+            total_items=stock_summary["total_items"],
+            total_quantity=stock_summary["total_quantity"],
+            low_stock_count=stock_summary["low_stock_count"],
+            expired_count=stock_summary["expired_count"],
+            total_value=stock_summary["total_value"],
         )
 
     async def generate_items_bulk_template(self) -> BytesIO:
@@ -766,24 +774,6 @@ class InventoryService:
         await self.db.delete(warehouse)
         await self.db.flush()
 
-    async def get_stock_summary(self, hospital_id: int | None) -> StockSummary:
-        total_items = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
-        total_quantity = await self.db.scalar(select(func.sum(WarehouseStock.quantity)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
-        total_value = await self.db.scalar(select(func.sum(WarehouseStock.quantity * InventoryItem.unit_cost)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id)) or 0.0
-        low_stock_count = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id, WarehouseStock.quantity < InventoryItem.reorder_level)) or 0
-
-        return StockSummary(
-            total_items=total_items,
-            total_quantity=int(total_quantity),
-            low_stock_count=low_stock_count,
-            expired_count=0,
-            total_value=float(total_value),
-            total_registered_items=total_items,
-            stock_alerts=low_stock_count,
-            active_warehouse_units=0,
-            inactive_warehouse_units=0,
-            total_vendors=0
-        )
 
     async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
         skip = (page - 1) * size

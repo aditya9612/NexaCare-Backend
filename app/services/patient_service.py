@@ -93,6 +93,57 @@ class PatientService:
             p_res.bed_allocation = bed_lookup.get(p_res.id)
             p_res.condition_status = status_lookup.get(p_res.id)
 
+    async def _resolve_allowed_patient_ids(self, current_user) -> list[int] | None:
+        if not current_user or not current_user.role:
+            return None
+        role_name = current_user.role.name.lower()
+        if role_name != "patient":
+            return None
+
+        from app.utils.phone_utils import indian_mobile_last10
+        from sqlalchemy import select, or_, func
+
+        phones = set()
+        emails = set()
+        if current_user.phone:
+            phones.add(current_user.phone.strip())
+        if current_user.email:
+            emails.add(current_user.email.strip().lower())
+
+        # Find any Patient row directly linked to this user_id
+        direct_patients_stmt = select(Patient).where(
+            Patient.user_id == current_user.id,
+            Patient.is_deleted.is_(False)
+        )
+        direct_patients = (await self.db.scalars(direct_patients_stmt)).all()
+        direct_patient_ids = {p.id for p in direct_patients}
+        for p in direct_patients:
+            if p.phone:
+                phones.add(p.phone.strip())
+            if p.email:
+                emails.add(p.email.strip().lower())
+
+        conditions = [Patient.user_id == current_user.id]
+        if direct_patient_ids:
+            conditions.append(Patient.id.in_(list(direct_patient_ids)))
+            conditions.append(Patient.guardian_patient_id.in_(list(direct_patient_ids)))
+
+        for ph in phones:
+            conditions.append(Patient.phone == ph)
+            last10 = indian_mobile_last10(ph)
+            if last10 and len(last10) == 10:
+                conditions.append(Patient.phone.like(f"%{last10}%"))
+
+        for em in emails:
+            conditions.append(func.lower(Patient.email) == em)
+
+        stmt = select(Patient.id).where(
+            Patient.is_deleted.is_(False),
+            or_(*conditions)
+        )
+        matched_ids = (await self.db.scalars(stmt)).all()
+        return list(set(matched_ids))
+
     async def list_patients(
         self,
         page: int = 1,
@@ -125,6 +176,20 @@ class PatientService:
                     "cities_count": 0,
                 }
 
+        # Resolve allowed_patient_ids if role is Patient (auto-filters by user's phone/family)
+        allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+        if allowed_patient_ids is not None and len(allowed_patient_ids) == 0:
+            return {
+                "items": [],
+                "total": 0,
+                "page": page,
+                "size": size,
+                "pages": 0,
+                "active_count": 0,
+                "inactive_count": 0,
+                "cities_count": 0,
+            }
+
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip,
@@ -134,8 +199,14 @@ class PatientService:
             start_date=start_date,
             end_date=end_date,
             nurse_id=nurse_id,
+            allowed_patient_ids=allowed_patient_ids,
         )
-        total = await self.repo.count_all(start_date=start_date, end_date=end_date, nurse_id=nurse_id)
+        total = await self.repo.count_all(
+            start_date=start_date,
+            end_date=end_date,
+            nurse_id=nurse_id,
+            allowed_patient_ids=allowed_patient_ids,
+        )
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
         patient_ids = [p.id for p in items]
@@ -144,7 +215,7 @@ class PatientService:
         paginated = build_paginated_result(
             patient_responses, total, page, size
         )
-        stats = await self.repo.get_patient_stats(nurse_id=nurse_id)
+        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
         return {
             "items": paginated.items,
             "total": paginated.total,
@@ -154,7 +225,11 @@ class PatientService:
             **stats
         }
 
-    async def get_by_id(self, patient_id: int) -> PatientResponse:
+    async def get_by_id(self, patient_id: int, current_user = None) -> PatientResponse:
+        allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+        if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
+            raise NotFoundException("Patient not found")
+
         patient = await self.repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
@@ -261,9 +336,13 @@ class PatientService:
             if nurse_id is None:
                 return build_paginated_result([], 0, page, size)
 
+        allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+        if allowed_patient_ids is not None and len(allowed_patient_ids) == 0:
+            return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size, nurse_id=nurse_id)
-        total = await self.repo.count_search(q, nurse_id=nurse_id)
+        items = await self.repo.search(q, skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
+        total = await self.repo.count_search(q, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
         patient_ids = [p.id for p in items]
@@ -293,14 +372,18 @@ class PatientService:
             if nurse_id is None:
                 return build_paginated_result([], 0, page, size)
 
+        allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+        if allowed_patient_ids is not None and len(allowed_patient_ids) == 0:
+            return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.repo.filter_patients(
             gender=gender, blood_group=blood_group, city=city, state=state, status=status,
-            skip=skip, limit=size, nurse_id=nurse_id,
+            skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
         )
         total = await self.repo.count_filter(
             gender=gender, blood_group=blood_group, city=city, state=state, status=status,
-            nurse_id=nurse_id,
+            nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
         )
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]

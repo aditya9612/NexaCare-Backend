@@ -371,28 +371,18 @@ class LabService:
             if not is_completed:
                 raise BadRequestException("Can only create test order for completed appointments")
 
-        # Resolve doctor profile of logged-in user
+        # Resolve doctor profile of logged-in user if available
         from app.models.doctor_model import Doctor
         doc_result = await self.db.execute(
             select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
         )
         doctor = doc_result.scalar_one_or_none()
 
-        if doctor:
-            # 2. It Should be Possible For Doctor to Only Put His Doctor Id in doctor_id Field.
-            if data.doctor_id is not None and data.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only create test orders using their own doctor ID")
-            # 1. It Should be Possible For Doctor to Create Test order for his Patients Only.
-            if appointment and appointment.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only create test orders for their own patients")
-
         test = await self.test_repo.get_by_id(data.lab_test_id)
         if not test or not test.is_active:
             raise NotFoundException("Lab test not found or inactive")
 
-        if doctor:
-            # Doctors can order any active lab test
-            pass
+        # Doctors/Staff can order any active lab test in the hospital catalogue
 
         # Resolve doctor_id to store in the order
         resolved_doctor_id = data.doctor_id

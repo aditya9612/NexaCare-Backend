@@ -289,7 +289,7 @@ async def get_patient(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    patient = await PatientService(db).get_by_id(patient_id)
+    patient = await PatientService(db).get_by_id(patient_id, current_user=current_user)
     return APIResponse(message="Patient retrieved", data=patient)
 
 
@@ -529,6 +529,29 @@ async def download_document(
     )
 
 
+@router.get("/{patient_id}/documents/{document_id}/download")
+async def download_patient_document_by_path(
+    patient_id: int,
+    document_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    import os
+    from fastapi.responses import FileResponse
+    from app.core.exceptions import NotFoundException
+    
+    doc = await PatientService(db).get_document(patient_id, document_id)
+    if not os.path.exists(doc.file_path):
+        raise NotFoundException("Document file not found on disk")
+        
+    return FileResponse(
+        path=doc.file_path,
+        filename=doc.document_name,
+        media_type="application/octet-stream"
+    )
+
+
 @router.get("/documents/view")
 async def view_document(
     db: DbSession,
@@ -549,6 +572,34 @@ async def view_document(
             data=None
         )
         
+    doc = await PatientService(db).get_document(patient_id, document_id)
+    if not os.path.exists(doc.file_path):
+        raise NotFoundException("Document file not found on disk")
+        
+    mime_type, _ = mimetypes.guess_type(doc.file_path)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+        
+    return FileResponse(
+        path=doc.file_path,
+        media_type=mime_type,
+        content_disposition_type="inline"
+    )
+
+
+@router.get("/{patient_id}/documents/{document_id}/view")
+async def view_patient_document_by_path(
+    patient_id: int,
+    document_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("patients", "read")),
+):
+    import os
+    import mimetypes
+    from fastapi.responses import FileResponse
+    from app.core.exceptions import NotFoundException
+    
     doc = await PatientService(db).get_document(patient_id, document_id)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")

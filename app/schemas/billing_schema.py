@@ -199,11 +199,23 @@ class RevenueReport(BaseSchema):
 
 class DailyCollectionSummary(BaseSchema):
     date: str
-    total_collected: float
-    payment_count: int
-    by_method: dict[str, float]
+    today_total_bill: float = 0.0
+    today_paid_bill: float = 0.0
+    today_pending_bill: float = 0.0
+    today_collected_revenue: float = 0.0
+    bills_count: int = 0
+    total_collected: float = 0.0
+    payment_count: int = 0
+    by_method: dict[str, float] = Field(default_factory=dict)
 
-    @field_validator("total_collected", mode="after")
+    @field_validator(
+        "today_total_bill",
+        "today_paid_bill",
+        "today_pending_bill",
+        "today_collected_revenue",
+        "total_collected",
+        mode="after",
+    )
     @classmethod
     def round_total_collected(cls, v: float) -> float:
         return max(0.0, round(float(v), 2))

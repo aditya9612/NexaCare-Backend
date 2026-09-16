@@ -1031,6 +1031,7 @@ class BillingService:
 
         # Ensure total_collected cannot be negative
         data["total_collected"] = max(0.0, round(float(data.get("total_collected", 0.0)), 2))
+        data["today_collected_revenue"] = data["total_collected"]
 
         # Ensure by_method contains only rounded non-pharmacy payment methods with positive amounts
         by_method = {}

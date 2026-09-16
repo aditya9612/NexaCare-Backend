@@ -229,10 +229,34 @@ class PatientRepository:
         return await self.db.scalar(query) or 0
 
     async def get_patient_stats(self, nurse_id: int | None = None) -> dict[str, int]:
+        from datetime import datetime, time
+        import calendar
+        from sqlalchemy import and_
+        from app.utils.helpers import get_today_ist
+        from app.repositories.discharge_repository import DischargeRepository
+        from app.models.bed_allocation_model import Bed
+
+        today = get_today_ist()
+        start_of_month = datetime.combine(date(today.year, today.month, 1), time.min)
+        _, last_day = calendar.monthrange(today.year, today.month)
+        end_of_month = datetime.combine(date(today.year, today.month, last_day), time.max)
+
+        # 1. Baseline patient stats + this_month
         query = select(
             func.count(case((Patient.status == "active", 1))).label("active_count"),
             func.count(case((Patient.status == "inactive", 1))).label("inactive_count"),
-            func.count(func.distinct(case((Patient.city != "", Patient.city), else_=None))).label("cities_count")
+            func.count(func.distinct(case((Patient.city != "", Patient.city), else_=None))).label("cities_count"),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Patient.created_at >= start_of_month,
+                            Patient.created_at <= end_of_month,
+                        ),
+                        1,
+                    )
+                )
+            ).label("this_month"),
         ).select_from(Patient).where(Patient.is_deleted.is_(False))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
@@ -246,10 +270,85 @@ class PatientRepository:
         
         result = await self.db.execute(query)
         row = result.one()
+
+        # 2. IPD: Unique patients currently admitted/inpatient (not discharged/cancelled)
+        admitted_subq = (
+            select(Appointment.patient_id)
+            .where(
+                func.lower(Appointment.admission_status) == "admitted",
+                Appointment.appointment_status.notin_(["Cancelled", "cancelled", "CANCELLED"]),
+            )
+        )
+        occupied_bed_subq = (
+            select(Bed.patient_id)
+            .where(
+                Bed.status.in_(["Occupied", "Reserved"]),
+                Bed.patient_id.isnot(None),
+            )
+        )
+        ipd_query = (
+            select(func.count(Patient.id))
+            .select_from(Patient)
+            .where(
+                Patient.is_deleted.is_(False),
+                or_(
+                    Patient.id.in_(admitted_subq),
+                    Patient.id.in_(occupied_bed_subq),
+                ),
+            )
+        )
+        if nurse_id is not None:
+            from app.models.nurse_model import NursePatientAssignment
+            ipd_query = ipd_query.join(
+                NursePatientAssignment,
+                NursePatientAssignment.patient_id == Patient.id,
+            ).where(
+                NursePatientAssignment.nurse_id == nurse_id,
+                NursePatientAssignment.status == "Active",
+            )
+        ipd_count = await self.db.scalar(ipd_query) or 0
+
+        # 3. OPD: Unique patients having valid OPD appointments (excluding Cancelled and No Show)
+        opd_query = (
+            select(func.count(func.distinct(Appointment.patient_id)))
+            .select_from(Appointment)
+            .join(Patient, Appointment.patient_id == Patient.id)
+            .where(
+                Patient.is_deleted.is_(False),
+                func.upper(Appointment.appointment_type) == "OPD",
+                or_(
+                    Appointment.appointment_status.is_(None),
+                    Appointment.appointment_status.notin_([
+                        "Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled",
+                        "No Show", "no show", "NO SHOW", "No-Show", "no-show",
+                    ]),
+                ),
+            )
+        )
+        if nurse_id is not None:
+            from app.models.nurse_model import NursePatientAssignment
+            opd_query = opd_query.join(
+                NursePatientAssignment,
+                NursePatientAssignment.patient_id == Patient.id,
+            ).where(
+                NursePatientAssignment.nurse_id == nurse_id,
+                NursePatientAssignment.status == "Active",
+            )
+        opd_count = await self.db.scalar(opd_query) or 0
+
+        # 4. today_discharge: Unique patients actually discharged today
+        today_discharge_count = await DischargeRepository(self.db).count_today_discharged(
+            on_date=today, nurse_id=nurse_id
+        )
+
         return {
             "active_count": row.active_count or 0,
             "inactive_count": row.inactive_count or 0,
             "cities_count": row.cities_count or 0,
+            "this_month": row.this_month or 0,
+            "ipd": ipd_count,
+            "opd": opd_count,
+            "today_discharge": today_discharge_count,
         }
 
     async def create(self, patient: Patient) -> Patient:

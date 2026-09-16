@@ -1,7 +1,7 @@
 from datetime import datetime, time
 from enum import Enum
 import re
-from pydantic import EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 from app.schemas.department_schema import DepartmentResponse
@@ -64,6 +64,8 @@ class StaffCreate(BaseSchema):
     department_id: int = Field(..., gt=0)
     role_name: str = Field(..., min_length=1, max_length=50)
     status: StaffStatus = StaffStatus.ACTIVE
+    license_number: str | None = Field(None, min_length=1, max_length=100)
+    shift: str | None = Field(None, min_length=1, max_length=50)
 
     @field_validator("full_name")
     @classmethod
@@ -96,6 +98,33 @@ class StaffCreate(BaseSchema):
             raise ValueError("Role name cannot be empty")
         return res
 
+    @field_validator("license_number")
+    @classmethod
+    def check_license_number(cls, value: str | None) -> str | None:
+        if value is not None:
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("license_number cannot be empty or only spaces")
+            return stripped
+        return value
+
+    @field_validator("shift")
+    @classmethod
+    def check_shift(cls, value: str | None) -> str | None:
+        if value is not None:
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("shift cannot be empty or only spaces")
+            return stripped
+        return value
+
+    @model_validator(mode="after")
+    def validate_nurse_requirements(self) -> "StaffCreate":
+        if self.role_name and self.role_name.strip() == "Nurse":
+            if not self.license_number or not self.license_number.strip():
+                raise ValueError("license_number is required when role_name is 'Nurse'")
+        return self
+
 
 class StaffUpdate(BaseSchema):
     full_name: str | None = Field(None, min_length=1, max_length=200)
@@ -105,6 +134,8 @@ class StaffUpdate(BaseSchema):
     department_id: int | None = Field(None, gt=0)
     role_name: str | None = Field(None, min_length=1, max_length=50)
     status: StaffStatus | None = None
+    license_number: str | None = Field(None, min_length=1, max_length=100)
+    shift: str | None = Field(None, min_length=1, max_length=50)
 
     @field_validator("full_name")
     @classmethod
@@ -129,6 +160,26 @@ class StaffUpdate(BaseSchema):
     @classmethod
     def check_role_name(cls, value: str | None) -> str | None:
         return validate_staff_role_name(value)
+
+    @field_validator("license_number")
+    @classmethod
+    def check_license_number(cls, value: str | None) -> str | None:
+        if value is not None:
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("license_number cannot be empty or only spaces")
+            return stripped
+        return value
+
+    @field_validator("shift")
+    @classmethod
+    def check_shift(cls, value: str | None) -> str | None:
+        if value is not None:
+            stripped = value.strip()
+            if len(stripped) < 1:
+                raise ValueError("shift cannot be empty or only spaces")
+            return stripped
+        return value
 
 
 class StaffStatusUpdate(BaseSchema):

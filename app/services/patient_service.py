@@ -123,6 +123,10 @@ class PatientService:
                     "active_count": 0,
                     "inactive_count": 0,
                     "cities_count": 0,
+                    "this_month": 0,
+                    "ipd": 0,
+                    "opd": 0,
+                    "today_discharge": 0,
                 }
 
         skip = (page - 1) * size

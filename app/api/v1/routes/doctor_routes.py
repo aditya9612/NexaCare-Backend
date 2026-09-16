@@ -144,6 +144,10 @@ async def create_doctor(
                             "phone",
                             "email",
                             "password",
+                            "department_id",
+                            "consultation_fee",
+                            "availability_status",
+                            "gender",
                         ]
                     }
                 }
@@ -187,6 +191,10 @@ async def onboard_doctor(
         "phone": phone,
         "email": email,
         "password": password,
+        "department_id": department_id,
+        "consultation_fee": consultation_fee,
+        "availability_status": availability_status,
+        "gender": gender,
     }
     for field_name, value in required.items():
         if value is None or (isinstance(value, str) and not value.strip()):
@@ -212,7 +220,7 @@ async def onboard_doctor(
             department_id=department_id,
             consultation_fee=consultation_fee,
             license_number=license_number,
-            availability_status=availability_status or "available",
+            availability_status=availability_status,
             bio=bio,
             gender=gender,
             date_of_birth=date_of_birth or None,

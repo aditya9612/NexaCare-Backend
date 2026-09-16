@@ -688,7 +688,16 @@ async def low_stock_alerts(
 async def expiry_alerts(
     db: DbSession,
     current_user: CurrentUser,
-    days: int = 30,
+    days: int = Query(
+        30,
+        ge=1,
+        description="Number of days ahead to check for expiring inventory items (must be a positive integer, e.g., 7, 30, 90)",
+        openapi_examples={
+            "7_days": {"summary": "7 Days (1 Week)", "value": 7},
+            "30_days": {"summary": "30 Days (1 Month)", "value": 30},
+            "90_days": {"summary": "90 Days (3 Months)", "value": 90},
+        },
+    ),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     alerts = await PharmacyService(db).get_expiry_alerts(days=days)

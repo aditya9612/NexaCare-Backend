@@ -264,12 +264,12 @@ class InventoryService:
         return StockTransactionResponse.model_validate(transaction)
 
     async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
-        total_registered_items = await self.item_repo.count_all()
-        stock_alerts = await self.alert_repo.count_active()
-        active_warehouse_units = await self.warehouse_repo.count_active()
-        inactive_warehouse_units = await self.warehouse_repo.count_inactive()
-        total_vendors = await self.vendor_repo.count_all()
-        stock_summary = await self.item_repo.get_stock_summary()
+        total_registered_items = await self.item_repo.count_all(hospital_id=hospital_id)
+        stock_alerts = await self.alert_repo.count_active(hospital_id=hospital_id)
+        active_warehouse_units = await self.warehouse_repo.count_active(hospital_id=hospital_id)
+        inactive_warehouse_units = await self.warehouse_repo.count_inactive(hospital_id=hospital_id)
+        total_vendors = await self.vendor_repo.count_all(hospital_id=hospital_id)
+        stock_summary = await self.item_repo.get_stock_summary(hospital_id=hospital_id)
 
         return InventoryDashboardResponse(
             total_registered_items=total_registered_items,

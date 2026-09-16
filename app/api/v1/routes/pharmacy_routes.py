@@ -1,7 +1,7 @@
 from datetime import date
 from enum import Enum
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException, Response
+from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException, Response, Request
 from fastapi.responses import StreamingResponse
 
 
@@ -44,36 +44,107 @@ from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
 
-ALLOWED_FILTERS = {"today", "7_days", "30_days", "month_to_date", "month", "3_month", "overall", "custom"}
+ALLOWED_FILTERS = {
+    "today", "7_days", "30_days", "month_to_date", "month",
+    "3_month", "6_month", "1_year", "overall", "custom"
+}
+
+FILTER_ALIASES = {
+    "today": "today",
+    "7_days": "7_days",
+    "7days": "7_days",
+    "last_7_days": "7_days",
+    "last7days": "7_days",
+    "7d": "7_days",
+    "week": "7_days",
+    "this_week": "7_days",
+    "1_week": "7_days",
+    "30_days": "30_days",
+    "30days": "30_days",
+    "last_30_days": "30_days",
+    "last30days": "30_days",
+    "30d": "30_days",
+    "month": "month",
+    "month_to_date": "month_to_date",
+    "this_month": "month_to_date",
+    "current_month": "month_to_date",
+    "1_month": "month",
+    "1month": "month",
+    "3_month": "3_month",
+    "3_months": "3_month",
+    "3month": "3_month",
+    "3months": "3_month",
+    "90_days": "3_month",
+    "90days": "3_month",
+    "quarter": "3_month",
+    "6_month": "6_month",
+    "6_months": "6_month",
+    "6month": "6_month",
+    "6months": "6_month",
+    "180_days": "6_month",
+    "year": "1_year",
+    "1_year": "1_year",
+    "1year": "1_year",
+    "12_months": "1_year",
+    "365_days": "1_year",
+    "yearly": "1_year",
+    "overall": "overall",
+    "all": "overall",
+    "all_time": "overall",
+    "custom": "custom",
+}
 
 
 # --- Pharmacy Dashboard ---
 @router.get("/dashboard", response_model=APIResponse[PharmacyDashboardResponse])
 @router.get("/dashboard/summary", response_model=APIResponse[PharmacyDashboardResponse])
 async def get_pharmacy_dashboard(
+    request: Request,
     db: DbSession,
     current_user: CurrentUser,
-    filter: Optional[str] = Query(None, description="Time range filter (e.g. today, 7_days, 30_days, month_to_date, month, 3_month, overall, custom)"),
-    time_filter: Optional[str] = Query(None, alias="time_filter"),
-    time_range: Optional[str] = Query(None, alias="time_range"),
-    timeRange: Optional[str] = Query(None, alias="timeRange"),
+    filter: Optional[str] = Query(None, description="Time range filter (today, 7_days, 30_days, month_to_date, month, 3_month, 6_month, 1_year, overall, custom)"),
     start_date: Optional[date] = Query(None, description="Start date for custom filter (YYYY-MM-DD)"),
-    startDate: Optional[date] = Query(None, alias="startDate"),
     end_date: Optional[date] = Query(None, description="End date for custom filter (YYYY-MM-DD)"),
-    endDate: Optional[date] = Query(None, alias="endDate"),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    resolved_filter = filter or time_filter or time_range or timeRange or "7_days"
-    resolved_start = start_date or startDate
-    resolved_end = end_date or endDate
+    qp = request.query_params
+    raw_filter = filter or qp.get("time_filter") or qp.get("time_range") or qp.get("timeRange") or qp.get("period") or qp.get("range") or qp.get("timeline") or qp.get("filter_type")
 
-    if resolved_filter not in ALLOWED_FILTERS:
-        raise BadRequestException(f"Invalid filter. Allowed values: {', '.join(sorted(ALLOWED_FILTERS))}")
-    if resolved_filter == "custom":
-        if not resolved_start or not resolved_end:
-            raise BadRequestException("start_date and end_date are required when filter is 'custom'")
-        if resolved_start > resolved_end:
+    resolved_start = start_date
+    if not resolved_start:
+        for k in ("startDate", "from_date", "fromDate"):
+            val = qp.get(k)
+            if val:
+                try:
+                    resolved_start = date.fromisoformat(val)
+                    break
+                except ValueError:
+                    pass
+
+    resolved_end = end_date
+    if not resolved_end:
+        for k in ("endDate", "to_date", "toDate"):
+            val = qp.get(k)
+            if val:
+                try:
+                    resolved_end = date.fromisoformat(val)
+                    break
+                except ValueError:
+                    pass
+
+    if resolved_start or resolved_end:
+        resolved_filter = "custom"
+        if resolved_start and resolved_end and resolved_start > resolved_end:
             raise BadRequestException("start_date cannot be after end_date")
+    elif raw_filter:
+        clean_key = str(raw_filter).strip().lower().replace("-", "_")
+        resolved_filter = FILTER_ALIASES.get(clean_key)
+        if not resolved_filter:
+            raise BadRequestException(f"Invalid filter. Allowed values: {', '.join(sorted(ALLOWED_FILTERS))}")
+        if resolved_filter == "custom" and not resolved_start and not resolved_end:
+            raise BadRequestException("start_date and end_date are required when filter is 'custom'")
+    else:
+        resolved_filter = "7_days"
 
     dashboard_data = await PharmacyService(db).get_dashboard_summary(
         time_filter=resolved_filter,
@@ -339,7 +410,7 @@ async def dispense_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    data: PrescriptionDispenseRequest | None = None,
+    data: PrescriptionDispenseRequest,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     result = await PharmacyService(db).dispense_prescription(
@@ -387,11 +458,20 @@ async def create_pharmacy_invoice(
 async def list_pharmacy_invoices(
     db: DbSession,
     current_user: CurrentUser,
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(20, ge=1, le=100, description="Page size"),
+    status: Optional[str] = Query(None, description="Filter by invoice status (e.g. PAID, PENDING, CANCELLED)"),
+    patient_name: Optional[str] = Query(None, description="Filter by patient name (case-insensitive search)"),
+    invoice_date: Optional[date] = Query(None, alias="date", description="Filter by invoice date (YYYY-MM-DD)"),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    result = await PharmacyService(db).list_invoices(page=page, size=size)
+    result = await PharmacyService(db).list_invoices(
+        page=page,
+        size=size,
+        status=status,
+        patient_name=patient_name,
+        invoice_date=invoice_date,
+    )
     return APIResponse(message="Pharmacy invoices retrieved", data=result)
 
 

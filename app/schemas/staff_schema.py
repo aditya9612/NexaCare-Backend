@@ -156,6 +156,7 @@ class StaffListWithCountsResponse(PaginatedResponse[StaffResponse]):
     total_staff: int
     active_staff: int
     inactive_staff: int
+    role_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class StaffScheduleCreate(BaseSchema):

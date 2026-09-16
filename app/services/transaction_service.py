@@ -39,6 +39,47 @@ class TransactionService:
                     raise BadRequestException("Refund amount exceeds paid amount")
                 billing.paid_amount = round(paid_amt - data.amount, 2)
             else:
+                b_status = str(billing.status).strip().lower() if billing.status else ""
+                is_fully_paid = b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt)
+
+                from sqlalchemy import select
+                existing_payments_res = await self.db.scalars(
+                    select(Payment).where(
+                        Payment.billing_id == data.billing_id,
+                        Payment.is_refund.is_(False),
+                        Payment.status == "completed",
+                    )
+                )
+                existing_payments = list(existing_payments_res.all())
+
+                req_method = (data.payment_method or "").strip().lower()
+                if req_method == "cheques":
+                    req_method = "cheque"
+                req_ref = data.transaction_ref.strip() if data.transaction_ref and data.transaction_ref.strip() else None
+
+                is_duplicate = is_fully_paid
+                if not is_duplicate:
+                    for p in existing_payments:
+                        p_ref = p.transaction_ref.strip() if p.transaction_ref and p.transaction_ref.strip() else None
+                        p_method = (p.payment_method or "").strip().lower()
+                        if p_method == "cheques":
+                            p_method = "cheque"
+
+                        if req_ref and p_ref and req_ref.lower() == p_ref.lower():
+                            is_duplicate = True
+                            break
+
+                        if (
+                            round(p.amount, 2) == round(data.amount, 2)
+                            and p_method == req_method
+                            and (p_ref == req_ref or (p_ref is None and req_ref is None))
+                        ):
+                            is_duplicate = True
+                            break
+
+                if is_duplicate:
+                    raise BadRequestException("Payment record already exists for this bill")
+
                 balance_due = round(total_amt - paid_amt, 2)
                 if data.amount > balance_due:
                     raise BadRequestException("Payment amount exceeds balance due")
@@ -58,24 +99,24 @@ class TransactionService:
 
         payment = await self.repo.create(payment)
 
-        # Create corresponding transaction history event
-        from app.services.transaction_history_service import TransactionHistoryService
-        event_type = "REFUND_ISSUED" if is_refund else "PAYMENT_RECEIVED"
-        ref_prefix = "REF" if is_refund else "PAY"
-        desc_action = "Refund Issued" if is_refund else "Payment Received"
-        
-        await TransactionHistoryService(self.db).create_event(
-            event_type=event_type,
-            reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
-            description=f"{desc_action} on bill {billing.bill_number or ''} via {payment.payment_method}",
-            amount=payment.amount,
-            source_module="refunds" if is_refund else "payments",
-            source_id=payment.id,
-            status=payment.status,
-            user_id=user_id
-        )
-
         if is_completed:
+            # Create corresponding transaction history event only when transaction is completed
+            from app.services.transaction_history_service import TransactionHistoryService
+            event_type = "REFUND_ISSUED" if is_refund else "PAYMENT_RECEIVED"
+            ref_prefix = "REF" if is_refund else "PAY"
+            desc_action = "Refund Issued" if is_refund else "Payment Received"
+            
+            await TransactionHistoryService(self.db).create_event(
+                event_type=event_type,
+                reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
+                description=f"{desc_action} on bill {billing.bill_number or ''} via {payment.payment_method}",
+                amount=payment.amount,
+                source_module="refunds" if is_refund else "payments",
+                source_id=payment.id,
+                status=payment.status,
+                user_id=user_id
+            )
+
             await BillingService(self.db)._recalculate_billing(billing)
 
         await self.audit_repo.create("create", "transaction", user_id=user_id, resource_id=str(payment.id))
@@ -152,7 +193,7 @@ class TransactionService:
             hist.event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
             if payment.transaction_ref:
                 hist.reference_no = payment.transaction_ref
-        else:
+        elif new_completed:
             from app.services.transaction_history_service import TransactionHistoryService
             event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
             ref_prefix = "REF" if payment.is_refund else "PAY"

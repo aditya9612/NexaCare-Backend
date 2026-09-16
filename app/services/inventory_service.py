@@ -1,4 +1,5 @@
-from sqlalchemy import select, func
+from datetime import timedelta
+from sqlalchemy import select, func, inspect
 from app.models.inventory_model import WarehouseStock
 from fastapi import HTTPException
 from io import BytesIO
@@ -24,7 +25,6 @@ from app.schemas.inventory_schema import (
     InventoryItemResponse,
     InventoryItemUpdate,
     ReorderAlertResponse,
-    StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
     StockTransactionUpdate,
@@ -164,29 +164,56 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
+    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
+        skip = (page - 1) * size
+        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
+        res = []
+        for alert in alerts:
+            item_name = alert.item.name if hasattr(alert, "item") and alert.item else ""
+            sku = alert.item.sku if hasattr(alert, "item") and alert.item else ""
+            status_val = alert.status if isinstance(alert.status, str) else getattr(alert.status, "value", str(alert.status))
+            res.append(
+                ReorderAlertResponse(
+                    id=alert.id,
+                    item_id=alert.item_id,
+                    item_name=item_name,
+                    sku=sku,
+                    current_quantity=alert.current_quantity,
+                    reorder_level=alert.reorder_level,
+                    status=status_val,
+                    created_at=alert.created_at,
+                )
+            )
+        return res
+
     async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
 
+        tx_type = data.transaction_type or data.type or "INWARD"
+        warehouse_id = data.warehouse_id or item.warehouse_id
+        if not warehouse_id:
+            raise BadRequestException("Warehouse ID is required for stock transaction")
+
         # Use StockMovementService for all physical mutations
         direction = "IN"
-        if data.transaction_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION, StockTransactionType.TRANSFER):
+        if tx_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION, StockTransactionType.TRANSFER):
             direction = "OUT"
 
         quantity = data.quantity
-        if data.transaction_type == StockTransactionType.ADJUSTMENT:
+        if tx_type == StockTransactionType.ADJUSTMENT:
             # We must reject direct API usage of adjustment here, it's safer to only allow explicit references
             raise BadRequestException("Direct adjustment transactions are not supported. Use physical IN/OUT.")
 
         transaction = await StockMovementService.create_movement(
             db=self.db,
             item_id=data.item_id,
-            warehouse_id=data.warehouse_id,
-            transaction_type=data.transaction_type,
+            warehouse_id=warehouse_id,
+            transaction_type=tx_type,
             direction=direction,
             quantity=abs(quantity),
-            batch_id=data.batch_id,
+            batch_id=getattr(data, "batch_id", None),
             unit_cost=data.unit_cost,
             reference_type=data.reference_type,
             reference_id=data.reference_id,
@@ -198,12 +225,7 @@ class InventoryService:
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:
         data = StockTransactionResponse.model_validate(transaction)
         data.type = transaction.transaction_type
-        # Avoid lazy loading item/warehouse synchronously in async context
-        # We can just omit item_name/warehouse_name or fetch them if needed.
-        # But for now, we'll just check if they are already loaded or skip.
-        from sqlalchemy.orm.attributes import instance_state
-        state = instance_state(transaction)
-
+        state = inspect(transaction)
         if "item" in state.dict and transaction.item:
             data.item_name = transaction.item.name
         if "warehouse" in state.dict and transaction.warehouse:
@@ -241,16 +263,25 @@ class InventoryService:
             raise NotFoundException("Stock transaction not found")
         return StockTransactionResponse.model_validate(transaction)
 
-    async def get_dashboard_summary(self) -> InventoryDashboardResponse:
+    async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
         total_registered_items = await self.item_repo.count_all()
         stock_alerts = await self.alert_repo.count_active()
         active_warehouse_units = await self.warehouse_repo.count_active()
+        inactive_warehouse_units = await self.warehouse_repo.count_inactive()
         total_vendors = await self.vendor_repo.count_all()
+        stock_summary = await self.item_repo.get_stock_summary()
+
         return InventoryDashboardResponse(
             total_registered_items=total_registered_items,
             stock_alerts=stock_alerts,
             active_warehouse_units=active_warehouse_units,
+            inactive_warehouse_units=inactive_warehouse_units,
             total_vendors=total_vendors,
+            total_items=stock_summary["total_items"],
+            total_quantity=stock_summary["total_quantity"],
+            low_stock_count=stock_summary["low_stock_count"],
+            expired_count=stock_summary["expired_count"],
+            total_value=stock_summary["total_value"],
         )
 
     async def generate_items_bulk_template(self) -> BytesIO:
@@ -743,24 +774,6 @@ class InventoryService:
         await self.db.delete(warehouse)
         await self.db.flush()
 
-    async def get_stock_summary(self, hospital_id: int | None) -> StockSummary:
-        total_items = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
-        total_quantity = await self.db.scalar(select(func.sum(WarehouseStock.quantity)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
-        total_value = await self.db.scalar(select(func.sum(WarehouseStock.quantity * InventoryItem.unit_cost)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id)) or 0.0
-        low_stock_count = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id, WarehouseStock.quantity < InventoryItem.reorder_level)) or 0
-
-        return StockSummary(
-            total_items=total_items,
-            total_quantity=int(total_quantity),
-            low_stock_count=low_stock_count,
-            expired_count=0,
-            total_value=float(total_value),
-            total_registered_items=total_items,
-            stock_alerts=low_stock_count,
-            active_warehouse_units=0,
-            inactive_warehouse_units=0,
-            total_vendors=0
-        )
 
     async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
         skip = (page - 1) * size
@@ -781,12 +794,27 @@ class InventoryService:
         return result
 
     async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:
+        normalized_period = (period or "monthly").strip().lower()
         now = utc_now()
-        if period == "daily":
+        if normalized_period == "daily":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "yearly":
-            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "weekly":
+            start = now - timedelta(days=7)
+        elif normalized_period == "yearly":
+            start = now - timedelta(days=365)
         else:
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        rows = await self.transaction_repo.get_consumption_report(start, now)
-        return [ConsumptionReport(period=period, **row) for row in rows]
+            start = now - timedelta(days=30)
+            normalized_period = "monthly"
+
+        report_data = await self.transaction_repo.get_consumption_report(start, now)
+        return [
+            ConsumptionReport(
+                period=normalized_period,
+                item_id=item["item_id"],
+                item_name=item["item_name"],
+                sku=item["sku"],
+                total_consumed=item["total_consumed"],
+                total_value=item["total_value"],
+            )
+            for item in report_data
+        ]

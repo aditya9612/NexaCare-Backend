@@ -103,17 +103,40 @@ class AppointmentService:
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        current_user = None,
     ):
         skip = (page - 1) * size
         source = booking_source.value if isinstance(booking_source, BookingSource) else booking_source
+
+        effective_patient_id = patient_id
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids:
+                return {
+                    "items": [], "total": 0, "page": page, "size": size, "pages": 0,
+                    "total_count": 0, "today_count": 0, "confirmed_count": 0,
+                    "cancelled_count": 0, "completed_count": 0, "pending_count": 0,
+                    "checked_in_count": 0, "checked_out_count": 0, "in_progress_count": 0,
+                    "vital_done_count": 0, "emergency_admit_count": 0, "emergency_refer_count": 0,
+                    "emergency_discharge_count": 0,
+                }
+            if patient_id:
+                if patient_id not in allowed_ids:
+                    effective_patient_id = [-1]
+                else:
+                    effective_patient_id = patient_id
+            else:
+                effective_patient_id = allowed_ids
+
         items = await self.repo.list_all(
-            skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
+            skip=skip, limit=size, patient_id=effective_patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
         total = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id,
+            patient_id=effective_patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
@@ -126,8 +149,11 @@ class AppointmentService:
 
         def _base_filter(q):
             """Apply patient/doctor/dept scope filters — no status/date filter."""
-            if patient_id:
-                q = q.where(Appointment.patient_id == patient_id)
+            if effective_patient_id:
+                if isinstance(effective_patient_id, (list, tuple, set)):
+                    q = q.where(Appointment.patient_id.in_(effective_patient_id))
+                else:
+                    q = q.where(Appointment.patient_id == effective_patient_id)
             if doctor_id:
                 q = q.where(Appointment.doctor_id == doctor_id)
             if department_id:

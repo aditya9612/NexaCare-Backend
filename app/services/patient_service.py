@@ -248,12 +248,31 @@ class PatientService:
             if existing_phone:
                 raise ConflictException("Patient with this phone number already exists")
 
-        if data.email:
-            existing_email = await self.repo.get_by_email(data.email)
-            if existing_email:
-                raise ConflictException("Patient with this email already exists")
+        from app.models.user_model import User
+        from app.utils.phone_utils import indian_mobile_last10
+        from sqlalchemy import func, or_, select
 
-        patient = Patient(patient_code=generate_mrn(), **data.model_dump())
+        # Auto-link user_id if this patient already registered a user account
+        user_match_id = None
+        user_conditions = []
+        if data.phone:
+            user_conditions.append(User.phone == data.phone)
+            last10 = indian_mobile_last10(data.phone)
+            if last10 and len(last10) == 10:
+                user_conditions.append(User.phone.like(f"%{last10}%"))
+        if data.email:
+            user_conditions.append(func.lower(User.email) == data.email.strip().lower())
+
+        if user_conditions:
+            matched_user = await self.db.scalar(
+                select(User).where(or_(*user_conditions)).order_by(User.id.asc()).limit(1)
+            )
+            if matched_user:
+                user_match_id = matched_user.id
+
+        patient_data_dict = data.model_dump()
+        patient_data_dict["user_id"] = user_match_id
+        patient = Patient(patient_code=generate_mrn(), **patient_data_dict)
         patient = await self.repo.create(patient)
 
         if consent_file:

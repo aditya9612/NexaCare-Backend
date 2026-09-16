@@ -92,6 +92,7 @@ async def list_appointments(
         department_id=department_id, status=status, appointment_date=appointment_date,
         appointment_type=appointment_type, booking_source=booking_source,
         admission_status=admission_status, triage_level=triage_level, disposition=disposition,
+        current_user=current_user,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 

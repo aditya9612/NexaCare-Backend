@@ -130,6 +130,10 @@ class DischargeService:
             if appointment.appointment_date and appointment.appointment_time
             else appointment.created_at
         )
+        if admission_time and hasattr(admission_time, "tzinfo") and admission_time.tzinfo is not None:
+            admission_time = admission_time.replace(tzinfo=None)
+
+        admission_notes_val = appointment.notes or None
 
         discharge = Discharge(
             discharge_number=generate_discharge_number(),
@@ -139,7 +143,7 @@ class DischargeService:
             bed_id=bed.id if bed else None,
             admission_date=admission_time,
             discharge_date=utc_now(),
-            diagnosis_at_admission=appointment.notes or None,
+            diagnosis_at_admission=admission_notes_val,
             diagnosis_at_discharge=data.diagnosis_at_discharge,
             treatment_summary=data.treatment_summary,
             condition_on_discharge=data.condition_on_discharge,

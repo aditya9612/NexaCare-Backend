@@ -230,9 +230,9 @@ class InventoryService:
             data.item_name = transaction.item.name
         if "warehouse" in state.dict and transaction.warehouse:
             data.warehouse_name = transaction.warehouse.name
+
         data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
         return data
-
     async def list_transactions(
         self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None
     ):
@@ -264,12 +264,12 @@ class InventoryService:
         return StockTransactionResponse.model_validate(transaction)
 
     async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
-        total_registered_items = await self.item_repo.count_all()
-        stock_alerts = await self.alert_repo.count_active()
-        active_warehouse_units = await self.warehouse_repo.count_active()
-        inactive_warehouse_units = await self.warehouse_repo.count_inactive()
-        total_vendors = await self.vendor_repo.count_all()
-        stock_summary = await self.item_repo.get_stock_summary()
+        total_registered_items = await self.item_repo.count_all(hospital_id=hospital_id)
+        stock_alerts = await self.alert_repo.count_active(hospital_id=hospital_id)
+        active_warehouse_units = await self.warehouse_repo.count_active(hospital_id=hospital_id)
+        inactive_warehouse_units = await self.warehouse_repo.count_inactive(hospital_id=hospital_id)
+        total_vendors = await self.vendor_repo.count_all(hospital_id=hospital_id)
+        stock_summary = await self.item_repo.get_stock_summary(hospital_id=hospital_id)
 
         return InventoryDashboardResponse(
             total_registered_items=total_registered_items,
@@ -298,10 +298,10 @@ class InventoryService:
         ]
         ws.append(headers)
 
-        
+
         # Configure Header Row Height
         ws.row_dimensions[1].height = 32
-        
+
         # Header Style definition
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         header_font = Font(name="Calibri", size=12, bold=True, color="000000")
@@ -309,14 +309,14 @@ class InventoryService:
         header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         thin_side = Side(style="thin", color="D3D3D3")
         header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-        
+
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_alignment
             cell.border = header_border
-        
+
         # Add sample row
         sample_row = [
             "Disposable Syringes 10ml",
@@ -335,13 +335,13 @@ class InventoryService:
         ]
         ws.append(sample_row)
 
-        
+
         # Freeze panes at A2
         ws.freeze_panes = "A2"
-        
+
         # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
         ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}2"
-        
+
         # Set custom column widths
         col_widths = {
             1: 25,  # name
@@ -361,7 +361,7 @@ class InventoryService:
         for col_idx, width in col_widths.items():
             col_letter = openpyxl.utils.get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = width
-        
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -557,10 +557,10 @@ class InventoryService:
             ]
             ws.append(headers)
 
-            
+
             # Configure Header Row Height
             ws.row_dimensions[1].height = 32
-            
+
             # Header Style definition
             from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
             header_font = Font(name="Calibri", size=12, bold=True, color="000000")
@@ -568,14 +568,14 @@ class InventoryService:
             header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             thin_side = Side(style="thin", color="D3D3D3")
             header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            
+
             for col_idx in range(1, len(headers) + 1):
                 cell = ws.cell(row=1, column=col_idx)
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = header_alignment
                 cell.border = header_border
-            
+
             for sr_no, item in enumerate(items, start=1):
                 row = [
                     sr_no,
@@ -596,15 +596,15 @@ class InventoryService:
                 ]
                 ws.append(row)
 
-                
+
             # Freeze panes at A2
             ws.freeze_panes = "A2"
-            
+
             # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
             total_rows = len(items) + 1
             last_col_letter = openpyxl.utils.get_column_letter(len(headers))
             ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-            
+
             # Set custom column widths
             col_widths = {
                 1: 8,   # Sr. No.
@@ -626,7 +626,7 @@ class InventoryService:
             for col_idx, width in col_widths.items():
                 col_letter = openpyxl.utils.get_column_letter(col_idx)
                 ws.column_dimensions[col_letter].width = width
-                
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
@@ -753,10 +753,13 @@ class InventoryService:
         if not warehouse or warehouse.hospital_id != hospital_id:
             raise HTTPException(status_code=404, detail="Warehouse not found")
 
-        if data.name is not None:
-            warehouse.name = data.name
-        if data.location is not None:
-            warehouse.location = data.location
+        update_data = data.model_dump(exclude_unset=True)
+        if "name" in update_data:
+            warehouse.name = update_data["name"]
+        if "location" in update_data:
+            warehouse.location = update_data["location"]
+        if "capacity" in update_data:
+            warehouse.capacity = update_data["capacity"]
 
         await self.db.flush()
         return WarehouseResponse.model_validate(warehouse)

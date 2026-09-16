@@ -1797,10 +1797,6 @@ class PharmacyService:
             Medicine.is_deleted.is_(False),
             Medicine.is_active.is_(True)
         )
-        if start_dt:
-            total_medicines_query = total_medicines_query.where(Medicine.created_at >= start_dt)
-        if end_dt:
-            total_medicines_query = total_medicines_query.where(Medicine.created_at <= end_dt)
         total_medicines = (await self.db.scalar(total_medicines_query)) or 0
 
         # 2. Low Stock Alerts (Medicine.stock_quantity <= Medicine.reorder_level, created in period if filtered)
@@ -1809,10 +1805,6 @@ class PharmacyService:
             Medicine.is_active.is_(True),
             Medicine.stock_quantity <= Medicine.reorder_level
         )
-        if start_dt:
-            low_stock_query = low_stock_query.where(Medicine.created_at >= start_dt)
-        if end_dt:
-            low_stock_query = low_stock_query.where(Medicine.created_at <= end_dt)
         low_stock_alerts = (await self.db.scalar(low_stock_query)) or 0
 
         # 3. Expired Alerts (Medicine.expiry_date in period or near expiry, stock_quantity > 0)
@@ -1822,14 +1814,8 @@ class PharmacyService:
             Medicine.stock_quantity > 0,
             Medicine.expiry_date.isnot(None),
         )
-        if start_dt and end_dt:
-            expired_alerts_query = expired_alerts_query.where(
-                Medicine.expiry_date >= start_dt.date(),
-                Medicine.expiry_date <= end_dt.date()
-            )
-        else:
-            threshold_date = today_ist + timedelta(days=30)
-            expired_alerts_query = expired_alerts_query.where(Medicine.expiry_date <= threshold_date)
+        threshold_date = today_ist + timedelta(days=30)
+        expired_alerts_query = expired_alerts_query.where(Medicine.expiry_date <= threshold_date)
         expired_alerts = (await self.db.scalar(expired_alerts_query)) or 0
 
         # Expired medicines count (strictly expired in period)
@@ -1839,13 +1825,7 @@ class PharmacyService:
             Medicine.stock_quantity > 0,
             Medicine.expiry_date.isnot(None),
         )
-        if start_dt and end_dt:
-            expired_medicines_query = expired_medicines_query.where(
-                Medicine.expiry_date >= start_dt.date(),
-                Medicine.expiry_date <= end_dt.date()
-            )
-        else:
-            expired_medicines_query = expired_medicines_query.where(Medicine.expiry_date < today_ist)
+        expired_medicines_query = expired_medicines_query.where(Medicine.expiry_date < today_ist)
         expired_medicines_alerts = (await self.db.scalar(expired_medicines_query)) or 0
 
         # 4. Today Sales (Strictly today's sales from 00:00:00 to 23:59:59 IST)
@@ -1880,21 +1860,12 @@ class PharmacyService:
         pending_purchases_query = select(func.count(Purchase.id)).where(
             Purchase.status.in_(["Pending", "Ordered"])
         )
-        if start_dt:
-            pending_purchases_query = pending_purchases_query.where(Purchase.created_at >= start_dt)
-        if end_dt:
-            pending_purchases_query = pending_purchases_query.where(Purchase.created_at <= end_dt)
-
         pending_purchases = (await self.db.scalar(pending_purchases_query)) or 0
 
         # 7. Total Suppliers (Count active suppliers)
         total_suppliers_query = select(func.count(Supplier.id)).where(
             Supplier.is_deleted.is_(False)
         )
-        if start_dt:
-            total_suppliers_query = total_suppliers_query.where(Supplier.created_at >= start_dt)
-        if end_dt:
-            total_suppliers_query = total_suppliers_query.where(Supplier.created_at <= end_dt)
         total_suppliers = (await self.db.scalar(total_suppliers_query)) or 0
 
         # 8. Prescriptions (Count active prescriptions pending to be dispensed)
@@ -1902,11 +1873,6 @@ class PharmacyService:
             Prescription.is_deleted.is_(False),
             Prescription.status == "pending"
         )
-        if start_dt:
-            prescriptions_query = prescriptions_query.where(Prescription.created_at >= start_dt)
-        if end_dt:
-            prescriptions_query = prescriptions_query.where(Prescription.created_at <= end_dt)
-
         prescriptions = (await self.db.scalar(prescriptions_query)) or 0
 
         # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
@@ -1918,10 +1884,6 @@ class PharmacyService:
                 Medicine.stock_quantity <= Medicine.reorder_level
             )
         )
-        if start_dt:
-            low_stock_items_query = low_stock_items_query.where(Medicine.created_at >= start_dt)
-        if end_dt:
-            low_stock_items_query = low_stock_items_query.where(Medicine.created_at <= end_dt)
         low_stock_items_query = low_stock_items_query.order_by(Medicine.stock_quantity.asc()).limit(10)
         low_stock_res = await self.db.execute(low_stock_items_query)
         low_stock_items = [

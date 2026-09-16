@@ -86,7 +86,7 @@ class MedicineCreate(BaseSchema):
     name: str
     generic_name: str | None = None
     barcode: str | None = None
-    batch_number: str | None = None
+    batch_number: str = Field(..., min_length=3, max_length=30, pattern=r"^[A-Za-z0-9\-_]+$")
     category: str
     unit: str
     unit_price: float = Field(0.0, ge=0)

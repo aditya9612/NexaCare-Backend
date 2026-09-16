@@ -22,10 +22,22 @@ class VendorRepository:
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, vendor_type: str | None = None) -> int:
-        query = select(func.count()).select_from(Vendor).where(Vendor.is_deleted.is_(False))
-        if vendor_type is not None:
-            query = query.where(Vendor.vendor_type == vendor_type)
+    async def count_all(self, vendor_type: str | None = None, hospital_id: int | None = None) -> int:
+        if hospital_id is not None:
+            from app.models.inventory_model import InventoryItem, Warehouse
+            query = (
+                select(func.count(func.distinct(Vendor.id)))
+                .select_from(Vendor)
+                .join(Vendor.items)
+                .join(InventoryItem.warehouse)
+                .where(Vendor.is_deleted.is_(False), Warehouse.hospital_id == hospital_id)
+            )
+            if vendor_type is not None:
+                query = query.where(Vendor.vendor_type == vendor_type)
+        else:
+            query = select(func.count()).select_from(Vendor).where(Vendor.is_deleted.is_(False))
+            if vendor_type is not None:
+                query = query.where(Vendor.vendor_type == vendor_type)
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, vendor_id: int) -> Vendor | None:

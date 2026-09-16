@@ -33,6 +33,7 @@ from app.schemas.inventory_schema import (
     WarehouseResponse,
     WarehouseUpdate,
     InventoryDashboardResponse,
+    StockSummary,
 )
 from app.utils.helpers import generate_code, generate_stock_transaction_number, utc_now
 from app.utils.pagination import build_paginated_result
@@ -164,28 +165,6 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
-    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
-        skip = (page - 1) * size
-        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
-        res = []
-        for alert in alerts:
-            item_name = alert.item.name if hasattr(alert, "item") and alert.item else ""
-            sku = alert.item.sku if hasattr(alert, "item") and alert.item else ""
-            status_val = alert.status if isinstance(alert.status, str) else getattr(alert.status, "value", str(alert.status))
-            res.append(
-                ReorderAlertResponse(
-                    id=alert.id,
-                    item_id=alert.item_id,
-                    item_name=item_name,
-                    sku=sku,
-                    current_quantity=alert.current_quantity,
-                    reorder_level=alert.reorder_level,
-                    status=status_val,
-                    created_at=alert.created_at,
-                )
-            )
-        return res
-
     async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
@@ -214,7 +193,6 @@ class InventoryService:
             direction=direction,
             quantity=abs(quantity),
             batch_id=getattr(data, "batch_id", None),
-            batch_id=getattr(data, "batch_id", None),
             unit_cost=data.unit_cost,
             reference_type=data.reference_type,
             reference_id=data.reference_id,
@@ -224,17 +202,17 @@ class InventoryService:
         return self._to_transaction_response(transaction)
 
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:
-        data = StockTransactionResponse.model_validate(transaction)
-        data.type = transaction.transaction_type
-        state = inspect(transaction)
-        if "item" in state.dict and transaction.item:
-        if "item" in transaction.__dict__ and transaction.item:
-            data.item_name = transaction.item.name
-        if "warehouse" in state.dict and transaction.warehouse:
-        if "warehouse" in transaction.__dict__ and transaction.warehouse:
-            data.warehouse_name = transaction.warehouse.name
-        data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
-        return data
+       data = StockTransactionResponse.model_validate(transaction)
+       data.type = transaction.transaction_type
+
+       if "item" in transaction.__dict__ and transaction.item:
+          data.item_name = transaction.item.name
+
+       if "warehouse" in transaction.__dict__ and transaction.warehouse:
+          data.warehouse_name = transaction.warehouse.name
+
+       data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
+       return data
 
     async def list_transactions(
         self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None
@@ -259,12 +237,6 @@ class InventoryService:
 
     async def delete_stock_transaction(self, transaction_id: int, user_id: int) -> None:
         raise BadRequestException("Stock transactions are immutable and cannot be deleted.")
-
-    async def get_transaction(self, transaction_id: int) -> StockTransactionResponse:
-        transaction = await self.transaction_repo.get_by_id(transaction_id)
-        if not transaction:
-            raise NotFoundException("Stock transaction not found")
-        return StockTransactionResponse.model_validate(transaction)
 
     async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
         total_registered_items = await self.item_repo.count_all()
@@ -796,31 +768,6 @@ class InventoryService:
             ))
         return result
 
-    async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:
-        normalized_period = (period or "monthly").strip().lower()
-        now = utc_now()
-        if normalized_period == "daily":
-            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif normalized_period == "weekly":
-            start = now - timedelta(days=7)
-        elif normalized_period == "yearly":
-            start = now - timedelta(days=365)
-        else:
-            start = now - timedelta(days=30)
-            normalized_period = "monthly"
-
-        report_data = await self.transaction_repo.get_consumption_report(start, now)
-        return [
-            ConsumptionReport(
-                period=normalized_period,
-                item_id=item["item_id"],
-                item_name=item["item_name"],
-                sku=item["sku"],
-                total_consumed=item["total_consumed"],
-                total_value=item["total_value"],
-            )
-            for item in report_data
-        ]
     async def get_stock_summary(self, hospital_id: int | None) -> StockSummary:
         total_items = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
         total_quantity = await self.db.scalar(select(func.sum(WarehouseStock.quantity)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0

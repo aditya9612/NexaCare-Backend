@@ -273,8 +273,7 @@ class AppointmentService:
         cancelled = sum(
             row.cnt for row in rows
             if (row.appointment_status or "") in _CANCELLED_SET
-        today_ist = get_today_ist()
-        
+        )
         total_appointments = await self.repo.count_all(
             patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
         )

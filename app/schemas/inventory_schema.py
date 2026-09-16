@@ -438,3 +438,17 @@ class InventoryDashboardResponse(BaseSchema):
     total_value: float
 
 
+class StockSummary(BaseSchema):
+    total_items: int = 0
+    total_quantity: int = 0
+    low_stock_count: int = 0
+    expired_count: int = 0
+    total_value: float = 0.0
+    total_registered_items: int = 0
+    stock_alerts: int = 0
+    active_warehouse_units: int = 0
+    inactive_warehouse_units: int = 0
+    total_vendors: int = 0
+
+
+

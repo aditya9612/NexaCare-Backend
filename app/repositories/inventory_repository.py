@@ -246,12 +246,6 @@ class StockTransactionRepository:
             .join(InventoryItem, InventoryItem.id == StockTransaction.item_id)
             .where(
                 func.lower(StockTransaction.transaction_type) == "consumption",
-                StockTransaction.transaction_date >= start,
-                StockTransaction.transaction_date <= end,
-            )
-            .group_by(StockTransaction.item_id, InventoryItem.name, InventoryItem.sku)
-        )
-                func.lower(StockTransaction.transaction_type) == "consumption",
                 InventoryItem.is_deleted.is_(False),
             )
         )

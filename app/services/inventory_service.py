@@ -753,10 +753,13 @@ class InventoryService:
         if not warehouse or warehouse.hospital_id != hospital_id:
             raise HTTPException(status_code=404, detail="Warehouse not found")
 
-        if data.name is not None:
-            warehouse.name = data.name
-        if data.location is not None:
-            warehouse.location = data.location
+        update_data = data.model_dump(exclude_unset=True)
+        if "name" in update_data:
+            warehouse.name = update_data["name"]
+        if "location" in update_data:
+            warehouse.location = update_data["location"]
+        if "capacity" in update_data:
+            warehouse.capacity = update_data["capacity"]
 
         await self.db.flush()
         return WarehouseResponse.model_validate(warehouse)

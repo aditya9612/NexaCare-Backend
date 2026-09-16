@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.transaction_history_model import TransactionHistory
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.transaction_history_repository import TransactionHistoryRepository
@@ -23,14 +23,24 @@ class TransactionHistoryService:
     async def create_transaction_history(
         self, data: TransactionHistoryCreate, user_id: int
     ) -> TransactionHistoryResponse:
-        if data.transaction_id is not None:
+        tx_status = (data.status or "completed").strip().lower()
+        if tx_status != "completed":
+            raise BadRequestException("Transaction history entry can only be created for completed transactions")
+
+        payment_id = data.transaction_id
+        if payment_id is None and data.source_module and data.source_module.strip().lower() in ("payments", "refunds", "transactions"):
+            payment_id = data.source_id
+
+        if payment_id is not None:
             from sqlalchemy import select
             from app.models.billing_model import Payment
-            stmt = select(Payment).where(Payment.id == data.transaction_id)
+            stmt = select(Payment).where(Payment.id == payment_id)
             res = await self.db.execute(stmt)
             payment = res.scalar_one_or_none()
-            if not payment:
+            if not payment and data.transaction_id is not None:
                 raise NotFoundException("Transaction not found")
+            if payment and (payment.status or "").strip().lower() != "completed":
+                raise BadRequestException("Cannot create transaction history for a transaction that is not completed")
 
         tx_history = TransactionHistory(
             event_type=data.event_type.strip().upper(),

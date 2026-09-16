@@ -110,7 +110,11 @@ class IcuTelemetryService:
         for key, value in updates.items():
             setattr(device, key, value)
 
-        device = await self.device_repo.save(device)
+        from sqlalchemy.exc import IntegrityError
+        try:
+            device = await self.device_repo.save(device)
+        except IntegrityError:
+            raise ConflictException("Device serial already registered")
         await self.audit_repo.create(
             "update",
             "icu_devices",

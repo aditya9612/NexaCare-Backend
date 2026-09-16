@@ -210,7 +210,7 @@ async def check_in_appointment(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).check_in(appointment_id, current_user.id)
     return APIResponse(
@@ -229,7 +229,7 @@ async def check_out_appointment(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).check_out(appointment_id, current_user.id)
     return APIResponse(
@@ -248,7 +248,7 @@ async def generate_queue_token(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).generate_queue_token(appointment_id, current_user.id)
     return APIResponse(
@@ -265,7 +265,7 @@ async def generate_queue_token(
 async def get_today_queue(
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointments = await AppointmentService(db).get_today_queue()
     return APIResponse(
@@ -278,7 +278,7 @@ async def get_today_queue(
 async def get_current_queue(
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).get_current_queue()
     return APIResponse(
@@ -292,7 +292,7 @@ async def call_next_token(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).call_next_token(appointment_id, current_user.id)
     return APIResponse(
@@ -310,7 +310,7 @@ async def complete_token(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).complete_token(appointment_id, current_user.id)
     return APIResponse(
@@ -328,7 +328,7 @@ async def skip_token(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
+    _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
     appointment = await AppointmentService(db).skip_token(appointment_id, current_user.id)
     return APIResponse(

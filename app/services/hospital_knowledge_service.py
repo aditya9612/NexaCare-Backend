@@ -21,13 +21,10 @@ from app.schemas.hospital_voice_schema import (
 )
 from app.services.canonical_faq_specs import CANONICAL_TOPICS, build_canonical_faq_specs
 from app.services.faq_retrieval_service import FaqRetrievalService
-from app.services.knowledge_embedding_sync import (
-    deactivate_kb_embedding,
-    sync_document_embedding,
-    sync_faq_embedding,
-    sync_policy_embedding,
-)
+from app.services.knowledge_embedding_sync import deactivate_kb_embedding
+from app.services.faq_ai_dispatcher import FaqAiDispatcher
 from app.utils.helpers import utc_now
+
 
 
 class HospitalKnowledgeService:
@@ -42,8 +39,8 @@ class HospitalKnowledgeService:
     async def create_faq(self, data: HospitalFaqCreate) -> HospitalFaqResponse:
         faq = HospitalFaq(**data.model_dump())
         faq = await self.faq_repo.create(faq)
-        await sync_faq_embedding(self.db, faq)
-        await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
+        # Dispatch embedding to Celery — does not block API response.
+        await FaqAiDispatcher(self.db).dispatch_faq_update(faq)
         return HospitalFaqResponse.model_validate(faq)
 
     async def get_faq(self, faq_id: int) -> HospitalFaqResponse:
@@ -59,9 +56,10 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(faq, k, v)
         faq = await self.faq_repo.update(faq)
-        await sync_faq_embedding(self.db, faq)
-        await FaqRetrievalService(self.db).invalidate_cache(faq.hospital_id)
+        # Dispatch embedding to Celery — does not block API response.
+        await FaqAiDispatcher(self.db).dispatch_faq_update(faq)
         return HospitalFaqResponse.model_validate(faq)
+
 
     async def list_faqs(self, hospital_id: int, language: str | None = None) -> list[HospitalFaqResponse]:
         items = await self.faq_repo.list_for_hospital(hospital_id, language)
@@ -80,8 +78,7 @@ class HospitalKnowledgeService:
     async def create_policy(self, data: HospitalPolicyCreate) -> HospitalPolicyResponse:
         policy = HospitalPolicy(**data.model_dump())
         policy = await self.policy_repo.create(policy)
-        await sync_policy_embedding(self.db, policy)
-        await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
+        await FaqAiDispatcher(self.db).dispatch_policy_update(policy)
         return HospitalPolicyResponse.model_validate(policy)
 
     async def get_policy(self, policy_id: int) -> HospitalPolicyResponse:
@@ -97,8 +94,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(policy, k, v)
         policy = await self.policy_repo.update(policy)
-        await sync_policy_embedding(self.db, policy)
-        await FaqRetrievalService(self.db).invalidate_cache(policy.hospital_id)
+        await FaqAiDispatcher(self.db).dispatch_policy_update(policy)
         return HospitalPolicyResponse.model_validate(policy)
 
     async def list_policies(
@@ -112,8 +108,7 @@ class HospitalKnowledgeService:
     ) -> HospitalVoiceDocumentResponse:
         doc = HospitalVoiceDocument(**data.model_dump())
         doc = await self.doc_repo.create(doc)
-        await sync_document_embedding(self.db, doc)
-        await FaqRetrievalService(self.db).invalidate_cache(data.hospital_id)
+        await FaqAiDispatcher(self.db).dispatch_document_update(doc)
         return HospitalVoiceDocumentResponse.model_validate(doc)
 
     async def get_document(self, doc_id: int) -> HospitalVoiceDocumentResponse:
@@ -131,8 +126,7 @@ class HospitalKnowledgeService:
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(doc, k, v)
         doc = await self.doc_repo.update(doc)
-        await sync_document_embedding(self.db, doc)
-        await FaqRetrievalService(self.db).invalidate_cache(doc.hospital_id)
+        await FaqAiDispatcher(self.db).dispatch_document_update(doc)
         return HospitalVoiceDocumentResponse.model_validate(doc)
 
     async def list_documents(

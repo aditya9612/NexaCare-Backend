@@ -326,6 +326,17 @@ class BedHistoryResponse(BaseSchema):
     discharged_date: str | None = None
 
 
+class LabHistoryResponse(BaseSchema):
+    test_order_id: int
+    test_name: str
+    category: str | None = None
+    status: str
+    ordered_date: str | date | None = None
+    sample_collected_date: str | date | None = None
+    completed_date: str | date | None = None
+    report_available: bool = False
+
+
 def parse_medical_history_to_bed_history(medical_history: str | None) -> list[dict]:
     if not medical_history:
         return []
@@ -452,6 +463,7 @@ class PatientResponseBase(BaseSchema):
     created_at: datetime
     updated_at: datetime
     bed_history: list[BedHistoryResponse] | None = None
+    lab_history: list[LabHistoryResponse] = []
 
     @model_validator(mode="after")
     def populate_bed_history(self) -> "PatientResponse":

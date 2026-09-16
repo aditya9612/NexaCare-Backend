@@ -162,7 +162,12 @@ class PatientService:
         patient = await self.repo.get_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
-        return PatientResponse.model_validate(patient)
+        lab_history = []
+        if hasattr(self.repo, "get_patient_lab_history"):
+            lab_history = await self.repo.get_patient_lab_history(patient_id)
+        res = PatientResponse.model_validate(patient)
+        res.lab_history = lab_history
+        return res
 
     async def create(
         self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None

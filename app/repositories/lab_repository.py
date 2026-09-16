@@ -23,7 +23,7 @@ class LabTestRepository:
         if category:
             query = query.where(LabTest.category == category)
         if doctor_id is not None:
-            query = query.where(LabTest.doctor_id == doctor_id)
+            query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
             query = query.where(LabTest.department_id == department_id)
         column = getattr(LabTest, sort_by, LabTest.created_at)
@@ -36,7 +36,7 @@ class LabTestRepository:
         if category:
             query = query.where(LabTest.category == category)
         if doctor_id is not None:
-            query = query.where(LabTest.doctor_id == doctor_id)
+            query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
             query = query.where(LabTest.department_id == department_id)
         return (await self.db.scalar(query)) or 0
@@ -51,7 +51,7 @@ class LabTestRepository:
             )
         )
         if doctor_id is not None:
-            query = query.where(LabTest.doctor_id == doctor_id)
+            query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
             query = query.where(LabTest.department_id == department_id)
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -64,10 +64,11 @@ class LabTestRepository:
             or_(
                 func.lower(LabTest.test_name).like(pattern),
                 func.lower(LabTest.test_code).like(pattern),
-            ),
+                func.lower(LabTest.category).like(pattern),
+            )
         )
         if doctor_id is not None:
-            query = query.where(LabTest.doctor_id == doctor_id)
+            query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
             query = query.where(LabTest.department_id == department_id)
         return (await self.db.scalar(query)) or 0

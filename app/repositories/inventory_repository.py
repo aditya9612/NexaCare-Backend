@@ -120,9 +120,12 @@ class InventoryRepository:
 
 
     async def update_quantity(self, item_id: int, delta: int) -> InventoryItem | None:
-        item = await self.get_by_id(item_id)
+        item = await self.get_by_id_for_update(item_id)
         if item:
-            item.quantity = max(0, item.quantity + delta)
+            new_qty = item.quantity + delta
+            if new_qty < 0:
+                raise ValueError("Insufficient inventory quantity")
+            item.quantity = new_qty
             await self.db.flush()
             await self.db.refresh(item)
         return item
@@ -243,6 +246,12 @@ class StockTransactionRepository:
             .join(InventoryItem, InventoryItem.id == StockTransaction.item_id)
             .where(
                 func.lower(StockTransaction.transaction_type) == "consumption",
+                StockTransaction.transaction_date >= start,
+                StockTransaction.transaction_date <= end,
+            )
+            .group_by(StockTransaction.item_id, InventoryItem.name, InventoryItem.sku)
+        )
+                func.lower(StockTransaction.transaction_type) == "consumption",
                 InventoryItem.is_deleted.is_(False),
             )
         )
@@ -340,6 +349,7 @@ class ReorderAlertRepository:
     async def list_active(self, skip: int = 0, limit: int = 50) -> list[ReorderAlert]:
         result = await self.db.execute(
             select(ReorderAlert)
+            .options(selectinload(ReorderAlert.item))
             .where(ReorderAlert.status == "active")
             .order_by(ReorderAlert.created_at.desc())
             .offset(skip)

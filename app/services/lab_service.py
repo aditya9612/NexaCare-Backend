@@ -413,9 +413,8 @@ class LabService:
             raise NotFoundException("Lab test not found or inactive")
 
         if doctor:
-            # 4. It Should be Possible For Doctor to Only Put Lab Test Id of Lab Tests Created by Him in lab_test_id Field.
-            if test.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only order lab tests created by themselves")
+            # Doctors can order any active lab test
+            pass
 
         # Resolve doctor_id to store in the order
         resolved_doctor_id = data.doctor_id
@@ -465,10 +464,7 @@ class LabService:
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
             if role_name == "doctor":
-                from app.repositories.doctor_repository import DoctorRepository
-                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
-                if doctor:
-                    doctor_id = doctor.id
+                pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
                 result = await self.db.execute(
@@ -591,6 +587,8 @@ class LabService:
             raise NotFoundException("Test order not found")
 
         # Check if sample already exists for this test order
+        if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+            raise BadRequestException("Cannot collect sample for a completed or cancelled test order")
         existing_sample = await self.sample_repo.get_by_test_order(data.test_order_id)
         if existing_sample:
             raise ConflictException("Sample has already been collected for this test order")
@@ -745,6 +743,8 @@ class LabService:
         order = await self.order_repo.get_by_id(sample.test_order_id)
         if not order:
             raise NotFoundException("Test order not found")
+        if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+            raise BadRequestException("Cannot enter result for a completed or cancelled test order")
 
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
@@ -769,18 +769,8 @@ class LabService:
         document_url = None
 
         if document:
-            upload_dir = "uploads/lab_results"
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_ext = os.path.splitext(document.filename)[1]
-            file_name = f"{uuid4()}{file_ext}"
-            file_path = os.path.join(upload_dir, file_name)
-
-            async with aiofiles.open(file_path, "wb") as f:
-                while content := await document.read(1024 * 1024):
-                    await f.write(content)
-
-            document_url = file_path
+            from app.utils.file_upload import save_upload
+            document_url = await save_upload(document, "lab_results")
 
         dump_data = data.model_dump()
         dump_data.pop("sample_id", None)
@@ -854,21 +844,8 @@ class LabService:
             raise NotFoundException("Test result not found")
 
         if document:
-            from uuid import uuid4
-            import aiofiles
-            import os
-            upload_dir = "uploads/lab_results"
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_ext = os.path.splitext(document.filename)[1]
-            file_name = f"{uuid4()}{file_ext}"
-            file_path = os.path.join(upload_dir, file_name)
-
-            async with aiofiles.open(file_path, "wb") as f:
-                while content := await document.read(1024 * 1024):
-                    await f.write(content)
-
-            result.document_url = file_path
+            from app.utils.file_upload import save_upload
+            result.document_url = await save_upload(document, "lab_results")
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(result, key, value)
@@ -1076,14 +1053,7 @@ class LabService:
             department_id = staff.department_id
             generated_by = current_user.id
         elif role_name == "doctor":
-            from app.models.doctor_model import Doctor
-            doctor_res = await self.db.execute(
-                select(Doctor).where(Doctor.user_id == current_user.id, Doctor.is_deleted == False)
-            )
-            doctor = doctor_res.scalar_one_or_none()
-            if not doctor:
-                raise ForbiddenException("Doctor profile not found")
-            doctor_id = doctor.id
+            pass
         elif role_name == "pharmacist" or role_name in [r.lower() for r in UserRole.ADMIN_ROLES]:
             # Pharmacists and Admins can view all lab reports (no filter applied)
             pass
@@ -1199,6 +1169,41 @@ class LabService:
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning(f"Failed to regenerate report PDF during approve_report: {e}")
+
+            try:
+                notif_service = NotificationService(self.db)
+                test_name = order.lab_test.test_name if order.lab_test else "Lab Test"
+
+                # Notify Patient
+                if patient and patient.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Lab Report Approved",
+                        message=f"Your lab report {report.report_number} for {test_name} has been approved and is now available.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=patient.email,
+                        phone=patient.phone,
+                    )
+
+                # Notify Doctor
+                if doctor and doctor.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=doctor.user_id,
+                        title="Lab Report Approved",
+                        message=f"Lab report {report.report_number} for {patient.first_name} {patient.last_name} has been approved.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                    )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch lab report approval notification: %s", exc)
 
         report = await self.report_repo.update(report)
         await self.audit_repo.create(
@@ -1366,7 +1371,8 @@ class LabService:
         from google import genai
         from google.genai import types
 
-        api_key = (settings.GEMINI_API_KEY or "").strip()
+        import os
+        api_key = (settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY") or "").strip()
         if not api_key:
             raise BadRequestException("GEMINI_API_KEY environment variable is not set.")
         
@@ -1735,8 +1741,8 @@ class LabService:
         
         # One valid sample row
         ws.append([
-            "John Doe [PT-0001]",
-            "Dr. Sarah Connor [DOC-0002]",
+            "John Doe",
+            "Dr. Sarah Connor",
             "Complete Blood Count [CBC]",
             "APT-202608210001",
             "normal",
@@ -1800,27 +1806,46 @@ class LabService:
                     except (ValueError, TypeError):
                         raise BadRequestException(f"Invalid integer value for {field_name}: {val}")
 
-                def extract_code(val, field_name, expected_format, required=False) -> str | None:
+                def parse_name_and_code(val, field_name, required=False):
                     if val is None or str(val).strip() == "":
                         if required:
                             raise BadRequestException(f"{field_name} is required.")
-                        return None
+                        return None, None
                     val_str = str(val).strip()
                     match = re.search(r"\[(.*?)\]", val_str)
-                    if not match:
-                        raise BadRequestException(f"Invalid {field_name} format. Expected: {expected_format}")
-                    code = match.group(1).strip()
-                    if not code:
+                    if match:
+                        code = match.group(1).strip()
+                        name = val_str[:match.start()].strip()
+                        return name, code
+                    return val_str, None
+
+                def extract_code(val, field_name, expected_format, required=False) -> str | None:
+                    _, code = parse_name_and_code(val, field_name, required=required)
+                    if val is not None and str(val).strip() != "" and not code:
                         raise BadRequestException(f"Invalid {field_name} format. Expected: {expected_format}")
                     return code
 
-                patient_code = extract_code(row_dict.get("patient name"), "Patient Name", "Name [patient_code]", required=True)
+                p_name, patient_code = parse_name_and_code(row_dict.get("patient name"), "Patient Name", required=True)
                 from app.models.patient_model import Patient
-                p_stmt = select(Patient.id).where(Patient.patient_code == patient_code, Patient.is_deleted == False)
-                p_res = await self.db.execute(p_stmt)
-                patient_id = p_res.scalar_one_or_none()
-                if patient_id is None:
-                    raise BadRequestException(f"Patient with code {patient_code} not found")
+                patient_id = None
+                if patient_code:
+                    p_stmt = select(Patient.id).where(Patient.patient_code == patient_code, Patient.is_deleted == False)
+                    p_res = await self.db.execute(p_stmt)
+                    patient_id = p_res.scalar_one_or_none()
+                    if patient_id is None:
+                        raise BadRequestException(f"Patient with code {patient_code} not found")
+                else:
+                    p_stmt = select(Patient.id).where(
+                        func.lower(func.concat(Patient.first_name, " ", Patient.last_name)) == p_name.lower(),
+                        Patient.is_deleted == False
+                    )
+                    p_res = await self.db.execute(p_stmt)
+                    p_ids = p_res.scalars().all()
+                    if not p_ids:
+                        raise BadRequestException(f"Patient with name '{p_name}' not found")
+                    if len(p_ids) > 1:
+                        raise BadRequestException(f"Multiple active patients found with name '{p_name}'. Please specify patient code.")
+                    patient_id = p_ids[0]
 
                 lab_test_code = extract_code(row_dict.get("lab test name"), "Lab Test Name", "Test Name [test_code]", required=True)
                 from app.models.lab_model import LabTest
@@ -1830,7 +1855,7 @@ class LabService:
                 if lab_test_id is None:
                     raise BadRequestException(f"Lab Test with code {lab_test_code} not found")
 
-                doctor_code = extract_code(row_dict.get("doctor name"), "Doctor Name", "Name [doctor_code]", required=False)
+                d_name, doctor_code = parse_name_and_code(row_dict.get("doctor name"), "Doctor Name", required=False)
                 doctor_id = None
                 if doctor_code:
                     from app.models.doctor_model import Doctor
@@ -1839,6 +1864,25 @@ class LabService:
                     doctor_id = d_res.scalar_one_or_none()
                     if doctor_id is None:
                         raise BadRequestException(f"Doctor with code {doctor_code} not found")
+                elif d_name:
+                    clean_d_name = d_name
+                    if clean_d_name.lower().startswith("dr."):
+                        clean_d_name = clean_d_name[3:].strip()
+                    elif clean_d_name.lower().startswith("dr "):
+                        clean_d_name = clean_d_name[3:].strip()
+
+                    from app.models.doctor_model import Doctor
+                    d_stmt = select(Doctor.id).where(
+                        func.lower(func.concat(Doctor.first_name, " ", Doctor.last_name)) == clean_d_name.lower(),
+                        Doctor.is_deleted == False
+                    )
+                    d_res = await self.db.execute(d_stmt)
+                    d_ids = d_res.scalars().all()
+                    if not d_ids:
+                        raise BadRequestException(f"Doctor with name '{d_name}' not found")
+                    if len(d_ids) > 1:
+                        raise BadRequestException(f"Multiple active doctors found with name '{d_name}'. Please specify doctor code.")
+                    doctor_id = d_ids[0]
 
                 appointment_id = None
                 appt_num_raw = row_dict.get("appointment number")
@@ -1939,10 +1983,7 @@ class LabService:
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
             if role_name == "doctor":
-                from app.repositories.doctor_repository import DoctorRepository
-                doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
-                if doctor:
-                    resolved_doctor_id = doctor.id
+                pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
                 result = await self.db.execute(
@@ -2033,8 +2074,8 @@ class LabService:
             
             for sr_no, o in enumerate(orders, start=1):
                 med = o.lab_test
-                p_name_formatted = f"{patients_map.get(o.patient_id, '')} [{patient_codes_map.get(o.patient_id, '')}]" if o.patient_id in patients_map else ""
-                d_name_formatted = f"{doctors_map.get(o.doctor_id, '')} [{doctor_codes_map.get(o.doctor_id, '')}]" if o.doctor_id and o.doctor_id in doctors_map else ""
+                p_name_formatted = patients_map.get(o.patient_id, "") if o.patient_id in patients_map else ""
+                d_name_formatted = doctors_map.get(o.doctor_id, "") if o.doctor_id and o.doctor_id in doctors_map else ""
                 t_name_formatted = f"{med.test_name} [{med.test_code}]" if med else ""
                 appt_num_val = appointments_map.get(o.appointment_id, "") if o.appointment_id else ""
                 

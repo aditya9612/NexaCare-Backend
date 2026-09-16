@@ -554,7 +554,7 @@ class DoctorService:
         created_slots = []
         for slot_data in data_list:
             if slot_data.start_time >= slot_data.end_time:
-                raise ConflictException(f"Start time must be before end time for day {slot_data.day_of_week + 1}")
+                raise ConflictException(f"Start time must be before end time for day {slot_data.day_of_week}")
             schedule = DoctorSchedule(doctor_id=doctor_id, **slot_data.model_dump())
             schedule = await self.repo.add_schedule(schedule)
             created_slots.append(schedule)

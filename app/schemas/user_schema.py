@@ -7,7 +7,7 @@ from app.utils.phone_utils import validate_phone_field
 
 class UserCreate(BaseSchema):
     email: EmailStr
-    password: str = Field(..., min_length=6, max_length=100)
+    password: str = Field(..., min_length=8, max_length=100)
     full_name: str = Field(..., min_length=2, max_length=255)
     phone: str | None = Field(None, max_length=20)
     role_id: int = Field(..., gt=0)
@@ -25,10 +25,14 @@ class UserCreate(BaseSchema):
 
     @field_validator("password")
     @classmethod
-    def strip_password(cls, value: str) -> str:
+    def validate_password_complexity(cls, value: str) -> str:
         stripped = value.strip()
-        if len(stripped) < 1:
-            raise ValueError("Field cannot be empty or only spaces")
+        if len(stripped) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not any(char.isalpha() for char in stripped):
+            raise ValueError("Password must contain at least one letter")
+        if not any(char.isdigit() for char in stripped):
+            raise ValueError("Password must contain at least one number")
         return stripped
 
     @model_validator(mode="after")

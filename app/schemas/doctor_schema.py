@@ -471,7 +471,7 @@ class DoctorAvailabilityUpdate(BaseSchema):
 
 
 class DoctorScheduleCreate(BaseSchema):
-    day_of_week: int = Field(..., ge=1, le=7)
+    day_of_week: int = Field(..., ge=0, le=6, description="0=Monday, 6=Sunday")
     start_time: time
     end_time: time
     slot_duration_minutes: int = Field(30, gt=0, le=180)
@@ -482,11 +482,6 @@ class DoctorScheduleCreate(BaseSchema):
         if v.tzinfo is not None:
             return v.replace(tzinfo=None)
         return v
-
-    @field_validator("day_of_week")
-    @classmethod
-    def map_day_of_week_to_db(cls, v: int) -> int:
-        return v - 1
 
     @model_validator(mode="after")
     def validate_duration(self) -> "DoctorScheduleCreate":
@@ -506,7 +501,7 @@ class DoctorScheduleCreate(BaseSchema):
 
 
 class DoctorScheduleUpdate(BaseSchema):
-    day_of_week: int | None = Field(None, ge=1, le=7)
+    day_of_week: int | None = Field(None, ge=0, le=6, description="0=Monday, 6=Sunday")
     start_time: time | None = None
     end_time: time | None = None
     slot_duration_minutes: int | None = Field(None, gt=0, le=180)
@@ -519,14 +514,6 @@ class DoctorScheduleUpdate(BaseSchema):
             return v.replace(tzinfo=None)
         return v
 
-    @field_validator("day_of_week")
-    @classmethod
-    def map_day_of_week_to_db(cls, v: int | None) -> int | None:
-        if v is None:
-            return v
-        return v - 1
-
-
 
 class DoctorScheduleResponse(BaseSchema):
     id: int
@@ -536,11 +523,6 @@ class DoctorScheduleResponse(BaseSchema):
     end_time: time
     slot_duration_minutes: int
     is_active: bool
-
-    @field_validator("day_of_week", mode="before")
-    @classmethod
-    def map_day_of_week_to_ui(cls, v: int) -> int:
-        return v + 1
 
 
 DoctorListResponse = PaginatedResponse[DoctorResponse]

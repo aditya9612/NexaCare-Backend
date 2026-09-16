@@ -713,6 +713,7 @@ async def doctor_schedule(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
+    """Retrieve doctor working schedules (day_of_week: 0=Monday, 6=Sunday)."""
     schedule = await DoctorService(db).get_schedule(doctor_id)
     return APIResponse(message="Schedule retrieved", data=schedule)
 
@@ -725,6 +726,7 @@ async def add_doctor_schedule(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "update")),
 ):
+    """Add a working schedule slot for a doctor (day_of_week: 0=Monday, 6=Sunday)."""
     schedule = await DoctorService(db).add_schedule(doctor_id, data, current_user.id)
     return APIResponse(message="Schedule added", data=schedule)
 
@@ -737,6 +739,7 @@ async def update_doctor_schedule(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "update")),
 ):
+    """Bulk update doctor working schedules (day_of_week: 0=Monday, 6=Sunday)."""
     schedule = await DoctorService(db).update_doctor_schedule(doctor_id, data, current_user.id)
     return APIResponse(message="Doctor schedule updated successfully", data=schedule)
 
@@ -751,6 +754,7 @@ async def update_doctor_schedule_slot(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "update")),
 ):
+    """Update a specific working schedule slot (day_of_week: 0=Monday, 6=Sunday)."""
     schedule = await DoctorService(db).update_schedule_slot(doctor_id, slot_id, data, current_user.id)
     return APIResponse(message="Schedule slot updated successfully", data=schedule)
 

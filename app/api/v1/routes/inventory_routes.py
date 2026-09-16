@@ -15,7 +15,6 @@ from app.schemas.inventory_schema import (
     InventoryItemResponse,
     InventoryItemUpdate,
     ReorderAlertResponse,
-    StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
     StockTransactionUpdate,
@@ -295,16 +294,6 @@ async def reorder_alerts(
     return APIResponse(message="Reorder alerts", data=alerts)
 
 
-@router.get("/stock-summary", response_model=APIResponse[StockSummary])
-async def stock_summary(
-    db: DbSession,
-    current_user: CurrentUser,
-    _: User = Depends(require_permission("inventory", "read")),
-):
-    summary = await InventoryService(db).get_stock_summary(current_user.hospital_id)
-    return APIResponse(message="Stock summary", data=summary)
-
-
 @router.get("/consumption-reports", response_model=APIResponse[list[ConsumptionReport]])
 async def consumption_report(
     db: DbSession,
@@ -322,5 +311,5 @@ async def get_inventory_dashboard(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    dashboard_data = await InventoryService(db).get_dashboard_summary()
+    dashboard_data = await InventoryService(db).get_dashboard_summary(current_user.hospital_id)
     return APIResponse(message="Inventory dashboard stats retrieved", data=dashboard_data)

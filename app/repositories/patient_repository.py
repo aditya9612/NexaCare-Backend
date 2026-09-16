@@ -424,3 +424,84 @@ class PatientRepository:
     async def delete_family_member(self, member: FamilyMember) -> None:
         await self.db.delete(member)
         await self.db.flush()
+
+    async def get_patient_lab_history(self, patient_id: int):
+        from app.models.lab_model import TestOrder
+        from app.schemas.patient_schema import LabHistoryResponse
+        from datetime import datetime
+
+        stmt = (
+            select(TestOrder)
+            .options(
+                selectinload(TestOrder.lab_test),
+                selectinload(TestOrder.samples),
+                selectinload(TestOrder.reports),
+            )
+            .where(
+                TestOrder.is_deleted.is_(False),
+                or_(
+                    TestOrder.patient_id == patient_id,
+                    TestOrder.appointment_id.in_(
+                        select(Appointment.id).where(Appointment.patient_id == patient_id)
+                    ),
+                ),
+            )
+            .order_by(TestOrder.ordered_at.desc(), TestOrder.id.desc())
+        )
+        result = await self.db.execute(stmt)
+        orders = list(result.scalars().unique().all())
+
+        history: list[LabHistoryResponse] = []
+        for o in orders:
+            # resolve sample collection date
+            sample_date = None
+            if hasattr(o, "samples") and o.samples:
+                for s in o.samples:
+                    dt = s.collected_at or s.collection_date
+                    if dt:
+                        sample_date = dt.strftime("%Y-%m-%d") if isinstance(dt, datetime) else str(dt)
+                        break
+
+            # resolve report availability
+            has_report = False
+            if hasattr(o, "reports") and o.reports:
+                has_report = any(
+                    (bool(r.report_path) or str(r.status or "").lower() in ["ready", "approved", "completed", "published"])
+                    for r in o.reports
+                )
+
+            ord_date = (
+                o.ordered_at.strftime("%Y-%m-%d")
+                if isinstance(o.ordered_at, datetime)
+                else str(o.ordered_at)
+                if o.ordered_at
+                else None
+            )
+            comp_date = (
+                o.completed_at.strftime("%Y-%m-%d")
+                if isinstance(o.completed_at, datetime)
+                else str(o.completed_at)
+                if o.completed_at
+                else None
+            )
+
+            test_name = "Lab Test"
+            category = None
+            if hasattr(o, "lab_test") and o.lab_test:
+                test_name = getattr(o.lab_test, "test_name", "Lab Test") or "Lab Test"
+                category = getattr(o.lab_test, "category", None)
+
+            history.append(
+                LabHistoryResponse(
+                    test_order_id=o.id,
+                    test_name=test_name,
+                    category=category,
+                    status=(o.status or "ordered").upper(),
+                    ordered_date=ord_date,
+                    sample_collected_date=sample_date,
+                    completed_date=comp_date,
+                    report_available=has_report,
+                )
+            )
+
+        return history

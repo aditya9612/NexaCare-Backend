@@ -163,3 +163,166 @@ async def test_notifications_all_features_e2e():
         assert send_email_async is not None
         assert send_sms_async is not None
 
+@pytest.mark.asyncio
+async def test_notify_appointment_confirmation_patient_id():
+    from app.core.database import AsyncSessionLocal
+    import uuid
+    uid = uuid.uuid4().hex[:8]
+
+    async with AsyncSessionLocal() as session:
+        from app.models.user_model import User
+        from app.models.role_model import Role
+
+        role = Role(name=f"PAT_NOTIF_{uid}", description="Patient Role 2")
+        session.add(role)
+        await session.commit()
+        await session.refresh(role)
+
+        user = User(
+            user_code=f"USR_NOTIF_{uid}",
+            full_name="Notif User 2",
+            email=f"notif_{uid}@example.com",
+            phone=f"123{uid}",
+            hashed_password="hashed_password",
+            role_id=role.id,
+            is_active=True,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        from app.services.notification_service import NotificationService
+        service = NotificationService(session)
+
+        notif = await service.notify_appointment_confirmation(
+            user_id=user.id,
+            appointment_number="APPT-100",
+            patient_name="John Doe",
+            doctor_name="Smith",
+            appointment_date="2026-09-20",
+            appointment_time="10:00",
+            patient_code="PAT-12345",
+        )
+        assert notif is not None
+        assert "PAT-12345" in notif.message
+
+        notif_none = await service.notify_appointment_confirmation(
+            user_id=user.id,
+            appointment_number="APPT-101",
+            patient_name="Jane Doe",
+            doctor_name="Adams",
+            appointment_date="2026-09-21",
+            appointment_time="11:00",
+            patient_code=None,
+        )
+        assert notif_none is not None
+        assert "Patient ID:" not in notif_none.message
+
+        res_list = await service.list_user_notifications(user_id=user.id, page=1, limit=10)
+        messages = [item.message for item in res_list.items]
+        assert any("PAT-12345" in m for m in messages)
+
+@pytest.mark.asyncio
+async def test_appointment_confirmation_full_flow():
+    from app.core.database import AsyncSessionLocal
+    import datetime
+    import uuid
+    uid = uuid.uuid4().hex[:8]
+
+    async with AsyncSessionLocal() as session:
+        from app.models.user_model import User
+        from app.models.role_model import Role
+
+        role = Role(name=f"PAT_FLOW_{uid}", description="Patient Flow")
+        session.add(role)
+        await session.commit()
+        await session.refresh(role)
+
+        user = User(
+            user_code=f"USR_FLOW_{uid}",
+            full_name="Notif Flow",
+            email=f"flow_{uid}@example.com",
+            phone=f"999{uid}",
+            hashed_password="hashed_password",
+            role_id=role.id,
+            is_active=True,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        from app.models.patient_model import Patient
+        patient = Patient(
+            patient_code=f"PAT-FLOW-{uid}",
+            first_name="John",
+            last_name="Doe",
+            user_id=user.id,
+        )
+        session.add(patient)
+        await session.commit()
+        await session.refresh(patient)
+
+        from app.models.doctor_model import Doctor
+        doctor = Doctor(
+            doctor_code=f"DOC-FLOW-{uid}",
+            first_name="Dr.",
+            last_name="Smith",
+            specialization="General",
+            license_number=f"LIC-{uid}",
+        )
+        session.add(doctor)
+        await session.commit()
+        await session.refresh(doctor)
+
+        from app.models.appointment_model import Appointment
+        appt = Appointment(
+            appointment_number=f"APPT-FLOW-{uid}",
+            patient_id=patient.id,
+            doctor_id=doctor.id,
+            appointment_date=datetime.date(2026, 9, 20),
+            appointment_time=datetime.time(10, 0),
+            appointment_status="PENDING"
+        )
+        session.add(appt)
+        await session.commit()
+        await session.refresh(appt)
+
+        from app.services.appointment_service import AppointmentService
+        appt_service = AppointmentService(session)
+        await appt_service._notify_confirmation_safely(appt, target_user_id=user.id)
+
+        from app.services.notification_service import NotificationService
+        notif_service = NotificationService(session)
+        res_list = await notif_service.list_user_notifications(user_id=user.id, page=1, limit=10)
+
+        assert res_list.total >= 1
+        messages = [item.message for item in res_list.items]
+
+        assert any(patient.patient_code in m for m in messages)
+        assert not any(str(patient.id) in m and patient.patient_code not in m for m in messages)
+        assert any(f"Your appointment {appt.appointment_number}" in m for m in messages)
+
+        from httpx import AsyncClient, ASGITransport
+        from app.main import app
+        from app.core.database import get_db
+        from app.core.dependencies import get_current_user
+
+        async def override_get_db():
+            yield session
+
+        async def override_get_current_user():
+            return user
+
+        app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_current_user] = override_get_current_user
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/api/v1/notifications")
+            assert response.status_code == 200
+            data = response.json()["data"]["items"]
+            assert len(data) >= 1
+            http_messages = [item["message"] for item in data]
+            assert any(patient.patient_code in m for m in http_messages)
+
+        app.dependency_overrides.clear()

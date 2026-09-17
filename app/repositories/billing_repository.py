@@ -246,6 +246,27 @@ class BillingRepository:
     async def get_daily_collection(self, target_date: date) -> dict:
         start = datetime.combine(target_date, datetime.min.time())
         end = datetime.combine(target_date, datetime.max.time())
+
+        # Billing stats for bills CREATED on target date
+        billing_stats_stmt = select(
+            func.coalesce(func.sum(Billing.total_amount), 0.0),
+            func.coalesce(func.sum(Billing.paid_amount), 0.0),
+            func.coalesce(func.sum(Billing.balance_amount), 0.0),
+            func.count(Billing.id),
+        ).where(
+            Billing.is_deleted.is_(False),
+            Billing.created_at >= start,
+            Billing.created_at <= end,
+        )
+        b_res = await self.db.execute(billing_stats_stmt)
+        b_row = b_res.first()
+
+        today_total_bill = round(float(b_row[0] if b_row else 0.0), 2)
+        today_paid_bill = round(float(b_row[1] if b_row else 0.0), 2)
+        today_pending_bill = round(float(b_row[2] if b_row else 0.0), 2)
+        bills_count = int(b_row[3] if b_row else 0)
+
+        # Payment stats for payments RECEIVED on target date
         result = await self.db.execute(
             select(Payment.payment_method, func.sum(Payment.amount))
             .where(
@@ -289,7 +310,16 @@ class BillingRepository:
                 Payment.payment_date <= end,
             )
         )
-        return {"total_collected": total, "payment_count": count or 0, "by_method": by_method}
+        return {
+            "today_total_bill": today_total_bill,
+            "today_paid_bill": today_paid_bill,
+            "today_pending_bill": today_pending_bill,
+            "today_collected_revenue": total,
+            "bills_count": bills_count,
+            "total_collected": total,
+            "payment_count": count or 0,
+            "by_method": by_method,
+        }
 
 
     async def get_period_report(self, start: datetime, end: datetime) -> dict:

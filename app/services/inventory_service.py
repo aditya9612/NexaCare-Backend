@@ -212,17 +212,6 @@ class InventoryService:
 
         data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
         return data
-       data = StockTransactionResponse.model_validate(transaction)
-       data.type = transaction.transaction_type
-
-       if "item" in transaction.__dict__ and transaction.item:
-          data.item_name = transaction.item.name
-
-       if "warehouse" in transaction.__dict__ and transaction.warehouse:
-          data.warehouse_name = transaction.warehouse.name
-
-       data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
-       return data
 
     async def list_transactions(
         self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None

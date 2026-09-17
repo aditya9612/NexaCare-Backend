@@ -232,14 +232,20 @@ async def list_medicines(
     sort_order: str = "desc",
     category: str | None = None,
     q: str | None = None,
+    status: Optional[str] = Query(None, description="Filter by medicine status (e.g. active, inactive, out_of_stock, low_stock, expired)"),
+    patient_name: Optional[str] = Query(None, description="Filter medicines by patient name prescribed or billed to"),
+    medicine_date: Optional[date] = Query(None, alias="date", description="Filter medicines by creation date (YYYY-MM-DD)"),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     service = PharmacyService(db)
     if q:
-        result = await service.search_medicines(q, page=page, size=size)
+        result = await service.search_medicines(
+            q, page=page, size=size, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
     else:
         result = await service.list_medicines(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category,
+            status=status, patient_name=patient_name, medicine_date=medicine_date
         )
     return APIResponse(message="Medicines retrieved", data=result)
 

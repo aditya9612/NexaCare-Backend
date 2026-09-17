@@ -29,13 +29,80 @@ class MedicineRepository:
     def _base_query(self):
         return select(Medicine).where(Medicine.is_deleted.is_(False))
 
-    async def list_all(
-        self, skip: int = 0, limit: int = 20, sort_by: str = "created_at",
-        sort_order: str = "desc", category: str | None = None,
-    ) -> list[Medicine]:
-        query = self._base_query()
+    def _apply_medicine_filters(
+        self,
+        query,
+        category: str | None = None,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
+    ):
         if category:
             query = query.where(Medicine.category == category)
+
+        if status is not None and status.strip():
+            st = status.strip().lower()
+            if st in ("active", "true", "1"):
+                query = query.where(Medicine.is_active.is_(True))
+            elif st in ("inactive", "false", "0"):
+                query = query.where(Medicine.is_active.is_(False))
+            elif st == "out_of_stock":
+                query = query.where(Medicine.stock_quantity <= 0)
+            elif st == "low_stock":
+                query = query.where(Medicine.stock_quantity <= Medicine.reorder_level)
+            elif st == "expired":
+                query = query.where(Medicine.expiry_date < date.today())
+            elif st in ("available", "in_stock"):
+                query = query.where(Medicine.stock_quantity > 0, Medicine.is_active.is_(True))
+            else:
+                query = query.where(Medicine.is_active.is_(True))
+
+        if patient_name is not None and patient_name.strip():
+            pattern = f"%{patient_name.strip().lower()}%"
+            patient_cond = or_(
+                func.lower(Patient.first_name).like(pattern),
+                func.lower(Patient.last_name).like(pattern),
+                (func.lower(Patient.first_name) + " " + func.lower(Patient.last_name)).like(pattern),
+            )
+            invoice_med_ids = (
+                select(PharmacyInvoiceItem.medicine_id)
+                .join(PharmacyInvoice, PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id)
+                .join(Patient, PharmacyInvoice.patient_id == Patient.id)
+                .where(patient_cond)
+            )
+            prescription_med_ids = (
+                select(PrescriptionItem.medicine_id)
+                .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
+                .join(Patient, Prescription.patient_id == Patient.id)
+                .where(patient_cond)
+            )
+            query = query.where(
+                or_(
+                    Medicine.id.in_(invoice_med_ids),
+                    Medicine.id.in_(prescription_med_ids),
+                )
+            )
+
+        if medicine_date is not None:
+            query = query.where(func.date(Medicine.created_at) == medicine_date)
+
+        return query
+
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        category: str | None = None,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
+    ) -> list[Medicine]:
+        query = self._base_query()
+        query = self._apply_medicine_filters(
+            query, category=category, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
         column = getattr(Medicine, sort_by, Medicine.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -46,13 +113,28 @@ class MedicineRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def count_all(self, category: str | None = None) -> int:
-        query = select(func.count()).select_from(Medicine).where(Medicine.is_deleted.is_(False))
-        if category:
-            query = query.where(Medicine.category == category)
+    async def count_all(
+        self,
+        category: str | None = None,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
+    ) -> int:
+        query = select(func.count(Medicine.id)).select_from(Medicine).where(Medicine.is_deleted.is_(False))
+        query = self._apply_medicine_filters(
+            query, category=category, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
         return (await self.db.scalar(query)) or 0
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Medicine]:
+    async def search(
+        self,
+        q: str,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
+    ) -> list[Medicine]:
         pattern = f"%{q.lower()}%"
         query = self._base_query().where(
             or_(
@@ -62,21 +144,32 @@ class MedicineRepository:
                 func.lower(Medicine.barcode).like(pattern),
             )
         )
+        query = self._apply_medicine_filters(
+            query, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
+    async def count_search(
+        self,
+        q: str,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
+    ) -> int:
         pattern = f"%{q.lower()}%"
-        result = await self.db.scalar(
-            select(func.count()).select_from(Medicine).where(
-                Medicine.is_deleted.is_(False),
-                or_(
-                    func.lower(Medicine.name).like(pattern),
-                    func.lower(Medicine.sku).like(pattern),
-                    func.lower(Medicine.generic_name).like(pattern),
-                ),
-            )
+        query = select(func.count(Medicine.id)).select_from(Medicine).where(
+            Medicine.is_deleted.is_(False),
+            or_(
+                func.lower(Medicine.name).like(pattern),
+                func.lower(Medicine.sku).like(pattern),
+                func.lower(Medicine.generic_name).like(pattern),
+            ),
         )
+        query = self._apply_medicine_filters(
+            query, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
+        result = await self.db.scalar(query)
         return result or 0
 
     async def get_by_id(self, medicine_id: int) -> Medicine | None:

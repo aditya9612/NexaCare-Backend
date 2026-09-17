@@ -203,19 +203,42 @@ class PharmacyService:
         return MedicineResponse.model_validate(medicine)
 
     async def list_medicines(
-        self, page: int = 1, size: int = 20, sort_by: str = "created_at",
-        sort_order: str = "desc", category: str | None = None,
+        self,
+        page: int = 1,
+        size: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        category: str | None = None,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
     ):
         skip = (page - 1) * size
-        items = await self.medicine_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
-                                                   sort_order=sort_order, category=category)
-        total = await self.medicine_repo.count_all(category=category)
+        items = await self.medicine_repo.list_all(
+            skip=skip, limit=size, sort_by=sort_by, sort_order=sort_order, category=category,
+            status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
+        total = await self.medicine_repo.count_all(
+            category=category, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
         return build_paginated_result([MedicineResponse.model_validate(m) for m in items], total, page, size)
 
-    async def search_medicines(self, q: str, page: int = 1, size: int = 20):
+    async def search_medicines(
+        self,
+        q: str,
+        page: int = 1,
+        size: int = 20,
+        status: str | None = None,
+        patient_name: str | None = None,
+        medicine_date: date | None = None,
+    ):
         skip = (page - 1) * size
-        items = await self.medicine_repo.search(q, skip=skip, limit=size)
-        total = await self.medicine_repo.count_search(q)
+        items = await self.medicine_repo.search(
+            q, skip=skip, limit=size, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
+        total = await self.medicine_repo.count_search(
+            q, status=status, patient_name=patient_name, medicine_date=medicine_date
+        )
         return build_paginated_result([MedicineResponse.model_validate(m) for m in items], total, page, size)
 
     async def get_medicine(self, medicine_id: int) -> MedicineResponse:

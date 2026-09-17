@@ -654,11 +654,28 @@ class PatientService:
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+
+            devanagari_font_path = os.path.abspath("app/static/fonts/NotoSansDevanagari-Regular.ttf")
+            if "NotoSansDevanagari" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(devanagari_font_path):
+                pdfmetrics.registerFont(TTFont("NotoSansDevanagari", devanagari_font_path))
+
+            sys_mangal = os.path.abspath("C:/Windows/Fonts/mangal.ttf")
+            if "Mangal" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(sys_mangal):
+                pdfmetrics.registerFont(TTFont("Mangal", sys_mangal))
                 
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+
+            default.DEFAULT_FONT["notosansdevanagari"] = "NotoSansDevanagari"
+            default.DEFAULT_FONT["notosansdevanagari-bold"] = "NotoSansDevanagari"
+            default.DEFAULT_FONT["notosansdevanagari-oblique"] = "NotoSansDevanagari"
+            default.DEFAULT_FONT["notosansdevanagari-boldoblique"] = "NotoSansDevanagari"
+
+            if "Mangal" in pdfmetrics.getRegisteredFontNames():
+                default.DEFAULT_FONT["mangal"] = "Mangal"
+                default.DEFAULT_FONT["mangal-bold"] = "Mangal"
             
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("patients_export_template.html")

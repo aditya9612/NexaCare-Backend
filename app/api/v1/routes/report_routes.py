@@ -265,6 +265,9 @@ async def get_pharmacy_sales(
         elif period == "daily" or period is None:
             s_date = today
             e_date = today
+        elif period == "all":
+            s_date = None
+            e_date = None
         else:
             raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, yearly, or all.")
 

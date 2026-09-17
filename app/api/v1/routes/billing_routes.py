@@ -228,6 +228,17 @@ async def update_billing(
     return APIResponse(message="Bill updated", data=billing)
 
 
+
+@router.post("/{billing_id}/cancel", response_model=APIResponse[BillingResponse])
+async def cancel_billing(
+    billing_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("billing", "update")),
+):
+    billing = await BillingService(db).cancel(billing_id, current_user.id)
+    return APIResponse(message="Bill cancelled successfully", data=billing)
+
 @router.delete("/{billing_id}", response_model=APIResponse[MessageResponse])
 async def delete_billing(
     billing_id: int,

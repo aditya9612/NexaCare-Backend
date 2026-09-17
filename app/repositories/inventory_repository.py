@@ -33,13 +33,15 @@ class InventoryRepository:
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, category: str | None = None, warehouse_id: int | None = None) -> int:
-        query = select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+    async def count_all(self, category: str | None = None, warehouse_id: int | None = None, hospital_id: int | None = None) -> int:
+        base = select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+        if hospital_id is not None:
+            base = base.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(Warehouse.hospital_id == hospital_id)
         if category:
-            query = query.where(InventoryItem.category == category)
+            base = base.where(InventoryItem.category == category)
         if warehouse_id:
-            query = query.where(InventoryItem.warehouse_id == warehouse_id)
-        return (await self.db.scalar(query)) or 0
+            base = base.where(InventoryItem.warehouse_id == warehouse_id)
+        return (await self.db.scalar(base)) or 0
 
     async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[InventoryItem]:
         pattern = f"%{q.lower()}%"
@@ -130,30 +132,35 @@ class InventoryRepository:
             await self.db.refresh(item)
         return item
 
-    async def get_stock_summary(self) -> dict:
+    async def get_stock_summary(self, hospital_id: int | None = None) -> dict:
+        def apply_hospital_filter(query):
+            if hospital_id is not None:
+                return query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(Warehouse.hospital_id == hospital_id)
+            return query
+
         total_items = await self.db.scalar(
-            select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+            apply_hospital_filter(select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False)))
         )
         total_qty = await self.db.scalar(
-            select(func.coalesce(func.sum(InventoryItem.quantity), 0)).where(InventoryItem.is_deleted.is_(False))
+            apply_hospital_filter(select(func.coalesce(func.sum(InventoryItem.quantity), 0)).where(InventoryItem.is_deleted.is_(False)))
         )
         low_stock = await self.db.scalar(
-            select(func.count()).select_from(InventoryItem).where(
+            apply_hospital_filter(select(func.count()).select_from(InventoryItem).where(
                 InventoryItem.is_deleted.is_(False),
                 InventoryItem.quantity <= InventoryItem.reorder_level,
-            )
+            ))
         )
         expired = await self.db.scalar(
-            select(func.count()).select_from(InventoryItem).where(
+            apply_hospital_filter(select(func.count()).select_from(InventoryItem).where(
                 InventoryItem.is_deleted.is_(False),
                 InventoryItem.expiry_date.isnot(None),
                 InventoryItem.expiry_date < date.today(),
-            )
+            ))
         )
         total_value = await self.db.scalar(
-            select(func.coalesce(func.sum(InventoryItem.quantity * InventoryItem.unit_cost), 0)).where(
+            apply_hospital_filter(select(func.coalesce(func.sum(InventoryItem.quantity * InventoryItem.unit_cost), 0)).where(
                 InventoryItem.is_deleted.is_(False)
-            )
+            ))
         )
         return {
             "total_items": total_items or 0,
@@ -290,21 +297,17 @@ class WarehouseRepository:
             select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False))
         )) or 0
 
-    async def count_active(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(Warehouse).where(
-                Warehouse.is_deleted.is_(False),
-                Warehouse.is_active.is_(True)
-            )
-        )) or 0
+    async def count_active(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False), Warehouse.is_active.is_(True))
+        if hospital_id:
+            query = query.where(Warehouse.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
-    async def count_inactive(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(Warehouse).where(
-                Warehouse.is_deleted.is_(False),
-                Warehouse.is_active.is_(False)
-            )
-        )) or 0
+    async def count_inactive(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False), Warehouse.is_active.is_(False))
+        if hospital_id:
+            query = query.where(Warehouse.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, warehouse_id: int) -> Warehouse | None:
         result = await self.db.execute(
@@ -351,10 +354,11 @@ class ReorderAlertRepository:
         )
         return list(result.scalars().all())
 
-    async def count_active(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(ReorderAlert).where(ReorderAlert.status == "active")
-        )) or 0
+    async def count_active(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(ReorderAlert).where(ReorderAlert.status == "active")
+        if hospital_id:
+            query = query.join(InventoryItem, ReorderAlert.item_id == InventoryItem.id).join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(Warehouse.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
     async def create(self, alert: ReorderAlert) -> ReorderAlert:
         self.db.add(alert)

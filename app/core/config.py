@@ -147,8 +147,8 @@ class Settings(BaseSettings):
     PUBLIC_BASE_URL: str = "http://localhost:8000"
     # When false (default), do not start pyngrok inside uvicorn lifespan.
     # Prefer: run `ngrok http 8000` in a separate terminal and set PUBLIC_BASE_URL.
-    ENABLE_NGROK_TUNNEL: bool = True
-    NGROK_AUTH_TOKEN: str = "3EzCszBGiNvyPcYItJ64ntD5Bc4_4qHqAL5ALrVftvdyhBCDs"
+    ENABLE_NGROK_TUNNEL: bool = False
+    NGROK_AUTH_TOKEN: str = ""
 
     # Hospital info surfaced in FAQ / chatbot prompts
     HOSPITAL_NAME: str = "NesaCare Hospital"

@@ -1154,18 +1154,6 @@ class LabService:
         await self._validate_lab_report_access(
             report,
             current_user,
-            "approve/reject",
-        )
-
-        report.status = LabReportStatus.APPROVED if data.approved else LabReportStatus.REJECTED
-        report.approved_by = current_user.id
-        report.approved_at = utc_now()
-
-        approval_remark = getattr(data, "remarks", None) or data.remark or report.remarks
-        if approval_remark:
-            report.remarks = approval_remark
-            if not report.summary or (getattr(data, "remarks", None) or data.remark):
-                report.summary = approval_remark
             "verify as technician",
         )
 
@@ -1269,81 +1257,52 @@ class LabService:
                 from app.models.doctor_model import Doctor
                 from sqlalchemy import select
 
+            try:
+                report.report_path = await self._generate_report_pdf(report, order)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to regenerate report PDF during verify_by_doctor: {e}")
+
+            try:
+                from app.models.patient_model import Patient
+                from app.models.doctor_model import Doctor
                 patient = await self.db.get(Patient, order.patient_id)
                 doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
-                
-                result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
-                results = list(result_objs.scalars().all())
 
-                columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
-                rows = [
-                    [
-                        r.parameter_name,
-                        r.result_value,
-                        r.unit or "-",
-                        r.normal_range or "-",
-                        "Yes" if r.is_critical else "No"
-                    ]
-                    for r in results
-                ]
+                notif_service = NotificationService(self.db)
+                test_name = order.lab_test.test_name if order.lab_test else "Lab Test"
 
-                report_data = {
-                    "order_number": order.order_number,
-                    "status": report.status,
-                    "generated_at": report.approved_at.strftime("%Y-%m-%d %H:%M:%S") if report.approved_at else utc_now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
-                    "patient_code": patient.patient_code if patient else "Unknown",
-                    "patient_gender": patient.gender if patient else "Unknown",
-                    "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
-                    "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
-                    "doctor_code": doctor.doctor_code if doctor else "",
-                    "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
-                    "test_category": order.lab_test.category if order.lab_test else "Unknown",
-                    "summary": report.summary or "",
-                    "columns": columns,
-                    "rows": rows,
-                }
+                # Notify Patient
+                if patient and patient.user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Lab Report Approved",
+                        message=f"Your lab report {report.report_number} for {test_name} has been approved and is now available.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=patient.email,
+                        phone=patient.phone,
+                    )
 
-                path = await generate_lab_report_html(
-                    report.report_number,
-                    report_data,
-                )
-                report.report_path = path
-
-                try:
-                    notif_service = NotificationService(self.db)
-                    test_name = order.lab_test.test_name if order.lab_test else "Lab Test"
-
-                    # Notify Patient
-                    if patient and patient.user_id:
-                        await notif_service.dispatch_notification(
-                            user_id=patient.user_id,
-                            title="Lab Report Approved",
-                            message=f"Your lab report {report.report_number} for {test_name} has been approved and is now available.",
-                            notification_type="LAB_REPORT_APPROVED",
-                            reference_type="LAB_REPORT",
-                            reference_id=report.id,
-                            priority="NORMAL",
-                            email=patient.email,
-                            phone=patient.phone,
-                        )
-
-                    # Notify Doctor
-                    if doctor and doctor.user_id:
-                        await notif_service.dispatch_notification(
-                            user_id=doctor.user_id,
-                            title="Lab Report Approved",
-                            message=f"Lab report {report.report_number} for {patient.first_name} {patient.last_name} has been approved.",
-                            notification_type="LAB_REPORT_APPROVED",
-                            reference_type="LAB_REPORT",
-                            reference_id=report.id,
-                            priority="NORMAL",
-                            email=None,
-                            phone=None,
-                        )
-                except Exception as exc:
-                    import logging
-                    logging.getLogger(__name__).warning("Failed to dispatch lab report approval notification: %s", exc)
+                # Notify Doctor
+                if doctor and doctor.user_id:
+                    patient_name = f"{patient.first_name} {patient.last_name}" if patient else "Patient"
+                    await notif_service.dispatch_notification(
+                        user_id=doctor.user_id,
+                        title="Lab Report Approved",
+                        message=f"Lab report {report.report_number} for {patient_name} has been approved.",
+                        notification_type="LAB_REPORT_APPROVED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                    )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch lab report approval notification: %s", exc)
         else:
             report.status = LabReportStatus.REJECTED
             report.doctor_remarks = data.doctor_remarks

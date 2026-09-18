@@ -194,7 +194,11 @@ class LabDashboardRepository:
             .join(Patient, Patient.id == TestOrder.patient_id)
             .where(
                 TestOrder.is_deleted.is_(False),
-                LabReport.status == LabReportStatus.PENDING_APPROVAL
+                LabReport.status.in_([
+                    LabReportStatus.PENDING_APPROVAL,
+                    LabReportStatus.TECHNICIAN_VERIFIED,
+                    LabReportStatus.DRAFT,
+                ])
             )
         )
         if department_id is not None:

@@ -182,31 +182,6 @@ async def onboard_doctor(
     Accepts application/json or multipart/form-data (optional profile image file).
     The new doctor can log in immediately with the provided email and password.
     """
-    missing_fields = []
-    required = {
-        "first_name": first_name,
-        "last_name": last_name,
-        "specialization": specialization,
-        "license_number": license_number,
-        "experience": experience,
-        "phone": phone,
-        "email": email,
-        "password": password,
-        "department_id": department_id,
-        "consultation_fee": consultation_fee,
-        "availability_status": availability_status,
-        "gender": gender,
-    }
-    for field_name, value in required.items():
-        if value is None or (isinstance(value, str) and not value.strip()):
-            missing_fields.append({
-                "type": "missing",
-                "loc": ["body", field_name],
-                "msg": "Field required",
-                "input": None,
-            })
-    if missing_fields:
-        raise HTTPException(status_code=422, detail=missing_fields)
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
         try:
@@ -240,27 +215,6 @@ async def onboard_doctor(
         if missing_fields:
             raise HTTPException(status_code=422, detail=missing_fields)
 
-    try:
-        onboard_data = DoctorOnboardCreate(
-            first_name=first_name,
-            last_name=last_name,
-            specialization=specialization,
-            qualification=qualification,
-            experience=experience,
-            phone=phone,
-            email=email,
-            password=password,
-            department_id=department_id,
-            consultation_fee=consultation_fee,
-            license_number=license_number,
-            availability_status=availability_status,
-            bio=bio,
-            gender=gender,
-            date_of_birth=date_of_birth or None,
-            profile_image=None,
-        )
-    except ValidationError as e:
-        raise RequestValidationError(e.errors())
         try:
             onboard_data = DoctorOnboardCreate(
                 first_name=first_name,

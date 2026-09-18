@@ -252,7 +252,11 @@ class PatientRepository:
             query = query.where(Patient.status == status)
         return await self.db.scalar(query) or 0
 
-    async def get_patient_stats(self, nurse_id: int | None = None) -> dict[str, int]:
+    async def get_patient_stats(
+        self,
+        nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
+    ) -> dict[str, int]:
         from datetime import datetime, time
         import calendar
         from sqlalchemy import and_
@@ -266,11 +270,6 @@ class PatientRepository:
         end_of_month = datetime.combine(date(today.year, today.month, last_day), time.max)
 
         # 1. Baseline patient stats + this_month
-    async def get_patient_stats(
-        self,
-        nurse_id: int | None = None,
-        allowed_patient_ids: list[int] | None = None,
-    ) -> dict[str, int]:
         query = select(
             func.count(case((Patient.status == "active", 1))).label("active_count"),
             func.count(case((Patient.status == "inactive", 1))).label("inactive_count"),

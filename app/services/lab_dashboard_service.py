@@ -85,15 +85,23 @@ class LabDashboardService:
         order_counts = await self.repo.get_test_order_status_counts(start_dt, end_dt, department_id)
         total_tests = sum(order_counts.values())
         pending_tests = order_counts.get(LabOrderStatus.ORDERED, 0)
-        tests_in_progress = order_counts.get(LabOrderStatus.IN_PROGRESS, 0)
-        completed_tests = order_counts.get(LabOrderStatus.COMPLETED, 0)
+        tests_in_progress = (
+            order_counts.get(LabOrderStatus.IN_PROGRESS, 0)
+            + order_counts.get(LabOrderStatus.SAMPLE_COLLECTED, 0)
+            + order_counts.get(LabOrderStatus.TECHNICIAN_VERIFIED, 0)
+        )
+        completed_tests = order_counts.get(LabOrderStatus.COMPLETED, 0) + order_counts.get("approved", 0)
 
         # Get samples collected count
         samples_collected = await self.repo.get_samples_collected_count(start_dt, end_dt, department_id)
 
         # Get report counts
         report_counts = await self.repo.get_report_status_counts(start_dt, end_dt, department_id)
-        reports_pending_approval = report_counts.get(LabReportStatus.PENDING_APPROVAL, 0)
+        reports_pending_approval = (
+            report_counts.get(LabReportStatus.PENDING_APPROVAL, 0)
+            + report_counts.get(LabReportStatus.TECHNICIAN_VERIFIED, 0)
+            + report_counts.get(LabReportStatus.DRAFT, 0)
+        )
         approved_reports = report_counts.get(LabReportStatus.APPROVED, 0)
 
         # Get critical and delivered counts

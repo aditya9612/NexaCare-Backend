@@ -174,6 +174,39 @@ class LabDashboardRepository:
             })
         return alerts
 
+    async def get_report_verification_counts(
+        self, start_date: Optional[datetime], end_date: Optional[datetime], department_id: Optional[int] = None
+    ) -> Dict[str, int]:
+        tech_query = select(func.count(LabReport.id)).join(TestOrder, LabReport.test_order_id == TestOrder.id).where(
+            TestOrder.is_deleted.is_(False),
+            or_(
+                LabReport.technician_verified_by.is_not(None),
+                LabReport.status == LabReportStatus.TECHNICIAN_VERIFIED,
+                LabReport.status == LabReportStatus.APPROVED,
+            )
+        )
+        if department_id is not None:
+            tech_query = tech_query.where(TestOrder.department_id == department_id)
+        tech_query = self._apply_date_filter(tech_query, LabReport.created_at, start_date, end_date)
+        tech_count = (await self.db.scalar(tech_query)) or 0
+
+        doc_query = select(func.count(LabReport.id)).join(TestOrder, LabReport.test_order_id == TestOrder.id).where(
+            TestOrder.is_deleted.is_(False),
+            or_(
+                LabReport.doctor_verified_by.is_not(None),
+                LabReport.status == LabReportStatus.APPROVED,
+            )
+        )
+        if department_id is not None:
+            doc_query = doc_query.where(TestOrder.department_id == department_id)
+        doc_query = self._apply_date_filter(doc_query, LabReport.created_at, start_date, end_date)
+        doc_count = (await self.db.scalar(doc_query)) or 0
+
+        return {
+            "technician_verified": tech_count,
+            "doctor_approved": doc_count,
+        }
+
     async def get_pending_report_approvals(
         self, start_date: Optional[datetime], end_date: Optional[datetime], limit: int = 10, department_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
@@ -186,7 +219,9 @@ class LabDashboardRepository:
                 LabTest.test_name,
                 Patient.first_name,
                 Patient.last_name,
-                LabReport.created_at
+                LabReport.created_at,
+                LabReport.status,
+                LabReport.technician_verified_by,
             )
             .select_from(LabReport)
             .join(TestOrder, TestOrder.id == LabReport.test_order_id)
@@ -216,7 +251,9 @@ class LabDashboardRepository:
                 "order_number": row[3],
                 "test_name": row[4],
                 "patient_name": f"{row[5]} {row[6]}".strip(),
-                "generated_at": row[7]
+                "generated_at": row[7],
+                "status": row[8],
+                "technician_verified": row[9] is not None or row[8] == LabReportStatus.TECHNICIAN_VERIFIED,
             })
         return approvals
 

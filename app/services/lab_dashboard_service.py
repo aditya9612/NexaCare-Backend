@@ -30,6 +30,26 @@ class LabDashboardService:
         now_dt = utc_now()
         today_date = now_dt.date()
 
+        # If custom date range is provided directly via start_date / end_date
+        if start_date or end_date or time_filter == "custom":
+            if start_date and end_date:
+                start = datetime.combine(start_date, time.min)
+                end = datetime.combine(end_date, time.max)
+                return start, end
+            elif start_date:
+                start = datetime.combine(start_date, time.min)
+                end = now_dt
+                return start, end
+            elif end_date:
+                start = datetime.combine(today_date - timedelta(days=3650), time.min)
+                end = datetime.combine(end_date, time.max)
+                return start, end
+            else:
+                # Fallback to today if custom is selected but no dates provided
+                start = datetime.combine(today_date, time.min)
+                end = datetime.combine(today_date, time.max)
+                return start, end
+
         if time_filter == "today":
             start = datetime.combine(today_date, time.min)
             end = datetime.combine(today_date, time.max)
@@ -59,17 +79,7 @@ class LabDashboardService:
             end = now_dt
             return start, end
 
-        elif time_filter == "custom":
-            if not start_date or not end_date:
-                # Fallback to today if custom is selected but dates are not provided
-                start = datetime.combine(today_date, time.min)
-                end = datetime.combine(today_date, time.max)
-                return start, end
-            start = datetime.combine(start_date, time.min)
-            end = datetime.combine(end_date, time.max)
-            return start, end
-
-        else: # overall
+        else:  # overall
             return None, None
 
     async def get_dashboard_data(
@@ -83,7 +93,7 @@ class LabDashboardService:
 
         # Get status counts for test orders
         order_counts = await self.repo.get_test_order_status_counts(start_dt, end_dt, department_id)
-        total_tests = sum(order_counts.values())
+        total_test_orders = sum(order_counts.values())
         pending_tests = order_counts.get(LabOrderStatus.ORDERED, 0)
         tests_in_progress = (
             order_counts.get(LabOrderStatus.IN_PROGRESS, 0)
@@ -95,14 +105,17 @@ class LabDashboardService:
         # Get samples collected count
         samples_collected = await self.repo.get_samples_collected_count(start_dt, end_dt, department_id)
 
-        # Get report counts
+        # Get report counts and verification metrics
         report_counts = await self.repo.get_report_status_counts(start_dt, end_dt, department_id)
         reports_pending_approval = (
             report_counts.get(LabReportStatus.PENDING_APPROVAL, 0)
             + report_counts.get(LabReportStatus.TECHNICIAN_VERIFIED, 0)
             + report_counts.get(LabReportStatus.DRAFT, 0)
         )
-        approved_reports = report_counts.get(LabReportStatus.APPROVED, 0)
+        verification_counts = await self.repo.get_report_verification_counts(start_dt, end_dt, department_id)
+        technician_verified_reports = verification_counts.get("technician_verified", 0)
+        doctor_approved_reports = verification_counts.get("doctor_approved", 0)
+        approved_reports = doctor_approved_reports
 
         # Get critical and delivered counts
         critical_reports = await self.repo.get_critical_reports_count(start_dt, end_dt, department_id)
@@ -119,13 +132,14 @@ class LabDashboardService:
         pending_report_approvals = [PendingReportApproval(**p) for p in pending_approvals_data]
 
         return LabDashboardResponse(
-            total_tests=total_tests,
+            total_test_orders=total_test_orders,
             pending_tests=pending_tests,
             tests_in_progress=tests_in_progress,
             completed_tests=completed_tests,
             samples_collected=samples_collected,
             reports_pending_approval=reports_pending_approval,
-            approved_reports=approved_reports,
+            technician_verified_reports=technician_verified_reports,
+            doctor_approved_reports=doctor_approved_reports,
             critical_reports=critical_reports,
             reports_delivered=reports_delivered,
             recent_test_orders=recent_test_orders,

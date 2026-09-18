@@ -467,11 +467,7 @@ class LabService:
                 if patient:
                     patient_id = patient.id
             elif role_name in ["lab technician", "lab_technician"]:
-                result = await self.db.execute(
-                    select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-                )
-                staff = result.scalar_one_or_none()
-                department_id = staff.department_id if staff else None
+                pass  # Lab technicians can view all test orders in the hospital, similar to Hospital Admin / Doctor
             elif role_name == "nurse":
                 from app.models.nurse_model import Nurse, NursePatientAssignment
                 res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))

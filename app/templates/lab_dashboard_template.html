@@ -165,8 +165,8 @@
     <table class="metrics-table">
       <tr>
         <td class="metric-card">
-          <div class="metric-value">{{ total_tests }}</div>
-          <div class="metric-label">Total Tests</div>
+          <div class="metric-value">{{ total_test_orders or total_tests }}</div>
+          <div class="metric-label">Total Test Orders</div>
         </td>
         <td class="metric-card">
           <div class="metric-value">{{ pending_tests }}</div>
@@ -193,16 +193,22 @@
       </tr>
       <tr>
         <td class="metric-card">
-          <div class="metric-value">{{ approved_reports }}</div>
-          <div class="metric-label">Approved Reports</div>
+          <div class="metric-value">{{ technician_verified_reports }}</div>
+          <div class="metric-label">Technician Verified</div>
         </td>
-        <td class="metric-card critical">
-          <div class="metric-value">{{ critical_reports }}</div>
-          <div class="metric-label">Critical Reports</div>
+        <td class="metric-card">
+          <div class="metric-value">{{ doctor_approved_reports }}</div>
+          <div class="metric-label">Doctor Approved</div>
         </td>
         <td class="metric-card">
           <div class="metric-value">{{ reports_delivered }}</div>
           <div class="metric-label">Reports Delivered</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="metric-card critical" colspan="3" style="width: 100%;">
+          <div class="metric-value">{{ critical_reports }}</div>
+          <div class="metric-label">Critical Reports</div>
         </td>
       </tr>
     </table>

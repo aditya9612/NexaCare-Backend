@@ -1401,6 +1401,197 @@ class PharmacyService:
             return HTMLResponse(content=html_content)
 
 
+    async def download_prescription(self, prescription_id: int, doctor_id: int | None = None, user_id: int | None = None):
+        from fastapi.responses import Response
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import Prescription, PrescriptionItem
+        from app.models.doctor_model import Doctor
+        from app.models.department_model import Department
+        from app.models.patient_model import Patient
+        from app.utils.pdf_generator import html_to_pdf
+        from app.core.exceptions import NotFoundException, ForbiddenException
+        from fastapi import HTTPException
+
+        stmt = (
+            select(Prescription)
+            .where(
+                Prescription.id == prescription_id,
+                Prescription.is_deleted.is_(False),
+            )
+            .options(
+                selectinload(Prescription.items).selectinload(PrescriptionItem.medicine)
+            )
+        )
+        res = await self.db.execute(stmt)
+        prescription = res.scalar_one_or_none()
+
+        if not prescription:
+            raise NotFoundException("Prescription not found")
+
+        if doctor_id is not None and prescription.doctor_id != doctor_id:
+            raise ForbiddenException("You do not have permission to access this prescription")
+
+        patient_name = "Walk-in Patient"
+        patient_code = "-"
+        patient_gender = "-"
+        patient_dob = "-"
+        patient_phone = "-"
+        patient_allergies = "-"
+        if prescription.patient_id:
+            patient = await self.patient_repo.get_by_id(prescription.patient_id)
+            if patient:
+                patient_name = f"{patient.first_name} {patient.last_name}".strip()
+                patient_code = patient.patient_code or "-"
+                patient_gender = (patient.gender or "-").title()
+                patient_dob = str(patient.dob) if patient.dob else "-"
+                patient_phone = patient.phone or "-"
+                patient_allergies = patient.allergies or "None"
+
+        doctor_name = "Attending Doctor"
+        doctor_specialization = "-"
+        doctor_qualification = "-"
+        doctor_license = "-"
+        department_name = "-"
+        if prescription.doctor_id:
+            from app.repositories.doctor_repository import DoctorRepository
+            doctor = await DoctorRepository(self.db).get_by_id(prescription.doctor_id)
+            if doctor:
+                doctor_name = f"Dr. {doctor.first_name} {doctor.last_name}".strip()
+                doctor_specialization = doctor.specialization or "-"
+                doctor_qualification = doctor.qualification or "-"
+                doctor_license = doctor.license_number or "-"
+                if doctor.department_id:
+                    dept = await self.db.get(Department, doctor.department_id)
+                    if dept:
+                        department_name = dept.department_name or "-"
+
+        created_str = prescription.created_at.strftime("%Y-%m-%d %H:%M") if prescription.created_at else "-"
+        instructions_text = prescription.instructions or "None specified."
+
+        item_rows = ""
+        for idx, item in enumerate(prescription.items, start=1):
+            med_name = item.medicine.name if (item.medicine and item.medicine.name) else f"Medicine #{item.medicine_id}"
+            dosage = item.dosage or "-"
+            frequency = item.frequency or "-"
+            duration = f"{item.duration_days} days" if item.duration_days else "-"
+            quantity = item.quantity or 1
+            item_instr = item.instructions or "-"
+            item_rows += f"""
+            <tr>
+                <td style="padding: 7px; border: 1px solid #ddd; text-align: center;">{idx}</td>
+                <td style="padding: 7px; border: 1px solid #ddd; font-weight: bold;">{med_name}</td>
+                <td style="padding: 7px; border: 1px solid #ddd; text-align: center;">{dosage}</td>
+                <td style="padding: 7px; border: 1px solid #ddd; text-align: center;">{frequency}</td>
+                <td style="padding: 7px; border: 1px solid #ddd; text-align: center;">{duration}</td>
+                <td style="padding: 7px; border: 1px solid #ddd; text-align: center;">{quantity}</td>
+                <td style="padding: 7px; border: 1px solid #ddd;">{item_instr}</td>
+            </tr>
+            """
+
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Prescription #{prescription.prescription_number}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; color: #333; font-size: 10pt; }}
+        h1 {{ color: #2563eb; margin: 0; font-size: 18pt; }}
+        .header {{ width: 100%; border-bottom: 2px solid #2563eb; padding-bottom: 10px; margin-bottom: 15px; }}
+        .meta-table {{ width: 100%; margin-bottom: 15px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px; font-size: 9.5pt; }}
+        .items-table {{ width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 9.5pt; }}
+        .items-table th {{ background: #2563eb; color: #ffffff; padding: 7px; border: 1px solid #2563eb; text-align: left; }}
+        .section-heading {{ font-size: 10.5pt; font-weight: bold; color: #1e293b; margin-top: 10px; margin-bottom: 5px; }}
+        .notes-box {{ background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px; border-radius: 4px; font-size: 9.5pt; margin-bottom: 20px; }}
+        .rx-title {{ font-size: 12pt; font-weight: bold; color: #2563eb; margin: 8px 0 5px 0; }}
+        .footer {{ border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 25px; text-align: center; font-size: 8.5pt; color: #777; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <table style="width: 100%; border: none;">
+            <tr>
+                <td style="border: none; padding: 0;">
+                    <h1>NEXACARE AI 360</h1>
+                    <p style="margin: 3px 0 0 0; color: #666; font-size: 8.5pt;">NexaCare Hospital | Wing B, Floor 1 | Contact: info@nexacare360.com</p>
+                </td>
+                <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
+                    <h2 style="margin: 0; color: #1e293b; font-size: 15pt;">MEDICAL PRESCRIPTION</h2>
+                    <p style="margin: 3px 0 0 0; color: #666; font-size: 8.5pt;"><strong>Rx No:</strong> {prescription.prescription_number}</p>
+                    <p style="margin: 2px 0 0 0; color: #666; font-size: 8.5pt;"><strong>Date:</strong> {created_str}</p>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <table class="meta-table">
+        <tr>
+            <td style="vertical-align: top; width: 50%; border: none; padding: 4px;">
+                <strong>Doctor Details:</strong><br>
+                {doctor_name}<br>
+                {doctor_qualification} - {doctor_specialization}<br>
+                <strong>Department:</strong> {department_name}<br>
+                <strong>License No:</strong> {doctor_license}
+            </td>
+            <td style="vertical-align: top; width: 50%; border: none; padding: 4px;">
+                <strong>Patient Details:</strong><br>
+                <strong>Name:</strong> {patient_name} (Code: {patient_code})<br>
+                <strong>Gender / DOB:</strong> {patient_gender} / {patient_dob}<br>
+                <strong>Phone:</strong> {patient_phone}<br>
+                <strong>Known Allergies:</strong> {patient_allergies}
+            </td>
+        </tr>
+    </table>
+
+    <div class="rx-title">Rx - Prescribed Medications</div>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="text-align: center; width: 30px;">#</th>
+                <th>Medicine Name</th>
+                <th style="text-align: center; width: 70px;">Dosage</th>
+                <th style="text-align: center; width: 70px;">Frequency</th>
+                <th style="text-align: center; width: 60px;">Duration</th>
+                <th style="text-align: center; width: 40px;">Qty</th>
+                <th>Instructions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {item_rows}
+        </tbody>
+    </table>
+
+    <div class="section-heading">Doctor's Advice / Instructions:</div>
+    <div class="notes-box">{instructions_text}</div>
+
+    <div class="footer">
+        <p>Thank you for choosing NexaCare AI 360. This is a computer-generated prescription and does not require a physical signature.</p>
+        <p style="margin-top: 4px; font-weight: bold; color: #2563eb;">Wish you good health!</p>
+    </div>
+</body>
+</html>"""
+
+        try:
+            pdf_bytes = html_to_pdf(html_content)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("PDF conversion failed for prescription %s: %s", prescription.prescription_number, exc)
+            raise HTTPException(status_code=500, detail="Prescription PDF generation failed")
+
+        if user_id:
+            await self.audit_repo.create("download", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="prescription_{prescription.prescription_number}.pdf"',
+                "Access-Control-Expose-Headers": "Content-Disposition",
+            },
+        )
+
+
     # --- Suppliers ---
     async def create_supplier(self, data: SupplierCreate, user_id: int) -> SupplierResponse:
         if data.phone:

@@ -357,7 +357,7 @@ async def recommend_admission(
     data: AdmitRecommendationRequest,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST)),
 ):
     result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id)
     return APIResponse(message="Admission recommended successfully", data=result)

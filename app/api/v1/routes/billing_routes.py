@@ -7,6 +7,7 @@ from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.schemas.billing_schema import (
     BillType,
+    BillingDateFilter,
     BillingCreate,
     BillingResponse,
     BillingSummary,
@@ -125,17 +126,19 @@ async def list_billings(
     patient_id: int | None = None,
     bill_type: BillType | None = Query(None, description="Filter by bill type ('pharmacy' or 'consultation')"),
     q: str | None = None,
+    date_filter: str | None = Query(
+        None,
+        description="Date filter preset: 'today', 'yesterday', 'last_30_days', 'quarterly', 'yearly', 'custom'",
+    ),
     start_date: date | None = Query(None, description="Start date filter (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="End date filter (YYYY-MM-DD)"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    if start_date and end_date and start_date > end_date:
-        raise BadRequestException("start_date cannot be greater than end_date")
-
     service = BillingService(db)
     if q:
         result = await service.search(
             q, page=page, size=size, status=status,
+            date_filter=date_filter,
             start_date=start_date, end_date=end_date,
             bill_type=bill_type,
         )
@@ -143,6 +146,7 @@ async def list_billings(
         result = await service.list_billings(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
             status=status, patient_id=patient_id,
+            date_filter=date_filter,
             start_date=start_date, end_date=end_date,
             bill_type=bill_type,
         )

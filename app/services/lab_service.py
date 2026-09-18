@@ -126,11 +126,6 @@ class LabService:
 
     # --- Lab Test Catalog ---
     async def create_test(self, data: LabTestCreate, user_id: int) -> LabTestResponse:
-        if not data.department_id:
-            raise BadRequestException("Department ID is required to create lab test.")
-        await self._validate_department(data.department_id)
-        await self._validate_doctor_department(user_id, data.department_id)
-
         normalized_name = (data.test_name or "").strip()
         if not normalized_name:
             raise BadRequestException("Test name cannot be blank.")

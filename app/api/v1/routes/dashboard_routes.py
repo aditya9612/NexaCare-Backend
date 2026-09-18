@@ -1,5 +1,5 @@
 from datetime import date
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.core.constants import UserRole
 from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles
@@ -10,6 +10,7 @@ from app.schemas.dashboard_schema import (
     DoctorDashboardResponse,
     PatientDashboardResponse,
     ReceptionDashboardResponse,
+    ReceptionDateFilter,
 )
 from app.services.dashboard_service import DashboardService
 
@@ -52,8 +53,23 @@ async def patient_dashboard(
 async def reception_dashboard(
     db: DbSession,
     date: date | None = None,
+    date_filter: str | None = Query(
+        None,
+        description="Date filter preset: 'today', 'yesterday', 'last_one_month', 'last_3_months', 'custom'",
+    ),
+    start_date: date | None = Query(None, description="Start date (YYYY-MM-DD) for custom filter"),
+    end_date: date | None = Query(None, description="End date (YYYY-MM-DD) for custom filter"),
     _: User = Depends(require_roles(UserRole.RECEPTIONIST)),
     __: User = Depends(require_permission("dashboard", "read")),
 ):
-    data = await DashboardService(db).reception_dashboard(date)
+    if date_filter is not None or start_date is not None or end_date is not None:
+        data = await DashboardService(db).reception_dashboard(
+            target_date=date,
+            date_filter=date_filter,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    else:
+        data = await DashboardService(db).reception_dashboard(date)
     return APIResponse(message="Receptionist dashboard stats retrieved successfully", data=data)
+

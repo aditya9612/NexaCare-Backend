@@ -12,6 +12,15 @@ class BillType(str, Enum):
     CONSULTATION = "consultation"
 
 
+class BillingDateFilter(str, Enum):
+    TODAY = "today"
+    YESTERDAY = "yesterday"
+    LAST_30_DAYS = "last_30_days"
+    QUARTERLY = "quarterly"
+    YEARLY = "yearly"
+    CUSTOM = "custom"
+
+
 class BillItemCreate(BaseSchema):
     description: str
     quantity: int = Field(1, ge=1)

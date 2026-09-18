@@ -1,6 +1,8 @@
+import calendar
 from datetime import date, timedelta
 from sqlalchemy import func, select, and_, or_
-from app.utils.helpers import utc_now
+from app.core.exceptions import BadRequestException
+from app.utils.helpers import get_today_ist, utc_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus
@@ -19,6 +21,56 @@ from app.schemas.dashboard_schema import (
     PatientDashboardResponse,
     ReceptionDashboardResponse,
 )
+
+
+def resolve_reception_date_filter(
+    date_filter: str | None,
+    start_date: date | None,
+    end_date: date | None,
+    target_date: date | None = None,
+) -> tuple[date, date]:
+    today = get_today_ist()
+
+    if not date_filter:
+        if start_date and end_date:
+            if start_date > end_date:
+                raise BadRequestException("start_date cannot be greater than end_date")
+            return start_date, end_date
+        t_date = target_date or today
+        return t_date, t_date
+
+    clean = str(date_filter).strip().lower().replace(" ", "_").replace("-", "_")
+
+    if clean == "today":
+        return today, today
+    elif clean == "yesterday":
+        y = today - timedelta(days=1)
+        return y, y
+    elif clean in ("last_one_month", "last_1_month", "last_month", "1_month"):
+        month = today.month - 1
+        year = today.year
+        if month <= 0:
+            year -= 1
+            month += 12
+        day = min(today.day, calendar.monthrange(year, month)[1])
+        return date(year, month, day), today
+    elif clean in ("last_3_months", "last_three_months", "3_months"):
+        month = today.month - 3
+        year = today.year
+        if month <= 0:
+            year -= 1
+            month += 12
+        day = min(today.day, calendar.monthrange(year, month)[1])
+        return date(year, month, day), today
+    elif clean in ("custom", "custom_range"):
+        if not start_date or not end_date:
+            raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
+        if start_date > end_date:
+            raise BadRequestException("start_date cannot be greater than end_date")
+        return start_date, end_date
+    else:
+        valid = ["today", "yesterday", "last_one_month", "last_3_months", "custom"]
+        raise BadRequestException(f"Invalid date_filter. Allowed values: {', '.join(valid)}")
 
 
 class DashboardService:
@@ -269,16 +321,27 @@ class DashboardService:
             upcoming_appointments=[AppointmentResponse.model_validate(a) for a in upcoming],
         )
 
-    async def reception_dashboard(self, target_date: date | None = None) -> ReceptionDashboardResponse:
+    async def reception_dashboard(
+        self,
+        target_date: date | None = None,
+        date_filter: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> ReceptionDashboardResponse:
         from datetime import datetime, time
         from app.models.audit_log_model import AuditLog
         from app.core.constants import DoctorAvailability
 
-        t_date = target_date or date.today()
-        start_of_day = datetime.combine(t_date, time.min)
-        end_of_day = datetime.combine(t_date, time.max)
+        resolved_start, resolved_end = resolve_reception_date_filter(
+            date_filter=date_filter,
+            start_date=start_date,
+            end_date=end_date,
+            target_date=target_date,
+        )
+        start_of_day = datetime.combine(resolved_start, time.min)
+        end_of_day = datetime.combine(resolved_end, time.max)
 
-        # 1. total_registered_patients
+        # 1. total_registered_patients (overall active patients in system)
         try:
             total_registered_patients = await self.db.scalar(
                 select(func.count(Patient.id)).where(
@@ -288,11 +351,12 @@ class DashboardService:
         except Exception:
             total_registered_patients = 0
 
-        # 2. today_scheduled_appointments
+        # 2. today_scheduled_appointments (scheduled appointments in date range)
         try:
             today_scheduled_appointments = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                 )
             ) or 0
         except Exception:
@@ -302,7 +366,8 @@ class DashboardService:
         try:
             checked_in_patients = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in"])
                 )
             ) or 0
@@ -313,7 +378,8 @@ class DashboardService:
         try:
             waiting_patients = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.appointment_status.in_(["Waiting", "waiting", "Pending", "pending"])
                 )
             ) or 0
@@ -324,7 +390,8 @@ class DashboardService:
         try:
             completed_visits = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.appointment_status.in_([AppointmentStatus.COMPLETED, "Checked-Out"])
                 )
             ) or 0
@@ -335,14 +402,15 @@ class DashboardService:
         try:
             cancelled_appointments = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.appointment_status == AppointmentStatus.CANCELLED
                 )
             ) or 0
         except Exception:
             cancelled_appointments = 0
 
-        # 7. available_doctors
+        # 7. available_doctors (real-time availability on duty)
         try:
             available_doctors = await self.db.scalar(
                 select(func.count(Doctor.id)).where(
@@ -357,7 +425,8 @@ class DashboardService:
         try:
             walk_in_patients = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.appointment_type.in_(["walk-in", "walk_in", "walk in", "Walk-In", "Walk_In", "Walk In"])
                 )
             ) or 0
@@ -394,7 +463,8 @@ class DashboardService:
         try:
             queue_waiting = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.queue_status == "WAITING"
                 )
             ) or 0
@@ -405,7 +475,8 @@ class DashboardService:
             queue_current_apt = await self.db.scalar(
                 select(Appointment.queue_token)
                 .where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.queue_status.in_(["CALLED", "IN_PROGRESS"])
                 )
                 .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
@@ -418,7 +489,8 @@ class DashboardService:
         try:
             queue_completed = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.queue_status == "COMPLETED"
                 )
             ) or 0
@@ -428,7 +500,8 @@ class DashboardService:
         try:
             queue_skipped = await self.db.scalar(
                 select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date == t_date,
+                    Appointment.appointment_date >= resolved_start,
+                    Appointment.appointment_date <= resolved_end,
                     Appointment.queue_status == "SKIPPED"
                 )
             ) or 0

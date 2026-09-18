@@ -102,7 +102,10 @@ class AppointmentRepository:
         disposition=None,
     ):
         if patient_id:
-            query = query.where(Appointment.patient_id == patient_id)
+            if isinstance(patient_id, (list, tuple, set)):
+                query = query.where(Appointment.patient_id.in_(patient_id))
+            else:
+                query = query.where(Appointment.patient_id == patient_id)
         if doctor_id:
             query = query.where(Appointment.doctor_id == doctor_id)
         if department_id:

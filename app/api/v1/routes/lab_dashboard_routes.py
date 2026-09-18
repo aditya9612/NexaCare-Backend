@@ -21,13 +21,13 @@ def _validate_filter_params(
     start_date: Optional[date],
     end_date: Optional[date]
 ) -> None:
+    if start_date and end_date and start_date > end_date:
+        raise BadRequestException("start_date cannot be after end_date")
     if time_filter not in ALLOWED_FILTERS:
         raise BadRequestException(f"Invalid filter. Allowed values: {', '.join(sorted(ALLOWED_FILTERS))}")
     if time_filter == "custom":
         if not start_date or not end_date:
             raise BadRequestException("start_date and end_date are required when filter is 'custom'")
-        if start_date > end_date:
-            raise BadRequestException("start_date cannot be after end_date")
 
 async def _get_technician_department_id(db: DbSession, current_user: User) -> Optional[int]:
     role_name = current_user.role.name.lower() if current_user and current_user.role else ""
@@ -45,7 +45,7 @@ async def _get_technician_department_id(db: DbSession, current_user: User) -> Op
 async def get_lab_dashboard(
     db: DbSession,
     current_user: CurrentUser,
-    time_filter: str = Query("today", alias="filter"),
+    time_filter: str = Query("overall", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     _: User = Depends(require_permission("lab", "read")),
@@ -80,14 +80,14 @@ async def get_lab_analytics_dashboard(
         end_date=end_date,
         department_id=dept_id
     )
-    return APIResponse(message="Lab reports & analytics retrieved", data=analytics_data)
+    return APIResponse(message="Lab analytics data retrieved", data=analytics_data)
 
 
 @router.get("/download/pdf")
 async def download_lab_dashboard_pdf(
     db: DbSession,
     current_user: CurrentUser,
-    time_filter: str = Query("today", alias="filter"),
+    time_filter: str = Query("overall", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     _: User = Depends(require_permission("lab", "read")),

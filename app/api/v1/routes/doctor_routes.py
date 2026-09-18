@@ -156,6 +156,7 @@ async def create_doctor(
     },
 )
 async def onboard_doctor(
+    request: Request,
     db: DbSession,
     current_user: CurrentUser,
     first_name: Optional[str] = Form(None),
@@ -178,58 +179,66 @@ async def onboard_doctor(
 ):
     """
     Create a doctor login account (`users`) and clinical profile (`doctors`) in one step.
-    Accepts multipart/form-data only (optional profile image file).
+    Accepts application/json or multipart/form-data (optional profile image file).
     The new doctor can log in immediately with the provided email and password.
     """
-    missing_fields = []
-    required = {
-        "first_name": first_name,
-        "last_name": last_name,
-        "specialization": specialization,
-        "license_number": license_number,
-        "experience": experience,
-        "phone": phone,
-        "email": email,
-        "password": password,
-        "department_id": department_id,
-        "consultation_fee": consultation_fee,
-        "availability_status": availability_status,
-        "gender": gender,
-    }
-    for field_name, value in required.items():
-        if value is None or (isinstance(value, str) and not value.strip()):
-            missing_fields.append({
-                "type": "missing",
-                "loc": ["body", field_name],
-                "msg": "Field required",
-                "input": None,
-            })
-    if missing_fields:
-        raise HTTPException(status_code=422, detail=missing_fields)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            onboard_data = DoctorOnboardCreate(**body)
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": f"Invalid JSON payload: {str(e)}", "type": "json_invalid"}])
+        image_file = None
+    else:
+        missing_fields = []
+        required = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "specialization": specialization,
+            "license_number": license_number,
+            "experience": experience,
+            "phone": phone,
+            "email": email,
+            "password": password,
+        }
+        for field_name, value in required.items():
+            if value is None or (isinstance(value, str) and not value.strip()):
+                missing_fields.append({
+                    "type": "missing",
+                    "loc": ["body", field_name],
+                    "msg": "Field required",
+                    "input": None,
+                })
+        if missing_fields:
+            raise HTTPException(status_code=422, detail=missing_fields)
 
-    try:
-        onboard_data = DoctorOnboardCreate(
-            first_name=first_name,
-            last_name=last_name,
-            specialization=specialization,
-            qualification=qualification,
-            experience=experience,
-            phone=phone,
-            email=email,
-            password=password,
-            department_id=department_id,
-            consultation_fee=consultation_fee,
-            license_number=license_number,
-            availability_status=availability_status,
-            bio=bio,
-            gender=gender,
-            date_of_birth=date_of_birth or None,
-            profile_image=None,
-        )
-    except ValidationError as e:
-        raise RequestValidationError(e.errors())
+        try:
+            onboard_data = DoctorOnboardCreate(
+                first_name=first_name,
+                last_name=last_name,
+                specialization=specialization,
+                qualification=qualification,
+                experience=experience,
+                phone=phone,
+                email=email,
+                password=password,
+                department_id=department_id,
+                consultation_fee=consultation_fee,
+                license_number=license_number,
+                availability_status=availability_status or "available",
+                bio=bio,
+                gender=gender,
+                date_of_birth=date_of_birth or None,
+                profile_image=None,
+            )
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+        image_file = profile_image
 
-    result = await DoctorService(db).onboard(onboard_data, current_user, image_file=profile_image)
+    result = await DoctorService(db).onboard(onboard_data, current_user, image_file=image_file)
     return APIResponse(message="Doctor onboarded successfully", data=result)
 
 

@@ -8,6 +8,8 @@ from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.lab_schema import (
     CriticalAlert,
     LabReportApprove,
+    LabReportTechnicianVerifyRequest,
+    LabReportDoctorVerifyRequest,
     RejectLabReportRequest,
     LabReportCreate,
     LabReportResponse,
@@ -27,6 +29,7 @@ from app.schemas.lab_schema import (
     LabOcrExtractionDetailResponse,
     LabOcrApproveRequest,
 )
+
 from app.services.lab_service import LabService
 from app.utils.pagination import PaginatedResult
 
@@ -464,6 +467,30 @@ async def get_lab_report(
     return APIResponse(message="Lab report retrieved", data=report)    
 
 
+@router.patch("/reports/{report_id}/verify-technician", response_model=APIResponse[LabReportResponse])
+async def verify_lab_report_technician(
+    report_id: int,
+    data: LabReportTechnicianVerifyRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "update")),
+):
+    report = await LabService(db).verify_by_technician(report_id, data, current_user)
+    return APIResponse(message="Lab report verified by technician successfully", data=report)
+
+
+@router.patch("/reports/{report_id}/verify-doctor", response_model=APIResponse[LabReportResponse])
+async def verify_lab_report_doctor(
+    report_id: int,
+    data: LabReportDoctorVerifyRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("lab", "approve")),
+):
+    report = await LabService(db).verify_by_doctor(report_id, data, current_user)
+    return APIResponse(message="Lab report verified by doctor successfully", data=report)
+
+
 @router.put("/reports/{report_id}/approve", response_model=APIResponse[LabReportResponse])
 async def approve_lab_report(
     report_id: int,
@@ -472,8 +499,9 @@ async def approve_lab_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "approve")),
 ):
-    report = await LabService(db).approve_report(report_id, data,  current_user)
+    report = await LabService(db).approve_report(report_id, data, current_user)
     return APIResponse(message="Lab report processed", data=report)
+
 
 
 @router.patch("/reports/{report_id}/reject", response_model=APIResponse[LabReportResponse])

@@ -41,7 +41,6 @@ class LabTestResponse(BaseSchema):
     normal_range: str | None
     is_active: bool
     department_id: int | None
-    doctor_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -147,6 +146,15 @@ class LabReportCreate(BaseSchema):
     summary: str | None = None
 
 
+class LabReportTechnicianVerifyRequest(BaseSchema):
+    technician_remarks: str | None = None
+
+
+class LabReportDoctorVerifyRequest(BaseSchema):
+    doctor_remarks: str | None = None
+    approved: bool = True
+
+
 class LabReportApprove(BaseSchema):
     approved: bool = True
     remark: str | None = None
@@ -168,13 +176,20 @@ class LabReportResponse(BaseSchema):
     test_order_id: int
     report_number: str
     status: str
-    summary: str | None
+    summary: str | None = None
     remarks: str | None = None
-    report_path: str | None
-    approved_by: int | None
-    approved_at: datetime | None
-    generated_at: datetime | None
+    report_path: str | None = None
+    technician_verified_by: int | None = None
+    technician_verified_at: datetime | None = None
+    technician_remarks: str | None = None
+    doctor_verified_by: int | None = None
+    doctor_verified_at: datetime | None = None
+    doctor_remarks: str | None = None
+    approved_by: int | None = None
+    approved_at: datetime | None = None
+    generated_at: datetime | None = None
     created_at: datetime
+
 
 
 class CriticalAlert(BaseSchema):

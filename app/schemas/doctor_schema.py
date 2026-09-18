@@ -32,14 +32,9 @@ class DoctorGenderOption(str, Enum):
 def validate_specialization_value(v: str | None) -> str | None:
     if v is None:
         return v
+    v = v.strip()
     if not v or v.lower() == "null" or v.lower() == "string":
         raise ValueError("Specialization cannot be blank, 'null', or 'string'")
-    
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError("Specialization should not contain leading or trailing spaces")
-        
-    if not v.strip():
-        raise ValueError("Specialization cannot be only spaces")
         
     if not re.match(r"^[a-zA-Z\s\-/]+$", v):
         raise ValueError("Specialization must contain only letters, spaces, hyphens, or slashes")

@@ -100,6 +100,12 @@ class LabReport(Base, TimestampMixin):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    technician_verified_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    technician_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    technician_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    doctor_verified_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    doctor_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    doctor_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -107,6 +113,7 @@ class LabReport(Base, TimestampMixin):
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="reports")
     ocr_extraction: Mapped[list["LabOcrExtraction"]] = relationship(back_populates="report")
+
 
 
 class LabOcrExtraction(Base, TimestampMixin):

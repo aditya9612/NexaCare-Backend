@@ -77,6 +77,9 @@ async def list_appointments(
     status: str | None = None,
     admission_status: str | None = None,
     appointment_date: date | None = None,
+    date_filter: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
     appointment_type: str | None = None,
     booking_source: BookingSource | None = None,
     triage_level: int | None = None,
@@ -90,6 +93,7 @@ async def list_appointments(
     result = await AppointmentService(db).list_appointments(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id,
         department_id=department_id, status=status, appointment_date=appointment_date,
+        date_filter=date_filter, start_date=start_date, end_date=end_date,
         appointment_type=appointment_type, booking_source=booking_source,
         admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         current_user=current_user,

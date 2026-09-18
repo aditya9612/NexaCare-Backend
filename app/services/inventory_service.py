@@ -25,7 +25,6 @@ from app.schemas.inventory_schema import (
     InventoryItemResponse,
     InventoryItemUpdate,
     ReorderAlertResponse,
-    StockSummary,
     StockTransactionCreate,
     StockTransactionResponse,
     StockTransactionUpdate,
@@ -34,6 +33,7 @@ from app.schemas.inventory_schema import (
     WarehouseResponse,
     WarehouseUpdate,
     InventoryDashboardResponse,
+    StockSummary,
 )
 from app.utils.helpers import generate_code, generate_stock_transaction_number, utc_now
 from app.utils.pagination import build_paginated_result
@@ -165,28 +165,6 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
-    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
-        skip = (page - 1) * size
-        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
-        res = []
-        for alert in alerts:
-            item_name = alert.item.name if hasattr(alert, "item") and alert.item else ""
-            sku = alert.item.sku if hasattr(alert, "item") and alert.item else ""
-            status_val = alert.status if isinstance(alert.status, str) else getattr(alert.status, "value", str(alert.status))
-            res.append(
-                ReorderAlertResponse(
-                    id=alert.id,
-                    item_id=alert.item_id,
-                    item_name=item_name,
-                    sku=sku,
-                    current_quantity=alert.current_quantity,
-                    reorder_level=alert.reorder_level,
-                    status=status_val,
-                    created_at=alert.created_at,
-                )
-            )
-        return res
-
     async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
@@ -231,6 +209,7 @@ class InventoryService:
             data.item_name = transaction.item.name
         if "warehouse" in state.dict and transaction.warehouse:
             data.warehouse_name = transaction.warehouse.name
+
         data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
         return data
 
@@ -258,22 +237,25 @@ class InventoryService:
     async def delete_stock_transaction(self, transaction_id: int, user_id: int) -> None:
         raise BadRequestException("Stock transactions are immutable and cannot be deleted.")
 
-    async def get_transaction(self, transaction_id: int) -> StockTransactionResponse:
-        transaction = await self.transaction_repo.get_by_id(transaction_id)
-        if not transaction:
-            raise NotFoundException("Stock transaction not found")
-        return StockTransactionResponse.model_validate(transaction)
+    async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
+        total_registered_items = await self.item_repo.count_all(hospital_id=hospital_id)
+        stock_alerts = await self.alert_repo.count_active(hospital_id=hospital_id)
+        active_warehouse_units = await self.warehouse_repo.count_active(hospital_id=hospital_id)
+        inactive_warehouse_units = await self.warehouse_repo.count_inactive(hospital_id=hospital_id)
+        total_vendors = await self.vendor_repo.count_all(hospital_id=hospital_id)
+        stock_summary = await self.item_repo.get_stock_summary(hospital_id=hospital_id)
 
-    async def get_dashboard_summary(self) -> InventoryDashboardResponse:
-        total_registered_items = await self.item_repo.count_all()
-        stock_alerts = await self.alert_repo.count_active()
-        active_warehouse_units = await self.warehouse_repo.count_active()
-        total_vendors = await self.vendor_repo.count_all()
         return InventoryDashboardResponse(
             total_registered_items=total_registered_items,
             stock_alerts=stock_alerts,
             active_warehouse_units=active_warehouse_units,
+            inactive_warehouse_units=inactive_warehouse_units,
             total_vendors=total_vendors,
+            total_items=stock_summary["total_items"],
+            total_quantity=stock_summary["total_quantity"],
+            low_stock_count=stock_summary["low_stock_count"],
+            expired_count=stock_summary["expired_count"],
+            total_value=stock_summary["total_value"],
         )
 
     async def generate_items_bulk_template(self) -> BytesIO:
@@ -290,10 +272,10 @@ class InventoryService:
         ]
         ws.append(headers)
 
-        
+
         # Configure Header Row Height
         ws.row_dimensions[1].height = 32
-        
+
         # Header Style definition
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         header_font = Font(name="Calibri", size=12, bold=True, color="000000")
@@ -301,14 +283,14 @@ class InventoryService:
         header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         thin_side = Side(style="thin", color="D3D3D3")
         header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-        
+
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_alignment
             cell.border = header_border
-        
+
         # Add sample row
         sample_row = [
             "Disposable Syringes 10ml",
@@ -327,13 +309,13 @@ class InventoryService:
         ]
         ws.append(sample_row)
 
-        
+
         # Freeze panes at A2
         ws.freeze_panes = "A2"
-        
+
         # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
         ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}2"
-        
+
         # Set custom column widths
         col_widths = {
             1: 25,  # name
@@ -353,7 +335,7 @@ class InventoryService:
         for col_idx, width in col_widths.items():
             col_letter = openpyxl.utils.get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = width
-        
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -549,10 +531,10 @@ class InventoryService:
             ]
             ws.append(headers)
 
-            
+
             # Configure Header Row Height
             ws.row_dimensions[1].height = 32
-            
+
             # Header Style definition
             from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
             header_font = Font(name="Calibri", size=12, bold=True, color="000000")
@@ -560,14 +542,14 @@ class InventoryService:
             header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             thin_side = Side(style="thin", color="D3D3D3")
             header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            
+
             for col_idx in range(1, len(headers) + 1):
                 cell = ws.cell(row=1, column=col_idx)
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = header_alignment
                 cell.border = header_border
-            
+
             for sr_no, item in enumerate(items, start=1):
                 row = [
                     sr_no,
@@ -588,15 +570,15 @@ class InventoryService:
                 ]
                 ws.append(row)
 
-                
+
             # Freeze panes at A2
             ws.freeze_panes = "A2"
-            
+
             # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
             total_rows = len(items) + 1
             last_col_letter = openpyxl.utils.get_column_letter(len(headers))
             ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-            
+
             # Set custom column widths
             col_widths = {
                 1: 8,   # Sr. No.
@@ -618,7 +600,7 @@ class InventoryService:
             for col_idx, width in col_widths.items():
                 col_letter = openpyxl.utils.get_column_letter(col_idx)
                 ws.column_dimensions[col_letter].width = width
-                
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
@@ -745,10 +727,13 @@ class InventoryService:
         if not warehouse or warehouse.hospital_id != hospital_id:
             raise HTTPException(status_code=404, detail="Warehouse not found")
 
-        if data.name is not None:
-            warehouse.name = data.name
-        if data.location is not None:
-            warehouse.location = data.location
+        update_data = data.model_dump(exclude_unset=True)
+        if "name" in update_data:
+            warehouse.name = update_data["name"]
+        if "location" in update_data:
+            warehouse.location = update_data["location"]
+        if "capacity" in update_data:
+            warehouse.capacity = update_data["capacity"]
 
         await self.db.flush()
         return WarehouseResponse.model_validate(warehouse)
@@ -765,6 +750,25 @@ class InventoryService:
 
         await self.db.delete(warehouse)
         await self.db.flush()
+
+
+    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
+        skip = (page - 1) * size
+        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
+        result = []
+        for alert in alerts:
+            item = await self.item_repo.get_by_id(alert.item_id)
+            result.append(ReorderAlertResponse(
+                id=alert.id,
+                item_id=alert.item_id,
+                item_name=item.name if item else "",
+                sku=item.sku if item else "",
+                current_quantity=alert.current_quantity,
+                reorder_level=alert.reorder_level,
+                status=alert.status,
+                created_at=alert.created_at,
+            ))
+        return result
 
     async def get_stock_summary(self, hospital_id: int | None) -> StockSummary:
         total_items = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
@@ -785,38 +789,34 @@ class InventoryService:
             total_vendors=0
         )
 
-    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
-        skip = (page - 1) * size
-        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
-        result = []
-        for alert in alerts:
-            item = await self.item_repo.get_by_id(alert.item_id)
-            result.append(ReorderAlertResponse(
-                id=alert.id,
-                item_id=alert.item_id,
-                item_name=item.name if item else "",
-                sku=item.sku if item else "",
-                current_quantity=alert.current_quantity,
-                reorder_level=alert.reorder_level,
-                status=alert.status,
-                created_at=alert.created_at,
-            ))
-        return result
-
-    async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:
+    async def get_consumption_report(
+        self, period: str = "monthly", hospital_id: int | None = None
+    ) -> list[ConsumptionReport]:
         normalized_period = (period or "monthly").strip().lower()
+        valid_periods = {"daily", "weekly", "monthly", "yearly", "all", "overall"}
+        if normalized_period not in valid_periods:
+            raise BadRequestException(
+                f"Invalid period parameter. Allowed values: {', '.join(sorted(valid_periods))}"
+            )
+
+        from datetime import timedelta
         now = utc_now()
+        start = None
+        end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
         if normalized_period == "daily":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         elif normalized_period == "weekly":
-            start = now - timedelta(days=7)
+            start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "monthly":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         elif normalized_period == "yearly":
-            start = now - timedelta(days=365)
-        else:
-            start = now - timedelta(days=30)
-            normalized_period = "monthly"
+            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period in ("all", "overall"):
+            start = None
+            end = None
 
-        report_data = await self.transaction_repo.get_consumption_report(start, now)
+        raw_data = await self.transaction_repo.get_consumption_report(start, end)
         return [
             ConsumptionReport(
                 period=normalized_period,
@@ -826,5 +826,6 @@ class InventoryService:
                 total_consumed=item["total_consumed"],
                 total_value=item["total_value"],
             )
-            for item in report_data
+            for item in raw_data
         ]
+

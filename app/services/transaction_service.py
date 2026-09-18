@@ -99,24 +99,24 @@ class TransactionService:
 
         payment = await self.repo.create(payment)
 
-        # Create corresponding transaction history event
-        from app.services.transaction_history_service import TransactionHistoryService
-        event_type = "REFUND_ISSUED" if is_refund else "PAYMENT_RECEIVED"
-        ref_prefix = "REF" if is_refund else "PAY"
-        desc_action = "Refund Issued" if is_refund else "Payment Received"
-        
-        await TransactionHistoryService(self.db).create_event(
-            event_type=event_type,
-            reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
-            description=f"{desc_action} on bill {billing.bill_number or ''} via {payment.payment_method}",
-            amount=payment.amount,
-            source_module="refunds" if is_refund else "payments",
-            source_id=payment.id,
-            status=payment.status,
-            user_id=user_id
-        )
-
         if is_completed:
+            # Create corresponding transaction history event only when transaction is completed
+            from app.services.transaction_history_service import TransactionHistoryService
+            event_type = "REFUND_ISSUED" if is_refund else "PAYMENT_RECEIVED"
+            ref_prefix = "REF" if is_refund else "PAY"
+            desc_action = "Refund Issued" if is_refund else "Payment Received"
+            
+            await TransactionHistoryService(self.db).create_event(
+                event_type=event_type,
+                reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
+                description=f"{desc_action} on bill {billing.bill_number or ''} via {payment.payment_method}",
+                amount=payment.amount,
+                source_module="refunds" if is_refund else "payments",
+                source_id=payment.id,
+                status=payment.status,
+                user_id=user_id
+            )
+
             await BillingService(self.db)._recalculate_billing(billing)
 
         await self.audit_repo.create("create", "transaction", user_id=user_id, resource_id=str(payment.id))
@@ -193,7 +193,7 @@ class TransactionService:
             hist.event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
             if payment.transaction_ref:
                 hist.reference_no = payment.transaction_ref
-        else:
+        elif new_completed:
             from app.services.transaction_history_service import TransactionHistoryService
             event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
             ref_prefix = "REF" if payment.is_refund else "PAY"

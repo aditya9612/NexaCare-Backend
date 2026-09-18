@@ -225,9 +225,9 @@ async def download_bulk_template(
     _: User = Depends(require_permission("patients", "read")),
 ):
     stream = await PatientService(db).generate_patient_bulk_template()
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(
-        stream,
+    from fastapi.responses import Response
+    return Response(
+        content=stream.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=patients_bulk_template.xlsx"}
     )

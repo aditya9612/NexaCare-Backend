@@ -174,6 +174,10 @@ class PatientService:
                     "active_count": 0,
                     "inactive_count": 0,
                     "cities_count": 0,
+                    "this_month": 0,
+                    "ipd": 0,
+                    "opd": 0,
+                    "today_discharge": 0,
                 }
 
         # Resolve allowed_patient_ids if role is Patient (auto-filters by user's phone/family)

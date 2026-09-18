@@ -657,4 +657,9 @@ class PatientListResponse(BaseSchema):
     active_count: int
     inactive_count: int
     cities_count: int
+    this_month: int = 0
+    ipd: int = 0
+    opd: int = 0
+    today_discharge: int = 0
+
 

@@ -487,9 +487,12 @@ class BillingService:
             if not invoice:
                 raise NotFoundException("Billing record not found")
 
+
+            if invoice.status in ["paid", "refunded", "partially_refunded", "cancelled"]:
+                raise BadRequestException("Cannot modify a billing record in a terminal state")
+
             dump = data.model_dump(exclude_unset=True)
-            if "status" in dump and dump["status"] is not None:
-                invoice.status = dump["status"]
+
 
             if "discount_percent" in dump and dump["discount_percent"] is not None:
                 invoice.discount_percentage = float(dump["discount_percent"])
@@ -516,7 +519,12 @@ class BillingService:
             await self.audit_repo.create("update", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
             return self._pharmacy_invoice_to_billing_response(invoice)
 
-        non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount", "status"]
+
+        if billing.status in ["paid", "refunded", "partially_refunded", "cancelled", "Completed", "Refunded"]:
+            raise BadRequestException("Cannot modify a billing record in a terminal state")
+
+        non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount"]
+
         for field in non_nullable_fields:
             if field in data.model_fields_set and getattr(data, field) is None:
                 raise BadRequestException(f"Field '{field}' cannot be null")
@@ -574,6 +582,46 @@ class BillingService:
         await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))
         return self._to_response(billing)
 
+    async def cancel(self, billing_id: int, user_id: int) -> BillingResponse:
+        billing = await self.repo.get_by_id_for_update(billing_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).with_for_update()
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            
+            # Validate PharmacyInvoice
+            if invoice.status == "cancelled":
+                raise BadRequestException("Billing record is already cancelled")
+            if invoice.status in ["paid", "refunded", "partially_refunded"]:
+                raise BadRequestException(f"Cannot cancel a billing record in '{invoice.status}' state. Process a refund instead.")
+            if (invoice.paid_amount or 0.0) > 0:
+                raise BadRequestException("Cannot cancel a billing record that has received payments. Process a refund instead.")
+            
+            invoice.status = "cancelled"
+            await self.db.flush()
+            await self.audit_repo.create("cancel", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return self._pharmacy_invoice_to_billing_response(invoice)
+
+        # Validate Billing
+        if billing.status == BillingStatus.CANCELLED:
+            raise BadRequestException("Billing record is already cancelled")
+        if billing.status in [BillingStatus.PAID, BillingStatus.REFUNDED, "partially_refunded"]:
+            raise BadRequestException(f"Cannot cancel a billing record in '{billing.status}' state. Process a refund instead.")
+        if (billing.paid_amount or 0.0) > 0:
+            raise BadRequestException("Cannot cancel a billing record that has received payments. Process a refund instead.")
+            
+        billing.status = BillingStatus.CANCELLED
+        await self.db.flush()
+        await self.audit_repo.create("cancel", "billing", user_id=user_id, resource_id=str(billing.id))
+        return self._to_billing_response(billing)
+
     async def delete(self, billing_id: int, user_id: int) -> None:
         billing = await self.repo.get_by_id(billing_id)
         if not billing:
@@ -604,8 +652,10 @@ class BillingService:
             invoice = res.scalar_one_or_none()
             if not invoice:
                 raise NotFoundException("Billing record not found")
-            if invoice.status == "cancelled":
-                raise BadRequestException("Cannot collect payment on cancelled bill")
+
+            if invoice.status in ["cancelled", "refunded", "partially_refunded"]:
+                raise BadRequestException(f"Cannot collect payment on {invoice.status} bill")
+
             total_amt = invoice.total_amount or 0.0
             paid_amt = invoice.paid_amount or 0.0
             balance_due = round(total_amt - paid_amt, 2)
@@ -653,8 +703,16 @@ class BillingService:
                 created_at=utc_now(),
             )
 
-        if billing.status == BillingStatus.CANCELLED:
-            raise BadRequestException("Cannot collect payment on cancelled bill")
+
+        if billing.status in [BillingStatus.CANCELLED, BillingStatus.REFUNDED, "partially_refunded"]:
+            raise BadRequestException(f"Cannot collect payment on {billing.status} bill")
+
+        total_amt = billing.total_amount or 0.0
+        paid_amt = billing.paid_amount or 0.0
+        balance_due = round(total_amt - paid_amt, 2)
+        if data.amount > balance_due:
+            raise BadRequestException("Payment amount exceeds balance due")
+
         # Defensive normalization
         method = data.payment_method.strip().lower()
         if method == "cheques":
@@ -1031,6 +1089,7 @@ class BillingService:
 
         # Ensure total_collected cannot be negative
         data["total_collected"] = max(0.0, round(float(data.get("total_collected", 0.0)), 2))
+        data["today_collected_revenue"] = data["total_collected"]
 
         # Ensure by_method contains only rounded non-pharmacy payment methods with positive amounts
         by_method = {}

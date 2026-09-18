@@ -1,12 +1,19 @@
 import io
 from typing import List, Optional
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import BedStatus
+from app.core.constants import (
+    AdmissionStatus,
+    AppointmentStatus,
+    AppointmentType,
+    BedStatus,
+    PatientStatus,
+)
 from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
+from app.models.appointment_model import Appointment
 from app.models.bed_allocation_model import Floor, Room, Bed, BedActivityLog
 from app.models.patient_model import Patient
 from app.repositories.bed_allocation_repository import BedAllocationRepository
@@ -24,7 +31,7 @@ from app.schemas.bed_allocation_schema import (
     ICUAnalyticsResponse,
     BedExportResponse,
 )
-from app.utils.helpers import utc_now
+from app.utils.helpers import generate_admission_number, utc_now
 
 
 class BedAllocationService:
@@ -418,7 +425,6 @@ class BedAllocationService:
 
         patient = await self.get_patient(data.patientId)
 
-        from app.core.constants import PatientStatus
         if patient.status == PatientStatus.INACTIVE:
             raise BadRequestException(
                 "Cannot allocate a bed to an inactive patient. Please activate the patient first."
@@ -434,9 +440,6 @@ class BedAllocationService:
         if admission_date_ist < current_date_ist:
             raise BadRequestException("Admission date cannot be in the past.")
 
-        from app.models.appointment_model import Appointment
-        from sqlalchemy import select, desc
-
         appointment = None
         if getattr(data, "appointmentId", None):
             stmt = select(Appointment).where(
@@ -446,19 +449,19 @@ class BedAllocationService:
             res = await self.db.execute(stmt)
             appointment = res.scalar_one_or_none()
             if not appointment:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Appointment {data.appointmentId} not found for this patient."
+                raise NotFoundException(
+                    f"Appointment {data.appointmentId} not found for this patient."
                 )
         else:
-            # 1. Search for appointment where admission was recommended or admitted
+            # 1. Search for appointment where admission was recommended or admitted with IPD type
             stmt = (
                 select(Appointment)
                 .where(
                     Appointment.patient_id == patient.id,
-                    (Appointment.admission_status.in_(["Admit Recommended", "Admitted"]))
-                    | (Appointment.admission_recommended == True)
-                    | (Appointment.appointment_status.in_(["Admit Recommended", "Admitted"]))
+                    Appointment.appointment_type == AppointmentType.IPD.value,
+                    (Appointment.admission_recommended == True)
+                    | (Appointment.admission_status.in_([AdmissionStatus.ADMIT_RECOMMENDED, AdmissionStatus.ADMITTED]))
+                    | (Appointment.appointment_status.in_([AppointmentStatus.ADMIT_RECOMMENDED, AppointmentStatus.ADMITTED]))
                 )
                 .order_by(desc(Appointment.id))
                 .limit(1)
@@ -478,57 +481,73 @@ class BedAllocationService:
                 appointment = res.scalar_one_or_none()
 
         if not appointment:
-            raise HTTPException(
-                status_code=404,
-                detail="No appointment found for this patient."
+            raise NotFoundException(
+                "No appointment found for this patient."
             )
+
+        # Business Rule Validations
+        # Check 1: Appointment Type MUST be IPD
+        appt_type_raw = appointment.appointment_type or ""
+        appt_type_norm = appt_type_raw.strip().upper()
+        if appt_type_norm != AppointmentType.IPD.value:
+            if appt_type_raw.strip().lower() in ("follow-up", "followup", "follow up"):
+                raise BadRequestException(
+                    "Bed allocation is not allowed for Follow-up appointments. "
+                    "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
+                )
+            elif appt_type_norm == AppointmentType.OPD.value:
+                raise BadRequestException(
+                    "Bed allocation is not allowed for OPD appointments. "
+                    "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
+                )
+            else:
+                raise BadRequestException(
+                    f"Bed allocation is only allowed for IPD appointments. Current appointment type: {appointment.appointment_type or 'None'}."
+                )
 
         status_norm = (appointment.appointment_status or "").strip().lower()
         adm_status_norm = (appointment.admission_status or "").strip().lower()
-        allowed_statuses = {"completed", "admit recommended", "admit_recommended", "admitted"}
-        is_recommended = (
-            adm_status_norm in ("admit recommended", "admit_recommended", "admitted")
-            or bool(appointment.admission_recommended)
-            or status_norm in ("admit recommended", "admit_recommended", "admitted")
-        )
 
-        if not is_recommended and status_norm == "pending":
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot allocate bed for a pending appointment. Please confirm and check in the patient first."
-            )
-
-        if not is_recommended and status_norm not in allowed_statuses:
-            if status_norm == "cancelled" or adm_status_norm == "cancelled":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot allocate bed for a cancelled appointment."
-                )
-            raise HTTPException(
-                status_code=400,
-                detail=f"Bed allocation is only allowed for patients with a completed appointment. Current appointment status: {appointment.appointment_status}."
-            )
-
-        if not appointment.check_in_time and not is_recommended and status_norm not in ("completed", "admitted", "checked-in", "in-progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot allocate bed for a patient who has not checked in. Please check in the patient first."
-            )
-
+        # Check 2: Appointment & Admission Status Cancellation / Discharge Check
         if status_norm == "cancelled" or adm_status_norm == "cancelled":
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot allocate bed for a cancelled appointment."
+            raise BadRequestException("Cannot allocate bed for a cancelled appointment or admission.")
+
+        if status_norm == "discharged" or adm_status_norm == "discharged":
+            raise BadRequestException("Cannot allocate bed for an already discharged patient.")
+
+        # Check 3: Admission Recommendation & Record State
+        is_admission_valid = (
+            bool(appointment.admission_recommended)
+            or adm_status_norm in ("admit recommended", "admit_recommended", "admitted")
+            or status_norm in ("admit recommended", "admit_recommended", "admitted")
+        ) and adm_status_norm not in ("not recommended", "not_recommended", "cancelled", "discharged")
+
+        if not is_admission_valid:
+            raise BadRequestException(
+                "Bed allocation requires a valid admission recommendation. "
+                "Admission has not been recommended or created for this IPD appointment."
             )
 
-        from app.core.constants import AdmissionStatus, AppointmentStatus
+        # Check 4: Check-in / Pending Check
+        if status_norm == "pending":
+            raise BadRequestException(
+                "Cannot allocate bed for a pending appointment. Please confirm and check in the patient first."
+            )
+
+        if status_norm in ("no show", "no_show"):
+            raise BadRequestException("Cannot allocate bed for a no-show appointment.")
+
+        # Execute Bed Allocation
         appointment.admission_status = AdmissionStatus.ADMITTED
         appointment.appointment_type = "IPD"
         appointment.queue_status = "COMPLETED"
+        appointment.appointment_type = AppointmentType.IPD.value
+        appointment.admission_recommended = True
+        appointment.admission_number = appointment.admission_number or generate_admission_number()
         if status_norm in ("admit recommended", "admit_recommended"):
             appointment.appointment_status = AppointmentStatus.COMPLETED
 
-        bed.status = "Occupied"
+        bed.status = BedStatus.OCCUPIED.value
         bed.patient_id = patient.id
         bed.patient = patient
         bed.allocation_time = utc_now()

@@ -103,6 +103,15 @@ class StaffRepository:
         )
         return list(result.scalars().all())
 
+    async def get_role_counts(self) -> dict[str, int]:
+        query = (
+            select(Staff.role_name, func.count(Staff.id))
+            .where(Staff.is_deleted.is_(False))
+            .group_by(Staff.role_name)
+        )
+        result = await self.db.execute(query)
+        return {row[0].strip().lower(): row[1] for row in result.all() if row[0]}
+
     async def get_dashboard_stats(self) -> dict:
         total = await self.db.scalar(
             select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
@@ -113,10 +122,12 @@ class StaffRepository:
         inactive = await self.db.scalar(
             select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 0)
         ) or 0
+        role_counts = await self.get_role_counts()
         return {
             "total_staff": total,
             "active_staff": active,
             "inactive_staff": inactive,
+            "role_counts": role_counts,
         }
 
     async def update(self, staff: Staff) -> Staff:

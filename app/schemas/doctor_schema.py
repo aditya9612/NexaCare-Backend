@@ -159,13 +159,13 @@ class DoctorOnboardCreate(BaseSchema):
     phone: str
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=20)
-    department_id: int | None = Field(None, gt=0)
-    consultation_fee: float | None = Field(None, ge=0)
+    department_id: int = Field(..., gt=0)
+    consultation_fee: float = Field(..., ge=0)
     license_number: str
-    availability_status: str = "available"
+    availability_status: str = Field(...)
     profile_image: str | None = None
     bio: str | None = None
-    gender: DoctorGenderOption | None = None
+    gender: DoctorGenderOption = Field(...)
     date_of_birth: date | None = None
 
     @field_validator("date_of_birth")

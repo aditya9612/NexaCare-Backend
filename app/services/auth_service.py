@@ -185,28 +185,6 @@ class AuthService:
             doctor = await self.db.scalar(select(Doctor).where(Doctor.user_id == user.id))
             return doctor is None or doctor.is_deleted
         elif user.role.name == UserRole.NURSE:
-            nurse = await self.db.scalar(select(Nurse).where(Nurse.user_id == user.id))
-            if nurse is None:
-                from app.utils.helpers import generate_nurse_code
-                from app.models.department_model import Department
-                department = await self.db.scalar(
-                    select(Department).order_by(Department.department_id.asc())
-                )
-                dept_id = department.department_id if department else None
-
-                staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
-                if staff and staff.department_id:
-                    dept_id = staff.department_id
-
-                nurse = Nurse(
-                    nurse_code=generate_nurse_code(),
-                    user_id=user.id,
-                    license_number=f"LIC-{generate_nurse_code()}",
-                    department_id=dept_id,
-                    shift="Morning Shift",
-                )
-                self.db.add(nurse)
-                await self.db.flush()
             return False
         elif user.role.name == UserRole.PATIENT:
             patient = await self.db.scalar(select(Patient).where(Patient.user_id == user.id))

@@ -201,7 +201,8 @@ class AppointmentService:
         from sqlalchemy import and_, case, func, or_, select, text
         # Calculate summary counts independently of pagination and status/date filters where appropriate
         from app.utils.helpers import get_today_ist, utc_now
-        today = utc_now().date()
+        today_ist = get_today_ist()
+        today = today_ist
 
         def _base_filter(q):
             """Apply patient/doctor/dept scope filters — no status/date filter."""

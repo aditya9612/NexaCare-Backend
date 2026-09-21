@@ -159,6 +159,7 @@ class StockTransactionCreate(BaseSchema):
     reference_id: Optional[int] = Field(None, gt=0)
     notes: Optional[str] = None
     target_warehouse_id: Optional[int] = Field(None, gt=0)
+    batch_id: Optional[int] = Field(None, gt=0)
 
     @model_validator(mode="before")
     @classmethod
@@ -175,7 +176,7 @@ class StockTransactionCreate(BaseSchema):
     def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             v_lower = str(v).strip().lower()
-            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            allowed = {"inward", "outward", "transfer", "adjustment", "return", "consumption"}
             if v_lower not in allowed:
                 raise ValueError(f"transaction_type must be one of {allowed}")
             return v_lower
@@ -257,7 +258,7 @@ class StockTransactionUpdate(BaseSchema):
     def validate_transaction_type(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             v_lower = str(v).strip().lower()
-            allowed = {"inward", "outward", "transfer", "adjustment", "return"}
+            allowed = {"inward", "outward", "transfer", "adjustment", "return", "consumption"}
             if v_lower not in allowed:
                 raise ValueError(f"transaction_type must be one of {allowed}")
             return v_lower
@@ -435,5 +436,19 @@ class InventoryDashboardResponse(BaseSchema):
     low_stock_count: int
     expired_count: int
     total_value: float
+
+
+class StockSummary(BaseSchema):
+    total_items: int = 0
+    total_quantity: int = 0
+    low_stock_count: int = 0
+    expired_count: int = 0
+    total_value: float = 0.0
+    total_registered_items: int = 0
+    stock_alerts: int = 0
+    active_warehouse_units: int = 0
+    inactive_warehouse_units: int = 0
+    total_vendors: int = 0
+
 
 

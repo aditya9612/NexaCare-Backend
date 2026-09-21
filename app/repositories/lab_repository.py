@@ -2,6 +2,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import LabOrderStatus
 from app.models.lab_model import LabReport, LabTest, Sample, TestOrder, TestResult
 from app.utils.helpers import utc_now
 
@@ -74,6 +75,16 @@ class LabTestRepository:
 
     async def get_by_id(self, test_id: int) -> LabTest | None:
         result = await self.db.execute(self._base_query().where(LabTest.id == test_id))
+        return result.scalar_one_or_none()
+
+    async def get_by_name(self, test_name: str) -> LabTest | None:
+        normalized = (test_name or "").strip()
+        if not normalized:
+            return None
+        query = self._base_query().where(
+            func.lower(LabTest.test_name) == func.lower(normalized)
+        )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_name(self, test_name: str) -> LabTest | None:
@@ -150,6 +161,26 @@ class TestOrderRepository:
 
     async def get_by_id(self, order_id: int) -> TestOrder | None:
         result = await self.db.execute(self._base_query().where(TestOrder.id == order_id))
+        return result.scalar_one_or_none()
+
+    async def get_active_order_by_patient_and_test(
+        self, patient_id: int, lab_test_id: int
+    ) -> TestOrder | None:
+        active_statuses = [
+            LabOrderStatus.ORDERED,
+            LabOrderStatus.SAMPLE_COLLECTED,
+            LabOrderStatus.IN_PROGRESS,
+        ]
+        query = (
+            self._base_query()
+            .where(
+                TestOrder.patient_id == patient_id,
+                TestOrder.lab_test_id == lab_test_id,
+                TestOrder.status.in_(active_statuses),
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def create(self, order: TestOrder) -> TestOrder:
@@ -343,6 +374,7 @@ class LabReportRepository:
         query = (
            select(LabReport)
            .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+           .where(TestOrder.is_deleted.is_(False))
         )
 
         if status:
@@ -378,6 +410,7 @@ class LabReportRepository:
             select(func.count())
             .select_from(LabReport)
             .join(TestOrder, LabReport.test_order_id == TestOrder.id)
+            .where(TestOrder.is_deleted.is_(False))
         )
 
         if status:

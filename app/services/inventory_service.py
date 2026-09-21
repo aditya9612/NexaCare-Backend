@@ -33,6 +33,7 @@ from app.schemas.inventory_schema import (
     WarehouseResponse,
     WarehouseUpdate,
     InventoryDashboardResponse,
+    StockSummary,
 )
 from app.utils.helpers import generate_code, generate_stock_transaction_number, utc_now
 from app.utils.pagination import build_paginated_result
@@ -164,28 +165,6 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
-    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
-        skip = (page - 1) * size
-        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
-        res = []
-        for alert in alerts:
-            item_name = alert.item.name if hasattr(alert, "item") and alert.item else ""
-            sku = alert.item.sku if hasattr(alert, "item") and alert.item else ""
-            status_val = alert.status if isinstance(alert.status, str) else getattr(alert.status, "value", str(alert.status))
-            res.append(
-                ReorderAlertResponse(
-                    id=alert.id,
-                    item_id=alert.item_id,
-                    item_name=item_name,
-                    sku=sku,
-                    current_quantity=alert.current_quantity,
-                    reorder_level=alert.reorder_level,
-                    status=status_val,
-                    created_at=alert.created_at,
-                )
-            )
-        return res
-
     async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
@@ -233,6 +212,7 @@ class InventoryService:
 
         data.total_value = round(abs(transaction.quantity) * transaction.unit_cost, 2)
         return data
+
     async def list_transactions(
         self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None
     ):
@@ -256,12 +236,6 @@ class InventoryService:
 
     async def delete_stock_transaction(self, transaction_id: int, user_id: int) -> None:
         raise BadRequestException("Stock transactions are immutable and cannot be deleted.")
-
-    async def get_transaction(self, transaction_id: int) -> StockTransactionResponse:
-        transaction = await self.transaction_repo.get_by_id(transaction_id)
-        if not transaction:
-            raise NotFoundException("Stock transaction not found")
-        return StockTransactionResponse.model_validate(transaction)
 
     async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
         total_registered_items = await self.item_repo.count_all(hospital_id=hospital_id)
@@ -796,20 +770,53 @@ class InventoryService:
             ))
         return result
 
-    async def get_consumption_report(self, period: str = "monthly") -> list[ConsumptionReport]:
+    async def get_stock_summary(self, hospital_id: int | None) -> StockSummary:
+        total_items = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
+        total_quantity = await self.db.scalar(select(func.sum(WarehouseStock.quantity)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
+        total_value = await self.db.scalar(select(func.sum(WarehouseStock.quantity * InventoryItem.unit_cost)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id)) or 0.0
+        low_stock_count = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id, WarehouseStock.quantity < InventoryItem.reorder_level)) or 0
+
+        return StockSummary(
+            total_items=total_items,
+            total_quantity=int(total_quantity),
+            low_stock_count=low_stock_count,
+            expired_count=0,
+            total_value=float(total_value),
+            total_registered_items=total_items,
+            stock_alerts=low_stock_count,
+            active_warehouse_units=0,
+            inactive_warehouse_units=0,
+            total_vendors=0
+        )
+
+    async def get_consumption_report(
+        self, period: str = "monthly", hospital_id: int | None = None
+    ) -> list[ConsumptionReport]:
         normalized_period = (period or "monthly").strip().lower()
+        valid_periods = {"daily", "weekly", "monthly", "yearly", "all", "overall"}
+        if normalized_period not in valid_periods:
+            raise BadRequestException(
+                f"Invalid period parameter. Allowed values: {', '.join(sorted(valid_periods))}"
+            )
+
+        from datetime import timedelta
         now = utc_now()
+        start = None
+        end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
         if normalized_period == "daily":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         elif normalized_period == "weekly":
-            start = now - timedelta(days=7)
+            start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period == "monthly":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         elif normalized_period == "yearly":
-            start = now - timedelta(days=365)
-        else:
-            start = now - timedelta(days=30)
-            normalized_period = "monthly"
+            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif normalized_period in ("all", "overall"):
+            start = None
+            end = None
 
-        report_data = await self.transaction_repo.get_consumption_report(start, now)
+        raw_data = await self.transaction_repo.get_consumption_report(start, end)
         return [
             ConsumptionReport(
                 period=normalized_period,
@@ -819,5 +826,6 @@ class InventoryService:
                 total_consumed=item["total_consumed"],
                 total_value=item["total_value"],
             )
-            for item in report_data
+            for item in raw_data
         ]
+

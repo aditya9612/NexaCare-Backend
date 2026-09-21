@@ -32,14 +32,9 @@ class DoctorGenderOption(str, Enum):
 def validate_specialization_value(v: str | None) -> str | None:
     if v is None:
         return v
+    v = v.strip()
     if not v or v.lower() == "null" or v.lower() == "string":
         raise ValueError("Specialization cannot be blank, 'null', or 'string'")
-    
-    if v.startswith(" ") or v.endswith(" "):
-        raise ValueError("Specialization should not contain leading or trailing spaces")
-        
-    if not v.strip():
-        raise ValueError("Specialization cannot be only spaces")
         
     if not re.match(r"^[a-zA-Z\s\-/]+$", v):
         raise ValueError("Specialization must contain only letters, spaces, hyphens, or slashes")
@@ -164,13 +159,13 @@ class DoctorOnboardCreate(BaseSchema):
     phone: str
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=20)
-    department_id: int | None = Field(None, gt=0)
-    consultation_fee: float | None = Field(None, ge=0)
+    department_id: int = Field(..., gt=0)
+    consultation_fee: float = Field(..., ge=0)
     license_number: str
-    availability_status: str = "available"
+    availability_status: str = Field(...)
     profile_image: str | None = None
     bio: str | None = None
-    gender: DoctorGenderOption | None = None
+    gender: DoctorGenderOption = Field(...)
     date_of_birth: date | None = None
 
     @field_validator("date_of_birth")

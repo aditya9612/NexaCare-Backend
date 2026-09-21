@@ -7,6 +7,7 @@ from app.core.exceptions import BadRequestException, ConflictException, NotFound
 from app.models.appointment_model import Appointment
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.discharge_repository import DischargeRepository
 from app.repositories.doctor_repository import DoctorRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.appointment_schema import (
@@ -41,6 +42,7 @@ class AppointmentService:
         self.validation_service = BookingValidationService(db)
         self.audit_repo = AuditRepository(db)
         self.doctor_repo = DoctorRepository(db)
+        self.discharge_repo = DischargeRepository(db)
 
     def _validate_future_datetime(self, appointment_date: date, appointment_time: time) -> tuple[date, time]:
         from datetime import timezone, timedelta
@@ -55,7 +57,7 @@ class AppointmentService:
                 appt_dt = dt_module.datetime.combine(appointment_date, appointment_time)
                 appt_dt_ist = appt_dt.astimezone(ist_tz)
                 appointment_date = appt_dt_ist.date()
-                appointment_time = appt_dt_ist.time()
+                appointment_time = appt_dt_ist.time().replace(tzinfo=None)
 
         if appointment_date < today_ist:
             raise BadRequestException("Cannot book or reschedule an appointment for a past date")
@@ -98,23 +100,98 @@ class AppointmentService:
         department_id: int | None = None,
         status: str | None = None,
         appointment_date: date | None = None,
+        date_filter: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
         appointment_type: str | None = None,
         booking_source: BookingSource | str | None = None,
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        current_user = None,
     ):
+        if date_filter is not None:
+            valid_filters = {"today", "yesterday", "last_7_days", "last_30_days", "last_3_months", "overall", "custom"}
+            if date_filter not in valid_filters:
+                raise BadRequestException(f"Invalid date_filter. Must be one of: {', '.join(sorted(valid_filters))}")
+            
+            if date_filter == "custom":
+                if not start_date or not end_date:
+                    raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
+                if start_date > end_date:
+                    raise BadRequestException("start_date cannot be greater than end_date")
+
+        filter_start = None
+        filter_end = None
+
+        if date_filter:
+            from datetime import timezone, timedelta
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            today = datetime.now(ist_tz).date()
+
+            if date_filter == "today":
+                filter_start = today
+                filter_end = today
+            elif date_filter == "yesterday":
+                yesterday = today - timedelta(days=1)
+                filter_start = yesterday
+                filter_end = yesterday
+            elif date_filter == "last_7_days":
+                filter_start = today - timedelta(days=7)
+                filter_end = today
+            elif date_filter == "last_30_days":
+                filter_start = today - timedelta(days=30)
+                filter_end = today
+            elif date_filter == "last_3_months":
+                import calendar
+                month = today.month - 3
+                year = today.year
+                if month <= 0:
+                    year -= 1
+                    month += 12
+                day = min(today.day, calendar.monthrange(year, month)[1])
+                filter_start = date(year, month, day)
+                filter_end = today
+            elif date_filter == "custom":
+                filter_start = start_date
+                filter_end = end_date
+            # For "overall", filter_start and filter_end remain None
+
         skip = (page - 1) * size
         source = booking_source.value if isinstance(booking_source, BookingSource) else booking_source
+
+        effective_patient_id = patient_id
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids:
+                return {
+                    "items": [], "total": 0, "page": page, "size": size, "pages": 0,
+                    "total_count": 0, "today_count": 0, "confirmed_count": 0,
+                    "cancelled_count": 0, "completed_count": 0, "pending_count": 0,
+                    "checked_in_count": 0, "checked_out_count": 0, "in_progress_count": 0,
+                    "vital_done_count": 0, "emergency_admit_count": 0, "emergency_refer_count": 0,
+                    "emergency_discharge_count": 0,
+                }
+            if patient_id:
+                if patient_id not in allowed_ids:
+                    effective_patient_id = [-1]
+                else:
+                    effective_patient_id = patient_id
+            else:
+                effective_patient_id = allowed_ids
+
         items = await self.repo.list_all(
-            skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id,
+            skip=skip, limit=size, patient_id=effective_patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
         total = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id,
+            patient_id=effective_patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
+            start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         )
@@ -122,12 +199,18 @@ class AppointmentService:
         # --- Optimized summary counts via grouped SQL (replaces 10 sequential count_all calls) ---
         from app.utils.helpers import utc_now
         from sqlalchemy import and_, case, func, or_, select, text
-        today = utc_now().date()
+        # Calculate summary counts independently of pagination and status/date filters where appropriate
+        from app.utils.helpers import get_today_ist, utc_now
+        today_ist = get_today_ist()
+        today = today_ist
 
         def _base_filter(q):
             """Apply patient/doctor/dept scope filters — no status/date filter."""
-            if patient_id:
-                q = q.where(Appointment.patient_id == patient_id)
+            if effective_patient_id:
+                if isinstance(effective_patient_id, (list, tuple, set)):
+                    q = q.where(Appointment.patient_id.in_(effective_patient_id))
+                else:
+                    q = q.where(Appointment.patient_id == effective_patient_id)
             if doctor_id:
                 q = q.where(Appointment.doctor_id == doctor_id)
             if department_id:
@@ -218,6 +301,59 @@ class AppointmentService:
             row.cnt for row in rows
             if (row.appointment_status or "") in _CANCELLED_SET
         )
+        total_appointments = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
+        )
+        today_appointments = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            appointment_date=today
+        )
+        total_today_discharged = await self.discharge_repo.count_today_discharged(on_date=today_ist)
+        total_scheduled = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date
+        )
+        completed = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date
+        )
+        cancelled = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date
+        )
+        pending = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.PENDING, appointment_date=appointment_date
+        )
+        confirmed = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
+        )
+
+        in_progress = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="In-Progress", appointment_date=appointment_date
+        )
+        checked_in = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="Check-in", appointment_date=appointment_date
+        )
+        checked_out = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="Checked-Out", appointment_date=appointment_date
+        )
+        admit_recommended = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admit-recommended", appointment_date=appointment_date
+        )
+        admitted = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admitted", appointment_date=appointment_date
+        )
+        waiting = await self.repo.count_all(
+            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="waiting", appointment_date=appointment_date
+        )
 
         paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
@@ -232,6 +368,7 @@ class AppointmentService:
             "today_appointments": today_appointments,
             "total_today_appointments": today_appointments,
             "total_today_tokens": today_appointments,
+            "total_today_discharged": total_today_discharged,
             "total_scheduled": total_scheduled,
             "completed": completed,
             "cancelled": cancelled,
@@ -320,6 +457,44 @@ class AppointmentService:
             raise NotFoundException("Appointment not found")
 
         update_data = data.model_dump(exclude_unset=True)
+        if "appointment_status" in update_data:
+            new_status = update_data["appointment_status"]
+            if new_status == AppointmentStatus.CONFIRMED:
+                from app.models.user_model import User
+                from sqlalchemy import select
+                from sqlalchemy.orm import selectinload
+                from app.core.constants import UserRole
+                from app.core.exceptions import ForbiddenException
+                
+                user_res = await self.db.execute(
+                    select(User)
+                    .where(User.id == user_id)
+                    .options(selectinload(User.role))
+                )
+                user_obj = user_res.scalar_one_or_none()
+                if not user_obj:
+                    raise ForbiddenException("User not found")
+                role_name = user_obj.role.name if user_obj.role else ""
+                if role_name not in UserRole.ADMIN_ROLES:
+                    from app.repositories.rbac_repository import RBACRepository
+                    rbac_repo = RBACRepository(self.db)
+                    permissions = await rbac_repo.get_user_permissions(user_obj.role_id)
+                    if "appointments:approve" not in permissions:
+                        raise ForbiddenException("Missing permission: appointments:approve")
+                        
+                if appointment.appointment_status == "Checked-In":
+                    raise BadRequestException("Cannot confirm an appointment that is already checked in")
+                elif appointment.appointment_status == AppointmentStatus.COMPLETED:
+                    raise BadRequestException("Cannot confirm a completed appointment")
+                elif appointment.appointment_status == "Checked-Out":
+                    raise BadRequestException("Cannot confirm a checked-out appointment")
+                elif appointment.appointment_status == AppointmentStatus.CANCELLED:
+                    raise BadRequestException("Cannot confirm a cancelled appointment")
+                elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+                    raise BadRequestException("Cannot confirm a no-show appointment")
+            elif new_status in (AppointmentStatus.COMPLETED, "Checked-Out"):
+                raise BadRequestException(f"Direct update to '{new_status}' status is not allowed. Please use the dedicated lifecycle endpoints.")
+
 
         if appointment.appointment_status in AppointmentStatus.TERMINAL:
             # allow purely notes update if status isn't changing to a non-terminal state
@@ -448,6 +623,16 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(data.appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+            
+        if appointment.appointment_status == AppointmentStatus.COMPLETED:
+            raise BadRequestException("Cannot confirm a completed appointment")
+        elif appointment.appointment_status == "Checked-Out":
+            raise BadRequestException("Cannot confirm a checked-out appointment")
+        elif appointment.appointment_status == AppointmentStatus.CANCELLED:
+            raise BadRequestException("Cannot confirm a cancelled appointment")
+        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+            raise BadRequestException("Cannot confirm a no-show appointment")
+            
         appointment.appointment_status = AppointmentStatus.CONFIRMED
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("confirm", "appointments", user_id=user_id, resource_id=str(appointment.id))
@@ -458,11 +643,13 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(start_date, end_date, doctor_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self) -> dict:
+    async def get_today(self, on_date: date | None = None) -> dict:
         from app.utils.helpers import get_today_ist
-        appointments = await self.repo.get_today()
+        if on_date is None:
+            on_date = get_today_ist()
+        appointments = await self.repo.get_today(on_date)
         has_updated = False
-        today = get_today_ist()
+        today = on_date
         next_num = None
         for a in appointments:
             if not a.queue_token:
@@ -543,6 +730,17 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        
+        if appointment.appointment_status == "Checked-Out":
+            raise BadRequestException("Appointment already checked out")
+        elif appointment.appointment_status == AppointmentStatus.CANCELLED:
+            raise BadRequestException("Cannot check out a cancelled appointment")
+        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+            raise BadRequestException("Cannot check out a no-show appointment")
+            
+        if appointment.appointment_status != AppointmentStatus.COMPLETED or appointment.queue_status != "COMPLETED":
+            raise BadRequestException("Appointment must be completed before check-out")
+            
 
         # 1. Reject if already checked out
         if appointment.check_out_time is not None or appointment.appointment_status in ("Checked-Out", "Checked_Out", "checked-out", "checked_out"):
@@ -692,6 +890,20 @@ class AppointmentService:
         appointment = await self.repo.get_by_id(appointment_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+            
+        if appointment.appointment_status == AppointmentStatus.CANCELLED:
+            raise BadRequestException("Cannot complete token for a cancelled appointment")
+        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
+            raise BadRequestException("Cannot complete token for a no-show appointment")
+        elif appointment.appointment_status == "Checked-Out":
+            raise BadRequestException("Cannot complete token for a checked-out appointment")
+        elif appointment.appointment_status == AppointmentStatus.COMPLETED or appointment.queue_status == "COMPLETED":
+            raise BadRequestException("Cannot complete token for an already completed appointment")
+        elif appointment.appointment_status == "Checked-In":
+            raise BadRequestException("Appointment visit must be confirmed before completing the token")
+        elif appointment.appointment_status != AppointmentStatus.CONFIRMED or not appointment.check_in_time:
+            raise BadRequestException("Appointment must be checked in first")
+            
 
         status = str(appointment.appointment_status or "").strip()
         if status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
@@ -701,6 +913,8 @@ class AppointmentService:
             raise BadRequestException("Appointment must be checked in before completing token.")
 
         appointment.queue_status = "COMPLETED"
+        appointment.appointment_status = AppointmentStatus.COMPLETED
+            
         await self.db.flush()
         return appointment
 

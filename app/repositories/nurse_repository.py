@@ -72,6 +72,10 @@ class NurseRepository:
         result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
         return result.scalar_one_or_none()
 
+    async def get_by_code(self, nurse_code: str) -> Nurse | None:
+        result = await self.db.execute(select(Nurse).where(Nurse.nurse_code == nurse_code))
+        return result.scalar_one_or_none()
+
     def _search_filter(self, q: str):
         pattern = f"%{q.lower()}%"
         return or_(

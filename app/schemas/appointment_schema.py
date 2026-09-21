@@ -74,6 +74,22 @@ class AppointmentCreate(BaseSchema):
             return v.strip().lower()
         return v
 
+    @field_validator("appointment_time", mode="before")
+    @classmethod
+    def parse_appointment_time(cls, v: any) -> any:
+        if isinstance(v, str):
+            v = v.strip()
+            # Explicitly parse Z/z suffix to UTC timezone for compatibility across Python versions
+            if v.endswith('Z') or v.endswith('z'):
+                time_part = v[:-1]
+                try:
+                    parsed_time = time.fromisoformat(time_part)
+                    from datetime import timezone
+                    return parsed_time.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
+        return v
+
 
 class AppointmentUpdate(BaseSchema):
     department_id: int | None = None
@@ -113,6 +129,22 @@ class AppointmentUpdate(BaseSchema):
             return None
         if isinstance(v, str):
             return v.strip().lower()
+        return v
+
+    @field_validator("appointment_time", mode="before")
+    @classmethod
+    def parse_appointment_time(cls, v: any) -> any:
+        if isinstance(v, str):
+            v = v.strip()
+            # Explicitly parse Z/z suffix to UTC timezone for compatibility across Python versions
+            if v.endswith('Z') or v.endswith('z'):
+                time_part = v[:-1]
+                try:
+                    parsed_time = time.fromisoformat(time_part)
+                    from datetime import timezone
+                    return parsed_time.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
         return v
 
     @field_validator("appointment_time")
@@ -291,6 +323,22 @@ class RescheduleRequest(BaseSchema):
     appointment_time: time
     notes: str | None = None
 
+    @field_validator("appointment_time", mode="before")
+    @classmethod
+    def parse_appointment_time(cls, v: any) -> any:
+        if isinstance(v, str):
+            v = v.strip()
+            # Explicitly parse Z/z suffix to UTC timezone for compatibility across Python versions
+            if v.endswith('Z') or v.endswith('z'):
+                time_part = v[:-1]
+                try:
+                    parsed_time = time.fromisoformat(time_part)
+                    from datetime import timezone
+                    return parsed_time.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
+        return v
+
 
 class CancelRequest(BaseSchema):
     appointment_id: int
@@ -349,6 +397,7 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     waiting: int = 0
     total_today_appointments: int = 0
     total_today_tokens: int = 0
+    total_today_discharged: int = 0
 
 
 class TodayAppointmentsResponse(BaseSchema):

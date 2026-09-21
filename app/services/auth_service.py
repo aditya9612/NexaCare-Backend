@@ -185,48 +185,51 @@ class AuthService:
             doctor = await self.db.scalar(select(Doctor).where(Doctor.user_id == user.id))
             return doctor is None or doctor.is_deleted
         elif user.role.name == UserRole.NURSE:
-            nurse = await self.db.scalar(select(Nurse).where(Nurse.user_id == user.id))
-            if nurse is None:
-                from app.utils.helpers import generate_nurse_code
-                from app.models.department_model import Department
-                department = await self.db.scalar(
-                    select(Department).order_by(Department.department_id.asc())
-                )
-                dept_id = department.department_id if department else None
-
-                staff = await self.db.scalar(select(Staff).where(Staff.email == user.email))
-                if staff and staff.department_id:
-                    dept_id = staff.department_id
-
-                nurse = Nurse(
-                    nurse_code=generate_nurse_code(),
-                    user_id=user.id,
-                    license_number=f"LIC-{generate_nurse_code()}",
-                    department_id=dept_id,
-                    shift="Morning Shift",
-                )
-                self.db.add(nurse)
-                await self.db.flush()
             return False
         elif user.role.name == UserRole.PATIENT:
             patient = await self.db.scalar(select(Patient).where(Patient.user_id == user.id))
             if patient is None:
-                from app.utils.helpers import generate_mrn
-                parts = (user.full_name or "Patient User").split(maxsplit=1)
-                first_name = parts[0]
-                last_name = parts[1] if len(parts) > 1 else "User"
+                from app.utils.phone_utils import indian_mobile_last10
+                from sqlalchemy import or_, func
 
-                patient = Patient(
-                    patient_code=generate_mrn(),
-                    user_id=user.id,
-                    first_name=first_name,
-                    last_name=last_name,
-                    phone=user.phone,
-                    email=user.email,
-                    status="active",
-                )
-                self.db.add(patient)
-                await self.db.flush()
+                patient_conditions = []
+                if user.phone:
+                    patient_conditions.append(Patient.phone == user.phone)
+                    last10 = indian_mobile_last10(user.phone)
+                    if last10 and len(last10) == 10:
+                        patient_conditions.append(Patient.phone.like(f"%{last10}%"))
+                if user.email:
+                    patient_conditions.append(func.lower(Patient.email) == user.email.strip().lower())
+
+                if patient_conditions:
+                    existing_patient = await self.db.scalar(
+                        select(Patient).where(
+                            Patient.is_deleted.is_(False),
+                            or_(*patient_conditions)
+                        ).order_by(Patient.id.asc()).limit(1)
+                    )
+                    if existing_patient:
+                        existing_patient.user_id = user.id
+                        patient = existing_patient
+                        await self.db.flush()
+
+                if patient is None:
+                    from app.utils.helpers import generate_mrn
+                    parts = (user.full_name or "Patient User").split(maxsplit=1)
+                    first_name = parts[0]
+                    last_name = parts[1] if len(parts) > 1 else "User"
+
+                    patient = Patient(
+                        patient_code=generate_mrn(),
+                        user_id=user.id,
+                        first_name=first_name,
+                        last_name=last_name,
+                        phone=user.phone,
+                        email=user.email,
+                        status="active",
+                    )
+                    self.db.add(patient)
+                    await self.db.flush()
             return patient.is_deleted
         elif user.role.name in {
             UserRole.RECEPTIONIST,
@@ -239,10 +242,82 @@ class AuthService:
             return staff is None or staff.is_deleted or staff.status == StaffStatus.INACTIVE.value
         return False
 
+    async def _find_patient_by_identifier(
+        self, email: str | None = None, phone: str | None = None
+    ):
+        from app.models.patient_model import Patient
+        from app.utils.phone_utils import indian_mobile_last10
+        from sqlalchemy import or_, func, select
+
+        conditions = []
+        if phone:
+            conditions.append(Patient.phone == phone)
+            last10 = indian_mobile_last10(phone)
+            if last10 and len(last10) == 10:
+                conditions.append(Patient.phone.like(f"%{last10}%"))
+        if email:
+            conditions.append(func.lower(Patient.email) == email.strip().lower())
+
+        if not conditions:
+            return None
+
+        return await self.db.scalar(
+            select(Patient).where(
+                Patient.is_deleted.is_(False),
+                or_(*conditions)
+            ).order_by(Patient.guardian_patient_id.is_(None).desc(), Patient.id.asc()).limit(1)
+        )
+
+    async def _create_or_link_patient_user(self, patient) -> User:
+        from app.models.role_model import Role
+        from app.utils.helpers import generate_user_code
+        from app.core.constants import UserRole
+        from app.core.security import get_password_hash
+        import secrets
+        from sqlalchemy import select
+
+        if patient.user_id:
+            user = await self.repo.get_by_id(patient.user_id)
+            if user:
+                return user
+
+        patient_role = await self.db.scalar(select(Role).where(Role.name == UserRole.PATIENT))
+        role_id = patient_role.id if patient_role else 2
+
+        full_name = f"{patient.first_name} {patient.last_name}".strip() or "Patient"
+        email_val = patient.email or f"patient_{patient.patient_code.lower().replace('-', '_')}@nexacare.local"
+        phone_val = patient.phone
+
+        user = User(
+            user_code=generate_user_code(),
+            email=email_val,
+            phone=phone_val,
+            hashed_password=get_password_hash(secrets.token_urlsafe(16)),
+            full_name=full_name,
+            role_id=role_id,
+            gender=patient.gender,
+            date_of_birth=patient.dob,
+            address=patient.address,
+            is_active=True,
+            is_verified=True,
+        )
+        self.db.add(user)
+        await self.db.flush()
+        await self.db.refresh(user)
+
+        patient.user_id = user.id
+        await self.db.flush()
+        return user
+
     async def send_otp(self, data: SendOTPRequest) -> None:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user or await self._is_user_deleted(user):
-            raise NotFoundException("User not found")
+            if data.phone or data.email:
+                patient_match = await self._find_patient_by_identifier(data.email, data.phone)
+                if patient_match:
+                    user = await self._create_or_link_patient_user(patient_match)
+            if not user or await self._is_user_deleted(user):
+                raise NotFoundException("User not found")
         await self._issue_and_deliver_otp(user, "login")
 
     async def login(
@@ -257,6 +332,11 @@ class AuthService:
         user = None
         try:
             user = await self._get_user_by_identifier(data.email, data.phone)
+            if not user and data.otp and (data.phone or data.email):
+                patient_match = await self._find_patient_by_identifier(data.email, data.phone)
+                if patient_match:
+                    user = await self._create_or_link_patient_user(patient_match)
+
             if not user:
                 raise UnauthorizedException("Invalid credentials")
 

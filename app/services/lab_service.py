@@ -23,6 +23,8 @@ from app.services.notification_service import NotificationService
 from app.schemas.lab_schema import (
     CriticalAlert,
     LabReportApprove,
+    LabReportTechnicianVerifyRequest,
+    LabReportDoctorVerifyRequest,
     RejectLabReportRequest,
     LabReportCreate,
     LabReportResponse,
@@ -38,6 +40,7 @@ from app.schemas.lab_schema import (
     TestResultCreate,
     TestResultResponse,
 )
+
 from app.utils.helpers import generate_lab_order_number, generate_lab_report_number, generate_lab_test_code, generate_sample_code, utc_now
 from app.utils.pagination import build_paginated_result
 from app.utils.pdf_generator import generate_lab_report_html
@@ -130,6 +133,14 @@ class LabService:
             raise BadRequestException("Department ID is required to create lab test.")
         await self._validate_department(data.department_id)
         await self._validate_doctor_department(user_id, data.department_id)
+
+        normalized_name = (data.test_name or "").strip()
+        if not normalized_name:
+            raise BadRequestException("Test name cannot be blank.")
+
+        existing_test = await self.test_repo.get_by_name(normalized_name)
+        if existing_test:
+            raise BadRequestException("Lab test with this name already exists.")
         
         if data.test_name:
             existing_test = await self.test_repo.get_by_name(data.test_name)
@@ -148,9 +159,23 @@ class LabService:
             doctor = result.scalar_one_or_none()
             if doctor:
                 doctor_id = doctor.id
+        from sqlalchemy.exc import IntegrityError
 
-        test = LabTest(test_code=generate_lab_test_code(), doctor_id=doctor_id, **data.model_dump())
-        test = await self.test_repo.create(test)
+        result = await self.db.execute(
+            select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
+        )
+        doctor = result.scalar_one_or_none()
+        doctor_id = doctor.id if doctor else None
+
+        dump = data.model_dump()
+        dump["test_name"] = normalized_name
+        test = LabTest(test_code=generate_lab_test_code(), doctor_id=doctor_id, **dump)
+        try:
+            test = await self.test_repo.create(test)
+        except IntegrityError:
+            await self.db.rollback()
+            raise BadRequestException("Lab test with this name already exists.")
+
         await self.audit_repo.create("create", "lab", user_id=user_id, resource_id=str(test.id))
         return LabTestResponse.model_validate(test)
 
@@ -376,28 +401,18 @@ class LabService:
             if not is_completed:
                 raise BadRequestException("Can only create test order for completed appointments")
 
-        # Resolve doctor profile of logged-in user
+        # Resolve doctor profile of logged-in user if available
         from app.models.doctor_model import Doctor
         doc_result = await self.db.execute(
             select(Doctor).where(Doctor.user_id == user_id, Doctor.is_deleted == False)
         )
         doctor = doc_result.scalar_one_or_none()
 
-        if doctor:
-            # 2. It Should be Possible For Doctor to Only Put His Doctor Id in doctor_id Field.
-            if data.doctor_id is not None and data.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only create test orders using their own doctor ID")
-            # 1. It Should be Possible For Doctor to Create Test order for his Patients Only.
-            if appointment and appointment.doctor_id != doctor.id:
-                raise ForbiddenException("Doctors can only create test orders for their own patients")
-
         test = await self.test_repo.get_by_id(data.lab_test_id)
         if not test or not test.is_active:
             raise NotFoundException("Lab test not found or inactive")
 
-        if doctor:
-            # Doctors can order any active lab test
-            pass
+        # Doctors/Staff can order any active lab test in the hospital catalogue
 
         # Resolve doctor_id to store in the order
         resolved_doctor_id = data.doctor_id
@@ -408,6 +423,14 @@ class LabService:
                 resolved_doctor_id = appointment.doctor_id
 
         await self._validate_department(test.department_id)
+
+        # Check for existing active/valid order for this patient and lab test
+        existing_order = await self.order_repo.get_active_order_by_patient_and_test(
+            patient_id=data.patient_id,
+            lab_test_id=data.lab_test_id,
+        )
+        if existing_order:
+            raise BadRequestException("Lab test order already exists for this patient.")
 
         # Prepare the TestOrder data dictionary
         order_data = data.model_dump()
@@ -449,11 +472,7 @@ class LabService:
                 if patient:
                     patient_id = patient.id
             elif role_name in ["lab technician", "lab_technician"]:
-                result = await self.db.execute(
-                    select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-                )
-                staff = result.scalar_one_or_none()
-                department_id = staff.department_id if staff else None
+                pass  # Lab technicians can view all test orders in the hospital, similar to Hospital Admin / Doctor
             elif role_name == "nurse":
                 from app.models.nurse_model import Nurse, NursePatientAssignment
                 res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
@@ -736,6 +755,11 @@ class LabService:
                 raise BadRequestException(
                     "You can enter test results only for test orders of your department"
             )     
+
+        existing_result = await self.result_repo.get_by_test_order(sample.test_order_id)
+        if existing_result:
+            raise BadRequestException("Test result already exists for this test order.")
+
         document_url = None
 
         if document:
@@ -874,6 +898,59 @@ class LabService:
         return alerts        
     
     # --- Reports ---
+    async def _generate_report_pdf(self, report: LabReport, order) -> str:
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from sqlalchemy import select
+
+        patient = await self.db.get(Patient, order.patient_id)
+        doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
+
+        result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
+        results = list(result_objs.scalars().all())
+
+        columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
+        rows = [
+            [
+                r.parameter_name,
+                r.result_value,
+                r.unit or "-",
+                r.normal_range or "-",
+                "Yes" if r.is_critical else "No"
+            ]
+            for r in results
+        ]
+
+        if report.approved_at:
+            generated_at_str = report.approved_at.strftime("%Y-%m-%d %H:%M:%S")
+        elif report.generated_at:
+            generated_at_str = report.generated_at.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            generated_at_str = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+
+        report_data = {
+            "order_number": order.order_number,
+            "status": report.status,
+            "generated_at": generated_at_str,
+            "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
+            "patient_code": patient.patient_code if patient else "Unknown",
+            "patient_gender": patient.gender if patient else "Unknown",
+            "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
+            "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
+            "doctor_code": doctor.doctor_code if doctor else "",
+            "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
+            "test_category": order.lab_test.category if order.lab_test else "Unknown",
+            "summary": report.summary or report.remarks or "",
+            "columns": columns,
+            "rows": rows,
+        }
+
+        path = await generate_lab_report_html(
+            report.report_number,
+            report_data,
+        )
+        return path
+
     async def create_report(self, data: LabReportCreate, current_user) -> LabReportResponse:
         result = await self.result_repo.get_by_id(data.test_result_id)
         if not result:
@@ -919,14 +996,27 @@ class LabService:
                     "You can create lab reports only for test orders of your department"
                 )        
                
+        remarks = getattr(data, "remarks", None) or data.summary or result.remark
+        summary = data.summary or result.remark
+
         report = LabReport(
             test_order_id=result.test_order_id,
             report_number=generate_lab_report_number(),
-            summary=data.summary,
+            summary=summary,
+            remarks=remarks,
             status=LabReportStatus.DRAFT,
             generated_at=utc_now(),
             generated_by=current_user.id,
-            )
+            approved_by=None,
+            approved_at=None,
+        )
+
+        try:
+            report.report_path = await self._generate_report_pdf(report, order)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to generate report PDF during create_report: {e}")
+
         report = await self.report_repo.create(report)
         await self.audit_repo.create("create", "lab_report", user_id=current_user.id, resource_id=str(report.id))
         return LabReportResponse.model_validate(report)
@@ -1040,76 +1130,146 @@ class LabService:
                 f"You can {action} only reports generated by you or reports of your department"
             )     
     
-    async def approve_report(self, report_id: int, data: LabReportApprove, current_user) -> LabReportResponse:
+    async def verify_by_technician(
+        self,
+        report_id: int,
+        data: LabReportTechnicianVerifyRequest,
+        current_user,
+    ) -> LabReportResponse:
         report = await self.report_repo.get_by_id(report_id)
         if not report:
             raise NotFoundException("Lab report not found")
+
+        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
+        is_admin = role_name in [r.lower() for r in UserRole.ADMIN_ROLES]
+        if not is_admin and role_name not in ["lab technician", "lab_technician"]:
+            raise ForbiddenException("Only lab technicians can perform technician verification.")
+
         if report.status == LabReportStatus.APPROVED:
             raise BadRequestException("Report already approved")
+        if report.status == LabReportStatus.TECHNICIAN_VERIFIED:
+            raise BadRequestException("Report has already been verified by a technician")
+        if report.status == LabReportStatus.REJECTED:
+            raise BadRequestException("Cannot verify a rejected report")
+
         await self._validate_lab_report_access(
             report,
             current_user,
-            "approve/reject",
+            "verify as technician",
         )
 
-        report.status = LabReportStatus.APPROVED if data.approved else LabReportStatus.REJECTED
-        report.approved_by = current_user.id
-        report.approved_at = utc_now()
-        if data.remark:
-            report.summary = data.remark
-
         order = await self.order_repo.get_by_id(report.test_order_id)
-        if order and data.approved:
-            order.status = LabOrderStatus.COMPLETED
-            order.completed_at = utc_now()
-            await self.order_repo.update(order)
+        if not order:
+            raise NotFoundException("Test order not found")
 
-            from app.models.patient_model import Patient
-            from app.models.doctor_model import Doctor
-            from sqlalchemy import select
+        # Verify that test results exist before technician can verify
+        results_count = await self.result_repo.count_all(test_order_id=order.id)
+        if results_count == 0:
+            raise BadRequestException("Cannot verify lab report before test results are entered.")
 
-            patient = await self.db.get(Patient, order.patient_id)
-            doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
-            
-            result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
-            results = list(result_objs.scalars().all())
+        report.status = LabReportStatus.TECHNICIAN_VERIFIED
+        report.technician_verified_by = current_user.id
+        report.technician_verified_at = utc_now()
+        if data.technician_remarks:
+            report.technician_remarks = data.technician_remarks
+            if not report.summary:
+                report.summary = data.technician_remarks
 
-            columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
-            rows = [
-                [
-                    r.parameter_name,
-                    r.result_value,
-                    r.unit or "-",
-                    r.normal_range or "-",
-                    "Yes" if r.is_critical else "No"
-                ]
-                for r in results
-            ]
+        order.status = LabOrderStatus.TECHNICIAN_VERIFIED
+        await self.order_repo.update(order)
 
-            report_data = {
-                "order_number": order.order_number,
-                "status": report.status,
-                "generated_at": report.approved_at.strftime("%Y-%m-%d %H:%M:%S") if report.approved_at else utc_now().strftime("%Y-%m-%d %H:%M:%S"),
-                "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
-                "patient_code": patient.patient_code if patient else "Unknown",
-                "patient_gender": patient.gender if patient else "Unknown",
-                "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
-                "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
-                "doctor_code": doctor.doctor_code if doctor else "",
-                "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
-                "test_category": order.lab_test.category if order.lab_test else "Unknown",
-                "summary": report.summary or "",
-                "columns": columns,
-                "rows": rows,
-            }
+        report = await self.report_repo.update(report)
+        await self.audit_repo.create(
+            "technician_verify",
+            "lab_report",
+            user_id=current_user.id,
+            resource_id=str(report.id),
+        )
 
-            path = await generate_lab_report_html(
-                report.report_number,
-                report_data,
-            )
-            report.report_path = path
+        # Notify doctor that technician verification is complete
+        try:
+            if order.doctor_id:
+                from app.models.doctor_model import Doctor
+                doctor = await self.db.get(Doctor, order.doctor_id)
+                if doctor and doctor.user_id:
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=doctor.user_id,
+                        title="Lab Report Awaiting Doctor Verification",
+                        message=f"Lab report {report.report_number} has been verified by technician and is awaiting your final verification.",
+                        notification_type="LAB_REPORT_TECHNICIAN_VERIFIED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                    )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch doctor notification on technician verification: %s", exc)
+
+        return LabReportResponse.model_validate(report)
+
+    async def verify_by_doctor(
+        self,
+        report_id: int,
+        data: LabReportDoctorVerifyRequest,
+        current_user,
+    ) -> LabReportResponse:
+        report = await self.report_repo.get_by_id(report_id)
+        if not report:
+            raise NotFoundException("Lab report not found")
+
+        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
+        is_admin = role_name in [r.lower() for r in UserRole.ADMIN_ROLES]
+        if not is_admin and role_name != "doctor":
+            raise ForbiddenException("Only doctors or pathologists can perform doctor verification.")
+
+        if report.status == LabReportStatus.APPROVED:
+            raise BadRequestException("Report already approved")
+        if report.status == LabReportStatus.REJECTED:
+            raise BadRequestException("Cannot verify a rejected report")
+
+        # Strict sequential validation: Technician verification is prerequisite
+        if report.status != LabReportStatus.TECHNICIAN_VERIFIED:
+            raise BadRequestException("Report must be verified by Lab Technician first before Doctor verification.")
+
+        if data.approved:
+            report.status = LabReportStatus.APPROVED
+            report.doctor_verified_by = current_user.id
+            report.doctor_verified_at = utc_now()
+            report.approved_by = current_user.id
+            report.approved_at = utc_now()
+            if data.doctor_remarks:
+                report.doctor_remarks = data.doctor_remarks
+                report.summary = data.doctor_remarks
+
+            order = await self.order_repo.get_by_id(report.test_order_id)
+            if order:
+                order.status = LabOrderStatus.COMPLETED
+                order.completed_at = utc_now()
+                await self.order_repo.update(order)
 
             try:
+                report.report_path = await self._generate_report_pdf(report, order)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to regenerate report PDF during approve_report: {e}")
+                from app.models.patient_model import Patient
+                from app.models.doctor_model import Doctor
+                from sqlalchemy import select
+
+            try:
+                report.report_path = await self._generate_report_pdf(report, order)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to regenerate report PDF during verify_by_doctor: {e}")
+
+            try:
+                from app.models.patient_model import Patient
+                from app.models.doctor_model import Doctor
+                patient = await self.db.get(Patient, order.patient_id)
+                doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
+
                 notif_service = NotificationService(self.db)
                 test_name = order.lab_test.test_name if order.lab_test else "Lab Test"
 
@@ -1129,10 +1289,11 @@ class LabService:
 
                 # Notify Doctor
                 if doctor and doctor.user_id:
+                    patient_name = f"{patient.first_name} {patient.last_name}" if patient else "Patient"
                     await notif_service.dispatch_notification(
                         user_id=doctor.user_id,
                         title="Lab Report Approved",
-                        message=f"Lab report {report.report_number} for {patient.first_name} {patient.last_name} has been approved.",
+                        message=f"Lab report {report.report_number} for {patient_name} has been approved.",
                         notification_type="LAB_REPORT_APPROVED",
                         reference_type="LAB_REPORT",
                         reference_id=report.id,
@@ -1143,15 +1304,26 @@ class LabService:
             except Exception as exc:
                 import logging
                 logging.getLogger(__name__).warning("Failed to dispatch lab report approval notification: %s", exc)
+        else:
+            report.status = LabReportStatus.REJECTED
+            report.doctor_remarks = data.doctor_remarks
 
         report = await self.report_repo.update(report)
         await self.audit_repo.create(
-            "approve",
+            "doctor_verify",
             "lab_report",
             user_id=current_user.id,
             resource_id=str(report.id),
         )
         return LabReportResponse.model_validate(report)
+
+    async def approve_report(self, report_id: int, data: LabReportApprove, current_user) -> LabReportResponse:
+        return await self.verify_by_doctor(
+            report_id=report_id,
+            data=LabReportDoctorVerifyRequest(doctor_remarks=data.remark, approved=data.approved),
+            current_user=current_user,
+        )
+
 
     async def reject_lab_report(
         self,

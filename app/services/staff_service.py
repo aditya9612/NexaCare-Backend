@@ -3,12 +3,14 @@ from sqlalchemy import select, func
 from app.core.exceptions import ConflictException, NotFoundException, BadRequestException
 from app.models.staff_model import Staff, StaffSchedule
 from app.models.user_model import User
+from app.models.nurse_model import Nurse
 from app.core.security import get_password_hash
-from app.utils.helpers import generate_user_code
+from app.utils.helpers import generate_user_code, generate_nurse_code
 from app.repositories.staff_repository import StaffRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.rbac_repository import RBACRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.nurse_repository import NurseRepository
 from app.schemas.staff_schema import (
     StaffCreate,
     StaffUpdate,
@@ -26,6 +28,7 @@ class StaffService:
         self.dept_repo = DepartmentRepository(db)
         self.rbac_repo = RBACRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.nurse_repo = NurseRepository(db)
 
     async def _validate_department_and_role(self, department_id: int | None, role_name: str | None):
         if department_id is not None:
@@ -49,6 +52,12 @@ class StaffService:
     
         # Validate existence of department and role
         await self._validate_department_and_role(data.department_id, data.role_name)
+
+        is_nurse = bool(data.role_name and data.role_name.strip() == "Nurse")
+        if is_nurse and data.license_number:
+            existing_license = await self.nurse_repo.get_by_license(data.license_number)
+            if existing_license:
+                raise ConflictException("License number already registered")
     
         # Validate duplicates in users table
         email_norm = data.email.strip().lower()
@@ -94,11 +103,28 @@ class StaffService:
             k: (v.value if isinstance(v, Enum) else v)
             for k, v in data.model_dump().items()
         }
-        # Remove password from data_dict so it is not passed to Staff model constructor
+        # Remove password and nurse-specific fields so they are not passed to Staff model constructor
         data_dict.pop("password", None)
+        nurse_license = data_dict.pop("license_number", None)
+        nurse_shift = data_dict.pop("shift", None)
 
         staff = Staff(**data_dict)
         staff = await self.repo.create(staff)
+
+        # If staff member is a Nurse, create linked Nurse profile
+        if is_nurse and nurse_license:
+            nurse_code = generate_nurse_code()
+            while await self.nurse_repo.get_by_code(nurse_code):
+                nurse_code = generate_nurse_code()
+
+            nurse = Nurse(
+                nurse_code=nurse_code,
+                user_id=user.id,
+                license_number=nurse_license,
+                department_id=data.department_id,
+                shift=nurse_shift,
+            )
+            await self.nurse_repo.create(nurse)
         
         # Eager load relationships by re-fetching
         staff = await self.repo.get_by_id(staff.id)
@@ -182,7 +208,31 @@ class StaffService:
         await self._validate_department_and_role(data.department_id, data.role_name)
         
         from enum import Enum
-        for key, value in data.model_dump(exclude_unset=True).items():
+        update_dict = data.model_dump(exclude_unset=True)
+        nurse_license = update_dict.pop("license_number", None)
+        nurse_shift = update_dict.pop("shift", None)
+
+        # Sync with Nurse record if this staff member is a nurse
+        effective_role = data.role_name or staff.role_name
+        if effective_role == "Nurse":
+            user = await self.db.scalar(
+                select(User).where(func.lower(User.email) == staff.email.lower())
+            )
+            if user:
+                nurse = await self.nurse_repo.get_by_user_id(user.id)
+                if nurse:
+                    if nurse_license and nurse_license != nurse.license_number:
+                        existing_lic = await self.nurse_repo.get_by_license(nurse_license)
+                        if existing_lic and existing_lic.id != nurse.id:
+                            raise ConflictException("License number already registered")
+                        nurse.license_number = nurse_license
+                    if nurse_shift is not None:
+                        nurse.shift = nurse_shift
+                    if data.department_id is not None:
+                        nurse.department_id = data.department_id
+                    await self.nurse_repo.update(nurse)
+
+        for key, value in update_dict.items():
             if isinstance(value, Enum):
                 value = value.value
             setattr(staff, key, value)

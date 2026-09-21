@@ -41,7 +41,6 @@ class LabTestResponse(BaseSchema):
     normal_range: str | None
     is_active: bool
     department_id: int | None
-    doctor_id: int | None = None
     created_at: datetime
     updated_at: datetime
 

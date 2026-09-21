@@ -131,6 +131,11 @@ class LabService:
         await self._validate_department(data.department_id)
         await self._validate_doctor_department(user_id, data.department_id)
         
+        if data.test_name:
+            existing_test = await self.test_repo.get_by_name(data.test_name)
+            if existing_test:
+                raise BadRequestException("A lab test with this name already exists.")
+        
         from app.models.doctor_model import Doctor
         from sqlalchemy import select
 
@@ -2124,11 +2129,28 @@ class LabService:
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+
+            devanagari_font_path = os.path.abspath("app/static/fonts/NotoSansDevanagari-Regular.ttf")
+            if "NotoSansDevanagari" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(devanagari_font_path):
+                pdfmetrics.registerFont(TTFont("NotoSansDevanagari", devanagari_font_path))
+
+            sys_mangal = os.path.abspath("C:/Windows/Fonts/mangal.ttf")
+            if "Mangal" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(sys_mangal):
+                pdfmetrics.registerFont(TTFont("Mangal", sys_mangal))
                 
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+
+            default.DEFAULT_FONT["notosansdevanagari"] = "NotoSansDevanagari"
+            default.DEFAULT_FONT["notosansdevanagari-bold"] = "NotoSansDevanagari"
+            default.DEFAULT_FONT["notosansdevanagari-oblique"] = "NotoSansDevanagari"
+            default.DEFAULT_FONT["notosansdevanagari-boldoblique"] = "NotoSansDevanagari"
+
+            if "Mangal" in pdfmetrics.getRegisteredFontNames():
+                default.DEFAULT_FONT["mangal"] = "Mangal"
+                default.DEFAULT_FONT["mangal-bold"] = "Mangal"
             
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("lab_orders_export_template.html")
@@ -2151,21 +2173,21 @@ class LabService:
                 med = o.lab_test
                 formatted_orders.append({
                     "id": o.id,
-                    "order_number": o.order_number,
+                    "order_number": wrap_unbroken_text(o.order_number, max_chars=14),
                     "patient_id": o.patient_id,
-                    "patient_name": patients_map.get(o.patient_id, ""),
+                    "patient_name": wrap_unbroken_text(patients_map.get(o.patient_id, ""), max_chars=12),
                     "doctor_id": o.doctor_id,
-                    "doctor_name": doctors_map.get(o.doctor_id, "") if o.doctor_id else "",
+                    "doctor_name": wrap_unbroken_text(doctors_map.get(o.doctor_id, ""), max_chars=12) if o.doctor_id else "",
                     "appointment_id": o.appointment_id,
-                    "appointment_number": appointments_map.get(o.appointment_id, "") if o.appointment_id else "",
+                    "appointment_number": wrap_unbroken_text(appointments_map.get(o.appointment_id, ""), max_chars=12) if o.appointment_id else "",
                     "department_id": o.department_id,
                     "status": o.status,
                     "priority": o.priority,
                     "notes": wrap_unbroken_text(o.notes, max_chars=12) if o.notes else "",
                     "ordered_at": o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
                     "completed_at": o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
-                    "lab_test_test_code": med.test_code if med else "",
-                    "lab_test_test_name": med.test_name if med else "",
+                    "lab_test_test_code": wrap_unbroken_text(med.test_code, max_chars=14) if med else "",
+                    "lab_test_test_name": wrap_unbroken_text(med.test_name, max_chars=14) if med else "",
                     "lab_test_category": med.category if med else "",
                     "lab_test_sample_type": med.sample_type if med else "",
                     "lab_test_price": med.price if med else 0.0

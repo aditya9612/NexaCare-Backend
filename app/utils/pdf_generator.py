@@ -15,15 +15,70 @@ def _ensure_output_dir(subdir: str) -> Path:
 
 
 from fastapi.concurrency import run_in_threadpool
-from io import BytesIO
-from xhtml2pdf import pisa
-
 def html_to_pdf(html_content: str) -> bytes:
-    result = BytesIO()
-    pdf = pisa.pisaDocument(BytesIO(html_content.encode("utf-8")), result)
-    if not pdf.err:
-        return result.getvalue()
-    raise Exception("PDF generation failed")
+    import threading
+    import asyncio
+    from pathlib import Path
+    from playwright.async_api import async_playwright
+
+    pdf_bytes = None
+    exc = None
+
+    def worker():
+        nonlocal pdf_bytes, exc
+        async def _async_pdf():
+            font_dir = Path(__file__).resolve().parent.parent / "static" / "fonts"
+            
+            dejavu_path = (font_dir / "DejaVuSans.ttf").as_posix()
+            noto_path = (font_dir / "NotoSansDevanagari-Regular.ttf").as_posix()
+            
+            font_css = f'''
+            <style>
+            @font-face {{
+                font-family: 'DejaVuSans';
+                src: url('file:///{dejavu_path}') format('truetype');
+            }}
+            @font-face {{
+                font-family: 'NotoSansDevanagari';
+                src: url('file:///{noto_path}') format('truetype');
+            }}
+            </style>
+            '''
+            
+            nonlocal html_content
+            if '</head>' in html_content:
+                html_content = html_content.replace('</head>', font_css + '</head>')
+            else:
+                html_content = font_css + html_content
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                try:
+                    page = await browser.new_page()
+                    await page.set_content(html_content, wait_until='networkidle')
+                    
+                    pdf_data = await page.pdf(
+                        prefer_css_page_size=True,
+                        print_background=True
+                    )
+                    
+                    return pdf_data
+                finally:
+                    await browser.close()
+
+        try:
+            pdf_bytes = asyncio.run(_async_pdf())
+        except Exception as e:
+            exc = e
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    if exc:
+        raise Exception("PDF generation failed") from exc
+    
+    return pdf_bytes
 
 
 async def generate_invoice_html(bill_number: str, data: dict) -> str:

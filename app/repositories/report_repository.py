@@ -607,60 +607,52 @@ class ReportRepository:
         from app.models.pharmacy_model import PharmacyInvoice, Purchase, Medicine
         from sqlalchemy import select, func, and_
         from datetime import datetime, date
-        import calendar
 
-        now = date.today()
-        s_date = start_date
-        e_date = end_date
-        if not s_date or not e_date:
-            s_date = date(now.year, now.month, 1)
-            last_day = calendar.monthrange(now.year, now.month)[1]
-            e_date = date(now.year, now.month, last_day)
+        sales_filters = [
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.status != 'cancelled'
+        ]
 
-        start_time = datetime.combine(s_date, datetime.min.time())
-        end_time = datetime.combine(e_date, datetime.max.time())
+        cost_filters = [
+            Purchase.status != 'cancelled'
+        ]
+
+        if start_date and end_date:
+            start_time = datetime.combine(start_date, datetime.min.time())
+            end_time = datetime.combine(end_date, datetime.max.time())
+            sales_filters.append(PharmacyInvoice.created_at >= start_time)
+            sales_filters.append(PharmacyInvoice.created_at <= end_time)
+            cost_filters.append(Purchase.ordered_at >= start_time)
+            cost_filters.append(Purchase.ordered_at <= end_time)
 
         sales_query = select(
             func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0).label('total_sales'),
             func.count(PharmacyInvoice.id).label('invoice_count')
-        ).where(
-            and_(
-                PharmacyInvoice.is_deleted == False,
-                PharmacyInvoice.status != 'cancelled',
-                PharmacyInvoice.created_at >= start_time,
-                PharmacyInvoice.created_at <= end_time
-            )
-        )
-        
+        ).where(*sales_filters)
+
         cost_query = select(
             func.coalesce(func.sum(Purchase.total_amount), 0.0).label('total_cost')
-        ).where(
-            and_(
-                Purchase.status != 'cancelled',
-                Purchase.ordered_at >= start_time,
-                Purchase.ordered_at <= end_time
-            )
-        )
-        
+        ).where(*cost_filters)
+
         medicine_query = select(func.count(Medicine.id).label('medicine_count')).where(
             Medicine.is_deleted == False,
             Medicine.is_active == True
         )
-        
+
         sales_result = await self.db.execute(sales_query)
         sales_row = sales_result.first()
-        
+
         cost_result = await self.db.execute(cost_query)
         cost_row = cost_result.first()
-        
+
         med_result = await self.db.execute(medicine_query)
         med_row = med_result.first()
-        
+
         total_sales = float(sales_row.total_sales) if sales_row else 0.0
         invoice_count = int(sales_row.invoice_count) if sales_row else 0
         total_cost = float(cost_row.total_cost) if cost_row else 0.0
         medicine_count = int(med_row.medicine_count) if med_row else 0
-        
+
         return {
             "total_sales": total_sales,
             "total_cost": total_cost,

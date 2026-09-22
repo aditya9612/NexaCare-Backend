@@ -241,16 +241,21 @@ class NotificationService:
         appointment_time: str,
         email: str | None = None,
         phone: str | None = None,
+        patient_code: str | None = None,
     ) -> Notification | None:
         title = "Appointment Confirmed"
         message = f"Your appointment {appointment_number} with Dr. {doctor_name} on {appointment_date} at {appointment_time} has been confirmed."
+
+        patient_id_li = f"<li><strong>Patient ID:</strong> {patient_code}</li>\n            " if patient_code else ""
+        if patient_code:
+            message += f" Patient ID: {patient_code}"
 
         email_html = f"""
         <h3>Appointment Confirmation</h3>
         <p>Dear {patient_name},</p>
         <p>Your appointment <strong>#{appointment_number}</strong> has been confirmed.</p>
         <ul>
-            <li><strong>Doctor:</strong> Dr. {doctor_name}</li>
+            {patient_id_li}<li><strong>Doctor:</strong> Dr. {doctor_name}</li>
             <li><strong>Date:</strong> {appointment_date}</li>
             <li><strong>Time:</strong> {appointment_time}</li>
         </ul>
@@ -562,7 +567,7 @@ class NotificationService:
             return 0
 
         reminder_minutes = getattr(settings, "MEDICATION_REMINDER_MINUTES", 15)
-        
+
         from datetime import timezone, timedelta, time
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         now_ist = datetime.now(ist_tz)

@@ -412,6 +412,8 @@ class AppointmentService:
             phone = patient.phone if patient else None
             user_target = (patient.user_id if patient and patient.user_id else None) or target_user_id
 
+            patient_code = patient.patient_code if patient else None
+
             from app.services.notification_service import NotificationService
             await NotificationService(self.db).notify_appointment_confirmation(
                 user_id=user_target,
@@ -422,6 +424,7 @@ class AppointmentService:
                 appointment_time=str(appointment.appointment_time),
                 email=email,
                 phone=phone,
+                patient_code=patient_code,
             )
         except Exception as exc:
             import logging
@@ -760,9 +763,9 @@ class AppointmentService:
 
         # Enforce that patient cannot check out before the appointment start time (unless already completed by doctor)
         if (
-            appointment.appointment_date 
-            and appointment.appointment_time 
-            and appointment.queue_status != "COMPLETED" 
+            appointment.appointment_date
+            and appointment.appointment_time
+            and appointment.queue_status != "COMPLETED"
             and appointment.appointment_status not in ("Completed", "completed")
         ):
             from datetime import timezone, timedelta

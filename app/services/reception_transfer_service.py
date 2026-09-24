@@ -188,6 +188,43 @@ class ReceptionTransferService:
                         reception_number,
                     )
 
+                    # In-app / WebSocket notification to active Receptionists of the same hospital
+                    try:
+                        from sqlalchemy import select, func
+                        from app.models.user_model import User
+                        from app.models.role_model import Role
+                        from app.services.notification_service import NotificationService
+
+                        recp_stmt = (
+                            select(User)
+                            .join(Role, User.role_id == Role.id)
+                            .where(
+                                User.hospital_id == ticket.hospital_id,
+                                User.is_active.is_(True),
+                                func.lower(Role.name) == "receptionist",
+                            )
+                        )
+                        recp_res = await self.db.execute(recp_stmt)
+                        receptionists = recp_res.scalars().all()
+
+                        notif_service = NotificationService(self.db)
+                        for recp in receptionists:
+                            await notif_service.dispatch_notification(
+                                user_id=recp.id,
+                                title="Callback Ticket Queued",
+                                message=notify_body,
+                                notification_type="CALLBACK_TICKET",
+                                reference_type="CALLBACK_TICKET",
+                                reference_id=ticket.id,
+                                priority="NORMAL",
+                            )
+                    except Exception as notif_err:
+                        logger.warning(
+                            "Failed to dispatch callback ticket notification for ticket #%s: %s",
+                            ticket.id,
+                            notif_err,
+                        )
+
                 # 2) Reception callback to patient via TelephonyProvider
                 provider = ProviderFactory.from_hospital_config(
                     await config_service.get_entity(ticket.hospital_id)
@@ -235,3 +272,6 @@ class ReceptionTransferService:
                     exc_info=True,
                 )
         return processed
+
+    # Alias for callback ticket processing
+    process_callback_tickets = process_queued_tickets

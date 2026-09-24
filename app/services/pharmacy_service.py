@@ -799,6 +799,28 @@ class PharmacyService:
             user_id=user_id,
             resource_id=str(prescription.id),
         )
+
+        try:
+            if prescription.doctor_id:
+                from app.models.doctor_model import Doctor
+                doctor = await self.db.get(Doctor, prescription.doctor_id)
+                if doctor and doctor.user_id:
+                    patient = await self.patient_repo.get_by_id(prescription.patient_id) if prescription.patient_id else None
+                    patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=doctor.user_id,
+                        title="Prescription Dispensed",
+                        message=f"Prescription #{prescription.prescription_number} for patient {patient_name} has been dispensed by pharmacy.",
+                        notification_type="DOCTOR_PRESCRIPTION_DISPENSED",
+                        reference_type="PRESCRIPTION",
+                        reference_id=prescription.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch doctor prescription dispensed notification: %s", notif_exc)
+
         return {
             "prescription": self._prescription_response(prescription),
             "invoice": invoice_res,

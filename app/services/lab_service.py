@@ -435,6 +435,27 @@ class LabService:
         )
         order = await self.order_repo.create(order)
         await self.audit_repo.create("create", "lab_order", user_id=user_id, resource_id=str(order.id))
+
+        try:
+            if order.patient_id:
+                from app.models.patient_model import Patient
+                patient = await self.db.get(Patient, order.patient_id)
+                if patient and patient.user_id:
+                    test_name = test.test_name if test and test.test_name else "Lab Test"
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Lab Order Created",
+                        message=f"A new lab order ({order.order_number}) has been placed for {test_name}.",
+                        notification_type="PATIENT_LAB_ORDER_CREATED",
+                        reference_type="TEST_ORDER",
+                        reference_id=order.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch patient lab order notification: %s", notif_exc)
+
         return await self.get_order(order.id)
 
     async def list_orders(
@@ -608,6 +629,29 @@ class LabService:
         order.status = LabOrderStatus.SAMPLE_COLLECTED
         await self.order_repo.update(order)
         await self.audit_repo.create("create", "lab_sample", user_id=user_id, resource_id=str(sample.id))
+
+        try:
+            if order.patient_id:
+                from app.models.patient_model import Patient
+                patient = await self.db.get(Patient, order.patient_id)
+                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Sample Collected",
+                        message=f"Your sample for lab order {order.order_number} has been collected.",
+                        notification_type="PATIENT_SAMPLE_COLLECTED",
+                        reference_type="TEST_ORDER",
+                        reference_id=order.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch patient sample collected notification: %s",
+                notif_exc,
+            )
+
         return SampleResponse.model_validate(sample)
 
     async def list_samples(self, page: int = 1, size: int = 20, status: str | None = None, current_user=None):
@@ -1305,6 +1349,27 @@ class LabService:
             user_id=current_user.id,
             resource_id=str(report.id),
         )
+
+        if not data.approved:
+            try:
+                if report.technician_verified_by:
+                    from app.services.notification_service import NotificationService
+                    notif_service = NotificationService(self.db)
+                    report_num = report.report_number or f"#{report.id}"
+                    remark_text = data.doctor_remarks or "No specific remarks provided."
+                    await notif_service.dispatch_notification(
+                        user_id=report.technician_verified_by,
+                        title="Lab Report Rejected by Doctor",
+                        message=f"Lab report {report_num} was rejected by doctor. Remarks: {remark_text}",
+                        notification_type="LAB_REPORT_REJECTED",
+                        reference_type="LAB_REPORT",
+                        reference_id=report.id,
+                        priority="HIGH",
+                    )
+            except Exception as notif_exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to dispatch lab report rejection notification: %s", notif_exc)
+
         return LabReportResponse.model_validate(report)
 
     async def approve_report(self, report_id: int, data: LabReportApprove, current_user) -> LabReportResponse:
@@ -1328,6 +1393,8 @@ class LabService:
         from app.core.constants import LabReportStatus
         if report.status == LabReportStatus.APPROVED:
             raise BadRequestException("Already approved report cannot be rejected")
+        if report.status == LabReportStatus.REJECTED:
+            raise BadRequestException("Report is already rejected")
 
         report = await self.report_repo.reject_report(
             report_id=report_id,
@@ -1342,6 +1409,25 @@ class LabService:
             resource_id=str(report.id),
             details=data.remarks
         )
+
+        try:
+            if report and report.technician_verified_by:
+                from app.services.notification_service import NotificationService
+                notif_service = NotificationService(self.db)
+                report_num = report.report_number or f"#{report.id}"
+                remark_text = data.remarks or "No specific remarks provided."
+                await notif_service.dispatch_notification(
+                    user_id=report.technician_verified_by,
+                    title="Lab Report Rejected by Doctor",
+                    message=f"Lab report {report_num} was rejected by doctor. Remarks: {remark_text}",
+                    notification_type="LAB_REPORT_REJECTED",
+                    reference_type="LAB_REPORT",
+                    reference_id=report.id,
+                    priority="HIGH",
+                )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch lab report rejection notification: %s", notif_exc)
 
         return LabReportResponse.model_validate(report)
 

@@ -969,6 +969,31 @@ class DischargeService:
                 self.db.add(log_entry)
 
         discharge = await self.repo.update(discharge)
+
+        try:
+            if discharge.patient_id:
+                from app.models.patient_model import Patient
+                patient = getattr(discharge, "patient", None)
+                if not patient:
+                    patient = await self.db.get(Patient, discharge.patient_id)
+                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Discharge & Gate Pass Issued",
+                        message=f"Your discharge ({discharge.discharge_number}) has been approved and Gate Pass ({discharge.gate_pass_number}) has been issued.",
+                        notification_type="PATIENT_DISCHARGE_GATE_PASS_ISSUED",
+                        reference_type="DISCHARGE",
+                        reference_id=discharge.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch patient discharge & gate pass notification: %s",
+                notif_exc,
+            )
+
         return DischargeResponse.model_validate(discharge)
 
     async def get_gate_pass(self, discharge_id: int) -> DischargeGatePassResponse:

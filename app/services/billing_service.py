@@ -955,6 +955,30 @@ class BillingService:
             user_id=user_id
         )
 
+        try:
+            if billing.patient_id:
+                from app.models.patient_model import Patient
+                patient = await self.db.get(Patient, billing.patient_id)
+                if not patient and hasattr(self, "patient_repo") and self.patient_repo:
+                    patient = await self.patient_repo.get_by_id(billing.patient_id)
+                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Refund Processed",
+                        message=f"A refund of ₹{payment.amount:,.2f} has been processed for bill {billing.bill_number}.",
+                        notification_type="PATIENT_REFUND_PROCESSED",
+                        reference_type="PAYMENT",
+                        reference_id=payment.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch patient refund processed notification: %s",
+                notif_exc,
+            )
+
         return PaymentResponse.model_validate(payment)
 
     async def generate_invoice(self, billing_id: int, user_id: int) -> tuple[str, bytes]:

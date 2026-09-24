@@ -448,6 +448,26 @@ class AppointmentService:
         appointment = await self.repo.create(appointment)
         await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id))
         await self._notify_confirmation_safely(appointment, user_id)
+
+        try:
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
+            if doctor and doctor.user_id:
+                patient = await self.patient_repo.get_by_id(appointment.patient_id)
+                patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+                from app.services.notification_service import NotificationService
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=doctor.user_id,
+                    title="New Appointment Scheduled",
+                    message=f"New appointment #{appointment.appointment_number} scheduled with patient {patient_name} on {appointment.appointment_date} at {appointment.appointment_time}.",
+                    notification_type="DOCTOR_NEW_APPOINTMENT",
+                    reference_type="APPOINTMENT",
+                    reference_id=appointment.id,
+                    priority="NORMAL",
+                )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch doctor new appointment notification: %s", notif_exc)
+
         return AppointmentResponse.model_validate(appointment)
 
 
@@ -613,6 +633,19 @@ class AppointmentService:
                 email=patient.email if patient else None,
                 phone=patient.phone if patient else None,
             )
+
+            # Notify assigned doctor of cancellation
+            if doctor and doctor.user_id:
+                patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=doctor.user_id,
+                    title="Appointment Cancelled",
+                    message=f"Appointment #{appointment.appointment_number} with patient {patient_name} scheduled for {appointment.appointment_date} has been cancelled.",
+                    notification_type="DOCTOR_APPOINTMENT_CANCELLED",
+                    reference_type="APPOINTMENT",
+                    reference_id=appointment.id,
+                    priority="NORMAL",
+                )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch cancellation notification: %s", exc)

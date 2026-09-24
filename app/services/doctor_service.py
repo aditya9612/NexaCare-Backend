@@ -35,14 +35,14 @@ async def save_doctor_image(file: UploadFile) -> str:
     import uuid
     from pathlib import Path
     import aiofiles
-    from fastapi import HTTPException
+    from fastapi import HTTPException, status
     from app.core.config import settings
 
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower().lstrip(".")
     if ext not in {"jpg", "jpeg", "png", "webp"}:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="File type not allowed. Only jpg, jpeg, png, and webp are allowed."
         )
 
@@ -55,12 +55,69 @@ async def save_doctor_image(file: UploadFile) -> str:
     content = await file.read()
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
     if len(content) > max_bytes:
-        raise HTTPException(status_code=400, detail="File too large")
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Image size exceeds maximum allowed limit of {settings.MAX_UPLOAD_SIZE_MB}MB"
+        )
 
     async with aiofiles.open(filepath, "wb") as f:
         await f.write(content)
 
     return str(filepath).replace(os.sep, "/")
+
+
+async def save_doctor_base64_image(base64_str: str) -> str:
+    import base64
+    import os
+    import uuid
+    from pathlib import Path
+    import aiofiles
+    from fastapi import HTTPException, status
+    from app.core.config import settings
+
+    if not base64_str:
+        return ""
+
+    header, _, encoded = base64_str.partition(",")
+    if not encoded:
+        encoded = header
+        ext = "jpg"
+    else:
+        if "png" in header.lower():
+            ext = "png"
+        elif "webp" in header.lower():
+            ext = "webp"
+        elif "jpeg" in header.lower() or "jpg" in header.lower():
+            ext = "jpeg"
+        else:
+            ext = "jpg"
+
+    try:
+        content = base64.b64decode(encoded)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid base64 image data"
+        )
+
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Image size exceeds maximum allowed limit of {settings.MAX_UPLOAD_SIZE_MB}MB"
+        )
+
+    upload_dir = Path("app/uploads/doctors")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    unique_filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = upload_dir / unique_filename
+
+    async with aiofiles.open(filepath, "wb") as f:
+        await f.write(content)
+
+    return str(filepath).replace(os.sep, "/")
+
 
 
 class DoctorService:
@@ -238,9 +295,14 @@ class DoctorService:
         if not role:
             raise BadRequestException("Doctor role not seeded")
 
-        profile_image_path: Optional[str] = data.profile_image
+        profile_image_path: Optional[str] = None
         if image_file and image_file.filename:
             profile_image_path = await save_doctor_image(image_file)
+        elif data.profile_image:
+            if data.profile_image.startswith("data:image/") or len(data.profile_image) > 500:
+                profile_image_path = await save_doctor_base64_image(data.profile_image)
+            else:
+                profile_image_path = data.profile_image
 
         full_name = f"{data.first_name} {data.last_name}".strip()
         hospital_id = actor.hospital_id
@@ -345,6 +407,10 @@ class DoctorService:
         if image_file and image_file.filename:
             profile_image_path = await save_doctor_image(image_file)
             update_data["profile_image"] = profile_image_path
+        elif "profile_image" in update_data and update_data["profile_image"]:
+            val = update_data["profile_image"]
+            if val.startswith("data:image/") or len(val) > 500:
+                update_data["profile_image"] = await save_doctor_base64_image(val)
         else:
             # Remove profile_image from update if no file provided so existing value stays
             update_data.pop("profile_image", None)

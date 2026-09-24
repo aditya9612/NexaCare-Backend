@@ -226,10 +226,24 @@ async def list_test_orders(
     size: int = 20,
     status: str | None = None,
     patient_id: int | None = None,
+    doctor_id: int | None = None,
+    department_id: int | None = None,
+    priority: str | None = None,
+    search: str | None = None,
+    q: str | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
+    search_term = search or q
     result = await LabService(db).list_orders(
-        page=page, size=size, status=status, patient_id=patient_id, current_user=current_user
+        page=page,
+        size=size,
+        status=status,
+        patient_id=patient_id,
+        doctor_id=doctor_id,
+        department_id=department_id,
+        priority=priority,
+        search=search_term,
+        current_user=current_user,
     )
     return APIResponse(message="Test orders retrieved", data=result)
 

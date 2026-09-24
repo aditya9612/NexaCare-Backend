@@ -47,6 +47,9 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     lab_test: Mapped["LabTest"] = relationship(back_populates="orders")
+    patient = relationship("Patient")
+    doctor = relationship("Doctor")
+    created_by_user = relationship("User", foreign_keys=[created_by])
     samples: Mapped[list["Sample"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     results: Mapped[list["TestResult"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     reports: Mapped[list["LabReport"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")

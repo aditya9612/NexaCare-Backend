@@ -204,7 +204,12 @@ async def save_profile_image(file: UploadFile) -> str:
     async with aiofiles.open(filepath, "wb") as f:
         await f.write(content)
 
-    return str(filepath).replace(os.sep, "/")
+    path_str = str(filepath).replace(os.sep, "/")
+    if path_str.startswith("app/"):
+        path_str = path_str[4:]
+    if not path_str.startswith("/"):
+        path_str = f"/{path_str}"
+    return path_str
 
 
 @router.put("/profile", response_model=APIResponse[UserProfileResponse])
@@ -215,7 +220,7 @@ async def update_profile(
     full_name: Optional[str] = Form(None),
     phone: Optional[str] = Form(None),
     gender: Optional[str] = Form(None),
-    date_of_birth: Optional[date] = Form(None),
+    date_of_birth: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
     address: Optional[str] = Form(None),
     profile_image: Optional[UploadFile] = File(None)
@@ -237,17 +242,27 @@ async def update_profile(
         update_dict = {}
         
         if "full_name" in form_data:
-            update_dict["full_name"] = full_name
+            update_dict["full_name"] = full_name if full_name and full_name.strip() not in ("", "null") else None
         if "phone" in form_data:
-            update_dict["phone"] = phone
+            update_dict["phone"] = phone if phone and phone.strip() not in ("", "null") else None
         if "gender" in form_data:
-            update_dict["gender"] = gender
+            update_dict["gender"] = gender if gender and gender.strip() not in ("", "null") else None
         if "date_of_birth" in form_data:
-            update_dict["date_of_birth"] = date_of_birth
+            if date_of_birth and date_of_birth.strip() not in ("", "null", "undefined", "none"):
+                from datetime import date as date_cls
+                try:
+                    update_dict["date_of_birth"] = date_cls.fromisoformat(date_of_birth.strip())
+                except ValueError:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=[{"loc": ["body", "date_of_birth"], "msg": "Invalid date format", "type": "date_invalid"}]
+                    )
+            else:
+                update_dict["date_of_birth"] = None
         if "email" in form_data:
-            update_dict["email"] = email
+            update_dict["email"] = email if email and email.strip() not in ("", "null") else None
         if "address" in form_data:
-            update_dict["address"] = address
+            update_dict["address"] = address if address and address.strip() not in ("", "null") else None
             
         if profile_image and profile_image.filename:
             profile_image_path = await save_profile_image(profile_image)
@@ -260,6 +275,15 @@ async def update_profile(
 
     profile = await AuthService(db).update_profile(current_user, data)
     return APIResponse(message="Profile updated", data=profile)
+
+
+@router.delete("/profile/image", response_model=APIResponse[MessageResponse])
+async def delete_profile_image(
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    await AuthService(db).delete_profile_image(current_user)
+    return APIResponse(message="Profile image deleted successfully", data=MessageResponse(message="Profile image removed"))
 
 @router.post("/2fa/setup", response_model=APIResponse[TOTPSetupResponse])
 async def setup_totp(db: DbSession, current_user: CurrentUser):

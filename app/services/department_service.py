@@ -44,10 +44,25 @@ class DepartmentService:
         ) or 0
         return self._to_response(department, staff_count)
 
-    async def list_departments(self, page: int = 1, size: int = 20) -> PaginatedResult[DepartmentResponse]:
-        skip = (page - 1) * size
-        items = await self.repo.list_all(skip=skip, limit=size)
-        total = await self.repo.count_all()
+    async def list_departments(
+        self,
+        page: int = 1,
+        size: int = 20,
+        search: str | None = None,
+        all_records: bool = False,
+    ) -> PaginatedResult[DepartmentResponse]:
+        if all_records:
+            skip = 0
+            limit = None
+        else:
+            skip = (page - 1) * size
+            limit = size
+
+        items = await self.repo.list_all(skip=skip, limit=limit, search=search)
+        total = await self.repo.count_all(search=search)
+
+        effective_size = total if (all_records and total > 0) else size
+        effective_page = 1 if all_records else page
 
         # Batch fetch staff count for each department to avoid N+1 queries
         from app.models.staff_model import Staff
@@ -67,8 +82,8 @@ class DepartmentService:
         return build_paginated_result(
             [self._to_response(item, staff_counts.get(item.department_id, 0)) for item in items],
             total,
-            page,
-            size
+            effective_page,
+            effective_size
         )
 
     async def update(self, department_id: int, data: DepartmentUpdate) -> DepartmentResponse:

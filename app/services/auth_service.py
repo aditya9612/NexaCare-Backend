@@ -552,6 +552,20 @@ class AuthService:
         await self.repo.update(user)
         return await self.get_profile(user)
 
+    async def delete_profile_image(self, user: User) -> None:
+        if user.profile_image:
+            import os
+            clean_path = user.profile_image.lstrip("/")
+            full_path = os.path.join("app", clean_path) if not clean_path.startswith("app/") else clean_path
+            if os.path.exists(full_path):
+                try:
+                    os.remove(full_path)
+                except Exception:
+                    pass
+
+            user.profile_image = None
+            await self.repo.update(user)
+
     async def setup_totp(self, user: User) -> TOTPSetupResponse:
         if not settings.ENABLE_2FA_FEATURE:
             raise NotFoundException("2FA feature is disabled")

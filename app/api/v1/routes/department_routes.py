@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from app.core.dependencies import CurrentUser, DbSession, require_permission
 from app.models.user_model import User
 from app.schemas.department_schema import DepartmentCreate, DepartmentUpdate, DepartmentResponse
@@ -22,11 +22,18 @@ async def create_department(
 async def list_departments(
     db: DbSession,
     current_user: CurrentUser,
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(20, ge=1, le=100, description="Page size"),
+    search: str | None = Query(None, description="Search term for department name or code"),
+    all_records: bool = Query(False, alias="all", description="Retrieve all department records without pagination"),
     _: User = Depends(require_permission("departments", "read")),
 ):
-    result = await DepartmentService(db).list_departments(page=page, size=size)
+    result = await DepartmentService(db).list_departments(
+        page=page,
+        size=size,
+        search=search,
+        all_records=all_records,
+    )
     return APIResponse(message="Departments retrieved", data=result)
 
 @router.get("/{department_id}", response_model=APIResponse[DepartmentResponse])

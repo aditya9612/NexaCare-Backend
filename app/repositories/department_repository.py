@@ -1,4 +1,4 @@
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.department_model import Department
 
@@ -30,14 +30,40 @@ class DepartmentRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[Department]:
-        result = await self.db.execute(
-            select(Department).offset(skip).limit(limit)
-        )
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int | None = 20,
+        search: str | None = None,
+    ) -> list[Department]:
+        stmt = select(Department)
+        if search:
+            clean_q = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Department.department_name).like(clean_q),
+                    func.lower(Department.department_code).like(clean_q),
+                )
+            )
+        stmt = stmt.order_by(Department.department_id.asc())
+        if skip:
+            stmt = stmt.offset(skip)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def count_all(self) -> int:
-        result = await self.db.scalar(select(func.count()).select_from(Department))
+    async def count_all(self, search: str | None = None) -> int:
+        stmt = select(func.count()).select_from(Department)
+        if search:
+            clean_q = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Department.department_name).like(clean_q),
+                    func.lower(Department.department_code).like(clean_q),
+                )
+            )
+        result = await self.db.scalar(stmt)
         return result or 0
 
     async def update(self, department: Department) -> Department:

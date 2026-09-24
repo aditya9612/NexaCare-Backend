@@ -7,8 +7,15 @@ from app.main import app
 from app.models.hospital_model import Hospital
 from app.models.inventory_model import Warehouse, InventoryItem, ReorderAlert
 from app.models.vendor_model import Vendor
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, engine
 from app.core.dependencies import get_current_active_user, get_current_user
+
+
+@pytest.fixture(autouse=True)
+async def cleanup_engine():
+    await engine.dispose()
+    yield
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

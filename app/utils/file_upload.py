@@ -23,7 +23,10 @@ async def save_upload(file: UploadFile, subfolder: str) -> str:
     content = await file.read()
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
     if len(content) > max_bytes:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File too large")
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"File size exceeds maximum allowed limit of {settings.MAX_UPLOAD_SIZE_MB}MB"
+        )
 
     async with aiofiles.open(filepath, "wb") as f:
         await f.write(content)

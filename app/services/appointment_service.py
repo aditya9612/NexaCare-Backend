@@ -734,29 +734,24 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
         
-        if appointment.appointment_status == "Checked-Out":
-            raise BadRequestException("Appointment already checked out")
-        elif appointment.appointment_status == AppointmentStatus.CANCELLED:
-            raise BadRequestException("Cannot check out a cancelled appointment")
-        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
-            raise BadRequestException("Cannot check out a no-show appointment")
-            
-        if appointment.appointment_status != AppointmentStatus.COMPLETED or appointment.queue_status != "COMPLETED":
-            raise BadRequestException("Appointment must be completed before check-out")
-            
+        status = str(appointment.appointment_status or "").strip()
 
         # 1. Reject if already checked out
-        if appointment.check_out_time is not None or appointment.appointment_status in ("Checked-Out", "Checked_Out", "checked-out", "checked_out"):
+        if appointment.check_out_time is not None or status in ("Checked-Out", "Checked_Out", "checked-out", "checked_out"):
             raise BadRequestException("Appointment already checked out")
 
         # 2. Reject if cancelled
-        if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
+        if status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
             raise BadRequestException("Cannot check out a cancelled appointment")
 
-        # 3. Verify that appointment was checked in
+        # 3. Reject if no-show
+        if status in (AppointmentStatus.NO_SHOW, "No Show", "no-show", "no_show"):
+            raise BadRequestException("Cannot check out a no-show appointment")
+
+        # 4. Verify that appointment was checked in
         is_checked_in = (
             appointment.check_in_time is not None
-            or appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in", "checked-in", "In-Progress", "in-progress", "Completed", "completed", AppointmentStatus.COMPLETED)
+            or status in ("Checked-In", "Checked_In", "checked_in", "checked-in", "In-Progress", "in-progress", "Completed", "completed", AppointmentStatus.COMPLETED)
         )
         if not is_checked_in:
             raise BadRequestException("Appointment must be checked in first")
@@ -766,7 +761,7 @@ class AppointmentService:
             appointment.appointment_date
             and appointment.appointment_time
             and appointment.queue_status != "COMPLETED"
-            and appointment.appointment_status not in ("Completed", "completed")
+            and status not in ("Completed", "completed", AppointmentStatus.COMPLETED)
         ):
             from datetime import timezone, timedelta
             ist_tz = timezone(timedelta(hours=5, minutes=30))
@@ -894,23 +889,14 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
             
-        if appointment.appointment_status == AppointmentStatus.CANCELLED:
-            raise BadRequestException("Cannot complete token for a cancelled appointment")
-        elif appointment.appointment_status == AppointmentStatus.NO_SHOW:
-            raise BadRequestException("Cannot complete token for a no-show appointment")
-        elif appointment.appointment_status == "Checked-Out":
-            raise BadRequestException("Cannot complete token for a checked-out appointment")
-        elif appointment.appointment_status == AppointmentStatus.COMPLETED or appointment.queue_status == "COMPLETED":
-            raise BadRequestException("Cannot complete token for an already completed appointment")
-        elif appointment.appointment_status == "Checked-In":
-            raise BadRequestException("Appointment visit must be confirmed before completing the token")
-        elif appointment.appointment_status != AppointmentStatus.CONFIRMED or not appointment.check_in_time:
-            raise BadRequestException("Appointment must be checked in first")
-            
-
         status = str(appointment.appointment_status or "").strip()
+
         if status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
-            raise BadRequestException("Cannot complete token for a cancelled appointment.")
+            raise BadRequestException("Cannot complete token for a cancelled appointment")
+        elif status in (AppointmentStatus.NO_SHOW, "No Show", "no-show", "no_show"):
+            raise BadRequestException("Cannot complete token for a no-show appointment")
+        elif status in (AppointmentStatus.PENDING, "Pending", "pending"):
+            raise BadRequestException("Appointment visit must be confirmed before completing the token")
 
         if not appointment.check_in_time or not appointment.queue_token:
             raise BadRequestException("Appointment must be checked in before completing token.")

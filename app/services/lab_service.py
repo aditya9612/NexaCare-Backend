@@ -454,16 +454,19 @@ class LabService:
         status: str | None = None,
         patient_id: int | None = None,
         doctor_id: int | None = None,
+        department_id: int | None = None,
+        priority: str | None = None,
+        search: str | None = None,
         current_user=None,
     ):
         skip = (page - 1) * size
-        department_id = None
 
         if current_user:
             role_name = current_user.role.name.lower() if current_user.role else ""
-            if role_name == "doctor":
+            clean_role = role_name.strip().lower().replace("_", " ")
+            if clean_role in ["doctor"]:
                 pass
-            elif role_name == "patient":
+            elif clean_role in ["patient"]:
                 from app.models.patient_model import Patient
                 result = await self.db.execute(
                     select(Patient).where(Patient.user_id == current_user.id, Patient.is_deleted == False)
@@ -471,9 +474,12 @@ class LabService:
                 patient = result.scalar_one_or_none()
                 if patient:
                     patient_id = patient.id
-            elif role_name in ["lab technician", "lab_technician"]:
-                pass  # Lab technicians can view all test orders in the hospital, similar to Hospital Admin / Doctor
-            elif role_name == "nurse":
+            elif clean_role in [
+                "lab technician", "lab_technician", "lab technician ", "lab user", "lab_user",
+                "lab", "lab staff", "lab_staff", "hospital admin", "hospitaladmin", "admin", "superadmin", "super admin"
+            ]:
+                pass  # Lab users & Hospital Admins can view all test orders in the hospital!
+            elif clean_role in ["nurse"]:
                 from app.models.nurse_model import Nurse, NursePatientAssignment
                 res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
                 nurse = res.scalar_one_or_none()
@@ -505,12 +511,16 @@ class LabService:
             patient_id=patient_id,
             doctor_id=doctor_id,
             department_id=department_id,
+            priority=priority,
+            search=search,
         )
         total = await self.order_repo.count_all(
             status=status,
             patient_id=patient_id,
             doctor_id=doctor_id,
             department_id=department_id,
+            priority=priority,
+            search=search,
         )
         return build_paginated_result([self._order_response(o) for o in items], total, page, size)
 
@@ -560,12 +570,25 @@ class LabService:
         await self.order_repo.soft_delete(order)
         await self.audit_repo.create("delete", "lab_order", user_id=current_user.id, resource_id=str(order.id))
 
-
-
     def _order_response(self, order: TestOrder) -> TestOrderResponse:
         resp = TestOrderResponse.model_validate(order)
         if order.lab_test:
             resp.lab_test = LabTestResponse.model_validate(order.lab_test)
+            resp.test_name = order.lab_test.test_name
+            resp.test_code = order.lab_test.test_code
+        if order.patient:
+            p_name = f"{order.patient.first_name or ''} {order.patient.last_name or ''}".strip()
+            resp.patient_name = p_name if p_name else None
+            resp.patient_code = order.patient.patient_code
+        if order.doctor:
+            d_name = f"{order.doctor.first_name or ''} {order.doctor.last_name or ''}".strip()
+            resp.doctor_name = d_name if d_name else None
+            resp.doctor_code = order.doctor.doctor_code
+        if order.department:
+            resp.department_name = order.department.name
+        if order.created_by_user:
+            c_name = f"{order.created_by_user.first_name or ''} {order.created_by_user.last_name or ''}".strip()
+            resp.created_by_name = c_name if c_name else order.created_by_user.email
         return resp
 
     async def get_pending_tests(self, page: int = 1, size: int = 20,  current_user=None):
@@ -2104,12 +2127,7 @@ class LabService:
                 if patient:
                     patient_ids = patient.id
             elif role_name in ["lab technician", "lab_technician"]:
-                from app.models.staff_model import Staff
-                result = await self.db.execute(
-                    select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-                )
-                staff = result.scalar_one_or_none()
-                department_id = staff.department_id if staff else None
+                pass
             elif role_name == "nurse":
                 from app.models.nurse_model import Nurse, NursePatientAssignment
                 res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))

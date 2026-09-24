@@ -63,17 +63,28 @@ class TestOrderResponse(BaseSchema):
     id: int
     order_number: str
     patient_id: int
-    doctor_id: int | None
+    doctor_id: int | None = None
     lab_test_id: int
     department_id: int | None = None
-    appointment_id: int | None
+    appointment_id: int | None = None
     status: str
     priority: str
-    notes: str | None
+    notes: str | None = None
     ordered_at: datetime
-    completed_at: datetime | None
+    completed_at: datetime | None = None
     lab_test: LabTestResponse | None = None
+    created_by: int | None = None
     created_at: datetime
+
+    # Display fields for UI list/table representation
+    patient_name: str | None = None
+    patient_code: str | None = None
+    doctor_name: str | None = None
+    doctor_code: str | None = None
+    test_name: str | None = None
+    test_code: str | None = None
+    department_name: str | None = None
+    created_by_name: str | None = None
 
 
 class SampleCreate(BaseSchema):

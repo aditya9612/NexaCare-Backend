@@ -116,14 +116,33 @@ class TestOrderRepository:
         self.db = db
 
     def _base_query(self):
+        from app.models.lab_model import LabTest
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.department_model import Department
+        from app.models.user_model import User
         return (
             select(TestOrder)
             .where(TestOrder.is_deleted.is_(False))
-            .options(selectinload(TestOrder.lab_test))
+            .options(
+                selectinload(TestOrder.lab_test),
+                selectinload(TestOrder.patient),
+                selectinload(TestOrder.doctor),
+                selectinload(TestOrder.department),
+                selectinload(TestOrder.created_by_user),
+            )
         )
 
     async def list_all(
-        self, skip: int = 0, limit: int = 20, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        patient_id: int | list[int] | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        priority: str | None = None,
+        search: str | None = None,
     ) -> list[TestOrder]:
         query = self._base_query()
         if status:
@@ -137,6 +156,22 @@ class TestOrderRepository:
             query = query.where(TestOrder.doctor_id == doctor_id)
         if department_id is not None:
             query = query.where(TestOrder.department_id == department_id)
+        if priority:
+            query = query.where(TestOrder.priority == priority)
+        if search:
+            s = f"%{search.strip()}%"
+            from app.models.patient_model import Patient
+            from app.models.lab_model import LabTest
+            query = query.outerjoin(Patient, TestOrder.patient_id == Patient.id).outerjoin(
+                LabTest, TestOrder.lab_test_id == LabTest.id
+            ).where(
+                (TestOrder.order_number.ilike(s))
+                | (Patient.first_name.ilike(s))
+                | (Patient.last_name.ilike(s))
+                | (Patient.patient_code.ilike(s))
+                | (LabTest.test_name.ilike(s))
+                | (LabTest.test_code.ilike(s))
+            )
         result = await self.db.execute(
             query.order_by(TestOrder.ordered_at.desc(), TestOrder.id.desc())
             .offset(skip)
@@ -144,8 +179,18 @@ class TestOrderRepository:
         )
         return list(result.scalars().unique().all())
 
-    async def count_all(self, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None) -> int:
-        query = select(func.count()).select_from(TestOrder).where(TestOrder.is_deleted.is_(False))
+    async def count_all(
+        self,
+        status: str | None = None,
+        patient_id: int | list[int] | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        priority: str | None = None,
+        search: str | None = None,
+    ) -> int:
+        from app.models.patient_model import Patient
+        from app.models.lab_model import LabTest
+        query = select(func.count(func.distinct(TestOrder.id))).select_from(TestOrder).where(TestOrder.is_deleted.is_(False))
         if status:
             query = query.where(TestOrder.status == status)
         if patient_id is not None:
@@ -157,6 +202,20 @@ class TestOrderRepository:
             query = query.where(TestOrder.doctor_id == doctor_id)
         if department_id is not None:
             query = query.where(TestOrder.department_id == department_id)
+        if priority:
+            query = query.where(TestOrder.priority == priority)
+        if search:
+            s = f"%{search.strip()}%"
+            query = query.outerjoin(Patient, TestOrder.patient_id == Patient.id).outerjoin(
+                LabTest, TestOrder.lab_test_id == LabTest.id
+            ).where(
+                (TestOrder.order_number.ilike(s))
+                | (Patient.first_name.ilike(s))
+                | (Patient.last_name.ilike(s))
+                | (Patient.patient_code.ilike(s))
+                | (LabTest.test_name.ilike(s))
+                | (LabTest.test_code.ilike(s))
+            )
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, order_id: int) -> TestOrder | None:

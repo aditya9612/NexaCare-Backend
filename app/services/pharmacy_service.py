@@ -1875,7 +1875,7 @@ class PharmacyService:
         )
         prescriptions = (await self.db.scalar(prescriptions_query)) or 0
 
-        # 9. Low Stock Items (Max 10 medicines ordered by stock ascending)
+        # 9. Low Stock Items (All low stock medicines ordered by stock ascending)
         low_stock_items_query = (
             select(Medicine)
             .where(
@@ -1883,8 +1883,8 @@ class PharmacyService:
                 Medicine.is_active.is_(True),
                 Medicine.stock_quantity <= Medicine.reorder_level
             )
+            .order_by(Medicine.stock_quantity.asc())
         )
-        low_stock_items_query = low_stock_items_query.order_by(Medicine.stock_quantity.asc()).limit(10)
         low_stock_res = await self.db.execute(low_stock_items_query)
         low_stock_items = [
             {

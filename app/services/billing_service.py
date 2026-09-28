@@ -17,6 +17,8 @@ from app.schemas.billing_schema import (
     BillingUpdate,
     BillItemResponse,
     DailyCollectionSummary,
+    ReceptionCollectionSummary,
+    PharmacyCollectionSummary,
     InsuranceClaimCreate,
     InsuranceClaimResponse,
     InsuranceCreate,
@@ -1059,46 +1061,171 @@ class BillingService:
 
         return BillingSummary(**data)
 
-    async def get_daily_report(self, target_date: date | None = None) -> DailyCollectionSummary:
-        target = target_date or date.today()
-        data = await self.repo.get_daily_collection(target)
+    async def get_daily_report(
+        self,
+        target_date: date | None = None,
+        filter_type: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> DailyCollectionSummary:
+        from datetime import date, datetime, timedelta
+        from app.utils.helpers import get_today_ist
 
-        start = datetime.combine(target, datetime.min.time())
-        end = datetime.combine(target, datetime.max.time())
+        today = get_today_ist()
+        raw_filter = (filter_type or "").strip().lower()
 
+        resolved_start: date
+        resolved_end: date
+        normalized_filter: str
+
+        if raw_filter in ("today", "1", "1. today", "1.today"):
+            normalized_filter = "today"
+            resolved_start = today
+            resolved_end = today
+        elif raw_filter in ("yesterday", "2", "2. yesterday", "2.yesterday"):
+            normalized_filter = "yesterday"
+            resolved_start = today - timedelta(days=1)
+            resolved_end = today - timedelta(days=1)
+        elif raw_filter in ("last_30_days", "last 30 days", "30_days", "30days", "3", "3. last 30 days", "3.last 30 days"):
+            normalized_filter = "last_30_days"
+            resolved_start = today - timedelta(days=29)
+            resolved_end = today
+        elif raw_filter in ("last_3_months", "last 3 months", "3_months", "3months", "4", "4. last 3 months", "4.last 3 months"):
+            normalized_filter = "last_3_months"
+            resolved_start = today - timedelta(days=90)
+            resolved_end = today
+        elif raw_filter in ("quarterly", "quarter", "this_quarter", "5", "5. quarterly", "5.quarterly"):
+            normalized_filter = "quarterly"
+            quarter_month = ((today.month - 1) // 3) * 3 + 1
+            resolved_start = date(today.year, quarter_month, 1)
+            resolved_end = today
+        elif raw_filter in ("yearly", "year", "this_year", "6", "6. yearly", "6.yearly"):
+            normalized_filter = "yearly"
+            resolved_start = date(today.year, 1, 1)
+            resolved_end = today
+        elif raw_filter in ("custom", "custom_range", "custom range", "7", "7. custom range", "7.custom range") or (start_date is not None or end_date is not None):
+            normalized_filter = "custom"
+            resolved_start = start_date or today
+            resolved_end = end_date or today
+            if resolved_start > resolved_end:
+                raise BadRequestException("start_date cannot be after end_date")
+        elif target_date is not None:
+            normalized_filter = "custom"
+            resolved_start = target_date
+            resolved_end = target_date
+        else:
+            normalized_filter = "today"
+            resolved_start = today
+            resolved_end = today
+
+        data = await self.repo.get_daily_collection(resolved_start, resolved_end)
+
+        start = datetime.combine(resolved_start, datetime.min.time())
+        end = datetime.combine(resolved_end, datetime.max.time())
+
+        # 1. Reception Billing & Payment Stats
+        reception_total_bill = round(float(data.get("today_total_bill", 0.0)), 2)
+        reception_paid_bill = round(float(data.get("today_paid_bill", 0.0)), 2)
+        reception_pending_bill = round(float(data.get("today_pending_bill", 0.0)), 2)
+        reception_collected = round(float(data.get("today_collected_revenue", 0.0)), 2)
+        reception_bills_count = int(data.get("bills_count", 0))
+        reception_payment_count = int(data.get("payment_count", 0))
+        reception_by_method = {
+            str(k): round(abs(float(v)), 2)
+            for k, v in data.get("by_method", {}).items()
+            if k and str(k).lower() != "pharmacy"
+        }
+
+        # 2. Pharmacy Invoices & Collection Stats
         from app.models.pharmacy_model import PharmacyInvoice
-        from sqlalchemy import select, func
+        from sqlalchemy import select, func, case
 
         pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
             func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
-            func.count(PharmacyInvoice.id)
+            func.coalesce(func.sum(PharmacyInvoice.total_amount - PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id),
+            func.sum(case((PharmacyInvoice.paid_amount > 0.0, 1), else_=0)),
         ).where(
             PharmacyInvoice.is_deleted == False,
             PharmacyInvoice.created_at >= start,
             PharmacyInvoice.created_at <= end,
-            PharmacyInvoice.paid_amount > 0.0
         )
         res = await self.db.execute(pharmacy_stmt)
-        row = res.first()
-        pharm_collected = float(row[0] if row else 0.0)
-        pharm_count = int(row[1] if row else 0)
+        p_row = res.first()
+        pharm_total_bill = round(float(p_row[0] if p_row else 0.0), 2)
+        pharm_paid_bill = round(float(p_row[1] if p_row else 0.0), 2)
+        pharm_pending_bill = round(max(0.0, float(p_row[2] if p_row else 0.0)), 2)
+        pharm_bills_count = int(p_row[3] if p_row else 0)
+        pharm_payment_count = int(p_row[4] if (p_row and p_row[4] is not None) else 0)
+        pharm_collected = pharm_paid_bill
 
+        # 3. Overall Combined Totals
+        overall_total_bill = round(reception_total_bill + pharm_total_bill, 2)
+        overall_paid_bill = round(reception_paid_bill + pharm_paid_bill, 2)
+        overall_pending_bill = round(reception_pending_bill + pharm_pending_bill, 2)
+        overall_collected = max(0.0, round(reception_collected + pharm_collected, 2))
+        overall_bills_count = reception_bills_count + pharm_bills_count
+        overall_payment_count = reception_payment_count + pharm_payment_count
+
+        by_method = dict(reception_by_method)
         if pharm_collected > 0:
-            data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
-            data["payment_count"] = data["payment_count"] + pharm_count
+            by_method["pharmacy"] = pharm_collected
 
-        # Ensure total_collected cannot be negative
-        data["total_collected"] = max(0.0, round(float(data.get("total_collected", 0.0)), 2))
-        data["today_collected_revenue"] = data["total_collected"]
+        date_label = str(resolved_start) if resolved_start == resolved_end else f"{resolved_start} to {resolved_end}"
 
-        # Ensure by_method contains only rounded non-pharmacy payment methods with positive amounts
-        by_method = {}
-        for k, v in data.get("by_method", {}).items():
-            if k and str(k).lower() != "pharmacy":
-                by_method[str(k)] = round(abs(float(v)), 2)
-        data["by_method"] = by_method
+        reception_summary = ReceptionCollectionSummary(
+            total_bill=reception_total_bill,
+            paid_bill=reception_paid_bill,
+            pending_bill=reception_pending_bill,
+            collected_revenue=reception_collected,
+            bills_count=reception_bills_count,
+            payment_count=reception_payment_count,
+            by_method=reception_by_method,
+        )
 
-        return DailyCollectionSummary(date=str(target), **data)
+        pharmacy_summary = PharmacyCollectionSummary(
+            total_bill=pharm_total_bill,
+            paid_bill=pharm_paid_bill,
+            pending_bill=pharm_pending_bill,
+            collected_revenue=pharm_collected,
+            bills_count=pharm_bills_count,
+            payment_count=pharm_payment_count,
+        )
+
+        return DailyCollectionSummary(
+            date=date_label,
+            filter_type=normalized_filter,
+            start_date=str(resolved_start),
+            end_date=str(resolved_end),
+            # Overall Summary
+            today_total_bill=overall_total_bill,
+            today_paid_bill=overall_paid_bill,
+            today_pending_bill=overall_pending_bill,
+            today_collected_revenue=overall_collected,
+            bills_count=overall_bills_count,
+            total_collected=overall_collected,
+            payment_count=overall_payment_count,
+            by_method=by_method,
+            # Separate Reception / Appointment Billing & Collection
+            reception_total_bill=reception_total_bill,
+            reception_paid_bill=reception_paid_bill,
+            reception_pending_bill=reception_pending_bill,
+            reception_collected_revenue=reception_collected,
+            reception_bills_count=reception_bills_count,
+            reception_payment_count=reception_payment_count,
+            reception_by_method=reception_by_method,
+            # Separate Pharmacy Billing & Collection
+            pharmacy_total_bill=pharm_total_bill,
+            pharmacy_paid_bill=pharm_paid_bill,
+            pharmacy_pending_bill=pharm_pending_bill,
+            pharmacy_collected_revenue=pharm_collected,
+            pharmacy_bills_count=pharm_bills_count,
+            pharmacy_payment_count=pharm_payment_count,
+            # Nested section objects
+            reception_collection=reception_summary,
+            pharmacy_collection=pharmacy_summary,
+        )
 
     async def get_yearly_report(self, year: int | None = None) -> RevenueReport:
         target_year = year or utc_now().year

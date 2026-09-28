@@ -196,8 +196,32 @@ class RevenueReport(BaseSchema):
 
 
 
+class ReceptionCollectionSummary(BaseSchema):
+    total_bill: float = 0.0
+    paid_bill: float = 0.0
+    pending_bill: float = 0.0
+    collected_revenue: float = 0.0
+    bills_count: int = 0
+    payment_count: int = 0
+    by_method: dict[str, float] = Field(default_factory=dict)
+
+
+class PharmacyCollectionSummary(BaseSchema):
+    total_bill: float = 0.0
+    paid_bill: float = 0.0
+    pending_bill: float = 0.0
+    collected_revenue: float = 0.0
+    bills_count: int = 0
+    payment_count: int = 0
+
+
 class DailyCollectionSummary(BaseSchema):
     date: str
+    filter_type: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
+    # Overall Summary
     today_total_bill: float = 0.0
     today_paid_bill: float = 0.0
     today_pending_bill: float = 0.0
@@ -207,22 +231,46 @@ class DailyCollectionSummary(BaseSchema):
     payment_count: int = 0
     by_method: dict[str, float] = Field(default_factory=dict)
 
+    # Separate Reception / Appointment Billing & Collection
+    reception_total_bill: float = 0.0
+    reception_paid_bill: float = 0.0
+    reception_pending_bill: float = 0.0
+    reception_collected_revenue: float = 0.0
+    reception_bills_count: int = 0
+    reception_payment_count: int = 0
+    reception_by_method: dict[str, float] = Field(default_factory=dict)
+
+    # Separate Pharmacy Billing & Collection
+    pharmacy_total_bill: float = 0.0
+    pharmacy_paid_bill: float = 0.0
+    pharmacy_pending_bill: float = 0.0
+    pharmacy_collected_revenue: float = 0.0
+    pharmacy_bills_count: int = 0
+    pharmacy_payment_count: int = 0
+
+    # Nested section objects for convenience
+    reception_collection: ReceptionCollectionSummary | None = None
+    pharmacy_collection: PharmacyCollectionSummary | None = None
+
     @field_validator(
         "today_total_bill",
         "today_paid_bill",
         "today_pending_bill",
         "today_collected_revenue",
         "total_collected",
+        "reception_total_bill",
+        "reception_paid_bill",
+        "reception_pending_bill",
+        "reception_collected_revenue",
+        "pharmacy_total_bill",
+        "pharmacy_paid_bill",
+        "pharmacy_pending_bill",
+        "pharmacy_collected_revenue",
         mode="after",
     )
     @classmethod
     def round_total_collected(cls, v: float) -> float:
         return max(0.0, round(float(v), 2))
-
-    @field_validator("by_method", mode="after")
-    @classmethod
-    def round_by_method_values(cls, v: dict[str, float]) -> dict[str, float]:
-        return {str(k): round(abs(float(val)), 2) for k, val in v.items() if str(k).lower() != "pharmacy"}
 
 
 

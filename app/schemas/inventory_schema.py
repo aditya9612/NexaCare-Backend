@@ -430,6 +430,9 @@ class InventoryDashboardResponse(BaseSchema):
     stock_alerts: int
     active_warehouse_units: int
     inactive_warehouse_units: int
+    total_warehouse_units: int = 0
+    total_warehouses: int = 0
+    warehouse_count: int = 0
     total_vendors: int
     total_items: int
     total_quantity: int
@@ -448,6 +451,9 @@ class StockSummary(BaseSchema):
     stock_alerts: int = 0
     active_warehouse_units: int = 0
     inactive_warehouse_units: int = 0
+    total_warehouse_units: int = 0
+    total_warehouses: int = 0
+    warehouse_count: int = 0
     total_vendors: int = 0
 
 

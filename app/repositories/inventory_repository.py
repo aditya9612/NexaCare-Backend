@@ -282,30 +282,32 @@ class WarehouseRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[Warehouse]:
+    async def list_all(self, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[Warehouse]:
+        query = select(Warehouse).where(Warehouse.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Warehouse.hospital_id == hospital_id)
         result = await self.db.execute(
-            select(Warehouse)
-            .where(Warehouse.is_deleted.is_(False))
-            .order_by(Warehouse.created_at.desc())
+            query.order_by(Warehouse.created_at.desc())
             .offset(skip)
             .limit(limit)
         )
         return list(result.scalars().all())
 
-    async def count_all(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False))
-        )) or 0
+    async def count_all(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Warehouse.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
     async def count_active(self, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False), Warehouse.is_active.is_(True))
-        if hospital_id:
+        if hospital_id is not None:
             query = query.where(Warehouse.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 
     async def count_inactive(self, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(Warehouse).where(Warehouse.is_deleted.is_(False), Warehouse.is_active.is_(False))
-        if hospital_id:
+        if hospital_id is not None:
             query = query.where(Warehouse.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 

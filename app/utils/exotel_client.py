@@ -106,10 +106,26 @@ class ExotelClient:
                 else:
                     # Fallback to SMS if WhatsApp service is not enabled on account
                     logger.warning("Exotel WhatsApp endpoint returned %s; falling back to Exotel SMS", response.status_code)
-                    return await self.send_sms(to=to, body=body)
+                    try:
+                        return await self.send_sms(to=to, body=body)
+                    except Exception as sms_err:
+                        logger.error("Exotel SMS fallback also failed: %s", sms_err)
+                        return {
+                            "sid": "",
+                            "status": "failed",
+                            "error": response.text,
+                        }
         except Exception as exc:
             logger.error("Exotel WhatsApp dispatch error: %s; falling back to SMS", exc)
-            return await self.send_sms(to=to, body=body)
+            try:
+                return await self.send_sms(to=to, body=body)
+            except Exception as sms_err:
+                logger.error("Exotel SMS fallback also failed: %s", sms_err)
+                return {
+                    "sid": "",
+                    "status": "failed",
+                    "error": str(exc),
+                }
 
     async def send_sms(
         self,

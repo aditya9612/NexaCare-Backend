@@ -580,7 +580,7 @@ class LabService:
             resp.doctor_name = d_name if d_name else None
             resp.doctor_code = order.doctor.doctor_code
         if order.department:
-            resp.department_name = order.department.name
+            resp.department_name = order.department.department_name
         if order.created_by_user:
             c_name = f"{order.created_by_user.first_name or ''} {order.created_by_user.last_name or ''}".strip()
             resp.created_by_name = c_name if c_name else order.created_by_user.email

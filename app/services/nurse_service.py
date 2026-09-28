@@ -1128,41 +1128,56 @@ class NurseService:
         from app.models.doctor_model import Doctor
         import json
 
-        query = select(NursePrescription, Patient, Doctor).join(
+        query = select(NursePrescription, Patient, Doctor).outerjoin(
             Patient, NursePrescription.patient_id == Patient.id
-        ).join(
+        ).outerjoin(
             Doctor, NursePrescription.doctor_id == Doctor.id
         )
         if patient_id is not None:
             query = query.where(NursePrescription.patient_id == patient_id)
         
-        result = await self.db.execute(query)
+        result = await self.db.execute(query.order_by(NursePrescription.id.desc()))
         rows = result.all()
         
         prescriptions = []
         for presc, patient, doctor in rows:
-            time_of_day = json.loads(presc.time_of_day) if presc.time_of_day else []
-            times = json.loads(presc.times) if presc.times else {}
+            try:
+                time_of_day = json.loads(presc.time_of_day) if presc.time_of_day else []
+            except Exception:
+                time_of_day = []
+            try:
+                times = json.loads(presc.times) if presc.times else {}
+            except Exception:
+                times = {}
+
+            p_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Unknown Patient"
+            p_code = patient.patient_code if patient and patient.patient_code else (f"P-100{presc.patient_id}" if presc.patient_id else "N/A")
+            d_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Unknown Doctor"
+            d_code = doctor.doctor_code if doctor and doctor.doctor_code else (f"DOC-20{presc.doctor_id}" if presc.doctor_id else "N/A")
+
             prescriptions.append({
                 "medication_id": f"MED-10{presc.id}",
                 "id": presc.id,
-                "patient_id": f"P-100{patient.id}",
-                "patient_db_id": patient.id,
-                "patient_name": f"{patient.first_name} {patient.last_name}",
-                "doctor_id": f"DOC-20{doctor.id}",
-                "doctor_db_id": doctor.id,
-                "doctor_name": f"{doctor.first_name} {doctor.last_name}",
+                "patient_id": p_code,
+                "patient_db_id": presc.patient_id,
+                "patient_name": p_name,
+                "doctor_id": d_code,
+                "doctor_db_id": presc.doctor_id,
+                "doctor_name": d_name,
                 "medicine_name": presc.medicine_name,
                 "dosage": presc.dosage,
                 "frequency": presc.frequency,
-                "start_date": presc.start_date.isoformat(),
-                "end_date": presc.end_date.isoformat(),
+                "start_date": presc.start_date.isoformat() if hasattr(presc.start_date, "isoformat") else str(presc.start_date),
+                "end_date": presc.end_date.isoformat() if hasattr(presc.end_date, "isoformat") else str(presc.end_date),
                 "meal_timing": presc.meal_timing,
                 "time_of_day": time_of_day,
                 "exact_times": times,
-                "duration": f"{presc.duration_value} {presc.duration_unit}" if presc.duration_value else "",
+                "times": times,
+                "duration": f"{presc.duration_value} {presc.duration_unit}".strip() if presc.duration_value else "",
+                "duration_value": presc.duration_value,
+                "duration_unit": presc.duration_unit,
                 "special_instructions": presc.special_instructions or "",
-                "status": presc.status
+                "status": presc.status or "active"
             })
         return prescriptions
 
@@ -1170,69 +1185,113 @@ class NurseService:
         from app.models.nurse_model import NursePrescription
         from app.models.patient_model import Patient
         from app.models.doctor_model import Doctor
+        from app.core.exceptions import BadRequestException, NotFoundException
         from sqlalchemy import select, or_
+        from datetime import date, timedelta
         import json
+        import re
 
+        # 1. Resolve and validate dates
+        start_date = data.start_date or date.today()
+        end_date = data.end_date
+        if not end_date:
+            dur_days = 7
+            if data.duration_value is not None:
+                try:
+                    match = re.search(r'\d+', str(data.duration_value))
+                    if match:
+                        dur_days = int(match.group())
+                except Exception:
+                    dur_days = 7
+            end_date = start_date + timedelta(days=dur_days)
+
+        if start_date > end_date:
+            raise BadRequestException("start_date cannot be after end_date")
+
+        # 2. Validate patient
         patient = await self.db.get(Patient, data.patient_id)
-        if not patient:
-            raise NotFoundException("Patient not found")
+        if not patient or getattr(patient, "is_deleted", False):
+            raise NotFoundException(f"Patient with ID {data.patient_id} not found")
 
-        # Resolve doctor by name if possible
+        # 3. Resolve doctor (prioritize valid doctor_id)
         doctor = None
-        if hasattr(data, "doctor_name") and data.doctor_name:
+        if data.doctor_id:
+            doctor = await self.db.get(Doctor, data.doctor_id)
+            if doctor and getattr(doctor, "is_deleted", False):
+                doctor = None
+
+        # If doctor not found by ID, try resolving by doctor_name
+        if not doctor and hasattr(data, "doctor_name") and data.doctor_name:
             doc_name = data.doctor_name.replace("Dr. ", "").replace("Dr.", "").strip()
             parts = doc_name.split()
             if len(parts) >= 2:
                 first, last = parts[0], parts[-1]
                 q = select(Doctor).where(
+                    Doctor.is_deleted == False,
                     or_(
                         Doctor.first_name.ilike(f"%{first}%"),
                         Doctor.last_name.ilike(f"%{last}%")
                     )
                 )
                 res = await self.db.execute(q)
-                doctor = res.scalar_one_or_none()
+                doctor = res.scalars().first()
             elif len(parts) == 1:
                 q = select(Doctor).where(
+                    Doctor.is_deleted == False,
                     or_(
                         Doctor.first_name.ilike(f"%{parts[0]}%"),
                         Doctor.last_name.ilike(f"%{parts[0]}%")
                     )
                 )
                 res = await self.db.execute(q)
-                doctor = res.scalar_one_or_none()
+                doctor = res.scalars().first()
 
         if not doctor:
-            doctor = await self.db.get(Doctor, data.doctor_id)
-            
-        if not doctor:
-            res = await self.db.execute(select(Doctor).limit(1))
-            doctor = res.scalar_one_or_none()
+            # Check if any doctor exists as fallback
+            res = await self.db.execute(select(Doctor).where(Doctor.is_deleted == False).limit(1))
+            doctor = res.scalars().first()
 
         if not doctor:
-            raise NotFoundException("No doctors found in the database. Please seed doctors first.")
+            raise NotFoundException("Doctor not found in the database.")
+
+        dur_val = str(data.duration_value).strip() if data.duration_value is not None else None
+        dur_unit = str(data.duration_unit).strip() if data.duration_unit is not None else "days"
+        meal_timing = str(data.meal_timing).strip() if data.meal_timing else "after meal"
+
+        if isinstance(data.time_of_day, (list, tuple)):
+            time_of_day_str = json.dumps(list(data.time_of_day))
+        elif isinstance(data.time_of_day, str):
+            time_of_day_str = data.time_of_day
+        else:
+            time_of_day_str = "[]"
+
+        if isinstance(data.times, dict):
+            times_str = json.dumps(data.times)
+        elif isinstance(data.times, str):
+            times_str = data.times
+        else:
+            times_str = "{}"
 
         presc = NursePrescription(
-            patient_id=data.patient_id,
+            patient_id=patient.id,
             doctor_id=doctor.id,
-            medicine_name=data.medicine_name,
-            dosage=data.dosage,
-            frequency=data.frequency,
-            start_date=data.start_date,
-            end_date=data.end_date,
-            meal_timing=data.meal_timing,
-            time_of_day=json.dumps(data.time_of_day) if data.time_of_day else "[]",
-            times=json.dumps(data.times) if data.times else "{}",
-            duration_value=data.duration_value,
-            duration_unit=data.duration_unit,
+            medicine_name=str(data.medicine_name or "").strip(),
+            dosage=str(data.dosage or "").strip(),
+            frequency=str(data.frequency or "").strip(),
+            start_date=start_date,
+            end_date=end_date,
+            meal_timing=meal_timing,
+            time_of_day=time_of_day_str,
+            times=times_str,
+            duration_value=dur_val,
+            duration_unit=dur_unit,
             special_instructions=data.special_instructions,
             status="active"
         )
         self.db.add(presc)
         await self.db.flush()
-        await self.db.commit()
 
-        return await self.list_prescriptions(patient_id=data.patient_id)
+        return await self.list_prescriptions(patient_id=patient.id)
 
     async def delete_prescription(self, prescription_id: int, user_id: int):
         from app.models.nurse_model import NursePrescription

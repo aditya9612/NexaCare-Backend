@@ -243,9 +243,9 @@ class BillingRepository:
             "pending_count": pending_count or 0,
         }
 
-    async def get_daily_collection(self, target_date: date) -> dict:
+    async def get_daily_collection(self, target_date: date, end_date: date | None = None) -> dict:
         start = datetime.combine(target_date, datetime.min.time())
-        end = datetime.combine(target_date, datetime.max.time())
+        end = datetime.combine(end_date or target_date, datetime.max.time())
 
         # Billing stats for bills CREATED on target date
         billing_stats_stmt = select(

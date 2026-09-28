@@ -901,6 +901,9 @@ class AppointmentService:
         if not appointment.check_in_time or not appointment.queue_token:
             raise BadRequestException("Appointment must be checked in before completing token.")
 
+        if not appointment.check_out_time and status not in ("Checked-Out", "Checked_Out", "checked-out", "checked_out"):
+            raise BadRequestException("Please check out the appointment first before completing it.")
+
         appointment.queue_status = "COMPLETED"
         appointment.appointment_status = AppointmentStatus.COMPLETED
             

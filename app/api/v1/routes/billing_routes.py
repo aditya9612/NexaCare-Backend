@@ -153,10 +153,23 @@ async def list_billings(
 async def daily_collection_report(
     db: DbSession,
     current_user: CurrentUser,
-    target_date: date | None = None,
+    filter: str | None = Query(
+        None,
+        description="Filter range: 'today', 'yesterday', 'last_30_days', 'last_3_months', 'quarterly', 'yearly', 'custom'",
+    ),
+    filter_type: str | None = Query(None, description="Alias for filter"),
+    start_date: date | None = Query(None, description="Start date for custom range filter (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="End date for custom range filter (YYYY-MM-DD)"),
+    target_date: date | None = Query(None, description="Target date for single day report (YYYY-MM-DD)"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_daily_report(target_date)
+    active_filter = filter or filter_type
+    report = await BillingService(db).get_daily_report(
+        target_date=target_date,
+        filter_type=active_filter,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return APIResponse(message="Daily collection report", data=report)
 
 

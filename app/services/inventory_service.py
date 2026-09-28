@@ -242,6 +242,7 @@ class InventoryService:
         stock_alerts = await self.alert_repo.count_active(hospital_id=hospital_id)
         active_warehouse_units = await self.warehouse_repo.count_active(hospital_id=hospital_id)
         inactive_warehouse_units = await self.warehouse_repo.count_inactive(hospital_id=hospital_id)
+        total_warehouses = active_warehouse_units + inactive_warehouse_units
         total_vendors = await self.vendor_repo.count_all(hospital_id=hospital_id)
         stock_summary = await self.item_repo.get_stock_summary(hospital_id=hospital_id)
 
@@ -250,6 +251,9 @@ class InventoryService:
             stock_alerts=stock_alerts,
             active_warehouse_units=active_warehouse_units,
             inactive_warehouse_units=inactive_warehouse_units,
+            total_warehouse_units=total_warehouses,
+            total_warehouses=total_warehouses,
+            warehouse_count=total_warehouses,
             total_vendors=total_vendors,
             total_items=stock_summary["total_items"],
             total_quantity=stock_summary["total_quantity"],
@@ -775,6 +779,9 @@ class InventoryService:
         total_quantity = await self.db.scalar(select(func.sum(WarehouseStock.quantity)).join(Warehouse).where(Warehouse.hospital_id == hospital_id)) or 0
         total_value = await self.db.scalar(select(func.sum(WarehouseStock.quantity * InventoryItem.unit_cost)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id)) or 0.0
         low_stock_count = await self.db.scalar(select(func.count(WarehouseStock.id)).join(Warehouse).join(InventoryItem, WarehouseStock.inventory_item_id == InventoryItem.id).where(Warehouse.hospital_id == hospital_id, WarehouseStock.quantity < InventoryItem.reorder_level)) or 0
+        active_wh = await self.warehouse_repo.count_active(hospital_id=hospital_id)
+        inactive_wh = await self.warehouse_repo.count_inactive(hospital_id=hospital_id)
+        total_wh = active_wh + inactive_wh
 
         return StockSummary(
             total_items=total_items,
@@ -784,8 +791,11 @@ class InventoryService:
             total_value=float(total_value),
             total_registered_items=total_items,
             stock_alerts=low_stock_count,
-            active_warehouse_units=0,
-            inactive_warehouse_units=0,
+            active_warehouse_units=active_wh,
+            inactive_warehouse_units=inactive_wh,
+            total_warehouse_units=total_wh,
+            total_warehouses=total_wh,
+            warehouse_count=total_wh,
             total_vendors=0
         )
 

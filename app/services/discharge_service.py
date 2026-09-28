@@ -95,6 +95,8 @@ class DischargeService:
         bed = None
         if getattr(data, "bed_id", None):
             bed = await self.db.get(Bed, data.bed_id)
+            if not bed:
+                raise NotFoundException(f"Bed with id {data.bed_id} not found. Please provide a valid bed ID.")
         if not bed:
             bed = await self.db.scalar(
                 select(Bed).where(
@@ -127,9 +129,14 @@ class DischargeService:
 
         admission_time = appointment.check_in_time or (
             datetime.combine(appointment.appointment_date, appointment.appointment_time)
-            if appointment.appointment_date and appointment.appointment_time
-            else appointment.created_at
-        )
+            if getattr(appointment, "appointment_date", None) and getattr(appointment, "appointment_time", None)
+            else getattr(appointment, "created_at", None)
+        ) or utc_now()
+        if isinstance(admission_time, str):
+            try:
+                admission_time = datetime.fromisoformat(admission_time)
+            except Exception:
+                admission_time = utc_now()
         if admission_time and hasattr(admission_time, "tzinfo") and admission_time.tzinfo is not None:
             admission_time = admission_time.replace(tzinfo=None)
 
@@ -255,13 +262,47 @@ class DischargeService:
 
         # 1. Calculate length of stay in days (Calendar days with 1 day minimum)
         now_dt = utc_now()
+        if hasattr(now_dt, "tzinfo") and now_dt.tzinfo is not None:
+            now_dt = now_dt.replace(tzinfo=None)
         discharge.discharge_date = now_dt
+
+        adm_dt = discharge.admission_date
+        if isinstance(adm_dt, str):
+            try:
+                adm_dt = datetime.fromisoformat(adm_dt)
+            except Exception:
+                adm_dt = None
+        if not adm_dt:
+            if discharge.appointment:
+                adm_dt = getattr(discharge.appointment, "check_in_time", None) or getattr(discharge.appointment, "created_at", None)
+        if not adm_dt:
+            adm_dt = now_dt
+        if hasattr(adm_dt, "tzinfo") and adm_dt.tzinfo is not None:
+            adm_dt = adm_dt.replace(tzinfo=None)
+        discharge.admission_date = adm_dt
+
         stay_days = (discharge.discharge_date.date() - discharge.admission_date.date()).days
         days_stayed = max(1, stay_days)
 
-        # 2. Get Bed / Room information & resolve bed_id
-        effective_bed_id = getattr(data, "bed_id", None) or discharge.bed_id
-        if not effective_bed_id:
+        # 2. Get Bed / Room information & resolve bed_id safely
+        effective_bed_id = None
+        if getattr(data, "bed_id", None) is not None:
+            requested_bed = await self.db.get(Bed, data.bed_id)
+            if not requested_bed:
+                raise NotFoundException(f"Bed with id {data.bed_id} not found. Please provide a valid bed ID.")
+            effective_bed_id = requested_bed.id
+            discharge.bed_id = effective_bed_id
+            discharge.bed = requested_bed
+        elif getattr(discharge, "bed_id", None) is not None:
+            existing_bed = await self.db.get(Bed, discharge.bed_id)
+            if existing_bed:
+                effective_bed_id = existing_bed.id
+                discharge.bed = existing_bed
+            else:
+                effective_bed_id = None
+                discharge.bed_id = None
+
+        if not effective_bed_id and discharge.patient_id:
             bed_row = await self.db.scalar(
                 select(Bed).where(Bed.patient_id == discharge.patient_id).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
             )
@@ -280,9 +321,11 @@ class DischargeService:
                     .limit(1)
                 )
                 if recent_bed_id:
-                    effective_bed_id = recent_bed_id
-                    discharge.bed_id = effective_bed_id
-                    discharge.bed = await self.db.get(Bed, effective_bed_id)
+                    b_rec = await self.db.get(Bed, recent_bed_id)
+                    if b_rec:
+                        effective_bed_id = b_rec.id
+                        discharge.bed_id = effective_bed_id
+                        discharge.bed = b_rec
                 elif discharge.appointment and getattr(discharge.appointment, "recommended_ward", None):
                     from app.models.bed_allocation_model import Room
                     ward_bed = await self.db.scalar(
@@ -297,15 +340,23 @@ class DischargeService:
                         discharge.bed_id = effective_bed_id
                         discharge.bed = ward_bed
 
-                if not effective_bed_id:
-                    any_bed = await self.db.scalar(select(Bed).order_by(Bed.id.asc()).limit(1))
-                    if any_bed:
-                        effective_bed_id = any_bed.id
-                        discharge.bed_id = effective_bed_id
-                        discharge.bed = any_bed
-
-        if not discharge.bed and effective_bed_id:
-            discharge.bed = await self.db.get(Bed, effective_bed_id)
+        # Ensure patient_id, doctor_id, appointment_id exist on discharge
+        if not discharge.patient_id:
+            if discharge.appointment and discharge.appointment.patient_id:
+                discharge.patient_id = discharge.appointment.patient_id
+            else:
+                raise BadRequestException("Discharge record is missing a valid patient_id.")
+        if not discharge.doctor_id:
+            if discharge.appointment and discharge.appointment.doctor_id:
+                discharge.doctor_id = discharge.appointment.doctor_id
+            else:
+                any_doc = await self.db.scalar(select(Doctor).where(Doctor.is_deleted == False).order_by(Doctor.id.asc()).limit(1))
+                if any_doc:
+                    discharge.doctor_id = any_doc.id
+                else:
+                    raise BadRequestException("Discharge record is missing a valid doctor_id.")
+        if not discharge.appointment_id:
+            raise BadRequestException("Discharge record is missing a valid appointment_id.")
 
         room_type = "General Ward"
         ward_name = "General Ward"
@@ -586,7 +637,7 @@ class DischargeService:
             existing_final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
 
         if existing_final_bill:
-            existing_final_bill.bed_id = effective_bed_id or discharge.bed_id
+            existing_final_bill.bed_id = effective_bed_id
             existing_final_bill.doctor_id = discharge.doctor_id
             existing_final_bill.bed_charges = bed_charges
             existing_final_bill.doctor_charges = doctor_charges
@@ -629,7 +680,7 @@ class DischargeService:
                 patient_id=discharge.patient_id,
                 appointment_id=discharge.appointment_id,
                 doctor_id=discharge.doctor_id,
-                bed_id=effective_bed_id or discharge.bed_id,
+                bed_id=effective_bed_id,
                 bed_charges=bed_charges,
                 doctor_charges=doctor_charges,
                 lab_charges=lab_charges,

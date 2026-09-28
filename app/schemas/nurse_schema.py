@@ -398,18 +398,18 @@ class NursePatientLabTestListResponse(BaseSchema):
 
 class NursePrescriptionCreate(BaseSchema):
     patient_id: int
-    doctor_id: int
+    doctor_id: int | None = None
     doctor_name: str | None = None
     medicine_name: str
     dosage: str
     frequency: str
-    start_date: date
-    end_date: date
-    meal_timing: str
+    start_date: date | None = None
+    end_date: date | None = None
+    meal_timing: str | None = "after meal"
     time_of_day: list[str] | None = None
     times: dict[str, str] | None = None
-    duration_value: str | None = None
-    duration_unit: str | None = None
+    duration_value: str | int | None = None
+    duration_unit: str | None = "days"
     special_instructions: str | None = None
 
 

@@ -21,3 +21,19 @@ class Department(Base, TimestampMixin):
     lab_tests = relationship("LabTest", back_populates="department")
     test_orders = relationship("TestOrder", back_populates="department")
     inventory_items = relationship("InventoryItem", back_populates="department")
+
+    @property
+    def name(self) -> str:
+        return self.department_name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.department_name = value
+
+    @property
+    def id(self) -> int:
+        return self.department_id
+
+    @id.setter
+    def id(self, value: int) -> None:
+        self.department_id = value

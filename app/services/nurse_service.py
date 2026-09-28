@@ -1641,7 +1641,7 @@ class NurseService:
         from app.models.patient_model import Patient
         from app.models.nurse_model import NurseTask
 
-        await self._get_nurse_or_raise(nurse_id)
+        nurse = await self._get_nurse_or_raise(nurse_id)
         
         patient = await self.db.get(Patient, data.patient_id)
         if not patient or patient.is_deleted:
@@ -1660,6 +1660,25 @@ class NurseService:
         await self.audit_repo.create(
             "create", "nurses", user_id=user_id, resource_id=str(task.id)
         )
+
+        try:
+            if nurse and nurse.user_id:
+                from app.services.notification_service import NotificationService
+                notif_service = NotificationService(self.db)
+                priority_val = "HIGH" if (task.priority or "").lower() == "high" else "NORMAL"
+                await notif_service.dispatch_notification(
+                    user_id=nurse.user_id,
+                    title="New Nurse Task Assigned",
+                    message=f"You have been assigned a new task: {task.title}",
+                    notification_type="NURSE_TASK",
+                    reference_type="NURSE_TASK",
+                    reference_id=task.id,
+                    priority=priority_val,
+                )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch nurse task notification: %s", notif_exc)
+
         return NurseTaskResponse.model_validate(task)
 
     async def delete_task(

@@ -752,9 +752,11 @@ class InventoryService:
         await self.db.flush()
 
 
-    async def get_reorder_alerts(self, page: int = 1, size: int = 50) -> list[ReorderAlertResponse]:
+    async def get_reorder_alerts(
+        self, hospital_id: int | None = None, page: int = 1, size: int = 50
+    ) -> list[ReorderAlertResponse]:
         skip = (page - 1) * size
-        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
+        alerts = await self.alert_repo.list_active(hospital_id=hospital_id, skip=skip, limit=size)
         result = []
         for alert in alerts:
             item = await self.item_repo.get_by_id(alert.item_id)

@@ -36,7 +36,10 @@ class InventoryRepository:
     async def count_all(self, category: str | None = None, warehouse_id: int | None = None, hospital_id: int | None = None) -> int:
         base = select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False))
         if hospital_id is not None:
-            base = base.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(Warehouse.hospital_id == hospital_id)
+            base = base.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         if category:
             base = base.where(InventoryItem.category == category)
         if warehouse_id:
@@ -135,7 +138,10 @@ class InventoryRepository:
     async def get_stock_summary(self, hospital_id: int | None = None) -> dict:
         def apply_hospital_filter(query):
             if hospital_id is not None:
-                return query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(Warehouse.hospital_id == hospital_id)
+                return query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                    Warehouse.hospital_id == hospital_id,
+                    Warehouse.is_deleted.is_(False),
+                )
             return query
 
         total_items = await self.db.scalar(
@@ -343,21 +349,38 @@ class ReorderAlertRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_active(self, skip: int = 0, limit: int = 50) -> list[ReorderAlert]:
-        result = await self.db.execute(
+    async def list_active(self, hospital_id: int | None = None, skip: int = 0, limit: int = 50) -> list[ReorderAlert]:
+        query = (
             select(ReorderAlert)
             .options(selectinload(ReorderAlert.item))
             .where(ReorderAlert.status == "active")
-            .order_by(ReorderAlert.created_at.desc())
-            .offset(skip)
-            .limit(limit)
         )
+        if hospital_id is not None:
+            query = (
+                query.join(InventoryItem, ReorderAlert.item_id == InventoryItem.id)
+                .join(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+                .where(
+                    InventoryItem.is_deleted.is_(False),
+                    Warehouse.is_deleted.is_(False),
+                    Warehouse.hospital_id == hospital_id,
+                )
+            )
+        query = query.order_by(ReorderAlert.created_at.desc()).offset(skip).limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def count_active(self, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(ReorderAlert).where(ReorderAlert.status == "active")
-        if hospital_id:
-            query = query.join(InventoryItem, ReorderAlert.item_id == InventoryItem.id).join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(Warehouse.hospital_id == hospital_id)
+        if hospital_id is not None:
+            query = (
+                query.join(InventoryItem, ReorderAlert.item_id == InventoryItem.id)
+                .join(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+                .where(
+                    InventoryItem.is_deleted.is_(False),
+                    Warehouse.is_deleted.is_(False),
+                    Warehouse.hospital_id == hospital_id,
+                )
+            )
         return (await self.db.scalar(query)) or 0
 
     async def create(self, alert: ReorderAlert) -> ReorderAlert:

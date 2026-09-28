@@ -10,7 +10,7 @@ from app.schemas.transaction_history_schema import (
     TransactionHistoryResponse,
     DashboardSummaryResponse,
 )
-from app.utils.helpers import utc_now
+from app.utils.helpers import generate_code, utc_now
 from app.utils.pagination import build_paginated_result
 
 
@@ -42,9 +42,10 @@ class TransactionHistoryService:
             if payment and (payment.status or "").strip().lower() != "completed":
                 raise BadRequestException("Cannot create transaction history for a transaction that is not completed")
 
+        ref_no = data.reference_no.strip() if (data.reference_no and data.reference_no.strip()) else generate_code("TXN")
         tx_history = TransactionHistory(
             event_type=data.event_type.strip().upper(),
-            reference_no=data.reference_no.strip(),
+            reference_no=ref_no,
             description=data.description,
             amount=data.amount,
             status=data.status or "completed",
@@ -59,7 +60,7 @@ class TransactionHistoryService:
     async def create_event(
         self,
         event_type: str,
-        reference_no: str,
+        reference_no: str | None,
         description: str | None,
         amount: float,
         source_module: str,
@@ -68,9 +69,10 @@ class TransactionHistoryService:
         event_date: datetime | None = None,
         user_id: int | None = None,
     ) -> TransactionHistory:
+        ref_no = reference_no.strip() if (reference_no and reference_no.strip()) else generate_code("TXN")
         tx_history = TransactionHistory(
             event_type=event_type.strip().upper(),
-            reference_no=reference_no.strip(),
+            reference_no=ref_no,
             description=description,
             amount=amount,
             status=status,

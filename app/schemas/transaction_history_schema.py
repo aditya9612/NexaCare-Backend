@@ -6,7 +6,7 @@ from app.schemas.common_schema import BaseSchema
 
 class TransactionHistoryCreate(BaseSchema):
     event_type: str
-    reference_no: str
+    reference_no: str | None = None
     description: str | None = None
     amount: float = Field(..., ge=0)
     status: str | None = "completed"

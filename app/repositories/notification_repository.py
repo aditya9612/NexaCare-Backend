@@ -184,6 +184,7 @@ class NotificationRepository:
             Notification.reference_id == reference_id,
             Notification.is_deleted.is_(False),
         )
-        result = await self.db.execute(query)
-        count = result.scalar() or 0
-        return count > 0
+        count = await self.db.scalar(query)
+        if isinstance(count, (int, float)):
+            return count > 0
+        return False

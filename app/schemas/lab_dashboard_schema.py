@@ -29,16 +29,19 @@ class PendingReportApproval(BaseModel):
     order_number: str
     test_name: str
     patient_name: str
+    status: Optional[str] = None
+    technician_verified: Optional[bool] = None
     generated_at: Optional[datetime] = None
 
 class LabDashboardResponse(BaseModel):
-    total_tests: int
+    total_test_orders: int
     pending_tests: int
     tests_in_progress: int
     completed_tests: int
     samples_collected: int
     reports_pending_approval: int
-    approved_reports: int
+    technician_verified_reports: int = 0
+    doctor_approved_reports: int = 0
     critical_reports: int
     reports_delivered: int
     

@@ -103,13 +103,23 @@ async def init_db():
             await _seed_lab_technician_permissions(session)
             await _seed_doctor_and_pharmacist_lab_permissions(session)
 
-            # Ensure any missing columns (e.g. patient_vitals.notes) are created
+            # Ensure any missing columns are created
             from sqlalchemy import text
-            try:
-                await session.execute(text("ALTER TABLE patient_vitals ADD COLUMN notes TEXT NULL"))
-                await session.commit()
-            except Exception:
-                await session.rollback()
+            for col_stmt in [
+                "ALTER TABLE patient_vitals ADD COLUMN notes TEXT NULL",
+                "ALTER TABLE lab_reports ADD COLUMN technician_verified_by INT NULL",
+                "ALTER TABLE lab_reports ADD COLUMN technician_verified_at DATETIME NULL",
+                "ALTER TABLE lab_reports ADD COLUMN technician_remarks TEXT NULL",
+                "ALTER TABLE lab_reports ADD COLUMN doctor_verified_by INT NULL",
+                "ALTER TABLE lab_reports ADD COLUMN doctor_verified_at DATETIME NULL",
+                "ALTER TABLE lab_reports ADD COLUMN doctor_remarks TEXT NULL",
+            ]:
+                try:
+                    await session.execute(text(col_stmt))
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+
 
             await session.commit()
         except Exception as e:
@@ -145,6 +155,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         "users", "roles", "permissions", "patients", "doctors", "nurses", "staff", "appointments", "dashboard",
         "billing", "pharmacy", "lab", "inventory",
         "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
+        "bed_allocation", "icu_telemetry", "expense", "vendor",
     ]
     actions = [
         PermissionAction.CREATE,
@@ -161,7 +172,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     existing_perms_res = await session.execute(select(Permission))
     existing_perms = {p.name: p for p in existing_perms_res.scalars().all()}
 
-    permissions: list[Permission] = []
+    permissions_map: dict[str, Permission] = {}
     for resource in resources:
         for action in actions:
             perm_name = f"{resource}:{action}"
@@ -173,32 +184,116 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
                     description=f"{action} {resource}",
                 )
                 session.add(perm_obj)
-                permissions.append(perm_obj)
+                permissions_map[perm_name] = perm_obj
             else:
-                permissions.append(existing_perms[perm_name])
+                permissions_map[perm_name] = existing_perms[perm_name]
     await session.flush()
 
-    super_admin = roles[UserRole.SUPER_ADMIN]
-    hospital_admin = roles[UserRole.HOSPITAL_ADMIN]
-    
     # Load existing role permissions to avoid duplicate inserts
     existing_rp_res = await session.execute(select(RolePermission.role_id, RolePermission.permission_id))
     existing_rp = {(rp[0], rp[1]) for rp in existing_rp_res.all()}
 
-    for perm in permissions:
-        if (super_admin.id, perm.id) not in existing_rp:
-            session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
-            
-    admin_resources = {
-        "users", "roles", "permissions", "patients", "doctors", "nurses", "staff", "appointments",
-        "dashboard", "billing", "pharmacy", "lab", "inventory", "ai_chat", "voice_reminder",
-        "whatsapp", "analytics", "departments",
-    }
+    def _grant(role_obj: Role | None, res_name: str, act_list: list[str]):
+        if not role_obj:
+            return
+        for act in act_list:
+            p_name = f"{res_name}:{act}"
+            p_obj = permissions_map.get(p_name)
+            if p_obj and (role_obj.id, p_obj.id) not in existing_rp:
+                session.add(RolePermission(role_id=role_obj.id, permission_id=p_obj.id))
+                existing_rp.add((role_obj.id, p_obj.id))
 
-    for perm in permissions:
-        if perm.resource in admin_resources:
-            if (hospital_admin.id, perm.id) not in existing_rp:
-                session.add(RolePermission(role_id=hospital_admin.id, permission_id=perm.id))
+    # 1. Super Admin & Hospital Admin (All Permissions)
+    super_admin = roles.get(UserRole.SUPER_ADMIN)
+    hospital_admin = roles.get(UserRole.HOSPITAL_ADMIN)
+    for perm in permissions_map.values():
+        if super_admin and (super_admin.id, perm.id) not in existing_rp:
+            session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
+            existing_rp.add((super_admin.id, perm.id))
+        if hospital_admin and (hospital_admin.id, perm.id) not in existing_rp:
+            session.add(RolePermission(role_id=hospital_admin.id, permission_id=perm.id))
+            existing_rp.add((hospital_admin.id, perm.id))
+
+    # 2. Doctor Role Permissions
+    doc_role = roles.get(UserRole.DOCTOR)
+    if doc_role:
+        _grant(doc_role, "appointments", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.APPROVE])
+        _grant(doc_role, "patients", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(doc_role, "doctors", [PermissionAction.READ])
+        _grant(doc_role, "nurses", [PermissionAction.READ])
+        _grant(doc_role, "departments", [PermissionAction.READ])
+        _grant(doc_role, "dashboard", [PermissionAction.READ])
+        _grant(doc_role, "pharmacy", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(doc_role, "lab", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE, PermissionAction.APPROVE])
+        _grant(doc_role, "bed_allocation", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.ASSIGN])
+        _grant(doc_role, "icu_telemetry", [PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(doc_role, "ai_chat", [PermissionAction.CREATE, PermissionAction.READ])
+
+    # 3. Receptionist Role Permissions
+    rec_role = roles.get(UserRole.RECEPTIONIST)
+    if rec_role:
+        _grant(rec_role, "appointments", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE, PermissionAction.APPROVE])
+        _grant(rec_role, "patients", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(rec_role, "doctors", [PermissionAction.READ])
+        _grant(rec_role, "nurses", [PermissionAction.READ])
+        _grant(rec_role, "departments", [PermissionAction.READ])
+        _grant(rec_role, "billing", [PermissionAction.CREATE, PermissionAction.READ])
+        _grant(rec_role, "bed_allocation", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.ASSIGN])
+        _grant(rec_role, "dashboard", [PermissionAction.READ])
+
+    # 4. Nurse Role Permissions
+    nurse_role = roles.get(UserRole.NURSE)
+    if nurse_role:
+        _grant(nurse_role, "appointments", [PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(nurse_role, "patients", [PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(nurse_role, "doctors", [PermissionAction.READ])
+        _grant(nurse_role, "nurses", [PermissionAction.READ])
+        _grant(nurse_role, "departments", [PermissionAction.READ])
+        _grant(nurse_role, "bed_allocation", [PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.ASSIGN])
+        _grant(nurse_role, "icu_telemetry", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(nurse_role, "pharmacy", [PermissionAction.READ])
+        _grant(nurse_role, "dashboard", [PermissionAction.READ])
+
+    # 5. Accountant Role Permissions
+    acc_role = roles.get(UserRole.ACCOUNTANT)
+    if acc_role:
+        _grant(acc_role, "billing", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE, PermissionAction.EXPORT, PermissionAction.APPROVE])
+        _grant(acc_role, "expense", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE, PermissionAction.EXPORT, PermissionAction.APPROVE])
+        _grant(acc_role, "vendor", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE])
+        _grant(acc_role, "appointments", [PermissionAction.READ])
+        _grant(acc_role, "patients", [PermissionAction.READ])
+        _grant(acc_role, "dashboard", [PermissionAction.READ])
+
+    # 6. Pharmacist Role Permissions
+    pharm_role = roles.get(UserRole.PHARMACIST)
+    if pharm_role:
+        _grant(pharm_role, "pharmacy", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE, PermissionAction.APPROVE, PermissionAction.EXPORT])
+        _grant(pharm_role, "inventory", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE])
+        _grant(pharm_role, "patients", [PermissionAction.READ])
+        _grant(pharm_role, "doctors", [PermissionAction.READ])
+        _grant(pharm_role, "lab", [PermissionAction.READ])
+        _grant(pharm_role, "dashboard", [PermissionAction.READ])
+
+    # 7. Lab Technician Role Permissions
+    lab_role = roles.get(UserRole.LAB_TECHNICIAN)
+    if lab_role:
+        _grant(lab_role, "lab", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE, PermissionAction.APPROVE, PermissionAction.EXPORT, PermissionAction.ASSIGN, PermissionAction.SHARE])
+        _grant(lab_role, "patients", [PermissionAction.READ])
+        _grant(lab_role, "doctors", [PermissionAction.READ])
+        _grant(lab_role, "departments", [PermissionAction.READ])
+        _grant(lab_role, "dashboard", [PermissionAction.READ])
+
+    # 8. Patient Role Permissions
+    pat_role = roles.get(UserRole.PATIENT)
+    if pat_role:
+        _grant(pat_role, "appointments", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(pat_role, "patients", [PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(pat_role, "doctors", [PermissionAction.READ])
+        _grant(pat_role, "departments", [PermissionAction.READ])
+        _grant(pat_role, "dashboard", [PermissionAction.READ])
+        _grant(pat_role, "ai_chat", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
+        _grant(pat_role, "voice_reminder", [PermissionAction.READ])
+
 
 
 async def _seed_phase3_permissions(session: AsyncSession) -> None:

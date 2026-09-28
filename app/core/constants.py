@@ -162,15 +162,19 @@ class LabOrderStatus:
     ORDERED = "ordered"
     SAMPLE_COLLECTED = "sample_collected"
     IN_PROGRESS = "in_progress"
+    TECHNICIAN_VERIFIED = "technician_verified"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
 
 
 class LabReportStatus:
     DRAFT = "draft"
+    PENDING_TECHNICIAN_VERIFICATION = "pending_technician_verification"
     PENDING_APPROVAL = "pending_approval"
+    TECHNICIAN_VERIFIED = "technician_verified"
     APPROVED = "approved"
     REJECTED = "rejected"
+
 
 
 class SampleStatus:

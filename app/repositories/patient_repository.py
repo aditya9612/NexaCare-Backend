@@ -11,8 +11,10 @@ class PatientRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self, nurse_id: int | None = None):
+    def _base_query(self, nurse_id: int | None = None, allowed_patient_ids: list[int] | None = None):
         query = select(Patient).where(Patient.is_deleted.is_(False))
+        if allowed_patient_ids is not None:
+            query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             query = query.join(
@@ -33,9 +35,10 @@ class PatientRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
     ) -> list[Patient]:
         from datetime import datetime, time
-        query = self._base_query(nurse_id)
+        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
         if start_date:
             start_dt = datetime.combine(start_date, time.min)
             query = query.where(Patient.created_at >= start_dt)
@@ -53,9 +56,12 @@ class PatientRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
     ) -> int:
         from datetime import datetime, time
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
+        if allowed_patient_ids is not None:
+            query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             query = query.join(
@@ -153,13 +159,27 @@ class PatientRepository:
             
         return base_filter
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20, nurse_id: int | None = None) -> list[Patient]:
-        query = self._base_query(nurse_id).where(self._search_filter(q))
+    async def search(
+        self,
+        q: str,
+        skip: int = 0,
+        limit: int = 20,
+        nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
+    ) -> list[Patient]:
+        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids).where(self._search_filter(q))
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str, nurse_id: int | None = None) -> int:
+    async def count_search(
+        self,
+        q: str,
+        nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
+    ) -> int:
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False), self._search_filter(q))
+        if allowed_patient_ids is not None:
+            query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             query = query.join(
@@ -182,8 +202,9 @@ class PatientRepository:
         skip: int = 0,
         limit: int = 20,
         nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
     ) -> list[Patient]:
-        query = self._base_query(nurse_id)
+        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
         if gender:
             query = query.where(Patient.gender == gender)
         if blood_group:
@@ -205,8 +226,11 @@ class PatientRepository:
         state: str | None = None,
         status: str | None = None,
         nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
     ) -> int:
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
+        if allowed_patient_ids is not None:
+            query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             query = query.join(
@@ -228,7 +252,11 @@ class PatientRepository:
             query = query.where(Patient.status == status)
         return await self.db.scalar(query) or 0
 
-    async def get_patient_stats(self, nurse_id: int | None = None) -> dict[str, int]:
+    async def get_patient_stats(
+        self,
+        nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
+    ) -> dict[str, int]:
         from datetime import datetime, time
         import calendar
         from sqlalchemy import and_
@@ -258,6 +286,8 @@ class PatientRepository:
                 )
             ).label("this_month"),
         ).select_from(Patient).where(Patient.is_deleted.is_(False))
+        if allowed_patient_ids is not None:
+            query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             query = query.join(

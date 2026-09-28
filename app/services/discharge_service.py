@@ -130,6 +130,10 @@ class DischargeService:
             if appointment.appointment_date and appointment.appointment_time
             else appointment.created_at
         )
+        if admission_time and hasattr(admission_time, "tzinfo") and admission_time.tzinfo is not None:
+            admission_time = admission_time.replace(tzinfo=None)
+
+        admission_notes_val = appointment.notes or None
 
         discharge = Discharge(
             discharge_number=generate_discharge_number(),
@@ -139,7 +143,7 @@ class DischargeService:
             bed_id=bed.id if bed else None,
             admission_date=admission_time,
             discharge_date=utc_now(),
-            diagnosis_at_admission=appointment.notes or None,
+            diagnosis_at_admission=admission_notes_val,
             diagnosis_at_discharge=data.diagnosis_at_discharge,
             treatment_summary=data.treatment_summary,
             condition_on_discharge=data.condition_on_discharge,
@@ -965,6 +969,31 @@ class DischargeService:
                 self.db.add(log_entry)
 
         discharge = await self.repo.update(discharge)
+
+        try:
+            if discharge.patient_id:
+                from app.models.patient_model import Patient
+                patient = getattr(discharge, "patient", None)
+                if not patient:
+                    patient = await self.db.get(Patient, discharge.patient_id)
+                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Discharge & Gate Pass Issued",
+                        message=f"Your discharge ({discharge.discharge_number}) has been approved and Gate Pass ({discharge.gate_pass_number}) has been issued.",
+                        notification_type="PATIENT_DISCHARGE_GATE_PASS_ISSUED",
+                        reference_type="DISCHARGE",
+                        reference_id=discharge.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch patient discharge & gate pass notification: %s",
+                notif_exc,
+            )
+
         return DischargeResponse.model_validate(discharge)
 
     async def get_gate_pass(self, discharge_id: int) -> DischargeGatePassResponse:

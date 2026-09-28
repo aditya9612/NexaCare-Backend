@@ -47,6 +47,9 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     lab_test: Mapped["LabTest"] = relationship(back_populates="orders")
+    patient = relationship("Patient")
+    doctor = relationship("Doctor")
+    created_by_user = relationship("User", foreign_keys=[created_by])
     samples: Mapped[list["Sample"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     results: Mapped[list["TestResult"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
     reports: Mapped[list["LabReport"]] = relationship(back_populates="test_order", cascade="all, delete-orphan")
@@ -100,6 +103,12 @@ class LabReport(Base, TimestampMixin):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    technician_verified_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    technician_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    technician_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    doctor_verified_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    doctor_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    doctor_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -107,6 +116,7 @@ class LabReport(Base, TimestampMixin):
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="reports")
     ocr_extraction: Mapped[list["LabOcrExtraction"]] = relationship(back_populates="report")
+
 
 
 class LabOcrExtraction(Base, TimestampMixin):

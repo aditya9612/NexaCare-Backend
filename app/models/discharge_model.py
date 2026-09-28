@@ -19,7 +19,7 @@ class Discharge(Base):
     admission_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     discharge_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    diagnosis_at_admission: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    diagnosis_at_admission: Mapped[str | None] = mapped_column(Text, nullable=True)
     diagnosis_at_discharge: Mapped[str] = mapped_column(String(255), nullable=False)
     treatment_summary: Mapped[str] = mapped_column(Text, nullable=False)
     condition_on_discharge: Mapped[str] = mapped_column(String(100), default="Stable", nullable=False)

@@ -96,6 +96,7 @@ async def list_appointments(
         date_filter=date_filter, start_date=start_date, end_date=end_date,
         appointment_type=appointment_type, booking_source=booking_source,
         admission_status=admission_status, triage_level=triage_level, disposition=disposition,
+        current_user=current_user,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 
@@ -357,7 +358,7 @@ async def recommend_admission(
     data: AdmitRecommendationRequest,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST)),
 ):
     result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id)
     return APIResponse(message="Admission recommended successfully", data=result)

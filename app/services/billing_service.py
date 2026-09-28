@@ -32,9 +32,46 @@ from app.utils.helpers import (
     generate_bill_number,
     generate_claim_number,
     utc_now,
+    get_today_ist,
 )
 from app.utils.pagination import build_paginated_result
 from app.utils.pdf_generator import generate_invoice_pdf
+
+
+def resolve_billing_date_filter(
+    date_filter: str | None,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[date | None, date | None]:
+    if not date_filter:
+        if start_date and end_date and start_date > end_date:
+            raise BadRequestException("start_date cannot be greater than end_date")
+        return start_date, end_date
+
+    clean = str(date_filter).strip().lower().replace(" ", "_").replace("-", "_")
+    today = get_today_ist()
+
+    if clean == "today":
+        return today, today
+    elif clean == "yesterday":
+        y = today - timedelta(days=1)
+        return y, y
+    elif clean in ("last_30_days", "30_days", "30days"):
+        return today - timedelta(days=30), today
+    elif clean in ("quarterly", "quarter", "current_quarter"):
+        q_start_month = ((today.month - 1) // 3) * 3 + 1
+        return date(today.year, q_start_month, 1), today
+    elif clean in ("yearly", "year", "current_year"):
+        return date(today.year, 1, 1), today
+    elif clean in ("custom", "custom_range"):
+        if not start_date or not end_date:
+            raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
+        if start_date > end_date:
+            raise BadRequestException("start_date cannot be greater than end_date")
+        return start_date, end_date
+    else:
+        valid = ["today", "yesterday", "last_30_days", "quarterly", "yearly", "custom"]
+        raise BadRequestException(f"Invalid date_filter. Allowed values: {', '.join(valid)}")
 
 
 class BillingService:
@@ -426,28 +463,33 @@ class BillingService:
 
         return build_paginated_result(ordered_items, total, page, size)
 
+
     async def list_billings(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
+        date_filter: str | None = None,
         start_date: date | None = None, end_date: date | None = None,
         bill_type: Any | None = None,
     ):
+        resolved_start, resolved_end = resolve_billing_date_filter(date_filter, start_date, end_date)
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
             status=status, patient_id=patient_id, q=None,
-            start_date=start_date, end_date=end_date,
+            start_date=resolved_start, end_date=resolved_end,
             bill_type=bill_type,
         )
 
     async def search(
         self, q: str, page: int = 1, size: int = 20, status: str | None = None,
+        date_filter: str | None = None,
         start_date: date | None = None, end_date: date | None = None,
         bill_type: Any | None = None,
     ):
+        resolved_start, resolved_end = resolve_billing_date_filter(date_filter, start_date, end_date)
         return await self._paginate_combined_billings(
             page=page, size=size, sort_by="created_at", sort_order="desc",
             status=status, patient_id=None, q=q,
-            start_date=start_date, end_date=end_date,
+            start_date=resolved_start, end_date=resolved_end,
             bill_type=bill_type,
         )
 
@@ -912,6 +954,30 @@ class BillingService:
             status="completed",
             user_id=user_id
         )
+
+        try:
+            if billing.patient_id:
+                from app.models.patient_model import Patient
+                patient = await self.db.get(Patient, billing.patient_id)
+                if not patient and hasattr(self, "patient_repo") and self.patient_repo:
+                    patient = await self.patient_repo.get_by_id(billing.patient_id)
+                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Refund Processed",
+                        message=f"A refund of ₹{payment.amount:,.2f} has been processed for bill {billing.bill_number}.",
+                        notification_type="PATIENT_REFUND_PROCESSED",
+                        reference_type="PAYMENT",
+                        reference_id=payment.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch patient refund processed notification: %s",
+                notif_exc,
+            )
 
         return PaymentResponse.model_validate(payment)
 

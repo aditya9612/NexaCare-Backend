@@ -304,12 +304,41 @@ async def get_pharmacy_expiry(db: DbSession, current_user: CurrentUser, format: 
 async def get_pharmacy_profit_loss(
     db: DbSession,
     current_user: CurrentUser,
+    period: str | None = Query("monthly", description="daily | monthly | yearly | all"),
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json."),
     download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.")
 ):
-    data = await ReportService(db).get_pharmacy_profit_loss(start_date, end_date)
+    import calendar
+    if start_date and end_date:
+        if start_date > end_date:
+            from fastapi.exceptions import HTTPException
+            raise HTTPException(status_code=400, detail="start_date cannot be greater than end_date")
+        s_date = start_date
+        e_date = end_date
+    else:
+        today = date.today()
+        # Fallback if no period is matched, though it defaults to monthly
+        effective_period = period or "monthly"
+
+        if effective_period == "monthly":
+            s_date = today.replace(day=1)
+            e_date = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        elif effective_period == "yearly":
+            s_date = today.replace(month=1, day=1)
+            e_date = today.replace(month=12, day=31)
+        elif effective_period == "daily":
+            s_date = today
+            e_date = today
+        elif effective_period == "all":
+            s_date = None
+            e_date = None
+        else:
+            from fastapi.exceptions import HTTPException
+            raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, yearly, or all.")
+
+    data = await ReportService(db).get_pharmacy_profit_loss(s_date, e_date)
     return export_response(
         ReportService.build_export_payload("Pharmacy Profit and Loss", data),
         format,

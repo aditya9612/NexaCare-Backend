@@ -364,6 +364,38 @@ async def get_prescription(
     return APIResponse(message="Prescription retrieved", data=prescription)
 
 
+@router.get(
+    "/prescriptions/{prescription_id}/download",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Prescription PDF document",
+            "content": {
+                "application/pdf": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary"
+                    }
+                }
+            },
+        }
+    },
+)
+async def download_prescription(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    from app.repositories.doctor_repository import DoctorRepository
+    doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
+    return await PharmacyService(db).download_prescription(
+        prescription_id=prescription_id,
+        doctor_id=doctor.id if doctor else None,
+        user_id=current_user.id,
+    )
+
+
 @router.put("/prescriptions/{prescription_id}", response_model=APIResponse[PrescriptionResponse])
 async def update_prescription(
     prescription_id: int,

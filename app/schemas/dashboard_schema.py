@@ -1,6 +1,16 @@
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel
+
+
+class ReceptionDateFilter(str, Enum):
+    TODAY = "today"
+    YESTERDAY = "yesterday"
+    LAST_ONE_MONTH = "last_one_month"
+    LAST_3_MONTHS = "last_3_months"
+    CUSTOM = "custom"
+
 
 from app.schemas.appointment_schema import AppointmentResponse
 from app.schemas.lab_schema import LabReportResponse

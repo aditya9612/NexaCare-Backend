@@ -14,7 +14,6 @@ class LabTestCreate(BaseSchema):
     sample_type: str = "blood"
     turnaround_hours: int = Field(24, ge=1)
     normal_range: str | None = None
-    department_id: int
 
 
 class LabTestUpdate(BaseSchema):
@@ -41,7 +40,6 @@ class LabTestResponse(BaseSchema):
     normal_range: str | None
     is_active: bool
     department_id: int | None
-    doctor_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -64,17 +62,28 @@ class TestOrderResponse(BaseSchema):
     id: int
     order_number: str
     patient_id: int
-    doctor_id: int | None
+    doctor_id: int | None = None
     lab_test_id: int
     department_id: int | None = None
-    appointment_id: int | None
+    appointment_id: int | None = None
     status: str
     priority: str
-    notes: str | None
+    notes: str | None = None
     ordered_at: datetime
-    completed_at: datetime | None
+    completed_at: datetime | None = None
     lab_test: LabTestResponse | None = None
+    created_by: int | None = None
     created_at: datetime
+
+    # Display fields for UI list/table representation
+    patient_name: str | None = None
+    patient_code: str | None = None
+    doctor_name: str | None = None
+    doctor_code: str | None = None
+    test_name: str | None = None
+    test_code: str | None = None
+    department_name: str | None = None
+    created_by_name: str | None = None
 
 
 class SampleCreate(BaseSchema):
@@ -148,6 +157,15 @@ class LabReportCreate(BaseSchema):
     remarks: str | None = None
 
 
+class LabReportTechnicianVerifyRequest(BaseSchema):
+    technician_remarks: str | None = None
+
+
+class LabReportDoctorVerifyRequest(BaseSchema):
+    doctor_remarks: str | None = None
+    approved: bool = True
+
+
 class LabReportApprove(BaseSchema):
     approved: bool = True
     remark: str | None = None
@@ -170,13 +188,20 @@ class LabReportResponse(BaseSchema):
     test_order_id: int
     report_number: str
     status: str
-    summary: str | None
+    summary: str | None = None
     remarks: str | None = None
-    report_path: str | None
-    approved_by: int | None
-    approved_at: datetime | None
-    generated_at: datetime | None
+    report_path: str | None = None
+    technician_verified_by: int | None = None
+    technician_verified_at: datetime | None = None
+    technician_remarks: str | None = None
+    doctor_verified_by: int | None = None
+    doctor_verified_at: datetime | None = None
+    doctor_remarks: str | None = None
+    approved_by: int | None = None
+    approved_at: datetime | None = None
+    generated_at: datetime | None = None
     created_at: datetime
+
 
 
 class CriticalAlert(BaseSchema):

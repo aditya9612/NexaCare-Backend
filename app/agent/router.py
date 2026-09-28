@@ -600,18 +600,39 @@ async def _do_reception_transfer(
 
 
 # ── Route 1: Incoming call ─────────────────────────────────────────────────────
-@router.post("/incoming")
+# Exotel fetches the answer URL with HTTP GET and puts CallSid/CallFrom/CallTo
+# in the query string. Twilio continues to POST form fields. Form() cannot be
+# used here: a GET with Form dependencies returns 422 before this handler runs.
+@router.api_route("/incoming", methods=["GET", "POST"])
 async def incoming_call(
     request: Request,
     db: DbSession,
-    CallSid: str = Form(default=""),
-    From: str = Form(default=""),
-    Caller: str = Form(default=""),
-    To: str = Form(default=""),
 ):
+    form_data: dict[str, str] = {}
+    if request.method == "POST":
+        try:
+            form = await request.form()
+            form_data = {
+                k: (v if isinstance(v, str) else str(v)) for k, v in form.items()
+            }
+        except Exception:
+            form_data = {}
+
+    def _field(*names: str) -> str:
+        for name in names:
+            val = form_data.get(name) or request.query_params.get(name)
+            if val:
+                return str(val).strip()
+        return ""
+
+    CallSid = _field("CallSid", "Sid")
+    From = _field("From", "CallFrom")
+    Caller = _field("Caller")
+    To = _field("To", "CallTo")
     logger.info(
-        "TRACE incoming_call ROUTE ENTRY path=%s url=%s CallSid=%r From=%r Caller=%r To=%r",
+        "TRACE incoming_call ROUTE ENTRY path=%s method=%s url=%s CallSid=%r From=%r Caller=%r To=%r",
         request.url.path,
+        request.method,
         str(request.url),
         CallSid,
         From,

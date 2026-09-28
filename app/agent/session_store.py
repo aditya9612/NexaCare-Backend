@@ -32,6 +32,7 @@ def _empty_state(call_sid: str, from_number: str, base_url: str) -> BookingCallS
         call_sid=call_sid,
         from_number=from_number,
         step="language_select",
+        provider=None,
         language="en",
         twilio_language="en-IN",
         language_locked=False,

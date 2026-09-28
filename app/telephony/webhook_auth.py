@@ -237,6 +237,7 @@ async def require_voice_webhook_auth(
             or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         )
         query_token = request.query_params.get("token")
+        has_auth_material = bool(signature or token_header or query_token)
         if not (settings.EXOTEL_WEBHOOK_SECRET or settings.EXOTEL_API_TOKEN):
             if settings.APP_ENV == "production":
                 raise HTTPException(
@@ -244,6 +245,25 @@ async def require_voice_webhook_auth(
                     detail="Exotel webhook secret not configured",
                 )
             logger.info("TRACE Exotel secret missing — allowing in non-production")
+            return
+        # Exotel Passthru answer URLs often send no signature headers. Outside
+        # production allow that; in production require ?token= / header / HMAC.
+        if not has_auth_material:
+            if _is_production():
+                logger.info(
+                    "TRACE require_voice_webhook_auth BEFORE HTTP 403 "
+                    "detail='Missing Exotel auth material' path=%s",
+                    request.url.path,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Missing Exotel auth material",
+                    headers={"X-Voice-Auth-Reject": "missing-exotel-auth"},
+                )
+            logger.info(
+                "TRACE Exotel request without auth material — allowing in non-production path=%s",
+                request.url.path,
+            )
             return
         if not validate_exotel_signature(body, signature, token_header, query_token):
             logger.info(
@@ -258,6 +278,7 @@ async def require_voice_webhook_auth(
             )
         replay_token = signature or hashlib.sha256(body).hexdigest()
         await _reject_replay(provider, replay_token, request.url.path)
+        logger.info("TRACE require_voice_webhook_auth Exotel OK path=%s", request.url.path)
         return
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown provider")

@@ -11,9 +11,10 @@ from typing_extensions import TypedDict
 
 class BookingCallState(TypedDict):
     # ── Call metadata ──────────────────────────────────────────────────────
-    call_sid: str                        # Twilio unique call ID
+    call_sid: str                        # Provider unique call ID (Twilio/Exotel)
     from_number: str                     # Caller's phone number
     step: str                            # Current node name
+    provider: Optional[str]              # "twilio" | "exotel"
 
     # ── Language ───────────────────────────────────────────────────────────
     language: str                        # "en" | "hi" | "mr"  (default "en")

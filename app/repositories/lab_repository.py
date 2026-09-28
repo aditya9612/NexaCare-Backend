@@ -78,16 +78,6 @@ class LabTestRepository:
         return result.scalar_one_or_none()
 
     async def get_by_name(self, test_name: str) -> LabTest | None:
-        normalized = (test_name or "").strip()
-        if not normalized:
-            return None
-        query = self._base_query().where(
-            func.lower(LabTest.test_name) == func.lower(normalized)
-        )
-        result = await self.db.execute(query)
-        return result.scalar_one_or_none()
-
-    async def get_by_name(self, test_name: str) -> LabTest | None:
         if not test_name:
             return None
         query = self._base_query().where(func.lower(LabTest.test_name) == test_name.strip().lower()).limit(1)

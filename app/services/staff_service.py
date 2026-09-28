@@ -143,12 +143,13 @@ class StaffService:
         q: str | None = None,
         department_id: int | None = None,
         status: int | None = None,
+        role_name: str | None = None,
     ):
         skip = (page - 1) * size
         items = await self.repo.list_all(
-            skip=skip, limit=size, q=q, department_id=department_id, status=status
+            skip=skip, limit=size, q=q, department_id=department_id, status=status, role_name=role_name
         )
-        total = await self.repo.count_all(q=q, department_id=department_id, status=status)
+        total = await self.repo.count_all(q=q, department_id=department_id, status=status, role_name=role_name)
         
         # Calculate overall global counts (not affected by pagination, search query, department, or status filters)
         total_staff = await self.repo.count_all()

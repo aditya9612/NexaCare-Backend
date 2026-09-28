@@ -13,7 +13,7 @@ import logging
 import traceback
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Form, Request, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import PlainTextResponse
 
 from app.agent import session_store
@@ -67,15 +67,79 @@ def xml(twiml: str) -> Response:
     return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
 
-async def _require_agent_webhook(request: Request) -> None:
-    """Agent webhooks are Twilio-oriented by default."""
+def _detect_agent_provider(request: Request) -> str:
+    """
+    Choose Twilio vs Exotel auth for shared /agent/v1/voice/* URLs.
+
+    Twilio always sends X-Twilio-Signature when validating webhooks.
+    Anything without that header (Exotel GET answer URL, Gather POST, etc.)
+    uses Exotel auth.
+    """
+    if request.headers.get("X-Twilio-Signature"):
+        return TelephonyProviderType.TWILIO
+    if request.headers.get("X-Exotel-Signature") or request.headers.get("X-Exotel-Token"):
+        return TelephonyProviderType.EXOTEL
+    # Exotel-style query fields (informational; still Exotel either way)
+    qp = request.query_params
+    if qp.get("CallFrom") or qp.get("CallTo"):
+        return TelephonyProviderType.EXOTEL
+    if request.method == "GET" and (qp.get("CallSid") or qp.get("Sid")):
+        return TelephonyProviderType.EXOTEL
+    # Unsigned POST (typical Exotel Passthru / Gather follow-up)
+    return TelephonyProviderType.EXOTEL
+
+
+async def _require_agent_webhook(
+    request: Request,
+    provider: str | None = None,
+) -> str:
+    """Validate Twilio or Exotel webhook auth; return the resolved provider."""
+    resolved = (provider or _detect_agent_provider(request) or "").lower()
     logger.info(
-        "TRACE _require_agent_webhook ENTER path=%s method=%s",
+        "TRACE _require_agent_webhook ENTER path=%s method=%s provider=%s",
         request.url.path,
         request.method,
+        resolved,
     )
-    await require_voice_webhook_auth(request, TelephonyProviderType.TWILIO)
-    logger.info("TRACE _require_agent_webhook EXIT path=%s (auth passed/skipped)", request.url.path)
+    await require_voice_webhook_auth(request, resolved)
+    logger.info(
+        "TRACE _require_agent_webhook EXIT path=%s provider=%s (auth passed/skipped)",
+        request.url.path,
+        resolved,
+    )
+    return resolved
+
+
+async def _webhook_fields(request: Request) -> dict[str, str]:
+    """Read Twilio/Exotel fields from POST form and/or query string."""
+    form_data: dict[str, str] = {}
+    if request.method == "POST":
+        try:
+            form = await request.form()
+            form_data = {
+                k: (v if isinstance(v, str) else str(v)) for k, v in form.items()
+            }
+        except Exception:
+            form_data = {}
+
+    def field(*names: str) -> str:
+        for name in names:
+            val = form_data.get(name) or request.query_params.get(name)
+            if val is not None and str(val).strip() != "":
+                return str(val).strip()
+        return ""
+
+    return {
+        "CallSid": field("CallSid", "Sid", "call_sid"),
+        "From": field("From", "CallFrom", "from"),
+        "Caller": field("Caller"),
+        "To": field("To", "CallTo", "to"),
+        "Digits": field("Digits", "digits"),
+        "SpeechResult": field("SpeechResult", "CustomField", "speech"),
+        "Confidence": field("Confidence", "confidence"),
+        "CallStatus": field("CallStatus", "Status"),
+        "DialCallStatus": field("DialCallStatus", "Status", "CallStatus"),
+    }
 
 
 def _base_url() -> str:
@@ -600,30 +664,37 @@ async def _do_reception_transfer(
 
 
 # ── Route 1: Incoming call ─────────────────────────────────────────────────────
-@router.post("/incoming")
+# Exotel fetches the answer URL with HTTP GET and puts CallSid/CallFrom/CallTo
+# in the query string. Twilio continues to POST form fields. Form() cannot be
+# used here: a GET with Form dependencies returns 422 before this handler runs.
+@router.api_route("/incoming", methods=["GET", "POST"])
 async def incoming_call(
     request: Request,
     db: DbSession,
-    CallSid: str = Form(default=""),
-    From: str = Form(default=""),
-    Caller: str = Form(default=""),
-    To: str = Form(default=""),
 ):
+    provider = await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    CallSid = fields["CallSid"]
+    From = fields["From"]
+    Caller = fields["Caller"]
+    To = fields["To"]
     logger.info(
-        "TRACE incoming_call ROUTE ENTRY path=%s url=%s CallSid=%r From=%r Caller=%r To=%r",
+        "TRACE incoming_call ROUTE ENTRY path=%s method=%s url=%s provider=%s "
+        "CallSid=%r From=%r Caller=%r To=%r",
         request.url.path,
+        request.method,
         str(request.url),
+        provider,
         CallSid,
         From,
         Caller,
         To,
     )
-    await _require_agent_webhook(request)
-    logger.info("TRACE incoming_call AFTER auth CallSid=%r", CallSid)
+    logger.info("TRACE incoming_call AFTER auth CallSid=%r provider=%s", CallSid, provider)
     call_sid = CallSid or "unknown"
     from_number = From or Caller or ""
     to_number = To or ""
-    _log_request("INCOMING", call_sid, From=from_number, To=to_number)
+    _log_request("INCOMING", call_sid, Provider=provider, From=from_number, To=to_number)
 
     try:
         base_url = _base_url()
@@ -664,6 +735,7 @@ async def incoming_call(
         )
 
         session_extra = {
+            "provider": provider,
             "hospital_id": hospital_id,
             "hospital_resolution_source": resolution_result.source.value,
             "to_number": to_number,
@@ -710,8 +782,9 @@ async def incoming_call(
         twiml = lang_node.build_language_select_twiml(base_url)
 
         logger.info(
-            "TRACE incoming_call BEFORE returning TwiML call_sid=%s twiml_len=%s",
+            "TRACE incoming_call BEFORE returning TwiML call_sid=%s provider=%s twiml_len=%s",
             call_sid,
+            provider,
             len(twiml or ""),
         )
         logger.info(f"  ↳ [{call_sid}] Returning language select TwiML")
@@ -725,19 +798,17 @@ async def incoming_call(
 
 
 # ── Route 2: Language selection ────────────────────────────────────────────────
-@router.post("/lang")
+@router.api_route("/lang", methods=["GET", "POST"])
 async def language_select(
     request: Request,
     db: DbSession,
-    CallSid: str = Form(default=""),
-    Digits: str = Form(default=""),
-    SpeechResult: str = Form(default=""),
 ):
-    await _require_agent_webhook(request)
-    call_sid = CallSid or "unknown"
-    digit = Digits.strip()
-    speech = SpeechResult.strip()
-    _log_request("LANG", call_sid, Digits=digit, Speech=speech)
+    provider = await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    call_sid = fields["CallSid"] or "unknown"
+    digit = fields["Digits"]
+    speech = fields["SpeechResult"]
+    _log_request("LANG", call_sid, Provider=provider, Digits=digit, Speech=speech)
 
     try:
         base_url = _base_url()
@@ -745,7 +816,11 @@ async def language_select(
         state = await session_store.get_session(call_sid)
         if state is None:
             logger.warning(f"  ↳ [{call_sid}] No session found — creating fresh")
-            state = await session_store.create_session(call_sid, "", base_url)
+            state = await session_store.create_session(
+                call_sid, "", base_url, provider=provider
+            )
+        elif not state.get("provider"):
+            await session_store.update_session(call_sid, {"provider": provider})
 
         resolver = LanguageResolverService(db)
         from_number = state.get("from_number") or ""
@@ -813,17 +888,16 @@ async def language_select(
 
 
 # ── Route 3: Service menu ──────────────────────────────────────────────────────
-@router.post("/menu")
+@router.api_route("/menu", methods=["GET", "POST"])
 async def service_menu(
     request: Request,
     db: DbSession,
-    CallSid: str = Form(default=""),
-    Digits: str = Form(default=""),
 ):
-    await _require_agent_webhook(request)
-    call_sid = CallSid or "unknown"
-    digit = Digits.strip()
-    _log_request("MENU", call_sid, Digits=digit)
+    provider = await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    call_sid = fields["CallSid"] or "unknown"
+    digit = fields["Digits"]
+    _log_request("MENU", call_sid, Provider=provider, Digits=digit)
 
     try:
         base_url = _base_url()
@@ -880,20 +954,25 @@ async def service_menu(
 
 
 # ── Route 4: Conversational turns ─────────────────────────────────────────────
-@router.post("/turn")
+@router.api_route("/turn", methods=["GET", "POST"])
 async def conversation_turn(
     request: Request,
     db: DbSession,
-    CallSid: str = Form(default=""),
-    SpeechResult: str = Form(default=""),
-    Digits: str = Form(default=""),
-    Confidence: str = Form(default=""),
 ):
-    await _require_agent_webhook(request)
-    call_sid = CallSid or "unknown"
-    speech = SpeechResult.strip()
-    digits = Digits.strip()
-    _log_request("TURN", call_sid, Speech=speech, Digits=digits, Confidence=Confidence)
+    provider = await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    call_sid = fields["CallSid"] or "unknown"
+    speech = fields["SpeechResult"]
+    digits = fields["Digits"]
+    Confidence = fields["Confidence"]
+    _log_request(
+        "TURN",
+        call_sid,
+        Provider=provider,
+        Speech=speech,
+        Digits=digits,
+        Confidence=Confidence,
+    )
 
     try:
         confidence_float = float(Confidence) if Confidence.strip() else -1.0
@@ -1185,38 +1264,38 @@ async def conversation_turn(
 
 
 # ── Route 5: Call status ───────────────────────────────────────────────────────
-@router.post("/status")
-async def call_status(
-    request: Request,
-    CallSid: str = Form(default=""),
-    CallStatus: str = Form(default=""),
-):
-    await _require_agent_webhook(request)
-    call_sid = CallSid or "unknown"
-    logger.info(f"▶ STATUS | SID={call_sid} | Status={CallStatus}")
-    if CallStatus in {"completed", "failed", "busy", "no-answer", "canceled"}:
+@router.api_route("/status", methods=["GET", "POST"])
+async def call_status(request: Request):
+    provider = await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    call_sid = fields["CallSid"] or "unknown"
+    call_status_val = fields["CallStatus"]
+    logger.info(f"▶ STATUS | SID={call_sid} | Status={call_status_val} | Provider={provider}")
+    if call_status_val.lower() in {"completed", "failed", "busy", "no-answer", "canceled", "cancelled"}:
         await session_store.delete_session(call_sid)
         logger.info(f"  ↳ [{call_sid}] Session cleaned up")
     return PlainTextResponse("ok")
 
 
 # ── Route 5b: Reception dial result (Phase 4) ──────────────────────────────────
-@router.post("/transfer-result")
+@router.api_route("/transfer-result", methods=["GET", "POST"])
 async def transfer_result(
     request: Request,
     db: DbSession,
-    CallSid: str = Form(default=""),
-    DialCallStatus: str = Form(default=""),
-    CallStatus: str = Form(default=""),
-    From: str = Form(default=""),
-    Caller: str = Form(default=""),
 ):
     """Thin wrapper — delegates only to ReceptionTransferService.handle_dial_status."""
-    await _require_agent_webhook(request)
-    call_sid = CallSid or "unknown"
-    dial_status = DialCallStatus or CallStatus or ""
-    from_number = From or Caller or ""
-    _log_request("TRANSFER-RESULT", call_sid, DialStatus=dial_status, From=from_number)
+    provider_name = await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    call_sid = fields["CallSid"] or "unknown"
+    dial_status = fields["DialCallStatus"] or fields["CallStatus"] or ""
+    from_number = fields["From"] or fields["Caller"] or ""
+    _log_request(
+        "TRANSFER-RESULT",
+        call_sid,
+        Provider=provider_name,
+        DialStatus=dial_status,
+        From=from_number,
+    )
 
     try:
         state = await session_store.get_session(call_sid)
@@ -1255,6 +1334,8 @@ async def agent_health():
 
     base_url = _base_url()
     logger.info(f"▶ HEALTH | base_url={base_url} | active_calls={session_store.active_session_count()}")
+    incoming = f"{base_url}/agent/v1/voice/incoming"
+    status_url = f"{base_url}/agent/v1/voice/status"
     return {
         "status": "ok",
         "agent": "NexaCare AI Voice Agent",
@@ -1262,8 +1343,10 @@ async def agent_health():
         "base_url": base_url,
         "voice_clone_enabled": voice_clone_ready(),
         "phase6_enabled": is_phase6_enabled(),
-        "twilio_incoming_webhook": f"{base_url}/agent/v1/voice/incoming",
-        "twilio_status_webhook": f"{base_url}/agent/v1/voice/status",
+        "twilio_incoming_webhook": incoming,
+        "twilio_status_webhook": status_url,
+        "exotel_incoming_webhook": incoming,
+        "exotel_status_webhook": status_url,
     }
 
 
@@ -1311,10 +1394,9 @@ async def reminder_twiml(
 
 
 # ── Route 8: Reminder call status callback ─────────────────────────────────────
-@router.post("/reminder-status")
+@router.api_route("/reminder-status", methods=["GET", "POST"])
 async def reminder_status(
     request: Request,
-    CallStatus: str = Form(default=""),
     doctor: str = "",
     time: str = "",
     lang: str = "en",
@@ -1322,6 +1404,15 @@ async def reminder_status(
     phone: str = "",
 ):
     await _require_agent_webhook(request)
+    fields = await _webhook_fields(request)
+    CallStatus = fields["CallStatus"]
+    # Prefer explicit query/form overrides used by reminder URLs
+    qp = request.query_params
+    doctor = doctor or qp.get("doctor") or ""
+    time = time or qp.get("time") or ""
+    lang = lang or qp.get("lang") or "en"
+    appt_no = appt_no or qp.get("appt_no") or ""
+    phone = phone or qp.get("phone") or ""
     from app.agent.reminder import send_reminder_sms
     logger.info(
         f"▶ REMINDER-STATUS | status={CallStatus} | "

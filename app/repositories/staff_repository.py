@@ -46,6 +46,7 @@ class StaffRepository:
         q: str | None = None,
         department_id: int | None = None,
         status: int | None = None,
+        role_name: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ) -> list[Staff]:
@@ -66,6 +67,8 @@ class StaffRepository:
             query = query.where(Staff.department_id == department_id)
         if status is not None:
             query = query.where(Staff.status == status)
+        if role_name:
+            query = query.where(func.lower(Staff.role_name) == role_name.strip().lower())
 
         column = getattr(Staff, sort_by, Staff.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -77,6 +80,7 @@ class StaffRepository:
         q: str | None = None,
         department_id: int | None = None,
         status: int | None = None,
+        role_name: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
         if q:
@@ -95,6 +99,8 @@ class StaffRepository:
             query = query.where(Staff.department_id == department_id)
         if status is not None:
             query = query.where(Staff.status == status)
+        if role_name:
+            query = query.where(func.lower(Staff.role_name) == role_name.strip().lower())
         return await self.db.scalar(query) or 0
 
     async def list_by_department(self, department_id: int) -> list[Staff]:

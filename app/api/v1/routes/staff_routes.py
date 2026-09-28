@@ -41,10 +41,13 @@ async def list_staff(
     q: str | None = None,
     department_id: int | None = None,
     status: int | None = None,
+    role_name: str | None = None,
+    role: str | None = None,
     _: User = Depends(require_permission("staff", "read")),
 ):
+    selected_role = role_name or role
     result = await StaffService(db).list_staff(
-        page=page, size=size, q=q, department_id=department_id, status=status
+        page=page, size=size, q=q, department_id=department_id, status=status, role_name=selected_role
     )
     return APIResponse(message="Staff retrieved", data=result)
 

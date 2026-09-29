@@ -17,6 +17,8 @@ import io
 import json
 import logging
 import os
+import shutil
+import subprocess
 import urllib.parse
 import wave
 from typing import Any
@@ -103,12 +105,16 @@ def _sample_rate(raw: str | None) -> int:
     return rate if rate in (8000, 16000, 24000) else 8000
 
 
-def _to_pcm(audio: bytes, rate: int) -> bytes:
-    if not audio:
-        return b""
-    if audio[:4] != b"RIFF":
-        logger.warning("exotel voicebot audio is not wav (%s bytes)", len(audio))
-        return b""
+def _looks_like_mp3(audio: bytes) -> bool:
+    """Detect MP3 from ID3 tag or MPEG frame sync (Sarvam TTS cache default)."""
+    if len(audio) < 2:
+        return False
+    if audio[:3] == b"ID3":
+        return True
+    return audio[0] == 0xFF and (audio[1] & 0xE0) == 0xE0
+
+
+def _wav_to_pcm(audio: bytes, rate: int) -> bytes:
     with wave.open(io.BytesIO(audio), "rb") as wf:
         channels = wf.getnchannels()
         width = wf.getsampwidth()
@@ -121,6 +127,83 @@ def _to_pcm(audio: bytes, rate: int) -> bytes:
     if src_rate != rate and frames:
         frames, _ = audioop.ratecv(frames, 2, 1, src_rate, rate, None)
     return frames
+
+
+def _ffmpeg_to_pcm(audio: bytes, rate: int) -> bytes:
+    """
+    Decode MP3 (or other ffmpeg-readable audio) to mono s16le PCM at ``rate``.
+
+    Exotel Voicebot streams raw PCM; Twilio <Play> accepts MP3, so cached Sarvam
+    TTS is often MP3. ffmpeg is required only on this Voicebot path.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        logger.warning("exotel voicebot ffmpeg not found; cannot decode non-wav audio")
+        return b""
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ac",
+                "1",
+                "-ar",
+                str(int(rate)),
+                "pipe:1",
+            ],
+            input=audio,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("exotel voicebot ffmpeg decode failed: %s", exc)
+        return b""
+    if proc.returncode != 0 or not proc.stdout:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        logger.warning(
+            "exotel voicebot ffmpeg decode exit=%s bytes_in=%s err=%s",
+            proc.returncode,
+            len(audio),
+            err[:300] if err else "-",
+        )
+        return b""
+    return proc.stdout
+
+
+def _to_pcm(audio: bytes, rate: int) -> bytes:
+    """Convert TTS/Play bytes (WAV or MP3) to mono PCM for Exotel streaming."""
+    if not audio:
+        return b""
+    if len(audio) >= 12 and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        return _wav_to_pcm(audio, rate)
+    if _looks_like_mp3(audio) or audio[:4] != b"RIFF":
+        kind = "mp3" if _looks_like_mp3(audio) else "non-wav"
+        pcm = _ffmpeg_to_pcm(audio, rate)
+        if pcm:
+            logger.debug(
+                "exotel voicebot decoded %s to pcm bytes_in=%s bytes_out=%s rate=%s",
+                kind,
+                len(audio),
+                len(pcm),
+                rate,
+            )
+            return pcm
+        logger.warning(
+            "exotel voicebot audio is not wav and decode failed (%s bytes, kind=%s)",
+            len(audio),
+            kind,
+        )
+        return b""
+    return b""
 
 
 def _tts_pcm(text: str, language: str, rate: int) -> bytes:

@@ -348,21 +348,46 @@ def _pcm_to_wav(pcm: bytes, rate: int) -> bytes:
 
 
 def _transcribe(pcm: bytes, rate: int, language: str) -> str:
+    """Transcribe Exotel PCM via Sarvam STT. Soft-fails so one bad turn keeps the call alive."""
     if not settings.SARVAM_API_KEY or len(pcm) < _MIN_CHUNK:
         return ""
+    from app.services import sarvam_tts
+
     wav = _pcm_to_wav(pcm, rate)
+    model = (settings.SARVAM_STT_MODEL or "saaras:v4").strip() or "saaras:v4"
+    lang = sarvam_tts._normalize_language(language) if language else "unknown"
     data = {
-        "model": "saarika:v2",
-        "language_code": language or "unknown",
+        "model": model,
+        "language_code": lang or "unknown",
     }
     files = {"file": ("caller.wav", wav, "audio/wav")}
     headers = {"api-subscription-key": settings.SARVAM_API_KEY}
     timeout = float(settings.SARVAM_TTS_TIMEOUT_SECONDS or 30.0)
-    with httpx.Client(timeout=timeout) as client:
-        response = client.post(_SARVAM_STT_URL, headers=headers, data=data, files=files)
-    response.raise_for_status()
-    payload = response.json()
-    return str(payload.get("transcript") or "").strip()
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(_SARVAM_STT_URL, headers=headers, data=data, files=files)
+        if response.status_code >= 400:
+            logger.warning(
+                "exotel voicebot STT failed status=%s model=%s language=%s pcm_bytes=%s rate=%s body=%s",
+                response.status_code,
+                model,
+                lang,
+                len(pcm),
+                rate,
+                (response.text or "")[:500],
+            )
+            return ""
+        payload = response.json()
+        return str(payload.get("transcript") or "").strip()
+    except Exception:
+        logger.exception(
+            "exotel voicebot STT request error model=%s language=%s pcm_bytes=%s rate=%s",
+            model,
+            lang,
+            len(pcm),
+            rate,
+        )
+        return ""
 
 
 # DTMF during these steps must hit /lang or /menu — not /turn.

@@ -5,10 +5,11 @@ import io
 import shutil
 import subprocess
 import wave
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.agent.exotel_voicebot import _looks_like_mp3, _to_pcm, _url_pcm
+from app.agent.exotel_voicebot import _looks_like_mp3, _to_pcm, _transcribe, _url_pcm
 
 
 def _make_wav(rate: int = 8000, seconds: float = 0.05) -> bytes:
@@ -20,6 +21,11 @@ def _make_wav(rate: int = 8000, seconds: float = 0.05) -> bytes:
         wf.setframerate(rate)
         wf.writeframes(frames)
     return buf.getvalue()
+
+
+def _make_pcm(rate: int = 8000, seconds: float = 0.5) -> bytes:
+    # Enough bytes to clear _MIN_CHUNK (3200).
+    return b"\x00\x10" * int(rate * seconds)
 
 
 def _make_mp3(rate: int = 8000) -> bytes:
@@ -90,3 +96,47 @@ def test_url_pcm_decodes_cached_mp3(monkeypatch):
     pcm = _url_pcm(f"https://api.example/agent/v1/voice/audio/{name}", 8000)
     assert len(pcm) > 0
     assert len(pcm) % 2 == 0
+
+
+def test_transcribe_uses_saaras_v4_and_returns_transcript():
+    pcm = _make_pcm()
+    response = MagicMock()
+    response.status_code = 200
+    response.text = '{"transcript":"Rahul"}'
+    response.json.return_value = {"transcript": "Rahul"}
+
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    client.post.return_value = response
+
+    with (
+        patch("app.agent.exotel_voicebot.settings.SARVAM_API_KEY", "test-key"),
+        patch("app.agent.exotel_voicebot.settings.SARVAM_STT_MODEL", "saaras:v4"),
+        patch("app.agent.exotel_voicebot.httpx.Client", return_value=client),
+    ):
+        assert _transcribe(pcm, 8000, "en-IN") == "Rahul"
+
+    kwargs = client.post.call_args.kwargs
+    assert kwargs["data"]["model"] == "saaras:v4"
+    assert kwargs["data"]["language_code"] == "en-IN"
+
+
+def test_transcribe_soft_fails_on_http_400():
+    pcm = _make_pcm()
+    response = MagicMock()
+    response.status_code = 400
+    response.text = '{"error":{"message":"Invalid model","code":"invalid_request_error"}}'
+    response.json.return_value = {"error": {"message": "Invalid model"}}
+
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    client.post.return_value = response
+
+    with (
+        patch("app.agent.exotel_voicebot.settings.SARVAM_API_KEY", "test-key"),
+        patch("app.agent.exotel_voicebot.settings.SARVAM_STT_MODEL", "saaras:v4"),
+        patch("app.agent.exotel_voicebot.httpx.Client", return_value=client),
+    ):
+        assert _transcribe(pcm, 8000, "hi-IN") == ""

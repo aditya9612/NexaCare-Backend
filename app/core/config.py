@@ -85,7 +85,8 @@ class Settings(BaseSettings):
     # Optional browser session Cookie header if Studio synthesize requires login auth.
     SARVAM_STUDIO_COOKIE: str = ""
     SARVAM_TTS_MODEL: str = "bulbul:v3"
-    SARVAM_TTS_CODEC: str = "mp3"  # mp3 | wav (Twilio <Play> supports both)
+    SARVAM_STT_MODEL: str = "saaras:v4"  # Exotel Voicebot speech-to-text (not saarika:v2)
+    SARVAM_TTS_CODEC: str = "mp3"  # mp3 | wav (Twilio <Play> supports both; wav safer for Exotel PCM)
     SARVAM_TTS_SAMPLE_RATE: int = 16000  # telephony-friendly
     SARVAM_TTS_PACE: float = 1.0
     SARVAM_TTS_TIMEOUT_SECONDS: float = 30.0

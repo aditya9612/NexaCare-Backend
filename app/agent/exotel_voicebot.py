@@ -282,32 +282,91 @@ def _transcribe(pcm: bytes, rate: int, language: str) -> str:
     return str(payload.get("transcript") or "").strip()
 
 
-async def _existing_turn_twiml(
+# DTMF during these steps must hit /lang or /menu — not /turn.
+_LANG_STEPS = frozenset({"language_select"})
+_MENU_STEPS = frozenset({"greeting", "service_menu"})
+
+
+def _route_for_step(step: str) -> tuple[str, str]:
+    """Return (path, handler_name) matching the HTTP voice Gather actions."""
+    if step in _LANG_STEPS:
+        return "/agent/v1/voice/lang", "language_select"
+    if step in _MENU_STEPS:
+        return "/agent/v1/voice/menu", "service_menu"
+    return "/agent/v1/voice/turn", "conversation_turn"
+
+
+async def _existing_input_twiml(
     call_sid: str,
     speech: str,
     digits: str,
 ) -> str:
-    from app.agent.router import conversation_turn
+    """
+    Invoke the same HTTP handler the Gather action would have hit.
 
-    request = _voice_request(
-        "POST",
-        "/agent/v1/voice/turn",
-        {},
-        {
+    Exotel Voicebot only plays TwiML audio and ignores Gather action URLs, so
+    DTMF/speech must be routed by session step to /lang, /menu, or /turn.
+    """
+    from app.agent import session_store
+    from app.agent.router import conversation_turn, language_select, service_menu
+
+    state = await session_store.get_session(call_sid)
+    step = str((state or {}).get("step") or "")
+    path, handler_name = _route_for_step(step)
+
+    handlers = {
+        "language_select": language_select,
+        "service_menu": service_menu,
+        "conversation_turn": conversation_turn,
+    }
+    handler = handlers[handler_name]
+
+    if handler_name == "language_select":
+        form = {
+            "CallSid": call_sid,
+            "Digits": digits,
+            "SpeechResult": speech,
+        }
+    elif handler_name == "service_menu":
+        form = {
+            "CallSid": call_sid,
+            "Digits": digits or speech,
+        }
+    else:
+        form = {
             "CallSid": call_sid,
             "SpeechResult": speech,
             "Digits": digits,
             "Confidence": "1.0",
-        },
+        }
+
+    logger.info(
+        "exotel voicebot route step=%s path=%s call_sid=%s digits=%r speech=%r",
+        step or "-",
+        path,
+        call_sid,
+        digits,
+        (speech[:80] + "…") if len(speech) > 80 else speech,
     )
+
+    request = _voice_request("POST", path, {}, form)
     async with AsyncSessionLocal() as db:
         try:
-            response = await conversation_turn(request, db)
+            response = await handler(request, db)
             await db.commit()
         except Exception:
             await db.rollback()
             raise
     return (response.body or b"").decode("utf-8", errors="replace")
+
+
+async def _existing_turn_twiml(
+    call_sid: str,
+    speech: str,
+    digits: str,
+) -> str:
+    """Back-compat alias — routes by session step like HTTP Gather actions."""
+    return await _existing_input_twiml(call_sid, speech, digits)
 
 
 def _rms(pcm: bytes) -> float:
@@ -440,13 +499,14 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                     busy = True
                     ignore_media = True
                     try:
-                        closed, sent = await _run_turn(
+                        closed, sent, language = await _run_input(
                             websocket,
                             stream_sid,
                             call_sid,
                             "",
                             digit,
                             sample_rate,
+                            language,
                         )
                     finally:
                         busy = False
@@ -485,13 +545,14 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                         _transcribe, heard, sample_rate, language
                     )
                     if transcript:
-                        closed, sent = await _run_turn(
+                        closed, sent, language = await _run_input(
                             websocket,
                             stream_sid,
                             call_sid,
                             transcript,
                             "",
                             sample_rate,
+                            language,
                         )
                         if closed:
                             return
@@ -508,18 +569,24 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
         logger.info("exotel voicebot disconnected call_sid=%s", call_sid or "-")
 
 
-async def _run_turn(
+async def _run_input(
     websocket: WebSocket,
     stream_sid: str,
     call_sid: str,
     speech: str,
     digits: str,
     sample_rate: int,
-) -> tuple[bool, bool]:
-    twiml = await _existing_turn_twiml(call_sid, speech, digits)
+    language: str,
+) -> tuple[bool, bool, str]:
+    twiml = await _existing_input_twiml(call_sid, speech, digits)
+    from app.agent import session_store
+
+    state = await session_store.get_session(call_sid)
+    if state and state.get("twilio_language"):
+        language = str(state["twilio_language"])
     pcm, _expects, should_close = await speakable_pcm(twiml, sample_rate)
     if pcm:
         await _send_pcm(websocket, stream_sid, pcm, "turn")
     if should_close:
         await websocket.close()
-    return should_close, bool(pcm)
+    return should_close, bool(pcm), language

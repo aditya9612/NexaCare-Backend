@@ -30,3 +30,4 @@ docker-compose.*.local.yml
 
 # Local / personal docs (not part of the codebase)
 AI_ARCHITECTURE_INTERVIEW.md
+app/tests/test_exotel_voicebot_ws.py

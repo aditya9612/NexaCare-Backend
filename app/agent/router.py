@@ -13,7 +13,7 @@ import logging
 import traceback
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, WebSocket
 from fastapi.responses import PlainTextResponse
 
 from app.agent import session_store
@@ -1435,6 +1435,19 @@ async def reminder_status(
         logger.info(f"  ↳ Reminder call {CallStatus} for {appt_no}")
 
     return PlainTextResponse("ok")
+
+
+@router.websocket("/incoming")
+async def exotel_voicebot_socket(websocket: WebSocket):
+    """Exotel Voicebot/AgentStream on the same path as HTTP /incoming.
+
+    incoming_call stays HTTP GET/POST and still returns call XML.
+    Exotel opens a WebSocket here; without this route the upgrade is rejected
+    and the call drops in about a second.
+    """
+    from app.agent.exotel_voicebot import handle_exotel_voicebot
+
+    await handle_exotel_voicebot(websocket)
 
 
 # ── Internal helper ────────────────────────────────────────────────────────────

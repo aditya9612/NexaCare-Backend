@@ -375,6 +375,21 @@ def _rms(pcm: bytes) -> float:
     return float(audioop.rms(pcm, 2))
 
 
+def _dtmf_digit(event: dict[str, Any]) -> str:
+    """Read one keypad digit from either Exotel DTMF payload shape."""
+    raw = event.get("dtmf")
+    if isinstance(raw, dict):
+        value = raw.get("digit")
+    elif isinstance(raw, str):
+        value = raw
+    else:
+        value = event.get("digit")
+    digit = str(value or "").strip()
+    if len(digit) == 1:
+        return digit
+    return ""
+
+
 async def _send_pcm(websocket: WebSocket, stream_sid: str, pcm: bytes, mark_name: str) -> None:
     for chunk in iter_pcm_chunks(pcm):
         await websocket.send_text(
@@ -494,7 +509,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                 continue
 
             if name == "dtmf" and not busy:
-                digit = str((event.get("dtmf") or {}).get("digit") or "")
+                digit = _dtmf_digit(event)
                 if digit and stream_sid:
                     busy = True
                     ignore_media = True
@@ -508,6 +523,9 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                             sample_rate,
                             language,
                         )
+                    except Exception:
+                        logger.exception("exotel voicebot dtmf failed call_sid=%s", call_sid)
+                        continue
                     finally:
                         busy = False
                         ignore_media = False
@@ -587,6 +605,8 @@ async def _run_input(
     pcm, _expects, should_close = await speakable_pcm(twiml, sample_rate)
     if pcm:
         await _send_pcm(websocket, stream_sid, pcm, "turn")
-    if should_close:
+    # Keypad 1-4 must play the existing turn and leave this socket open.
+    keep_alive = digits in {"1", "2", "3", "4"}
+    if should_close and not keep_alive:
         await websocket.close()
-    return should_close, bool(pcm), language
+    return should_close and not keep_alive, bool(pcm), language

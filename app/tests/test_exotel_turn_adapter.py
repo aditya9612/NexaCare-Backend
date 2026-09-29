@@ -1,15 +1,19 @@
 """Exotel Voicebot must route DTMF/speech to /lang, /menu, or /turn by session step."""
 
+import base64
 import inspect
 
-from fastapi import Response
+import pytest
+from fastapi import FastAPI, Response
+from fastapi.testclient import TestClient
 
 from app.agent.exotel_voicebot import (
+    _dtmf_digit,
     _existing_input_twiml,
     _existing_turn_twiml,
     _route_for_step,
 )
-from app.agent.router import _webhook_fields, conversation_turn
+from app.agent.router import _webhook_fields, conversation_turn, router
 
 
 def test_conversation_turn_accepts_request_and_db_only():
@@ -145,3 +149,100 @@ async def test_language_select_digit_routes_to_lang(monkeypatch):
     assert seen["path"] == "/agent/v1/voice/lang"
     assert seen["fields"]["Digits"] == "2"
     assert session.db.committed is True
+
+
+@pytest.mark.parametrize("digit", ["1", "2", "3", "4"])
+def test_dtmf_digit_reads_nested_and_flat_payloads(digit):
+    assert _dtmf_digit({"event": "dtmf", "dtmf": {"digit": digit, "duration": "100"}}) == digit
+    assert _dtmf_digit({"event": "dtmf", "digit": digit}) == digit
+    assert _dtmf_digit({"event": "dtmf", "dtmf": digit}) == digit
+
+
+@pytest.mark.parametrize("digit", ["1", "2", "3", "4"])
+def test_keypad_dtmf_plays_turn_and_keeps_socket_open(monkeypatch, digit):
+    seen: dict = {}
+
+    class _Db:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            raise AssertionError("dtmf turn should not roll back")
+
+    class _Session:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def opening(call_sid, from_number, to_number):
+        return "<Response><Say>Hello</Say><Gather><Say>Menu</Say></Gather></Response>"
+
+    async def pcm(twiml, rate):
+        if "Hangup" in twiml:
+            return b"\x10\x00" * 1600, False, True
+        return b"\x10\x00" * 1600, True, False
+
+    async def fake_turn(request, db):
+        seen["fields"] = await _webhook_fields(request)
+        return Response(content=b"<Response><Say>Next</Say><Hangup/></Response>", media_type="application/xml")
+
+    async def no_session(call_sid):
+        return None
+
+    monkeypatch.setattr("app.agent.exotel_voicebot.opening_twiml", opening)
+    monkeypatch.setattr("app.agent.exotel_voicebot.speakable_pcm", pcm)
+    monkeypatch.setattr("app.agent.router.conversation_turn", fake_turn)
+    monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: _Session())
+    monkeypatch.setattr("app.agent.session_store.get_session", no_session)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/agent/v1/voice")
+    client = TestClient(app)
+    if digit == "4":
+        dtmf_event = {"event": "dtmf", "stream_sid": "MZ1", "digit": digit}
+    else:
+        dtmf_event = {
+            "event": "dtmf",
+            "stream_sid": "MZ1",
+            "dtmf": {"digit": digit, "duration": "100"},
+        }
+
+    with client.websocket_connect("/agent/v1/voice/incoming?sample-rate=8000") as ws:
+        ws.send_json({"event": "connected"})
+        ws.send_json(
+            {
+                "event": "start",
+                "stream_sid": "MZ1",
+                "start": {
+                    "stream_sid": "MZ1",
+                    "call_sid": "CA_TEST",
+                    "from": "08951395076",
+                    "to": "02048565100",
+                    "media_format": {"encoding": "audio/x-raw", "sample_rate": "8000"},
+                },
+            }
+        )
+        opening_media = ws.receive_json()
+        assert opening_media["event"] == "media"
+        opening_mark = ws.receive_json()
+        assert opening_mark["mark"]["name"] == "open-1"
+
+        ws.send_json(dtmf_event)
+        media = ws.receive_json()
+        assert media["event"] == "media"
+        assert media["stream_sid"] == "MZ1"
+        payload = base64.b64decode(media["media"]["payload"])
+        assert len(payload) >= 3200
+        assert len(payload) % 320 == 0
+        mark = ws.receive_json()
+        assert mark["event"] == "mark"
+        assert mark["mark"]["name"] == "turn"
+
+        ws.send_json({"event": "mark", "stream_sid": "MZ1", "mark": {"name": "turn"}})
+        ws.send_json({"event": "stop", "stop": {"reason": "callended", "call_sid": "CA_TEST"}})
+
+    assert seen["fields"]["CallSid"] == "CA_TEST"
+    assert seen["fields"]["SpeechResult"] == ""
+    assert seen["fields"]["Digits"] == digit

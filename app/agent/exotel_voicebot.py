@@ -302,9 +302,7 @@ async def _existing_turn_twiml(
     )
     async with AsyncSessionLocal() as db:
         try:
-            response = await conversation_turn(
-                request, db, call_sid, speech, digits, "1.0"
-            )
+            response = await conversation_turn(request, db)
             await db.commit()
         except Exception:
             await db.rollback()

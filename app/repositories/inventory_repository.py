@@ -19,8 +19,14 @@ class InventoryRepository:
     async def list_all(
         self, skip: int = 0, limit: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, warehouse_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[InventoryItem]:
         query = self._base_query()
+        if hospital_id is not None:
+            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         if category:
             query = query.where(InventoryItem.category == category)
         if warehouse_id:
@@ -46,7 +52,7 @@ class InventoryRepository:
             base = base.where(InventoryItem.warehouse_id == warehouse_id)
         return (await self.db.scalar(base)) or 0
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[InventoryItem]:
+    async def search(self, q: str, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[InventoryItem]:
         pattern = f"%{q.lower()}%"
         query = self._base_query().where(
             or_(
@@ -55,20 +61,29 @@ class InventoryRepository:
                 func.lower(InventoryItem.barcode).like(pattern),
             )
         )
+        if hospital_id is not None:
+            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
+    async def count_search(self, q: str, hospital_id: int | None = None) -> int:
         pattern = f"%{q.lower()}%"
-        return (await self.db.scalar(
-            select(func.count()).select_from(InventoryItem).where(
-                InventoryItem.is_deleted.is_(False),
-                or_(
-                    func.lower(InventoryItem.name).like(pattern),
-                    func.lower(InventoryItem.sku).like(pattern),
-                ),
+        query = select(func.count()).select_from(InventoryItem).where(
+            InventoryItem.is_deleted.is_(False),
+            or_(
+                func.lower(InventoryItem.name).like(pattern),
+                func.lower(InventoryItem.sku).like(pattern),
+            ),
+        )
+        if hospital_id is not None:
+            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
             )
-        )) or 0
+        return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, item_id: int) -> InventoryItem | None:
         result = await self.db.execute(self._base_query().where(InventoryItem.id == item_id))
@@ -174,6 +189,55 @@ class InventoryRepository:
             "low_stock_count": low_stock or 0,
             "expired_count": expired or 0,
             "total_value": float(total_value or 0),
+        }
+
+    async def get_inventory_summary(self, hospital_id: int | None = None) -> dict:
+        stock_summary = await self.get_stock_summary(hospital_id=hospital_id)
+
+        inward_query = (
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+            .select_from(StockTransaction)
+            .join(InventoryItem, StockTransaction.item_id == InventoryItem.id)
+            .where(
+                InventoryItem.is_deleted.is_(False),
+                or_(
+                    func.upper(StockTransaction.direction) == "IN",
+                    func.lower(StockTransaction.transaction_type).in_(["inward", "purchase_receipt", "return"])
+                )
+            )
+        )
+
+        outward_query = (
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+            .select_from(StockTransaction)
+            .join(InventoryItem, StockTransaction.item_id == InventoryItem.id)
+            .where(
+                InventoryItem.is_deleted.is_(False),
+                or_(
+                    func.upper(StockTransaction.direction) == "OUT",
+                    func.lower(StockTransaction.transaction_type).in_(["outward", "consumption", "dispense", "transfer"])
+                )
+            )
+        )
+
+        if hospital_id is not None:
+            inward_query = inward_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
+            outward_query = outward_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
+
+        inward_restocks = (await self.db.scalar(inward_query)) or 0
+        outward_issued = (await self.db.scalar(outward_query)) or 0
+
+        return {
+            "stock_on_hand": stock_summary["total_quantity"],
+            "inward_restocks": int(inward_restocks),
+            "outward_issued": int(outward_issued),
+            "reorder_alerts": stock_summary["low_stock_count"],
         }
 
 

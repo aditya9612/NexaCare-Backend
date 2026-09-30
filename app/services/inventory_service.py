@@ -1,3 +1,4 @@
+import math
 from datetime import timedelta
 from sqlalchemy import select, func, inspect
 from app.models.inventory_model import WarehouseStock
@@ -34,6 +35,8 @@ from app.schemas.inventory_schema import (
     WarehouseUpdate,
     InventoryDashboardResponse,
     StockSummary,
+    InventorySummaryResponse,
+    InventoryPaginatedWithSummaryResponse,
 )
 from app.utils.helpers import generate_code, generate_stock_transaction_number, utc_now
 from app.utils.pagination import build_paginated_result
@@ -105,20 +108,41 @@ class InventoryService:
     async def list_items(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, warehouse_id: int | None = None,
-    ):
+        hospital_id: int | None = None,
+    ) -> InventoryPaginatedWithSummaryResponse:
         skip = (page - 1) * size
         items = await self.item_repo.list_all(
             skip=skip, limit=size, sort_by=sort_by, sort_order=sort_order,
-            category=category, warehouse_id=warehouse_id,
+            category=category, warehouse_id=warehouse_id, hospital_id=hospital_id,
         )
-        total = await self.item_repo.count_all(category=category, warehouse_id=warehouse_id)
-        return build_paginated_result([InventoryItemResponse.model_validate(i) for i in items], total, page, size)
+        total = await self.item_repo.count_all(category=category, warehouse_id=warehouse_id, hospital_id=hospital_id)
+        summary_dict = await self.item_repo.get_inventory_summary(hospital_id=hospital_id)
+        pages = math.ceil(total / size) if size else 0
 
-    async def search_items(self, q: str, page: int = 1, size: int = 20):
+        return InventoryPaginatedWithSummaryResponse(
+            items=[InventoryItemResponse.model_validate(i) for i in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            summary=InventorySummaryResponse(**summary_dict),
+        )
+
+    async def search_items(self, q: str, page: int = 1, size: int = 20, hospital_id: int | None = None) -> InventoryPaginatedWithSummaryResponse:
         skip = (page - 1) * size
-        items = await self.item_repo.search(q, skip=skip, limit=size)
-        total = await self.item_repo.count_search(q)
-        return build_paginated_result([InventoryItemResponse.model_validate(i) for i in items], total, page, size)
+        items = await self.item_repo.search(q, skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.item_repo.count_search(q, hospital_id=hospital_id)
+        summary_dict = await self.item_repo.get_inventory_summary(hospital_id=hospital_id)
+        pages = math.ceil(total / size) if size else 0
+
+        return InventoryPaginatedWithSummaryResponse(
+            items=[InventoryItemResponse.model_validate(i) for i in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            summary=InventorySummaryResponse(**summary_dict),
+        )
 
     async def get_item(self, item_id: int) -> InventoryItemResponse:
         item = await self.item_repo.get_by_id(item_id)
@@ -238,7 +262,6 @@ class InventoryService:
         raise BadRequestException("Stock transactions are immutable and cannot be deleted.")
 
     async def get_dashboard_summary(self, hospital_id: int | None = None) -> InventoryDashboardResponse:
-        total_registered_items = await self.item_repo.count_all(hospital_id=hospital_id)
         stock_alerts = await self.alert_repo.count_active(hospital_id=hospital_id)
         active_warehouse_units = await self.warehouse_repo.count_active(hospital_id=hospital_id)
         inactive_warehouse_units = await self.warehouse_repo.count_inactive(hospital_id=hospital_id)
@@ -247,13 +270,10 @@ class InventoryService:
         stock_summary = await self.item_repo.get_stock_summary(hospital_id=hospital_id)
 
         return InventoryDashboardResponse(
-            total_registered_items=total_registered_items,
             stock_alerts=stock_alerts,
             active_warehouse_units=active_warehouse_units,
             inactive_warehouse_units=inactive_warehouse_units,
-            total_warehouse_units=total_warehouses,
             total_warehouses=total_warehouses,
-            warehouse_count=total_warehouses,
             total_vendors=total_vendors,
             total_items=stock_summary["total_items"],
             total_quantity=stock_summary["total_quantity"],
@@ -791,13 +811,10 @@ class InventoryService:
             low_stock_count=low_stock_count,
             expired_count=0,
             total_value=float(total_value),
-            total_registered_items=total_items,
             stock_alerts=low_stock_count,
             active_warehouse_units=active_wh,
             inactive_warehouse_units=inactive_wh,
-            total_warehouse_units=total_wh,
             total_warehouses=total_wh,
-            warehouse_count=total_wh,
             total_vendors=0
         )
 

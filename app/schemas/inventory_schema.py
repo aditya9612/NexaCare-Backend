@@ -426,13 +426,10 @@ class ConsumptionReport(BaseSchema):
 
 
 class InventoryDashboardResponse(BaseSchema):
-    total_registered_items: int
     stock_alerts: int
     active_warehouse_units: int
     inactive_warehouse_units: int
-    total_warehouse_units: int = 0
     total_warehouses: int = 0
-    warehouse_count: int = 0
     total_vendors: int
     total_items: int
     total_quantity: int
@@ -447,14 +444,28 @@ class StockSummary(BaseSchema):
     low_stock_count: int = 0
     expired_count: int = 0
     total_value: float = 0.0
-    total_registered_items: int = 0
     stock_alerts: int = 0
     active_warehouse_units: int = 0
     inactive_warehouse_units: int = 0
-    total_warehouse_units: int = 0
     total_warehouses: int = 0
-    warehouse_count: int = 0
     total_vendors: int = 0
+
+
+class InventorySummaryResponse(BaseSchema):
+    stock_on_hand: int = 0
+    inward_restocks: int = 0
+    outward_issued: int = 0
+    reorder_alerts: int = 0
+
+
+class InventoryPaginatedWithSummaryResponse(BaseSchema):
+    items: List[InventoryItemResponse] = []
+    total: int
+    page: int
+    size: int
+    pages: int
+    summary: InventorySummaryResponse
+
 
 
 

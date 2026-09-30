@@ -265,15 +265,27 @@ class PatientRepository:
         from app.models.bed_allocation_model import Bed
 
         today = get_today_ist()
+        start_of_today = datetime.combine(today, time.min)
+        end_of_today = datetime.combine(today, time.max)
         start_of_month = datetime.combine(date(today.year, today.month, 1), time.min)
         _, last_day = calendar.monthrange(today.year, today.month)
         end_of_month = datetime.combine(date(today.year, today.month, last_day), time.max)
 
-        # 1. Baseline patient stats + this_month
+        # 1. Baseline patient stats + new_today + this_month
         query = select(
             func.count(case((Patient.status == "active", 1))).label("active_count"),
             func.count(case((Patient.status == "inactive", 1))).label("inactive_count"),
-            func.count(func.distinct(case((Patient.city != "", Patient.city), else_=None))).label("cities_count"),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Patient.created_at >= start_of_today,
+                            Patient.created_at <= end_of_today,
+                        ),
+                        1,
+                    )
+                )
+            ).label("new_today"),
             func.count(
                 case(
                     (
@@ -374,7 +386,7 @@ class PatientRepository:
         return {
             "active_count": row.active_count or 0,
             "inactive_count": row.inactive_count or 0,
-            "cities_count": row.cities_count or 0,
+            "new_today": row.new_today or 0,
             "this_month": row.this_month or 0,
             "ipd": ipd_count,
             "opd": opd_count,

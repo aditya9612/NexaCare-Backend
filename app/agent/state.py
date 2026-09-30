@@ -57,6 +57,7 @@ class BookingCallState(TypedDict):
     appointment_id: Optional[int]
     appointment_number: Optional[str]
     booking_attempt_id: Optional[str]     # idempotency key for voice booking
+    reschedule_candidates: Optional[list]  # upcoming appts for DTMF "which one?" picker
 
     # ── Phase 6 conversation memory ────────────────────────────────────────
     current_topic: Optional[str]

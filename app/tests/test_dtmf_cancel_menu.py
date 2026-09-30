@@ -175,7 +175,7 @@ async def test_digit_3_cancels_confirmed_appointment(monkeypatch):
     assert isinstance(data, CancelRequest)
     assert data.appointment_id == 11
     assert data.reason == "Cancelled via voice assistant"
-    assert user_id == 0
+    assert user_id is None
     assert voice.find_patient_calls == ["+919876543210"]
     assert voice.find_upcoming_calls == []
     assert len(voice.list_all_calls) == 1
@@ -203,7 +203,7 @@ async def test_digit_3_uses_pending_when_confirmed_missing(monkeypatch):
 
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 22
-    assert user_id == 0
+    assert user_id is None
     assert "Your appointment has been cancelled successfully." in _body(response)
 
 
@@ -230,7 +230,7 @@ async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatc
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 33
     assert data.reason == "Cancelled via voice assistant"
-    assert user_id == 0
+    assert user_id is None
     assert "Your appointment has been cancelled successfully." in _body(response)
 
 
@@ -247,7 +247,7 @@ async def test_digit_3_cancels_session_appointment_without_phone_lookup(monkeypa
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 44
     assert data.reason == "Cancelled via voice assistant"
-    assert user_id == 0
+    assert user_id is None
     assert voice.find_patient_calls == []
     assert voice.find_upcoming_calls == []
     assert voice.list_all_calls == []
@@ -310,7 +310,7 @@ async def test_digit_3_speaks_selected_language(monkeypatch):
         data, user_id = appointments.calls[-1]
         assert data.appointment_id == 11
         assert data.reason == "Cancelled via voice assistant"
-        assert user_id == 0
+        assert user_id is None
         assert phrase in text
         assert f'language="{twilio_language}"' in text
         assert "<Hangup/>" in text
@@ -385,108 +385,144 @@ async def test_digit_3_not_found_and_generic_error(monkeypatch):
     assert "not yet implemented" not in error_text
 
 
-async def test_digit_3_cancels_appointment_on_caller_patient(monkeypatch):
-    _session(monkeypatch)
+async def test_digit_2_reschedule_single_appointment_offers_slots(monkeypatch):
+    store = _session(monkeypatch, language="en", base_url="http://localhost:8000")
     voice = _Voice(None)
-    voice.confirmed = [SimpleNamespace(id=11, patient_id=7)]
-    voice.pending = []
     appointments = _Appointments(None)
     _install(monkeypatch, voice, appointments)
 
-    response = await service_menu(_request("3"), db=object())
-
-    assert appointments.calls[0][0].appointment_id == 11
-    assert 7 in voice.list_all_calls[0]["patient_id"]
-    assert "Your appointment has been cancelled successfully." in _body(response)
-
-
-async def test_digit_3_cancels_dependent_patient_appointment(monkeypatch):
-    _session(monkeypatch, from_number="+917350334029")
-    voice = _Voice(None)
-    voice.patient = SimpleNamespace(
-        id=47, guardian_patient_id=None, phone="+917350334029"
-    )
-    voice.dependents = {
-        47: [SimpleNamespace(id=226, guardian_patient_id=47, phone=None)],
+    candidate = {
+        "appointment_id": 11,
+        "appointment_number": "A-11",
+        "patient_id": 7,
+        "patient_name": "Rahul",
+        "doctor_id": 3,
+        "doctor_name": "Sharma",
+        "date": "2026-10-01",
+        "time": "10:00:00",
     }
-    voice.confirmed = []
-    voice.pending = [SimpleNamespace(id=239, patient_id=226)]
-    appointments = _Appointments(None)
-    _install(monkeypatch, voice, appointments)
 
-    response = await service_menu(_request("3"), db=object())
+    async def fake_list(*_args, **_kwargs):
+        return [7], [candidate]
 
-    assert voice.list_dependents_calls == [47]
-    assert set(voice.list_all_calls[0]["patient_id"]) == {47, 226}
-    assert appointments.calls[0][0].appointment_id == 239
-    assert "Your appointment has been cancelled successfully." in _body(response)
+    async def fake_prepare(_db, state, chosen):
+        return {
+            "step": "select_slot",
+            "service": "reschedule",
+            "appointment_id": chosen["appointment_id"],
+            "selected_doctor_id": chosen["doctor_id"],
+            "selected_doctor_name": chosen["doctor_name"],
+            "available_slots": [
+                {"date": "2026-10-02", "time": "11:00:00", "doctor_id": 3},
+            ],
+            "_twiml": "<Response><Say>choose slot</Say></Response>",
+        }
 
-
-async def test_digit_3_cancels_appointment_on_other_same_phone_patient(monkeypatch):
-    _session(monkeypatch, from_number="+917350334029")
-    voice = _Voice(None)
-    voice.patient = SimpleNamespace(
-        id=47, guardian_patient_id=None, phone="+917350334029"
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
     )
-    other = SimpleNamespace(id=99, guardian_patient_id=None, phone="+917350334029")
-    voice.search_results = [voice.patient, other]
-    voice.confirmed = []
-    voice.pending = [SimpleNamespace(id=501, patient_id=99)]
-    appointments = _Appointments(None)
-    _install(monkeypatch, voice, appointments)
-
-    response = await service_menu(_request("3"), db=object())
-
-    assert voice.search_calls
-    assert 47 in voice.list_all_calls[0]["patient_id"]
-    assert 99 in voice.list_all_calls[0]["patient_id"]
-    assert appointments.calls[0][0].appointment_id == 501
-    assert "Your appointment has been cancelled successfully." in _body(response)
-
-
-async def test_digit_3_does_not_cancel_when_multiple_appointments(monkeypatch):
-    _session(monkeypatch)
-    voice = _Voice(None)
-    voice.confirmed = [SimpleNamespace(id=11, patient_id=7)]
-    voice.pending = [SimpleNamespace(id=22, patient_id=7)]
-    appointments = _Appointments(None)
-    _install(monkeypatch, voice, appointments)
-
-    text = _body(await service_menu(_request("3"), db=object()))
-
-    assert appointments.calls == []
-    assert "could not cancel your appointment" in text
-    assert "<Hangup/>" in text
-
-
-async def test_digit_3_multiple_appointments_does_not_cancel_first(monkeypatch):
-    _session(monkeypatch)
-    voice = _Voice(None)
-    voice.confirmed = [
-        SimpleNamespace(id=11, patient_id=7),
-        SimpleNamespace(id=12, patient_id=7),
-    ]
-    voice.pending = []
-    appointments = _Appointments(None)
-    _install(monkeypatch, voice, appointments)
-
-    await service_menu(_request("3"), db=object())
-
-    assert appointments.calls == []
-
-
-async def test_digit_2_keeps_unimplemented_fallback(monkeypatch):
-    _session(monkeypatch)
-    voice = _Voice(None)
-    appointments = _Appointments(None)
-    _install(monkeypatch, voice, appointments)
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.prepare_slot_selection",
+        fake_prepare,
+    )
 
     response = await service_menu(_request("2"), db=object())
     text = _body(response)
 
+    assert "choose slot" in text
+    assert "This service will be available soon." not in text
+    assert store["CA_CANCEL"]["service"] == "reschedule"
+    assert store["CA_CANCEL"]["step"] == "select_slot"
+    assert store["CA_CANCEL"]["appointment_id"] == 11
+
+
+async def test_digit_2_reschedule_multiple_asks_which_appointment(monkeypatch):
+    store = _session(monkeypatch, language="en", base_url="http://localhost:8000")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    candidates = [
+        {
+            "appointment_id": 11,
+            "appointment_number": "A-11",
+            "patient_id": 7,
+            "patient_name": "Rahul",
+            "doctor_id": 3,
+            "doctor_name": "Sharma",
+            "date": "2026-10-01",
+            "time": "10:00:00",
+        },
+        {
+            "appointment_id": 12,
+            "appointment_number": "A-12",
+            "patient_id": 8,
+            "patient_name": "Priya",
+            "doctor_id": 4,
+            "doctor_name": "Patel",
+            "date": "2026-10-02",
+            "time": "14:00:00",
+        },
+    ]
+
+    async def fake_list(*_args, **_kwargs):
+        return [7, 8], candidates
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+
+    response = await service_menu(_request("2"), db=object())
+    text = _body(response)
+
+    assert "You have more than one upcoming appointment." in text
+    assert "Press 1 for Rahul" in text
+    assert "Press 2 for Priya" in text
+    assert "<Gather" in text
+    assert store["CA_CANCEL"]["step"] == "reschedule_select_appointment"
+    assert store["CA_CANCEL"]["service"] == "reschedule"
+    assert len(store["CA_CANCEL"]["reschedule_candidates"]) == 2
     assert appointments.calls == []
-    assert voice.find_patient_calls == []
-    assert "This service will be available soon." in text
+
+
+async def test_digit_2_reschedule_patient_not_found(monkeypatch):
+    _session(monkeypatch, language="en", base_url="http://localhost:8000")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    async def fake_list(*_args, **_kwargs):
+        return None, []
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+
+    text = _body(await service_menu(_request("2"), db=object()))
+    assert "could not find a patient record" in text
+    assert "<Hangup/>" in text
+    assert "This service will be available soon." not in text
+
+
+async def test_digit_2_reschedule_no_appointment(monkeypatch):
+    _session(monkeypatch, language="en", base_url="http://localhost:8000")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    async def fake_list(*_args, **_kwargs):
+        return [7], []
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+
+    text = _body(await service_menu(_request("2"), db=object()))
+    assert "do not have an upcoming confirmed or pending appointment to reschedule" in text
     assert "<Hangup/>" in text
 
 

@@ -109,6 +109,13 @@ def process_service_menu(digit: str) -> dict:
             "service": "reschedule",
             "retry_count": 0,
         }
+    if service == "cancel":
+        # Stay on /menu so Exotel DTMF routing and Twilio Gather share one path.
+        return {
+            "step": "service_menu",
+            "service": "cancel",
+            "retry_count": 0,
+        }
     return {
         "step": "collect_name",
         "service": service,

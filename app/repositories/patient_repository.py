@@ -113,6 +113,26 @@ class PatientRepository:
                 return patient
         return None
 
+    async def list_by_phone(self, phone: str, limit: int = 5) -> list[Patient]:
+        """All non-deleted patients whose stored phone matches this mobile (max `limit`)."""
+        from app.utils.phone_utils import indian_mobile_last10
+
+        last10 = indian_mobile_last10(phone)
+        if not last10:
+            return []
+        result = await self.db.execute(
+            self._base_query()
+            .where(Patient.phone.is_not(None))
+            .order_by(Patient.id.asc())
+        )
+        matched: dict[int, Patient] = {}
+        for patient in result.scalars().all():
+            if indian_mobile_last10(patient.phone) == last10:
+                matched[patient.id] = patient
+                if len(matched) >= limit:
+                    break
+        return list(matched.values())[:limit]
+
     async def list_dependents(self, guardian_patient_id: int) -> list[Patient]:
         result = await self.db.execute(
             self._base_query()

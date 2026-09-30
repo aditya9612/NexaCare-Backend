@@ -961,35 +961,39 @@ async def service_menu(
                 )
 
             try:
-                voice = VoiceAssistantService(db)
-                phone = state.get("from_number") or ""
-                patient = await voice._find_patient(phone) if phone else None
-                loaded_by_id = False
-                if patient is None and state.get("patient_id"):
-                    patient = await voice.patient_repo.get_by_id(state["patient_id"])
-                    loaded_by_id = patient is not None
-                if not patient:
-                    logger.info(f"  ↳ [{call_sid}] Cancel: patient not found")
-                    return xml(_say_hangup(cancel_patient_not_found(spoken_language)))
+                session_appointment_id = state.get("appointment_id")
+                if session_appointment_id:
+                    appt = await AppointmentService(db).get_by_id(int(session_appointment_id))
+                else:
+                    voice = VoiceAssistantService(db)
+                    phone = state.get("from_number") or ""
+                    patient = await voice._find_patient(phone) if phone else None
+                    loaded_by_id = False
+                    if patient is None and state.get("patient_id"):
+                        patient = await voice.patient_repo.get_by_id(state["patient_id"])
+                        loaded_by_id = patient is not None
+                    if not patient:
+                        logger.info(f"  ↳ [{call_sid}] Cancel: patient not found")
+                        return xml(_say_hangup(cancel_patient_not_found(spoken_language)))
 
-                appt = await voice._find_upcoming_appointment(phone) if phone else None
-                if appt is None and loaded_by_id:
-                    appointments = await voice.appointment_repo.list_all(
-                        patient_id=patient.id,
-                        status=AppointmentStatus.CONFIRMED,
-                        limit=5,
-                    )
-                    if not appointments:
+                    appt = await voice._find_upcoming_appointment(phone) if phone else None
+                    if appt is None and loaded_by_id:
                         appointments = await voice.appointment_repo.list_all(
                             patient_id=patient.id,
-                            status=AppointmentStatus.PENDING,
+                            status=AppointmentStatus.CONFIRMED,
                             limit=5,
                         )
-                    appt = appointments[0] if appointments else None
+                        if not appointments:
+                            appointments = await voice.appointment_repo.list_all(
+                                patient_id=patient.id,
+                                status=AppointmentStatus.PENDING,
+                                limit=5,
+                            )
+                        appt = appointments[0] if appointments else None
 
-                if not appt:
-                    logger.info(f"  ↳ [{call_sid}] Cancel: no upcoming appointment")
-                    return xml(_say_hangup(cancel_no_appointment(spoken_language)))
+                    if not appt:
+                        logger.info(f"  ↳ [{call_sid}] Cancel: no upcoming appointment")
+                        return xml(_say_hangup(cancel_no_appointment(spoken_language)))
 
                 await AppointmentService(db).cancel(
                     CancelRequest(

@@ -101,6 +101,13 @@ class _Appointments:
         self.db = db
         self.calls = []
         self.error = None
+        self.rows = {}
+
+    async def get_by_id(self, appointment_id):
+        row = self.rows.get(int(appointment_id))
+        if row is None:
+            raise NotFoundException("Appointment not found")
+        return row
 
     async def cancel(self, data, user_id):
         self.calls.append((data, user_id))
@@ -187,6 +194,58 @@ async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatc
     assert data.reason == "Cancelled via voice assistant"
     assert user_id == 0
     assert "Your appointment has been cancelled successfully." in _body(response)
+
+
+async def test_digit_3_cancels_session_appointment_without_phone_lookup(monkeypatch):
+    _session(monkeypatch, appointment_id=44, patient_id=7)
+    voice = _Voice(None)
+    voice.patient = SimpleNamespace(id=7)
+    voice.upcoming = SimpleNamespace(id=11)
+    appointments = _Appointments(None)
+    appointments.rows[44] = SimpleNamespace(id=44, patient_id=99)
+    _install(monkeypatch, voice, appointments)
+
+    text = _body(await service_menu(_request("3"), db=object()))
+
+    data, user_id = appointments.calls[0]
+    assert data.appointment_id == 44
+    assert data.reason == "Cancelled via voice assistant"
+    assert user_id == 0
+    assert voice.find_patient_calls == []
+    assert voice.find_upcoming_calls == []
+    assert "Your appointment has been cancelled successfully." in text
+    assert "<Hangup/>" in text
+
+
+async def test_digit_3_invalid_session_appointment_id(monkeypatch):
+    _session(monkeypatch, appointment_id=404)
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    text = _body(await service_menu(_request("3"), db=object()))
+
+    assert appointments.calls == []
+    assert voice.find_patient_calls == []
+    assert "could not cancel your appointment" in text
+    assert "<Hangup/>" in text
+
+
+async def test_digit_3_session_appointment_already_terminal(monkeypatch):
+    _session(monkeypatch, appointment_id=44, language="hi", twilio_language="hi-IN")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    appointments.rows[44] = SimpleNamespace(id=44, patient_id=99)
+    appointments.error = BadRequestException("Cannot cancel a terminal appointment")
+    _install(monkeypatch, voice, appointments)
+
+    text = _body(await service_menu(_request("3"), db=object()))
+
+    assert appointments.calls[0][0].appointment_id == 44
+    assert voice.find_patient_calls == []
+    assert "पहले ही पूरी हो चुकी है या रद्द हो चुकी है" in text
+    assert 'language="hi-IN"' in text
+    assert "<Hangup/>" in text
 
 
 async def test_digit_3_speaks_selected_language(monkeypatch):

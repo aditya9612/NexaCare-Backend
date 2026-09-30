@@ -128,6 +128,30 @@ async def test_greeting_digit_routes_to_service_menu(monkeypatch):
     assert session.db.committed is True
 
 
+async def test_service_menu_ignores_speech_without_dtmf(monkeypatch):
+    """STT filler must not be treated as Digits or burn menu retries."""
+    session = _session_factory()
+
+    async def fake_get_session(call_sid):
+        return {"step": "greeting", "call_sid": call_sid}
+
+    async def boom_menu(*_a, **_k):
+        raise AssertionError("speech-only input must not hit service_menu")
+
+    async def boom_turn(*_a, **_k):
+        raise AssertionError("greeting speech must not hit /turn")
+
+    monkeypatch.setattr("app.agent.session_store.get_session", fake_get_session)
+    monkeypatch.setattr("app.agent.router.service_menu", boom_menu)
+    monkeypatch.setattr("app.agent.router.conversation_turn", boom_turn)
+    monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: session)
+
+    twiml = await _existing_input_twiml("CA_EXOTEL", "हो.", "")
+
+    assert twiml == ""
+    assert session.db.committed is False
+
+
 async def test_language_select_digit_routes_to_lang(monkeypatch):
     seen: dict = {}
     session = _session_factory()

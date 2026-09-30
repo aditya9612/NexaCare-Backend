@@ -436,9 +436,19 @@ async def _existing_input_twiml(
             "SpeechResult": speech,
         }
     elif handler_name == "service_menu":
+        # Service menu Gather is DTMF-only (numDigits=1). Never map STT into Digits —
+        # filler like "हो." was counted as invalid input, burned retries, and hung up.
+        if not digits:
+            logger.info(
+                "exotel voicebot ignoring speech on DTMF service menu "
+                "call_sid=%s speech=%r",
+                call_sid,
+                (speech[:80] + "…") if len(speech) > 80 else speech,
+            )
+            return ""
         form = {
             "CallSid": call_sid,
-            "Digits": digits or speech,
+            "Digits": digits,
         }
     else:
         form = {

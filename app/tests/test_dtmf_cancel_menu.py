@@ -146,7 +146,7 @@ async def test_digit_3_cancels_confirmed_appointment(monkeypatch):
     assert isinstance(data, CancelRequest)
     assert data.appointment_id == 11
     assert data.reason == "Cancelled via voice assistant"
-    assert user_id == 0
+    assert user_id is None
     assert voice.find_patient_calls == ["+919876543210"]
     assert voice.find_upcoming_calls == ["+919876543210"]
     assert "Your appointment has been cancelled successfully." in text
@@ -166,7 +166,7 @@ async def test_digit_3_uses_pending_when_confirmed_missing(monkeypatch):
 
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 22
-    assert user_id == 0
+    assert user_id is None
     assert "Your appointment has been cancelled successfully." in _body(response)
 
 
@@ -192,7 +192,7 @@ async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatc
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 33
     assert data.reason == "Cancelled via voice assistant"
-    assert user_id == 0
+    assert user_id is None
     assert "Your appointment has been cancelled successfully." in _body(response)
 
 
@@ -210,7 +210,7 @@ async def test_digit_3_cancels_session_appointment_without_phone_lookup(monkeypa
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 44
     assert data.reason == "Cancelled via voice assistant"
-    assert user_id == 0
+    assert user_id is None
     assert voice.find_patient_calls == []
     assert voice.find_upcoming_calls == []
     assert "Your appointment has been cancelled successfully." in text
@@ -270,7 +270,7 @@ async def test_digit_3_speaks_selected_language(monkeypatch):
         data, user_id = appointments.calls[-1]
         assert data.appointment_id == 11
         assert data.reason == "Cancelled via voice assistant"
-        assert user_id == 0
+        assert user_id is None
         assert phrase in text
         assert f'language="{twilio_language}"' in text
         assert "<Hangup/>" in text

@@ -119,7 +119,7 @@ async def test_confirm_and_reschedule_success(monkeypatch):
     assert isinstance(data, RescheduleRequest)
     assert data.appointment_id == 11
     assert data.appointment_date == date(2026, 10, 5)
-    assert user_id == 0
+    assert user_id is None
 
 
 async def test_confirm_and_reschedule_terminal(monkeypatch):

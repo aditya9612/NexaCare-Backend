@@ -1000,7 +1000,7 @@ async def service_menu(
                         appointment_id=appt.id,
                         reason="Cancelled via voice assistant",
                     ),
-                    user_id=0,
+                    user_id=None,
                 )
                 logger.info(f"  ↳ [{call_sid}] Appointment {appt.id} cancelled")
                 return xml(_say_hangup(cancel_success(spoken_language)))

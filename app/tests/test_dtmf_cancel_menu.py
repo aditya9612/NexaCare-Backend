@@ -65,15 +65,24 @@ def _session(monkeypatch, **extra):
 class _Voice:
     def __init__(self, db):
         self.db = db
-        self.patient = SimpleNamespace(id=7)
-        self.upcoming = SimpleNamespace(id=11)
+        self.patient = SimpleNamespace(
+            id=7, guardian_patient_id=None, phone="+919876543210"
+        )
         self.by_id_patient = None
-        self.confirmed = []
+        self.confirmed = [SimpleNamespace(id=11, patient_id=7)]
         self.pending = []
+        self.dependents = {}
+        self.search_results = []
         self.find_patient_calls = []
         self.find_upcoming_calls = []
         self.list_all_calls = []
-        self.patient_repo = SimpleNamespace(get_by_id=self._get_by_id)
+        self.list_dependents_calls = []
+        self.search_calls = []
+        self.patient_repo = SimpleNamespace(
+            get_by_id=self._get_by_id,
+            list_dependents=self._list_dependents,
+            search=self._search,
+        )
         self.appointment_repo = SimpleNamespace(list_all=self._list_all)
 
     async def _find_patient(self, mobile):
@@ -82,18 +91,38 @@ class _Voice:
 
     async def _find_upcoming_appointment(self, mobile):
         self.find_upcoming_calls.append(mobile)
-        return self.upcoming
+        return None
 
     async def _get_by_id(self, patient_id):
         return self.by_id_patient
 
+    async def _list_dependents(self, guardian_patient_id):
+        self.list_dependents_calls.append(guardian_patient_id)
+        return list(self.dependents.get(guardian_patient_id, []))
+
+    async def _search(self, q, skip=0, limit=20, **_kwargs):
+        self.search_calls.append({"q": q, "limit": limit})
+        return list(self.search_results)
+
     async def _list_all(self, **kwargs):
         self.list_all_calls.append(kwargs)
-        if kwargs.get("status") == AppointmentStatus.CONFIRMED:
-            return list(self.confirmed)
-        if kwargs.get("status") == AppointmentStatus.PENDING:
-            return list(self.pending)
-        return []
+        status = kwargs.get("status")
+        rows = []
+        if status == AppointmentStatus.CONFIRMED:
+            rows = list(self.confirmed)
+        elif status == AppointmentStatus.PENDING:
+            rows = list(self.pending)
+        elif isinstance(status, (list, tuple, set)):
+            if AppointmentStatus.CONFIRMED in status:
+                rows.extend(self.confirmed)
+            if AppointmentStatus.PENDING in status:
+                rows.extend(self.pending)
+        requested = kwargs.get("patient_id")
+        if requested is not None:
+            allowed = set(requested) if isinstance(requested, (list, tuple, set)) else {requested}
+            rows = [row for row in rows if getattr(row, "patient_id", None) in allowed]
+        limit = kwargs.get("limit") or 20
+        return rows[:limit]
 
 
 class _Appointments:
@@ -148,7 +177,14 @@ async def test_digit_3_cancels_confirmed_appointment(monkeypatch):
     assert data.reason == "Cancelled via voice assistant"
     assert user_id == 0
     assert voice.find_patient_calls == ["+919876543210"]
-    assert voice.find_upcoming_calls == ["+919876543210"]
+    assert voice.find_upcoming_calls == []
+    assert len(voice.list_all_calls) == 1
+    assert voice.list_all_calls[0]["status"] == [
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.PENDING,
+    ]
+    assert 7 in voice.list_all_calls[0]["patient_id"]
+    assert voice.list_all_calls[0]["limit"] == 50
     assert "Your appointment has been cancelled successfully." in text
     assert "<Hangup/>" in text
     assert 'language="en-IN"' in text
@@ -158,7 +194,8 @@ async def test_digit_3_cancels_confirmed_appointment(monkeypatch):
 async def test_digit_3_uses_pending_when_confirmed_missing(monkeypatch):
     _session(monkeypatch)
     voice = _Voice(None)
-    voice.upcoming = SimpleNamespace(id=22)
+    voice.confirmed = []
+    voice.pending = [SimpleNamespace(id=22, patient_id=7)]
     appointments = _Appointments(None)
     _install(monkeypatch, voice, appointments)
 
@@ -174,21 +211,22 @@ async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatc
     _session(monkeypatch, from_number="", patient_id=7)
     voice = _Voice(None)
     voice.patient = None
-    voice.upcoming = None
-    voice.by_id_patient = SimpleNamespace(id=7)
+    voice.by_id_patient = SimpleNamespace(id=7, guardian_patient_id=None, phone=None)
     voice.confirmed = []
-    voice.pending = [SimpleNamespace(id=33)]
+    voice.pending = [SimpleNamespace(id=33, patient_id=7)]
     appointments = _Appointments(None)
     _install(monkeypatch, voice, appointments)
 
     response = await service_menu(_request("3"), db=object())
 
-    assert [call["status"] for call in voice.list_all_calls] == [
+    assert len(voice.list_all_calls) == 1
+    assert voice.list_all_calls[0]["status"] == [
         AppointmentStatus.CONFIRMED,
         AppointmentStatus.PENDING,
     ]
-    assert voice.list_all_calls[0]["patient_id"] == 7
-    assert voice.list_all_calls[0]["limit"] == 5
+    assert voice.list_all_calls[0]["patient_id"] == [7]
+    assert voice.list_all_calls[0]["limit"] == 50
+    assert voice.search_calls == []
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 33
     assert data.reason == "Cancelled via voice assistant"
@@ -199,8 +237,7 @@ async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatc
 async def test_digit_3_cancels_session_appointment_without_phone_lookup(monkeypatch):
     _session(monkeypatch, appointment_id=44, patient_id=7)
     voice = _Voice(None)
-    voice.patient = SimpleNamespace(id=7)
-    voice.upcoming = SimpleNamespace(id=11)
+    voice.patient = SimpleNamespace(id=7, guardian_patient_id=None, phone="+919876543210")
     appointments = _Appointments(None)
     appointments.rows[44] = SimpleNamespace(id=44, patient_id=99)
     _install(monkeypatch, voice, appointments)
@@ -213,6 +250,9 @@ async def test_digit_3_cancels_session_appointment_without_phone_lookup(monkeypa
     assert user_id == 0
     assert voice.find_patient_calls == []
     assert voice.find_upcoming_calls == []
+    assert voice.list_all_calls == []
+    assert voice.list_dependents_calls == []
+    assert voice.search_calls == []
     assert "Your appointment has been cancelled successfully." in text
     assert "<Hangup/>" in text
 
@@ -296,7 +336,7 @@ async def test_digit_3_patient_not_found(monkeypatch):
 async def test_digit_3_no_appointment(monkeypatch):
     _session(monkeypatch)
     voice = _Voice(None)
-    voice.upcoming = None
+    voice.confirmed = []
     appointments = _Appointments(None)
     _install(monkeypatch, voice, appointments)
 
@@ -343,6 +383,96 @@ async def test_digit_3_not_found_and_generic_error(monkeypatch):
     error_text = _body(await service_menu(_request("3"), db=object()))
     assert "could not cancel your appointment" in error_text
     assert "not yet implemented" not in error_text
+
+
+async def test_digit_3_cancels_appointment_on_caller_patient(monkeypatch):
+    _session(monkeypatch)
+    voice = _Voice(None)
+    voice.confirmed = [SimpleNamespace(id=11, patient_id=7)]
+    voice.pending = []
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    response = await service_menu(_request("3"), db=object())
+
+    assert appointments.calls[0][0].appointment_id == 11
+    assert 7 in voice.list_all_calls[0]["patient_id"]
+    assert "Your appointment has been cancelled successfully." in _body(response)
+
+
+async def test_digit_3_cancels_dependent_patient_appointment(monkeypatch):
+    _session(monkeypatch, from_number="+917350334029")
+    voice = _Voice(None)
+    voice.patient = SimpleNamespace(
+        id=47, guardian_patient_id=None, phone="+917350334029"
+    )
+    voice.dependents = {
+        47: [SimpleNamespace(id=226, guardian_patient_id=47, phone=None)],
+    }
+    voice.confirmed = []
+    voice.pending = [SimpleNamespace(id=239, patient_id=226)]
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    response = await service_menu(_request("3"), db=object())
+
+    assert voice.list_dependents_calls == [47]
+    assert set(voice.list_all_calls[0]["patient_id"]) == {47, 226}
+    assert appointments.calls[0][0].appointment_id == 239
+    assert "Your appointment has been cancelled successfully." in _body(response)
+
+
+async def test_digit_3_cancels_appointment_on_other_same_phone_patient(monkeypatch):
+    _session(monkeypatch, from_number="+917350334029")
+    voice = _Voice(None)
+    voice.patient = SimpleNamespace(
+        id=47, guardian_patient_id=None, phone="+917350334029"
+    )
+    other = SimpleNamespace(id=99, guardian_patient_id=None, phone="+917350334029")
+    voice.search_results = [voice.patient, other]
+    voice.confirmed = []
+    voice.pending = [SimpleNamespace(id=501, patient_id=99)]
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    response = await service_menu(_request("3"), db=object())
+
+    assert voice.search_calls
+    assert 47 in voice.list_all_calls[0]["patient_id"]
+    assert 99 in voice.list_all_calls[0]["patient_id"]
+    assert appointments.calls[0][0].appointment_id == 501
+    assert "Your appointment has been cancelled successfully." in _body(response)
+
+
+async def test_digit_3_does_not_cancel_when_multiple_appointments(monkeypatch):
+    _session(monkeypatch)
+    voice = _Voice(None)
+    voice.confirmed = [SimpleNamespace(id=11, patient_id=7)]
+    voice.pending = [SimpleNamespace(id=22, patient_id=7)]
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    text = _body(await service_menu(_request("3"), db=object()))
+
+    assert appointments.calls == []
+    assert "could not cancel your appointment" in text
+    assert "<Hangup/>" in text
+
+
+async def test_digit_3_multiple_appointments_does_not_cancel_first(monkeypatch):
+    _session(monkeypatch)
+    voice = _Voice(None)
+    voice.confirmed = [
+        SimpleNamespace(id=11, patient_id=7),
+        SimpleNamespace(id=12, patient_id=7),
+    ]
+    voice.pending = []
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    await service_menu(_request("3"), db=object())
+
+    assert appointments.calls == []
 
 
 async def test_digit_2_keeps_unimplemented_fallback(monkeypatch):

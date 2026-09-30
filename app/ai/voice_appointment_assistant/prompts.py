@@ -148,6 +148,38 @@ def cancel_success(language: str) -> str:
     }.get(language, "Your appointment has been cancelled successfully.")
 
 
+def cancel_patient_not_found(language: str) -> str:
+    return {
+        "en": "We could not find a patient record for this phone number. Goodbye.",
+        "hi": "इस फोन नंबर के लिए मरीज का रिकॉर्ड नहीं मिला। अलविदा।",
+        "mr": "या फोन नंबरसाठी रुग्णाची नोंद सापडली नाही. नमस्कार.",
+    }.get(language, "We could not find a patient record for this phone number. Goodbye.")
+
+
+def cancel_no_appointment(language: str) -> str:
+    return {
+        "en": "You do not have an upcoming confirmed or pending appointment to cancel. Goodbye.",
+        "hi": "रद्द करने के लिए आपकी कोई आगामी कन्फर्म या पेंडिंग अपॉइंटमेंट नहीं है। अलविदा।",
+        "mr": "रद्द करण्यासाठी तुमची कोणतीही पुढील कन्फर्म किंवा पेंडिंग अपॉइंटमेंट नाही. नमस्कार.",
+    }.get(language, "You do not have an upcoming confirmed or pending appointment to cancel. Goodbye.")
+
+
+def cancel_terminal(language: str) -> str:
+    return {
+        "en": "This appointment is already completed or cancelled and cannot be cancelled. Goodbye.",
+        "hi": "यह अपॉइंटमेंट पहले ही पूरी हो चुकी है या रद्द हो चुकी है, इसलिए इसे रद्द नहीं किया जा सकता। अलविदा।",
+        "mr": "ही अपॉइंटमेंट आधीच पूर्ण झाली आहे किंवा रद्द झाली आहे, त्यामुळे ती रद्द करता येणार नाही. नमस्कार.",
+    }.get(language, "This appointment is already completed or cancelled and cannot be cancelled. Goodbye.")
+
+
+def cancel_failed(language: str) -> str:
+    return {
+        "en": "We could not cancel your appointment. Please call again. Goodbye.",
+        "hi": "हम आपका अपॉइंटमेंट रद्द नहीं कर सके। कृपया फिर से कॉल करें। अलविदा।",
+        "mr": "आम्ही तुमची अपॉइंटमेंट रद्द करू शकलो नाही. कृपया पुन्हा कॉल करा. नमस्कार.",
+    }.get(language, "We could not cancel your appointment. Please call again. Goodbye.")
+
+
 def reschedule_success(language: str) -> str:
     return {
         "en": "Your appointment has been rescheduled successfully. Goodbye.",

@@ -2,7 +2,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -88,12 +88,13 @@ class BillingResponse(BaseSchema):
     bill_type: Optional[str] = "consultation"
 
 
-from pydantic import model_validator
-
 class PaymentCreate(BaseSchema):
     amount: float = Field(..., gt=0)
-    payment_method: str
-    transaction_ref: str | None = None
+    payment_method: str = Field(..., validation_alias=AliasChoices("payment_method", "paymentMethod"))
+    transaction_ref: str | None = Field(
+        None,
+        validation_alias=AliasChoices("transaction_ref", "transactionReference", "transaction_reference"),
+    )
 
     @model_validator(mode="after")
     def validate_payment_details(self) -> 'PaymentCreate':

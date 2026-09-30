@@ -498,6 +498,22 @@ class PurchaseResponse(BaseSchema):
     created_at: datetime
 
 
+class PurchaseSummary(BaseSchema):
+    total_orders: int = 0
+    pending_orders: int = 0
+    completed_orders: int = 0
+    total_spent: float = 0.0
+
+
+class PurchaseListResponse(BaseSchema):
+    items: List[PurchaseResponse] = []
+    total: int
+    page: int
+    size: int
+    pages: int
+    summary: PurchaseSummary
+
+
 class LowStockAlert(BaseSchema):
     medicine_id: int
     name: str

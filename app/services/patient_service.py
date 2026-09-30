@@ -179,7 +179,7 @@ class PatientService:
                     "pages": 0,
                     "active_count": 0,
                     "inactive_count": 0,
-                    "cities_count": 0,
+                    "new_today": 0,
                     "this_month": 0,
                     "ipd": 0,
                     "opd": 0,
@@ -197,7 +197,7 @@ class PatientService:
                 "pages": 0,
                 "active_count": 0,
                 "inactive_count": 0,
-                "cities_count": 0,
+                "new_today": 0,
             }
 
         skip = (page - 1) * size

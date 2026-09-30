@@ -22,6 +22,7 @@ from app.schemas.inventory_schema import (
     WarehouseResponse,
     WarehouseUpdate,
     InventoryDashboardResponse,
+    InventoryPaginatedWithSummaryResponse,
 )
 from app.services.inventory_service import InventoryService
 from app.utils.pagination import PaginatedResult
@@ -41,7 +42,7 @@ async def create_inventory_item(
     return APIResponse(message="Inventory item created", data=item)
 
 
-@router.get("/items", response_model=APIResponse[PaginatedResult[InventoryItemResponse]])
+@router.get("/items", response_model=APIResponse[InventoryPaginatedWithSummaryResponse])
 async def list_inventory_items(
     db: DbSession,
     current_user: CurrentUser,
@@ -55,12 +56,13 @@ async def list_inventory_items(
     _: User = Depends(require_permission("inventory", "read")),
 ):
     service = InventoryService(db)
+    hospital_id = current_user.hospital_id
     if q:
-        result = await service.search_items(q, page=page, size=size)
+        result = await service.search_items(q, page=page, size=size, hospital_id=hospital_id)
     else:
         result = await service.list_items(
             page=page, size=size, sort_by=sort_by, sort_order=sort_order,
-            category=category, warehouse_id=warehouse_id,
+            category=category, warehouse_id=warehouse_id, hospital_id=hospital_id,
         )
     return APIResponse(message="Inventory items retrieved", data=result)
 

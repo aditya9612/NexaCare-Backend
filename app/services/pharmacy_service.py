@@ -1,5 +1,6 @@
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+import math
 from typing import Any, Optional
 
 # pyrefly: ignore [missing-import]
@@ -68,7 +69,9 @@ from app.schemas.pharmacy_schema import (
     PrescriptionUpdate,
     PurchaseCreate,
     PurchaseItemResponse,
+    PurchaseListResponse,
     PurchaseResponse,
+    PurchaseSummary,
     SalesReport,
     SupplierCreate,
     SupplierResponse,
@@ -1751,11 +1754,29 @@ class PharmacyService:
 
         return self._purchase_response(purchase)
 
-    async def list_purchases(self, page: int = 1, size: int = 20):
+    async def list_purchases(self, page: int = 1, size: int = 20) -> PurchaseListResponse:
         skip = (page - 1) * size
         items = await self.purchase_repo.list_all(skip=skip, limit=size)
         total = await self.purchase_repo.count_all()
-        return build_paginated_result([self._purchase_response(p) for p in items], total, page, size)
+        summary_stats = await self.purchase_repo.get_summary_stats()
+
+        pages = math.ceil(total / size) if size > 0 else 0
+
+        summary = PurchaseSummary(
+            total_orders=summary_stats["total_orders"],
+            pending_orders=summary_stats["pending_orders"],
+            completed_orders=summary_stats["completed_orders"],
+            total_spent=summary_stats["total_spent"],
+        )
+
+        return PurchaseListResponse(
+            items=[self._purchase_response(p) for p in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            summary=summary,
+        )
 
     def _purchase_response(self, purchase: Purchase) -> PurchaseResponse:
         items_resp = []

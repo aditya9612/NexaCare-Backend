@@ -142,10 +142,9 @@ async def test_digit_3_cancels_confirmed_appointment(monkeypatch):
     assert user_id == 0
     assert voice.find_patient_calls == ["+919876543210"]
     assert voice.find_upcoming_calls == ["+919876543210"]
-    assert "Your appointment has been cancelled." in text
+    assert "Your appointment has been cancelled successfully." in text
     assert "<Hangup/>" in text
     assert 'language="en-IN"' in text
-    assert 'voice="Polly.Aditi"' in text
     assert "not yet implemented" not in text
 
 
@@ -161,7 +160,7 @@ async def test_digit_3_uses_pending_when_confirmed_missing(monkeypatch):
     data, user_id = appointments.calls[0]
     assert data.appointment_id == 22
     assert user_id == 0
-    assert "Your appointment has been cancelled." in _body(response)
+    assert "Your appointment has been cancelled successfully." in _body(response)
 
 
 async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatch):
@@ -187,7 +186,36 @@ async def test_digit_3_session_patient_id_uses_confirmed_then_pending(monkeypatc
     assert data.appointment_id == 33
     assert data.reason == "Cancelled via voice assistant"
     assert user_id == 0
-    assert "Your appointment has been cancelled." in _body(response)
+    assert "Your appointment has been cancelled successfully." in _body(response)
+
+
+async def test_digit_3_speaks_selected_language(monkeypatch):
+    cases = (
+        ("en", "en-IN", "Your appointment has been cancelled successfully."),
+        ("hi", "hi-IN", "आपका अपॉइंटमेंट सफलतापूर्वक रद्द कर दिया गया है।"),
+        ("mr", "mr-IN", "आपली अपॉइंटमेंट यशस्वीरित्या रद्द करण्यात आली आहे."),
+    )
+    for language, twilio_language, phrase in cases:
+        _session(
+            monkeypatch,
+            language=language,
+            twilio_language=twilio_language,
+            voice_profile="Polly.Aditi",
+        )
+        voice = _Voice(None)
+        appointments = _Appointments(None)
+        _install(monkeypatch, voice, appointments)
+
+        text = _body(await service_menu(_request("3"), db=object()))
+
+        data, user_id = appointments.calls[-1]
+        assert data.appointment_id == 11
+        assert data.reason == "Cancelled via voice assistant"
+        assert user_id == 0
+        assert phrase in text
+        assert f'language="{twilio_language}"' in text
+        assert "<Hangup/>" in text
+        assert "not yet implemented" not in text
 
 
 async def test_digit_3_patient_not_found(monkeypatch):

@@ -935,22 +935,28 @@ async def service_menu(
             return xml(twiml)
 
         if service == "cancel":
-            from xml.sax.saxutils import escape
-
+            from app.ai.voice_appointment_assistant.prompts import (
+                cancel_failed,
+                cancel_no_appointment,
+                cancel_patient_not_found,
+                cancel_success,
+                cancel_terminal,
+            )
             from app.core.constants import AppointmentStatus
             from app.core.exceptions import BadRequestException, NotFoundException
             from app.schemas.appointment_schema import CancelRequest
             from app.services.appointment_service import AppointmentService
+            from app.services.sarvam_tts import speak
             from app.services.voice_assistant_service import VoiceAssistantService
 
-            lang = state["twilio_language"]
-            vp = state.get("voice_profile")
-            voice_attr = f' voice="{escape(vp)}"' if vp else ""
+            spoken_language = state.get("language") or "en"
+            twilio_lang = state["twilio_language"]
+            base_url = state.get("base_url") or ""
 
             def _say_hangup(text: str) -> str:
                 return (
                     '<?xml version="1.0" encoding="UTF-8"?><Response>'
-                    f'<Say language="{escape(lang)}"{voice_attr}>{escape(text)}</Say>'
+                    f"{speak(text, twilio_lang, base_url, allow_generate=False)}"
                     "<Hangup/></Response>"
                 )
 
@@ -964,11 +970,7 @@ async def service_menu(
                     loaded_by_id = patient is not None
                 if not patient:
                     logger.info(f"  ↳ [{call_sid}] Cancel: patient not found")
-                    return xml(
-                        _say_hangup(
-                            "We could not find a patient record for this phone number. Goodbye."
-                        )
-                    )
+                    return xml(_say_hangup(cancel_patient_not_found(spoken_language)))
 
                 appt = await voice._find_upcoming_appointment(phone) if phone else None
                 if appt is None and loaded_by_id:
@@ -987,11 +989,7 @@ async def service_menu(
 
                 if not appt:
                     logger.info(f"  ↳ [{call_sid}] Cancel: no upcoming appointment")
-                    return xml(
-                        _say_hangup(
-                            "You do not have an upcoming confirmed or pending appointment to cancel. Goodbye."
-                        )
-                    )
+                    return xml(_say_hangup(cancel_no_appointment(spoken_language)))
 
                 await AppointmentService(db).cancel(
                     CancelRequest(
@@ -1001,36 +999,20 @@ async def service_menu(
                     user_id=0,
                 )
                 logger.info(f"  ↳ [{call_sid}] Appointment {appt.id} cancelled")
-                return xml(_say_hangup("Your appointment has been cancelled. Goodbye."))
+                return xml(_say_hangup(cancel_success(spoken_language)))
             except BadRequestException as exc:
                 detail = str(getattr(exc, "detail", "") or "")
                 logger.error(f"  ✗ [{call_sid}] Cancel rejected: {detail}")
                 if "terminal" in detail.lower():
-                    return xml(
-                        _say_hangup(
-                            "This appointment is already completed or cancelled and cannot be cancelled. Goodbye."
-                        )
-                    )
-                return xml(
-                    _say_hangup(
-                        "We could not cancel your appointment. Please call again. Goodbye."
-                    )
-                )
+                    return xml(_say_hangup(cancel_terminal(spoken_language)))
+                return xml(_say_hangup(cancel_failed(spoken_language)))
             except NotFoundException as exc:
                 logger.error(f"  ✗ [{call_sid}] Cancel not found: {exc}")
-                return xml(
-                    _say_hangup(
-                        "We could not cancel your appointment. Please call again. Goodbye."
-                    )
-                )
+                return xml(_say_hangup(cancel_failed(spoken_language)))
             except Exception as exc:
                 logger.error(f"  ✗ [{call_sid}] Cancel failed: {exc}")
                 logger.error(traceback.format_exc())
-                return xml(
-                    _say_hangup(
-                        "We could not cancel your appointment. Please call again. Goodbye."
-                    )
-                )
+                return xml(_say_hangup(cancel_failed(spoken_language)))
 
         # Reschedule / cancel remain stubs (Phase 5 deferred) — Flow A owns these
         lang = state["twilio_language"]

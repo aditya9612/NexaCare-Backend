@@ -345,18 +345,144 @@ async def test_digit_3_not_found_and_generic_error(monkeypatch):
     assert "not yet implemented" not in error_text
 
 
-async def test_digit_2_keeps_unimplemented_fallback(monkeypatch):
-    _session(monkeypatch)
+async def test_digit_2_reschedule_single_appointment_offers_slots(monkeypatch):
+    store = _session(monkeypatch, language="en", base_url="http://localhost:8000")
     voice = _Voice(None)
     appointments = _Appointments(None)
     _install(monkeypatch, voice, appointments)
 
+    candidate = {
+        "appointment_id": 11,
+        "appointment_number": "A-11",
+        "patient_id": 7,
+        "patient_name": "Rahul",
+        "doctor_id": 3,
+        "doctor_name": "Sharma",
+        "date": "2026-10-01",
+        "time": "10:00:00",
+    }
+
+    async def fake_list(*_args, **_kwargs):
+        return [7], [candidate]
+
+    async def fake_prepare(_db, state, chosen):
+        return {
+            "step": "select_slot",
+            "service": "reschedule",
+            "appointment_id": chosen["appointment_id"],
+            "selected_doctor_id": chosen["doctor_id"],
+            "selected_doctor_name": chosen["doctor_name"],
+            "available_slots": [
+                {"date": "2026-10-02", "time": "11:00:00", "doctor_id": 3},
+            ],
+            "_twiml": "<Response><Say>choose slot</Say></Response>",
+        }
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.prepare_slot_selection",
+        fake_prepare,
+    )
+
     response = await service_menu(_request("2"), db=object())
     text = _body(response)
 
+    assert "choose slot" in text
+    assert "This service will be available soon." not in text
+    assert store["CA_CANCEL"]["service"] == "reschedule"
+    assert store["CA_CANCEL"]["step"] == "select_slot"
+    assert store["CA_CANCEL"]["appointment_id"] == 11
+
+
+async def test_digit_2_reschedule_multiple_asks_which_appointment(monkeypatch):
+    store = _session(monkeypatch, language="en", base_url="http://localhost:8000")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    candidates = [
+        {
+            "appointment_id": 11,
+            "appointment_number": "A-11",
+            "patient_id": 7,
+            "patient_name": "Rahul",
+            "doctor_id": 3,
+            "doctor_name": "Sharma",
+            "date": "2026-10-01",
+            "time": "10:00:00",
+        },
+        {
+            "appointment_id": 12,
+            "appointment_number": "A-12",
+            "patient_id": 8,
+            "patient_name": "Priya",
+            "doctor_id": 4,
+            "doctor_name": "Patel",
+            "date": "2026-10-02",
+            "time": "14:00:00",
+        },
+    ]
+
+    async def fake_list(*_args, **_kwargs):
+        return [7, 8], candidates
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+
+    response = await service_menu(_request("2"), db=object())
+    text = _body(response)
+
+    assert "You have more than one upcoming appointment." in text
+    assert "Press 1 for Rahul" in text
+    assert "Press 2 for Priya" in text
+    assert "<Gather" in text
+    assert store["CA_CANCEL"]["step"] == "reschedule_select_appointment"
+    assert store["CA_CANCEL"]["service"] == "reschedule"
+    assert len(store["CA_CANCEL"]["reschedule_candidates"]) == 2
     assert appointments.calls == []
-    assert voice.find_patient_calls == []
-    assert "This service will be available soon." in text
+
+
+async def test_digit_2_reschedule_patient_not_found(monkeypatch):
+    _session(monkeypatch, language="en", base_url="http://localhost:8000")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    async def fake_list(*_args, **_kwargs):
+        return None, []
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+
+    text = _body(await service_menu(_request("2"), db=object()))
+    assert "could not find a patient record" in text
+    assert "<Hangup/>" in text
+    assert "This service will be available soon." not in text
+
+
+async def test_digit_2_reschedule_no_appointment(monkeypatch):
+    _session(monkeypatch, language="en", base_url="http://localhost:8000")
+    voice = _Voice(None)
+    appointments = _Appointments(None)
+    _install(monkeypatch, voice, appointments)
+
+    async def fake_list(*_args, **_kwargs):
+        return [7], []
+
+    monkeypatch.setattr(
+        "app.agent.nodes.reschedule.list_upcoming_candidates",
+        fake_list,
+    )
+
+    text = _body(await service_menu(_request("2"), db=object()))
+    assert "do not have an upcoming confirmed or pending appointment to reschedule" in text
     assert "<Hangup/>" in text
 
 

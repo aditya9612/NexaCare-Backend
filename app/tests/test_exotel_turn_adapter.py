@@ -32,6 +32,14 @@ def test_route_for_step_matches_http_gather_actions():
         "/agent/v1/voice/turn",
         "conversation_turn",
     )
+    assert _route_for_step("reschedule_select_appointment") == (
+        "/agent/v1/voice/turn",
+        "conversation_turn",
+    )
+    assert _route_for_step("select_slot") == (
+        "/agent/v1/voice/turn",
+        "conversation_turn",
+    )
     assert _route_for_step("") == ("/agent/v1/voice/turn", "conversation_turn")
 
 

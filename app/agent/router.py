@@ -1018,7 +1018,84 @@ async def service_menu(
                 logger.error(traceback.format_exc())
                 return xml(_say_hangup(cancel_failed(spoken_language)))
 
-        # Reschedule / cancel remain stubs (Phase 5 deferred) — Flow A owns these
+        if service == "reschedule":
+            from app.agent.nodes import reschedule as reschedule_node
+
+            spoken_language = state.get("language") or "en"
+            twilio_lang = state["twilio_language"]
+            base_url = state.get("base_url") or ""
+
+            try:
+                phone = state.get("from_number") or ""
+                patient_ids, candidates = await reschedule_node.list_upcoming_candidates(
+                    db,
+                    phone=phone,
+                    patient_id=state.get("patient_id"),
+                )
+                if patient_ids is None:
+                    logger.info(f"  ↳ [{call_sid}] Reschedule: patient not found")
+                    return xml(
+                        reschedule_node.hangup_prompt(
+                            "patient_not_found", spoken_language, twilio_lang, base_url
+                        )
+                    )
+                if not candidates:
+                    logger.info(f"  ↳ [{call_sid}] Reschedule: no upcoming appointments")
+                    return xml(
+                        reschedule_node.hangup_prompt(
+                            "no_appointment", spoken_language, twilio_lang, base_url
+                        )
+                    )
+
+                # Prefer a session-pinned appointment when it still appears in the list
+                session_appointment_id = state.get("appointment_id")
+                chosen = None
+                if session_appointment_id:
+                    for c in candidates:
+                        if int(c["appointment_id"]) == int(session_appointment_id):
+                            chosen = c
+                            break
+
+                if chosen is None and len(candidates) == 1:
+                    chosen = candidates[0]
+
+                if chosen is not None:
+                    logger.info(
+                        f"  ↳ [{call_sid}] Reschedule: single/pinned appointment "
+                        f"id={chosen['appointment_id']}"
+                    )
+                    prepared = await reschedule_node.prepare_slot_selection(
+                        db, state, chosen
+                    )
+                    await _apply(call_sid, prepared)
+                    return xml(prepared["_twiml"])
+
+                logger.info(
+                    f"  ↳ [{call_sid}] Reschedule: offering {len(candidates)} appointments"
+                )
+                await session_store.update_session(
+                    call_sid,
+                    {
+                        "service": "reschedule",
+                        "step": "reschedule_select_appointment",
+                        "reschedule_candidates": candidates,
+                        "retry_count": 0,
+                    },
+                )
+                state = await session_store.get_session(call_sid)
+                return xml(
+                    reschedule_node.build_select_appointment_twiml(state, candidates)
+                )
+            except Exception as exc:
+                logger.error(f"  ✗ [{call_sid}] Reschedule start failed: {exc}")
+                logger.error(traceback.format_exc())
+                return xml(
+                    reschedule_node.hangup_prompt(
+                        "failed", spoken_language, twilio_lang, base_url
+                    )
+                )
+
+        # Unknown service fallback
         lang = state["twilio_language"]
         vp = state.get("voice_profile")
         logger.info(f"  ↳ [{call_sid}] Service '{service}' not yet implemented")
@@ -1182,6 +1259,23 @@ async def conversation_turn(
                 )
             )
 
+        # ── reschedule_select_appointment ─────────────────────────────────
+        if step == "reschedule_select_appointment":
+            from app.agent.nodes import reschedule as reschedule_node
+
+            logger.info(f"  ↳ [{call_sid}] Reschedule appointment digit: {digits!r}")
+            result = reschedule_node.process_select_appointment(state, digits)
+            await _apply(call_sid, result)
+
+            if result.get("_pending") == "fetch_slots":
+                state = await session_store.get_session(call_sid)
+                chosen = result.get("_chosen") or {}
+                prepared = await reschedule_node.prepare_slot_selection(db, state, chosen)
+                await _apply(call_sid, prepared)
+                return xml(prepared["_twiml"])
+
+            return xml(result.get("_twiml", _error_twiml()))
+
         # ── collect_name ──────────────────────────────────────────────────
         if step == "collect_name":
             if phase6 and transcript:
@@ -1265,6 +1359,21 @@ async def conversation_turn(
 
             if result.get("_pending") == "confirm":
                 state = await session_store.get_session(call_sid)
+
+                # DTMF reschedule: existing appointment_id is the one being moved
+                if state.get("service") == "reschedule":
+                    from app.agent.nodes import reschedule as reschedule_node
+
+                    logger.info(
+                        f"  ↳ [{call_sid}] Confirming reschedule for "
+                        f"appointment_id={state.get('appointment_id')}"
+                    )
+                    confirm_result = await reschedule_node.confirm_and_reschedule(state, db)
+                    await _apply(call_sid, confirm_result)
+                    if confirm_result.get("step") == "rescheduled":
+                        await session_store.delete_session(call_sid)
+                    return xml(confirm_result["_twiml"])
+
                 if state.get("appointment_id"):
                     logger.info(
                         "BOOKING_ALREADY_PROCESSED call_sid=%s appointment_id=%s step=%s",

@@ -196,8 +196,6 @@ class PatientRepository:
         self,
         gender: str | None = None,
         blood_group: str | None = None,
-        city: str | None = None,
-        state: str | None = None,
         status: str | None = None,
         skip: int = 0,
         limit: int = 20,
@@ -209,10 +207,6 @@ class PatientRepository:
             query = query.where(Patient.gender == gender)
         if blood_group:
             query = query.where(Patient.blood_group == blood_group)
-        if city:
-            query = query.where(Patient.city == city)
-        if state:
-            query = query.where(Patient.state == state)
         if status:
             query = query.where(Patient.status == status)
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -222,8 +216,6 @@ class PatientRepository:
         self,
         gender: str | None = None,
         blood_group: str | None = None,
-        city: str | None = None,
-        state: str | None = None,
         status: str | None = None,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
@@ -244,10 +236,6 @@ class PatientRepository:
             query = query.where(Patient.gender == gender)
         if blood_group:
             query = query.where(Patient.blood_group == blood_group)
-        if city:
-            query = query.where(Patient.city == city)
-        if state:
-            query = query.where(Patient.state == state)
         if status:
             query = query.where(Patient.status == status)
         return await self.db.scalar(query) or 0

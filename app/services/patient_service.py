@@ -379,8 +379,6 @@ class PatientService:
         self,
         gender: str | None = None,
         blood_group: str | None = None,
-        city: str | None = None,
-        state: str | None = None,
         status: str | None = None,
         page: int = 1,
         size: int = 20,
@@ -401,11 +399,11 @@ class PatientService:
 
         skip = (page - 1) * size
         items = await self.repo.filter_patients(
-            gender=gender, blood_group=blood_group, city=city, state=state, status=status,
+            gender=gender, blood_group=blood_group, status=status,
             skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
         )
         total = await self.repo.count_filter(
-            gender=gender, blood_group=blood_group, city=city, state=state, status=status,
+            gender=gender, blood_group=blood_group, status=status,
             nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
         )
         

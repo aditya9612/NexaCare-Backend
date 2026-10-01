@@ -59,6 +59,15 @@ class BookingCallState(TypedDict):
     booking_attempt_id: Optional[str]     # idempotency key for voice booking
     reschedule_candidates: Optional[list]  # upcoming appts for DTMF "which one?" picker
 
+    # ── DTMF 3 cancel (session-scoped, Redis-safe) ─────────────────────────
+    cancel_step: Optional[str]            # select_patient | select_appointment | confirm
+    cancel_patient_ids: Optional[list]
+    cancel_patient_names: Optional[list]
+    cancel_patient_id: Optional[int]
+    cancel_candidates: Optional[list]
+    cancel_pending_id: Optional[int]
+    cancel_list_truncated: bool
+
     # ── Phase 6 conversation memory ────────────────────────────────────────
     current_topic: Optional[str]
     last_question: Optional[str]

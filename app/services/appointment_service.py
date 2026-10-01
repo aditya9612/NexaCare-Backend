@@ -586,6 +586,8 @@ class AppointmentService:
         await self.repo.delete(appointment)
         await self.audit_repo.create("delete", "appointments", user_id=user_id, resource_id=str(appointment.id))
 
+    async def reschedule(self, data: RescheduleRequest, user_id: int | None) -> AppointmentResponse:
+        appointment = await self.repo.get_by_id(data.appointment_id)
     async def reschedule(self, data: RescheduleRequest, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -610,26 +612,29 @@ class AppointmentService:
             patient = await self.patient_repo.get_by_id(appointment.patient_id)
             doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
             doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
-            user_target = (patient.user_id if patient and patient.user_id else None) or user_id
+            user_target = patient.user_id if patient and patient.user_id else None
 
-            from app.services.notification_service import NotificationService
-            await NotificationService(self.db).dispatch_notification(
-                user_id=user_target,
-                title="Appointment Rescheduled",
-                message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been rescheduled to {new_date} at {new_time}.",
-                notification_type="APPOINTMENT_RESCHEDULE",
-                reference_type="APPOINTMENT",
-                reference_id=appointment.id,
-                priority="NORMAL",
-                email=patient.email if patient else None,
-                phone=patient.phone if patient else None,
-            )
+            if user_target:
+                from app.services.notification_service import NotificationService
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=user_target,
+                    title="Appointment Rescheduled",
+                    message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been rescheduled to {new_date} at {new_time}.",
+                    notification_type="APPOINTMENT_RESCHEDULE",
+                    reference_type="APPOINTMENT",
+                    reference_id=appointment.id,
+                    priority="NORMAL",
+                    email=patient.email if patient else None,
+                    phone=patient.phone if patient else None,
+                )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch reschedule notification: %s", exc)
 
         return AppointmentResponse.model_validate(appointment)
 
+    async def cancel(self, data: CancelRequest, user_id: int | None) -> AppointmentResponse:
+        appointment = await self.repo.get_by_id(data.appointment_id)
     async def cancel(self, data: CancelRequest, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -649,20 +654,21 @@ class AppointmentService:
             patient = await self.patient_repo.get_by_id(appointment.patient_id)
             doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
             doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
-            user_target = (patient.user_id if patient and patient.user_id else None) or user_id
+            user_target = patient.user_id if patient and patient.user_id else None
 
             from app.services.notification_service import NotificationService
-            await NotificationService(self.db).dispatch_notification(
-                user_id=user_target,
-                title="Appointment Cancelled",
-                message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been cancelled.",
-                notification_type="APPOINTMENT_CANCELLATION",
-                reference_type="APPOINTMENT",
-                reference_id=appointment.id,
-                priority="NORMAL",
-                email=patient.email if patient else None,
-                phone=patient.phone if patient else None,
-            )
+            if user_target:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=user_target,
+                    title="Appointment Cancelled",
+                    message=f"Your appointment {appointment.appointment_number} with Dr. {doctor_name} has been cancelled.",
+                    notification_type="APPOINTMENT_CANCELLATION",
+                    reference_type="APPOINTMENT",
+                    reference_id=appointment.id,
+                    priority="NORMAL",
+                    email=patient.email if patient else None,
+                    phone=patient.phone if patient else None,
+                )
 
             # Notify assigned doctor of cancellation
             if doctor and doctor.user_id:

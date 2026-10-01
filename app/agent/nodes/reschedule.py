@@ -337,7 +337,7 @@ async def confirm_and_reschedule(state: BookingCallState, db: AsyncSession) -> d
                 appointment_time=slot_time,
                 notes="Rescheduled via voice DTMF",
             ),
-            user_id=0,
+            user_id=None,
         )
     except BadRequestException as exc:
         detail = str(getattr(exc, "detail", "") or "")

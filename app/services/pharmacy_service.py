@@ -444,6 +444,8 @@ class PharmacyService:
         appointment_id: int | None = None,
         department_id: int | None = None,
         assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         if assigned_patient_ids == []:
             return build_paginated_result([], 0, page, size)
@@ -457,7 +459,9 @@ class PharmacyService:
             patient_id=patient_id,
             appointment_id=appointment_id,
             department_id=department_id,
-            assigned_patient_ids=assigned_patient_ids
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
         )
         total = await self.prescription_repo.count_all(
             status=status,
@@ -465,7 +469,9 @@ class PharmacyService:
             patient_id=patient_id,
             appointment_id=appointment_id,
             department_id=department_id,
-            assigned_patient_ids=assigned_patient_ids
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         return build_paginated_result(

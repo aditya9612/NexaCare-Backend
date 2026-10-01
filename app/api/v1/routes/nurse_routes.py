@@ -17,6 +17,7 @@ from app.schemas.nurse_schema import (
     NurseHandoverNoteUpdate,
     NurseNotificationResponse,
     NurseResponse,
+    NurseDetailResponse,
     NurseShiftCreate,
     NurseShiftDetailsResponse,
     NurseShiftResponse,
@@ -181,7 +182,7 @@ async def delete_medication_log(
     return APIResponse(message="Medication log deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
-@router.get("/{nurse_id}", response_model=APIResponse[NurseResponse])
+@router.get("/{nurse_id}", response_model=APIResponse[NurseDetailResponse])
 async def get_nurse(
     nurse_id: int,
     db: DbSession,

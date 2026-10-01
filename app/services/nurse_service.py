@@ -33,6 +33,7 @@ from app.schemas.nurse_schema import (
     NurseHandoverNoteUpdate,
     NurseNotificationResponse,
     NurseResponse,
+    NurseDetailResponse,
     NurseShiftCreate,
     NurseShiftDetailsResponse,
     NurseShiftResponse,
@@ -49,6 +50,8 @@ from app.schemas.nurse_schema import (
     NursePatientAssignmentResponse,
     NurseDashboardResponse,
 )
+from app.schemas.department_schema import DepartmentResponse
+from app.schemas.rbac_schema import RoleResponse
 from app.utils.helpers import generate_nurse_code, utc_now
 from app.utils.pagination import build_paginated_result
 
@@ -104,9 +107,43 @@ class NurseService:
             [NurseResponse.model_validate(n) for n in items], total, page, size
         )
 
-    async def get_by_id(self, nurse_id: int) -> NurseResponse:
-        nurse = await self._get_nurse_or_raise(nurse_id)
-        return NurseResponse.model_validate(nurse)
+    @staticmethod
+    def _to_detail_response(nurse: Nurse) -> NurseDetailResponse:
+        user = nurse.user
+        role = user.role if user else None
+        dept = nurse.department
+
+        dept_resp = DepartmentResponse.model_validate(dept) if dept else None
+        role_resp = RoleResponse.model_validate(role) if role else None
+
+        return NurseDetailResponse(
+            id=nurse.id,
+            nurse_code=nurse.nurse_code,
+            user_id=nurse.user_id,
+            license_number=nurse.license_number,
+            department_id=nurse.department_id,
+            shift=nurse.shift,
+            created_at=nurse.created_at,
+            updated_at=nurse.updated_at,
+            full_name=user.full_name if user else "",
+            email=user.email if user else "",
+            phone=user.phone if user else None,
+            role_name=role.name if role else "Nurse",
+            status=1 if (user and user.is_active) else 0,
+            is_active=user.is_active if user else False,
+            gender=user.gender if user else None,
+            date_of_birth=user.date_of_birth if user else None,
+            address=user.address if user else None,
+            profile_image=user.profile_image if user else None,
+            department=dept_resp,
+            role=role_resp,
+        )
+
+    async def get_by_id(self, nurse_id: int) -> NurseDetailResponse:
+        nurse = await self.repo.get_by_id_with_details(nurse_id)
+        if not nurse:
+            raise NotFoundException("Nurse not found")
+        return self._to_detail_response(nurse)
 
     async def create(self, data: NurseCreate, user_id: int) -> NurseResponse:
         # Validate that the user exists

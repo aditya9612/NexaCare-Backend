@@ -299,6 +299,9 @@ async def list_prescriptions(
     status: str | None = None,
     patient_id: int | None = Query(None),
     appointment_id: int | None = Query(None),
+    date: Optional[date] = Query(None, description="Filter by prescription date (YYYY-MM-DD)"),
+    start_date: Optional[date] = Query(None, description="Start date for range filter (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for range filter (YYYY-MM-DD)"),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     from app.core.constants import UserRole
@@ -333,15 +336,30 @@ async def list_prescriptions(
         doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
         doctor_id = doctor.id if doctor else None
 
+    from datetime import date as dt_date
+    resolved_start = start_date if isinstance(start_date, dt_date) else None
+    resolved_end = end_date if isinstance(end_date, dt_date) else None
+    if isinstance(date, dt_date):
+        resolved_start = date
+        resolved_end = date
+
+    if resolved_start and resolved_end and resolved_start > resolved_end:
+        raise BadRequestException("start_date cannot be after end_date")
+
+    p_id = patient_id if isinstance(patient_id, int) else None
+    apt_id = appointment_id if isinstance(appointment_id, int) else None
+
     result = await PharmacyService(db).list_prescriptions(
         page=page,
         size=size,
         status=status,
         doctor_id=doctor_id,
-        patient_id=patient_id,
-        appointment_id=appointment_id,
+        patient_id=p_id,
+        appointment_id=apt_id,
         department_id=department_id,
         assigned_patient_ids=assigned_patient_ids,
+        start_date=resolved_start,
+        end_date=resolved_end,
     )
     return APIResponse(message="Prescriptions retrieved", data=result)
 

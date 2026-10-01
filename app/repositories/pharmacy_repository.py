@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from sqlalchemy import func, or_, select, case, delete
@@ -262,18 +262,18 @@ class PrescriptionRepository:
             .options(selectinload(Prescription.items))
         )
 
-    async def list_all(
+    def _apply_filters(
         self,
-        skip: int = 0,
-        limit: int = 20,
+        query,
         status: str | None = None,
         doctor_id: int | None = None,
         patient_id: int | None = None,
         appointment_id: int | None = None,
         department_id: int | None = None,
-        assigned_patient_ids: Optional[list[int]] = None
-    ) -> list[Prescription]:
-        query = self._base_query()
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ):
         if status:
             query = query.where(Prescription.status == status)
         if doctor_id is not None:
@@ -287,6 +287,38 @@ class PrescriptionRepository:
             query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
         if assigned_patient_ids is not None:
             query = query.where(Prescription.patient_id.in_(assigned_patient_ids))
+        if start_date is not None:
+            start_dt = datetime.combine(start_date, time.min)
+            query = query.where(Prescription.created_at >= start_dt)
+        if end_date is not None:
+            end_dt = datetime.combine(end_date, time.max)
+            query = query.where(Prescription.created_at <= end_dt)
+        return query
+
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        doctor_id: int | None = None,
+        patient_id: int | None = None,
+        appointment_id: int | None = None,
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[Prescription]:
+        query = self._apply_filters(
+            self._base_query(),
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
         result = await self.db.execute(query.order_by(Prescription.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
@@ -297,22 +329,22 @@ class PrescriptionRepository:
         patient_id: int | None = None,
         appointment_id: int | None = None,
         department_id: int | None = None,
-        assigned_patient_ids: Optional[list[int]] = None
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> int:
         query = select(func.count()).select_from(Prescription).where(Prescription.is_deleted.is_(False))
-        if status:
-            query = query.where(Prescription.status == status)
-        if doctor_id is not None:
-            query = query.where(Prescription.doctor_id == doctor_id)
-        if patient_id is not None:
-            query = query.where(Prescription.patient_id == patient_id)
-        if appointment_id is not None:
-            query = query.where(Prescription.appointment_id == appointment_id)
-        if department_id is not None:
-            from app.models.doctor_model import Doctor
-            query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
-        if assigned_patient_ids is not None:
-            query = query.where(Prescription.patient_id.in_(assigned_patient_ids))
+        query = self._apply_filters(
+            query,
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, prescription_id: int) -> Prescription | None:

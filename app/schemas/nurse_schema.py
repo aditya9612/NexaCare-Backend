@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
+from app.schemas.department_schema import DepartmentResponse
+from app.schemas.rbac_schema import RoleResponse
 
 
 class NurseCreate(BaseSchema):
@@ -66,6 +68,22 @@ class NurseResponse(BaseSchema):
     shift: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class NurseDetailResponse(NurseResponse):
+    full_name: str
+    email: str
+    phone: str | None = None
+    role_name: str | None = None
+    status: int
+    is_active: bool
+    gender: str | None = None
+    date_of_birth: date | None = None
+    address: str | None = None
+    profile_image: str | None = None
+
+    department: DepartmentResponse | None = None
+    role: RoleResponse | None = None
 
 
 NurseListResponse = PaginatedResponse[NurseResponse]

@@ -127,7 +127,9 @@ async def create_patient(
             raise RequestValidationError(e.errors())
         consent_file = consent_form
 
-    patient = await PatientService(db).create(patient_data, current_user.id, consent_file=consent_file)
+    patient = await PatientService(db).create(
+        patient_data, current_user.id, consent_file=consent_file, current_user=current_user
+    )
     return APIResponse(message="Patient created", data=patient)
 
 
@@ -406,7 +408,7 @@ async def update_patient(
         except ValidationError as e:
             raise RequestValidationError(e.errors())
 
-    patient = await PatientService(db).update(patient_id, patient_data, current_user.id)
+    patient = await PatientService(db).update(patient_id, patient_data, current_user.id, current_user=current_user)
 
     if consent_form:
         from app.utils.file_upload import save_upload_file
@@ -434,7 +436,7 @@ async def delete_patient(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "delete")),
 ):
-    await PatientService(db).delete(patient_id, current_user.id)
+    await PatientService(db).delete(patient_id, current_user.id, current_user=current_user)
     return APIResponse(message="Patient deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -447,7 +449,7 @@ async def patient_appointments(
 ):
     from app.schemas.appointment_schema import AppointmentResponse
 
-    appointments = await PatientService(db).get_appointments(patient_id)
+    appointments = await PatientService(db).get_appointments(patient_id, current_user=current_user)
     return APIResponse(message="Appointments retrieved", data=appointments)
 
 
@@ -458,7 +460,7 @@ async def patient_history(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    history = await PatientService(db).get_history(patient_id)
+    history = await PatientService(db).get_history(patient_id, current_user=current_user)
     return APIResponse(message="Visit history retrieved", data=history)
 
 
@@ -484,7 +486,7 @@ async def upload_document(
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 
-    doc = await PatientService(db).upload_document(patient_id, file, document_type, current_user.id)
+    doc = await PatientService(db).upload_document(patient_id, file, document_type, current_user.id, current_user=current_user)
     return APIResponse(message="Document uploaded", data=doc)
 
 
@@ -495,7 +497,7 @@ async def list_documents(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    docs = await PatientService(db).list_documents(patient_id)
+    docs = await PatientService(db).list_documents(patient_id, current_user=current_user)
     return APIResponse(message="Documents retrieved", data=docs)
 
 
@@ -518,7 +520,7 @@ async def download_document(
             data=None
         )
         
-    doc = await PatientService(db).get_document(patient_id, document_id)
+    doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")
         
@@ -541,7 +543,7 @@ async def download_patient_document_by_path(
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
-    doc = await PatientService(db).get_document(patient_id, document_id)
+    doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")
         
@@ -572,7 +574,7 @@ async def view_document(
             data=None
         )
         
-    doc = await PatientService(db).get_document(patient_id, document_id)
+    doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")
         
@@ -600,7 +602,7 @@ async def view_patient_document_by_path(
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
-    doc = await PatientService(db).get_document(patient_id, document_id)
+    doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
     if not os.path.exists(doc.file_path):
         raise NotFoundException("Document file not found on disk")
         
@@ -624,7 +626,7 @@ async def delete_document(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "update")),
 ):
-    await PatientService(db).delete_document(patient_id, document_id, current_user.id)
+    await PatientService(db).delete_document(patient_id, document_id, current_user.id, current_user=current_user)
     return APIResponse(message="Document deleted successfully", data=MessageResponse(message="Deleted"))
 
 
@@ -636,7 +638,7 @@ async def add_family_member(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "update")),
 ):
-    member = await PatientService(db).add_family_member(patient_id, data, current_user.id)
+    member = await PatientService(db).add_family_member(patient_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Family member added", data=member)
 
 
@@ -647,7 +649,7 @@ async def list_family_members(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    members = await PatientService(db).list_family_members(patient_id)
+    members = await PatientService(db).list_family_members(patient_id, current_user=current_user)
     return APIResponse(message="Family members retrieved", data=members)
 
 
@@ -659,7 +661,7 @@ async def delete_family_member(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "update")),
 ):
-    await PatientService(db).delete_family_member(patient_id, member_id, current_user.id)
+    await PatientService(db).delete_family_member(patient_id, member_id, current_user.id, current_user=current_user)
     return APIResponse(message="Family member deleted successfully", data=MessageResponse(message="Deleted"))
 
 
@@ -674,6 +676,6 @@ async def list_patient_clinical_records(
 ):
     from app.services.clinical_record_service import ClinicalRecordService
     result = await ClinicalRecordService(db).list_records(
-        page=page, size=size, patient_id=patient_id
+        page=page, size=size, patient_id=patient_id, current_user=current_user
     )
     return APIResponse(message="Records fetched successfully", data=result)

@@ -35,8 +35,11 @@ class DepartmentRepository:
         skip: int = 0,
         limit: int | None = 20,
         search: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Department]:
         stmt = select(Department)
+        if hospital_id is not None:
+            stmt = stmt.where(Department.hospital_id == hospital_id)
         if search:
             clean_q = f"%{search.strip().lower()}%"
             stmt = stmt.where(
@@ -53,8 +56,10 @@ class DepartmentRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def count_all(self, search: str | None = None) -> int:
+    async def count_all(self, search: str | None = None, hospital_id: int | None = None) -> int:
         stmt = select(func.count()).select_from(Department)
+        if hospital_id is not None:
+            stmt = stmt.where(Department.hospital_id == hospital_id)
         if search:
             clean_q = f"%{search.strip().lower()}%"
             stmt = stmt.where(

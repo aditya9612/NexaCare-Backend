@@ -11,6 +11,9 @@ class Medicine(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "medicines"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), index=True)
     generic_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     barcode: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
@@ -59,6 +62,9 @@ class Prescription(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "prescriptions"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("doctors.id"), index=True)
     appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id"), nullable=True)
@@ -95,6 +101,9 @@ class PharmacyInvoice(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "pharmacy_invoices"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     invoice_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
     prescription_id: Mapped[int | None] = mapped_column(ForeignKey("prescriptions.id"), nullable=True)
@@ -136,6 +145,9 @@ class PharmacyReturn(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "pharmacy_returns"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     return_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     invoice_id: Mapped[int] = mapped_column(ForeignKey("pharmacy_invoices.id"), index=True)
     patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
@@ -171,6 +183,9 @@ class Supplier(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "suppliers"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), index=True)
     contact_person: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -186,6 +201,9 @@ class Purchase(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "purchases"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     purchase_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)

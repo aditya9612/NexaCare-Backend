@@ -58,8 +58,11 @@ class ExpenseRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Expense).where(Expense.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Expense).where(Expense.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Expense.hospital_id == hospital_id)
+        return query
 
     async def list_all(
         self,
@@ -73,8 +76,9 @@ class ExpenseRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         description: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Expense]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if category_id is not None:
             query = query.where(Expense.category_id == category_id)
         if vendor_id is not None:
@@ -106,8 +110,11 @@ class ExpenseRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         description: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Expense).where(Expense.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Expense.hospital_id == hospital_id)
         if category_id is not None:
             query = query.where(Expense.category_id == category_id)
         if vendor_id is not None:

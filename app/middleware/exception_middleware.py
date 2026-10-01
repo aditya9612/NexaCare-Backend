@@ -23,7 +23,8 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             )
         except (RequestValidationError, ValidationError) as exc:
             logger.warning("Validation error on %s: %s", request.url.path, exc)
-            errors = exc.errors() if hasattr(exc, "errors") else str(exc)
+            from fastapi.encoders import jsonable_encoder
+            errors = jsonable_encoder(exc.errors()) if hasattr(exc, "errors") else str(exc)
             return JSONResponse(
                 status_code=422,
                 content={"detail": errors},

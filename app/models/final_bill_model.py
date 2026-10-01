@@ -10,6 +10,9 @@ class IPDFinalBill(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "ipd_final_bills"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     bill_number: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     
     discharge_id: Mapped[int] = mapped_column(Integer, ForeignKey("discharges.id"), index=True, nullable=False)

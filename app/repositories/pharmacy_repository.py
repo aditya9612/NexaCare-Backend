@@ -26,14 +26,18 @@ class MedicineRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Medicine).where(Medicine.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Medicine).where(Medicine.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
+        return query
 
     async def list_all(
         self, skip: int = 0, limit: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Medicine]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if category:
             query = query.where(Medicine.category == category)
         column = getattr(Medicine, sort_by, Medicine.created_at)
@@ -41,20 +45,22 @@ class MedicineRepository:
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def get_all_active(self) -> list[Medicine]:
-        query = self._base_query().order_by(Medicine.created_at.desc())
+    async def get_all_active(self, hospital_id: int | None = None) -> list[Medicine]:
+        query = self._base_query(hospital_id=hospital_id).order_by(Medicine.created_at.desc())
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def count_all(self, category: str | None = None) -> int:
+    async def count_all(self, category: str | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(Medicine).where(Medicine.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
         if category:
             query = query.where(Medicine.category == category)
         return (await self.db.scalar(query)) or 0
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Medicine]:
+    async def search(self, q: str, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[Medicine]:
         pattern = f"%{q.lower()}%"
-        query = self._base_query().where(
+        query = self._base_query(hospital_id=hospital_id).where(
             or_(
                 func.lower(Medicine.name).like(pattern),
                 func.lower(Medicine.sku).like(pattern),
@@ -65,35 +71,36 @@ class MedicineRepository:
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
+    async def count_search(self, q: str, hospital_id: int | None = None) -> int:
         pattern = f"%{q.lower()}%"
-        result = await self.db.scalar(
-            select(func.count()).select_from(Medicine).where(
-                Medicine.is_deleted.is_(False),
-                or_(
-                    func.lower(Medicine.name).like(pattern),
-                    func.lower(Medicine.sku).like(pattern),
-                    func.lower(Medicine.generic_name).like(pattern),
-                ),
-            )
+        query = select(func.count()).select_from(Medicine).where(
+            Medicine.is_deleted.is_(False),
+            or_(
+                func.lower(Medicine.name).like(pattern),
+                func.lower(Medicine.sku).like(pattern),
+                func.lower(Medicine.generic_name).like(pattern),
+            ),
         )
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
+        result = await self.db.scalar(query)
         return result or 0
 
-    async def get_by_id(self, medicine_id: int) -> Medicine | None:
+    async def get_by_id(self, medicine_id: int, hospital_id: int | None = None) -> Medicine | None:
         result = await self.db.execute(
-            self._base_query().where(Medicine.id == medicine_id)
+            self._base_query(hospital_id=hospital_id).where(Medicine.id == medicine_id)
         )
         return result.scalar_one_or_none()
 
-    async def get_by_id_for_update(self, medicine_id: int) -> Medicine | None:
+    async def get_by_id_for_update(self, medicine_id: int, hospital_id: int | None = None) -> Medicine | None:
         result = await self.db.execute(
-            self._base_query().where(Medicine.id == medicine_id).with_for_update()
+            self._base_query(hospital_id=hospital_id).where(Medicine.id == medicine_id).with_for_update()
         )
         return result.scalar_one_or_none()
 
-    async def get_by_barcode(self, barcode: str) -> Medicine | None:
+    async def get_by_barcode(self, barcode: str, hospital_id: int | None = None) -> Medicine | None:
         result = await self.db.execute(
-            self._base_query().where(Medicine.barcode == barcode)
+            self._base_query(hospital_id=hospital_id).where(Medicine.barcode == barcode)
         )
         return result.scalar_one_or_none()
 

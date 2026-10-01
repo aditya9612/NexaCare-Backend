@@ -10,8 +10,11 @@ class DoctorRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Doctor).outerjoin(Doctor.department).where(Doctor.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Doctor).outerjoin(Doctor.department).where(Doctor.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Doctor.hospital_id == hospital_id)
+        return query
 
     async def get_doctor_hospital_id(self, doctor_id: int) -> int:
         from app.models.user_model import User
@@ -20,12 +23,18 @@ class DoctorRepository:
         import random
         
         result = await self.db.execute(
-            select(User.hospital_id)
-            .select_from(Doctor)
-            .join(User, Doctor.user_id == User.id)
+            select(Doctor.hospital_id)
             .where(Doctor.id == doctor_id, Doctor.is_deleted.is_(False))
         )
         hospital_id = result.scalar_one_or_none()
+        if not hospital_id:
+            user_res = await self.db.execute(
+                select(User.hospital_id)
+                .select_from(Doctor)
+                .join(User, Doctor.user_id == User.id)
+                .where(Doctor.id == doctor_id, Doctor.is_deleted.is_(False))
+            )
+            hospital_id = user_res.scalar_one_or_none()
         if not hospital_id:
             # Fallback to the first active (non-deleted) hospital
             fallback_res = await self.db.execute(
@@ -44,8 +53,6 @@ class DoctorRepository:
                 hospital_id = new_hospital.id
         return hospital_id
 
-
-
     async def list_all(
         self,
         skip: int | None = None,
@@ -54,8 +61,9 @@ class DoctorRepository:
         availability_status: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ) -> list[Doctor]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if department_id:
             query = query.where(Doctor.department_id == department_id)
         if availability_status:
@@ -73,28 +81,34 @@ class DoctorRepository:
         self,
         department_id: int | None = None,
         availability_status: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Doctor).where(Doctor.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Doctor.hospital_id == hospital_id)
         if department_id:
             query = query.where(Doctor.department_id == department_id)
         if availability_status:
             query = query.where(Doctor.availability_status == availability_status)
         return await self.db.scalar(query) or 0
 
-    async def get_by_id(self, doctor_id: int) -> Doctor | None:
-        result = await self.db.execute(self._base_query().where(Doctor.id == doctor_id))
+    async def get_by_id(self, doctor_id: int, hospital_id: int | None = None) -> Doctor | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Doctor.id == doctor_id))
         return result.scalar_one_or_none()
 
-    async def get_doctor_counts(self) -> dict:
+    async def get_doctor_counts(self, hospital_id: int | None = None) -> dict:
         from sqlalchemy import case
         
-        result = await self.db.execute(
+        query = (
             select(
                 func.count().label("total"),
                 func.sum(case((Doctor.availability_status == "available", 1), else_=0)).label("available"),
                 func.sum(case((Doctor.availability_status.in_(["onleave", "on_leave"]), 1), else_=0)).label("on_leave")
             ).where(Doctor.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            query = query.where(Doctor.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         row = result.fetchone()
         if row:
             return {
@@ -107,7 +121,6 @@ class DoctorRepository:
             "available_doctors": 0,
             "on_leave_doctors": 0
         }
-
 
     def _search_filter(self, q: str):
         q_clean = q.strip().lower() if q else ""
@@ -142,25 +155,25 @@ class DoctorRepository:
             
         return base_filter
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Doctor]:
-        query = self._base_query().where(self._search_filter(q))
+    async def search(self, q: str, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[Doctor]:
+        query = self._base_query(hospital_id=hospital_id).where(self._search_filter(q))
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
-        return (
-            await self.db.scalar(
-                select(func.count())
-                .select_from(Doctor)
-                .outerjoin(Doctor.department)
-                .where(Doctor.is_deleted.is_(False), self._search_filter(q))
-            )
-            or 0
+    async def count_search(self, q: str, hospital_id: int | None = None) -> int:
+        query = (
+            select(func.count())
+            .select_from(Doctor)
+            .outerjoin(Doctor.department)
+            .where(Doctor.is_deleted.is_(False), self._search_filter(q))
         )
+        if hospital_id is not None:
+            query = query.where(Doctor.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
-    async def list_available(self) -> list[Doctor]:
+    async def list_available(self, hospital_id: int | None = None) -> list[Doctor]:
         result = await self.db.execute(
-            self._base_query().where(Doctor.availability_status == "available")
+            self._base_query(hospital_id=hospital_id).where(Doctor.availability_status == "available")
         )
         return list(result.scalars().all())
 

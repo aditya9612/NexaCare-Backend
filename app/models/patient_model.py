@@ -11,6 +11,9 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "patients"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     patient_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     first_name: Mapped[str] = mapped_column(String(100), index=True)

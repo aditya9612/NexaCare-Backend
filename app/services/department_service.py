@@ -15,7 +15,7 @@ class DepartmentService:
         res.staff_linked = staff_count
         return res
 
-    async def create(self, data: DepartmentCreate) -> DepartmentResponse:
+    async def create(self, data: DepartmentCreate, current_user = None) -> DepartmentResponse:
         existing = await self.repo.get_by_name(data.department_name)
         if existing:
             raise ConflictException(f"Department with name '{data.department_name}' already exists")
@@ -25,9 +25,13 @@ class DepartmentService:
             if existing_code:
                 raise ConflictException(f"Department with code '{data.department_code}' already exists")
         
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         department = Department(
             department_code=data.department_code,
-            department_name=data.department_name
+            department_name=data.department_name,
+            hospital_id=hospital_id,
         )
         department = await self.repo.create(department)
         return self._to_response(department, 0)
@@ -50,7 +54,11 @@ class DepartmentService:
         size: int = 20,
         search: str | None = None,
         all_records: bool = False,
+        current_user = None,
     ) -> PaginatedResult[DepartmentResponse]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         if all_records:
             skip = 0
             limit = None
@@ -58,8 +66,8 @@ class DepartmentService:
             skip = (page - 1) * size
             limit = size
 
-        items = await self.repo.list_all(skip=skip, limit=limit, search=search)
-        total = await self.repo.count_all(search=search)
+        items = await self.repo.list_all(skip=skip, limit=limit, search=search, hospital_id=hospital_id)
+        total = await self.repo.count_all(search=search, hospital_id=hospital_id)
 
         effective_size = total if (all_records and total > 0) else size
         effective_page = 1 if all_records else page

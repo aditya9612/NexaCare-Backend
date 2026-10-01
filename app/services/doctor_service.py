@@ -157,9 +157,11 @@ class DoctorService:
         sort_order: str = "desc",
     ):
         from app.schemas.doctor_schema import DoctorPaginatedResult
+        from app.core.dependencies import resolve_tenant_id
         import math
 
-        counts = await self.repo.get_doctor_counts()
+        hospital_id = resolve_tenant_id(current_user)
+        counts = await self.repo.get_doctor_counts(hospital_id=hospital_id)
 
         if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
             from app.models.staff_model import Staff
@@ -196,8 +198,13 @@ class DoctorService:
             items = await self.repo.list_all(
                 skip=None, limit=None, department_id=department_id,
                 availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
+                hospital_id=hospital_id,
             )
-            total = await self.repo.count_all(department_id=department_id, availability_status=availability_status)
+            total = await self.repo.count_all(
+                department_id=department_id,
+                availability_status=availability_status,
+                hospital_id=hospital_id,
+            )
             return DoctorPaginatedResult(
                 items=[DoctorResponse.model_validate(d) for d in items],
                 total=total,
@@ -215,8 +222,13 @@ class DoctorService:
             items = await self.repo.list_all(
                 skip=skip, limit=effective_size, department_id=department_id,
                 availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
+                hospital_id=hospital_id,
             )
-            total = await self.repo.count_all(department_id=department_id, availability_status=availability_status)
+            total = await self.repo.count_all(
+                department_id=department_id,
+                availability_status=availability_status,
+                hospital_id=hospital_id,
+            )
             pages = math.ceil(total / effective_size) if effective_size else 0
             return DoctorPaginatedResult(
                 items=[DoctorResponse.model_validate(d) for d in items],
@@ -229,8 +241,10 @@ class DoctorService:
                 on_leave_doctors=counts["on_leave_doctors"]
             )
 
-    async def get_by_id(self, doctor_id: int) -> DoctorResponse:
-        doctor = await self.repo.get_by_id(doctor_id)
+    async def get_by_id(self, doctor_id: int, current_user = None) -> DoctorResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        doctor = await self.repo.get_by_id(doctor_id, hospital_id=hospital_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
         return DoctorResponse.model_validate(doctor)
@@ -264,6 +278,12 @@ class DoctorService:
 
         dump = data.model_dump()
         dump["profile_image"] = profile_image_path
+
+        # Resolve hospital_id from user if not explicitly passed
+        actor_user = await self.auth_repo.get_by_id(user_id) if user_id else None
+        target_user = await self.auth_repo.get_by_id(data.user_id) if data.user_id else None
+        hospital_id = (target_user.hospital_id if target_user and target_user.hospital_id else None) or (actor_user.hospital_id if actor_user else None)
+        dump["hospital_id"] = hospital_id
 
         doctor = Doctor(doctor_code=generate_doctor_code(), **dump)
         try:
@@ -326,6 +346,7 @@ class DoctorService:
             doctor = Doctor(
                 doctor_code=generate_doctor_code(),
                 user_id=user.id,
+                hospital_id=hospital_id,
                 first_name=data.first_name,
                 last_name=data.last_name,
                 specialization=data.specialization,
@@ -370,8 +391,11 @@ class DoctorService:
         data: DoctorUpdate,
         user_id: int,
         image_file: Optional[UploadFile] = None,
+        current_user = None,
     ) -> DoctorOnboardResponse:
-        doctor = await self.repo.get_by_id(doctor_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        doctor = await self.repo.get_by_id(doctor_id, hospital_id=hospital_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
 
@@ -466,8 +490,10 @@ class DoctorService:
         )
 
 
-    async def delete(self, doctor_id: int, user_id: int) -> None:
-        doctor = await self.repo.get_by_id(doctor_id)
+    async def delete(self, doctor_id: int, user_id: int, current_user = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        doctor = await self.repo.get_by_id(doctor_id, hospital_id=hospital_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
         await self.repo.soft_delete(doctor)
@@ -478,32 +504,36 @@ class DoctorService:
                 user.is_active = False
         await self.audit_repo.create("delete", "doctors", user_id=user_id, resource_id=str(doctor.id))
 
-    async def search(self, q: str, page: int = 1, size: int = 20):
+    async def search(self, q: str, page: int = 1, size: int = 20, current_user: User | None = None):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         q_stripped = q.strip() if q else ""
         skip = (page - 1) * size
-        items = await self.repo.search(q_stripped, skip=skip, limit=size)
-        total = await self.repo.count_search(q_stripped)
+        items = await self.repo.search(q_stripped, skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.repo.count_search(q_stripped, hospital_id=hospital_id)
         return build_paginated_result(
             [DoctorResponse.model_validate(d) for d in items], total, page, size
         )
 
-    async def list_available(self) -> list[DoctorResponse]:
-        doctors = await self.repo.list_available()
+    async def list_available(self, current_user: User | None = None) -> list[DoctorResponse]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        doctors = await self.repo.list_available(hospital_id=hospital_id)
         return [DoctorResponse.model_validate(d) for d in doctors]
 
-    async def get_appointments(self, doctor_id: int) -> DoctorAppointmentListResponse:
-        await self.get_by_id(doctor_id)
+    async def get_appointments(self, doctor_id: int, current_user = None) -> DoctorAppointmentListResponse:
+        await self.get_by_id(doctor_id, current_user=current_user)
         appointments = await self.repo.get_appointments(doctor_id)
         items = [AppointmentResponse.model_validate(a) for a in appointments]
         return DoctorAppointmentListResponse(items=items, total=len(items))
 
-    async def get_schedule(self, doctor_id: int) -> list[DoctorScheduleResponse]:
-        await self.get_by_id(doctor_id)
+    async def get_schedule(self, doctor_id: int, current_user = None) -> list[DoctorScheduleResponse]:
+        await self.get_by_id(doctor_id, current_user=current_user)
         schedules = await self.repo.get_schedule(doctor_id)
         return [DoctorScheduleResponse.model_validate(s) for s in schedules]
 
-    async def add_schedule(self, doctor_id: int, data: DoctorScheduleCreate, user_id: int) -> DoctorScheduleResponse:
-        await self.get_by_id(doctor_id)
+    async def add_schedule(self, doctor_id: int, data: DoctorScheduleCreate, user_id: int, current_user = None) -> DoctorScheduleResponse:
+        await self.get_by_id(doctor_id, current_user=current_user)
         if data.start_time >= data.end_time:
             raise ConflictException("Start time must be before end time")
 

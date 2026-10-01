@@ -72,8 +72,8 @@ class AppointmentService:
 
         return appointment_date, appointment_time
 
-    async def _validate_entities(self, patient_id: int, doctor_id: int) -> None:
-        patient = await self.patient_repo.get_by_id(patient_id)
+    async def _validate_entities(self, patient_id: int, doctor_id: int, hospital_id: int | None = None) -> None:
+        patient = await self.patient_repo.get_by_id(patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
 
@@ -82,9 +82,11 @@ class AppointmentService:
             raise BadRequestException(
                 "Cannot create an appointment for an inactive patient. Please activate the patient before booking an appointment."
             )
-        doctor = await self.doctor_repo.get_by_id(doctor_id)
+        doctor = await self.doctor_repo.get_by_id(doctor_id, hospital_id=hospital_id)
         if not doctor:
             raise NotFoundException("Doctor not found")
+        if patient.hospital_id and doctor.hospital_id and patient.hospital_id != doctor.hospital_id:
+            raise BadRequestException("Doctor and Patient belong to different hospitals")
         status = (doctor.availability_status or "available").lower().strip()
         if status not in ("available", "busy"):
             raise ConflictException("Doctor is not available for appointments")
@@ -181,12 +183,16 @@ class AppointmentService:
             else:
                 effective_patient_id = allowed_ids
 
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=effective_patient_id, doctor_id=doctor_id,
             department_id=department_id, status=status, appointment_date=appointment_date,
             start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
+            hospital_id=hospital_id,
         )
         total = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id,
@@ -194,6 +200,7 @@ class AppointmentService:
             start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
+            hospital_id=hospital_id,
         )
 
         # --- Optimized summary counts via grouped SQL (replaces 10 sequential count_all calls) ---
@@ -205,7 +212,9 @@ class AppointmentService:
         today = today_ist
 
         def _base_filter(q):
-            """Apply patient/doctor/dept scope filters — no status/date filter."""
+            """Apply patient/doctor/dept/tenant scope filters — no status/date filter."""
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
             if effective_patient_id:
                 if isinstance(effective_patient_id, (list, tuple, set)):
                     q = q.where(Appointment.patient_id.in_(effective_patient_id))
@@ -382,14 +391,18 @@ class AppointmentService:
             "admitted": admitted,
         }
 
-    async def get_by_id(self, appointment_id: int) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def get_by_id(self, appointment_id: int, current_user = None) -> AppointmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         return AppointmentResponse.model_validate(appointment)
 
-    async def get_token(self, appointment_id: int) -> TokenResponse:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def get_token(self, appointment_id: int, current_user = None) -> TokenResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
 
         if not appointment:
             raise NotFoundException("Appointment not found")
@@ -430,9 +443,11 @@ class AppointmentService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch appointment notification: %s", exc)
 
-    async def create(self, data: AppointmentCreate, user_id: int) -> AppointmentResponse:
+    async def create(self, data: AppointmentCreate, user_id: int, current_user = None) -> AppointmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         data.appointment_date, data.appointment_time = self._validate_future_datetime(data.appointment_date, data.appointment_time)
-        await self._validate_entities(data.patient_id, data.doctor_id)
+        await self._validate_entities(data.patient_id, data.doctor_id, hospital_id=hospital_id)
         rules = await self.validation_service.validate(data.doctor_id, data.appointment_date, data.appointment_time)
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
@@ -440,6 +455,10 @@ class AppointmentService:
         appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
         if not appointment_data.get("booking_source"):
             appointment_data["booking_source"] = BookingSource.STAFF
+        if not appointment_data.get("hospital_id"):
+            patient = await self.patient_repo.get_by_id(data.patient_id)
+            appointment_data["hospital_id"] = hospital_id or (patient.hospital_id if patient else None)
+
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
@@ -474,8 +493,10 @@ class AppointmentService:
         return AppointmentResponse.model_validate(appointment)
 
 
-    async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int, current_user = None) -> AppointmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
 
@@ -556,15 +577,19 @@ class AppointmentService:
         await self.audit_repo.create("update", "appointments", user_id=user_id, resource_id=str(appointment.id))
         return AppointmentResponse.model_validate(appointment)
 
-    async def delete(self, appointment_id: int, user_id: int) -> None:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def delete(self, appointment_id: int, user_id: int, current_user = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         await self.repo.delete(appointment)
         await self.audit_repo.create("delete", "appointments", user_id=user_id, resource_id=str(appointment.id))
 
-    async def reschedule(self, data: RescheduleRequest, user_id: int) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(data.appointment_id)
+    async def reschedule(self, data: RescheduleRequest, user_id: int, current_user = None) -> AppointmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(data.appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         if appointment.appointment_status in AppointmentStatus.TERMINAL:
@@ -605,8 +630,10 @@ class AppointmentService:
 
         return AppointmentResponse.model_validate(appointment)
 
-    async def cancel(self, data: CancelRequest, user_id: int) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(data.appointment_id)
+    async def cancel(self, data: CancelRequest, user_id: int, current_user = None) -> AppointmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(data.appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         if appointment.appointment_status in AppointmentStatus.TERMINAL:
@@ -655,8 +682,10 @@ class AppointmentService:
 
         return AppointmentResponse.model_validate(appointment)
 
-    async def confirm(self, data: ConfirmRequest, user_id: int) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(data.appointment_id)
+    async def confirm(self, data: ConfirmRequest, user_id: int, current_user = None) -> AppointmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(data.appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
             

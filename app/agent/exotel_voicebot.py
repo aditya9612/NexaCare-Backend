@@ -508,6 +508,18 @@ def _dtmf_digit(event: dict[str, Any]) -> str:
     return ""
 
 
+def _mark_name(event: dict[str, Any]) -> str:
+    """Read the playback mark label from either Exotel mark payload shape."""
+    raw = event.get("mark")
+    if isinstance(raw, dict):
+        value = raw.get("name")
+    elif isinstance(raw, str):
+        value = raw
+    else:
+        value = event.get("name")
+    return str(value or "").strip()
+
+
 async def _send_pcm(websocket: WebSocket, stream_sid: str, pcm: bytes, mark_name: str) -> None:
     for chunk in iter_pcm_chunks(pcm):
         await websocket.send_text(
@@ -601,7 +613,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                 continue
 
             if name == "mark" and awaiting_mark:
-                got = str((event.get("mark") or {}).get("name") or "")
+                got = _mark_name(event)
                 if got == mark_name:
                     awaiting_mark = False
                     discarded = 0

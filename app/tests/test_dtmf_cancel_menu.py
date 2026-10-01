@@ -219,7 +219,7 @@ async def test_digit_3_one_patient_one_pending_requires_confirm(monkeypatch):
 
 
 async def test_digit_3_one_patient_one_confirmed_then_dtmf_1_cancels(monkeypatch):
-    _session(monkeypatch)
+    store = _session(monkeypatch)
     holder, _ = _holder_and_dependent()
     patients = _Patients([holder])
     appts = _Appts([_a(11, 47, AppointmentStatus.CONFIRMED, date(2026, 10, 1))])
@@ -238,6 +238,7 @@ async def test_digit_3_one_patient_one_confirmed_then_dtmf_1_cancels(monkeypatch
         "Thank you for calling NexaCare. Have a nice day."
     ) in _body(second)
     assert "<Hangup/>" in _body(second)
+    assert store["CA_CANCEL"]["cancel_hangup_after_playback"] is True
 
 
 async def test_digit_3_one_patient_multiple_appointments_never_auto_cancels_first(monkeypatch):
@@ -349,6 +350,7 @@ async def test_digit_3_appointment_dtmf_selects_exact_id_then_confirm(monkeypatc
     assert service.calls[0][0].appointment_id == 22
     assert "successfully cancelled" in text
     assert "Thank you for calling NexaCare" in text
+    assert store["CA_CANCEL"]["cancel_hangup_after_playback"] is True
 
 
 async def test_digit_3_final_dtmf_2_does_not_cancel(monkeypatch):

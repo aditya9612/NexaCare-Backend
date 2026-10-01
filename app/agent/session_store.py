@@ -67,6 +67,7 @@ def _empty_state(call_sid: str, from_number: str, base_url: str) -> BookingCallS
         cancel_candidates=None,
         cancel_pending_id=None,
         cancel_list_truncated=False,
+        cancel_hangup_after_playback=False,
         current_topic=None,
         last_question=None,
         last_answer=None,

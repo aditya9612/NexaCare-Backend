@@ -281,11 +281,24 @@ def test_keypad_dtmf_plays_turn_and_keeps_socket_open(monkeypatch, digit):
 
 
 def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
+    import asyncio
+
+    from app.agent import session_store
+
     slept: list[float] = []
     seen: dict = {}
+    redis: dict = {}
 
     async def fake_sleep(seconds):
         slept.append(seconds)
+
+    async def cache_get(key):
+        value = redis.get(key)
+        return dict(value) if isinstance(value, dict) else value
+
+    async def cache_set(key, value, ttl=300):
+        redis[key] = dict(value) if isinstance(value, dict) else value
+        return True
 
     class _Db:
         async def commit(self):
@@ -311,6 +324,9 @@ def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
 
     async def fake_turn(request, db):
         seen["fields"] = await _webhook_fields(request)
+        await session_store.update_session(
+            seen["fields"]["CallSid"], {"cancel_hangup_after_playback": True}
+        )
         return Response(
             content=(
                 b"<Response><Say>Your appointment has been successfully cancelled. "
@@ -319,18 +335,26 @@ def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
             media_type="application/xml",
         )
 
-    async def hangup_session(call_sid):
-        return {
-            "cancel_hangup_after_playback": True,
-            "twilio_language": "en-IN",
-        }
-
+    monkeypatch.setattr("app.agent.session_store.cache_get", cache_get)
+    monkeypatch.setattr("app.agent.session_store.cache_set", cache_set)
     monkeypatch.setattr("app.agent.exotel_voicebot.asyncio.sleep", fake_sleep)
     monkeypatch.setattr("app.agent.exotel_voicebot.opening_twiml", opening)
     monkeypatch.setattr("app.agent.exotel_voicebot.speakable_pcm", pcm)
     monkeypatch.setattr("app.agent.router.conversation_turn", fake_turn)
     monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: _Session())
-    monkeypatch.setattr("app.agent.session_store.get_session", hangup_session)
+
+    session_store._sessions.pop("CA_TEST", None)
+    asyncio.run(
+        session_store.create_session("CA_TEST", "08951395076", "http://localhost")
+    )
+    asyncio.run(
+        session_store.update_session(
+            "CA_TEST", {"step": "collect_name", "twilio_language": "en-IN"}
+        )
+    )
+    reloaded = asyncio.run(session_store.get_session("CA_TEST"))
+    assert reloaded is not None
+    assert reloaded.get("cancel_hangup_after_playback") is False
 
     app = FastAPI()
     app.include_router(router, prefix="/agent/v1/voice")
@@ -369,10 +393,21 @@ def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
         assert mark["event"] == "mark"
         assert mark["mark"]["name"] == "turn"
         assert slept == []
+        after_pcm = asyncio.run(session_store.get_session("CA_TEST"))
+        assert after_pcm is not None
+        assert after_pcm.get("cancel_hangup_after_playback") is True
 
-        ws.send_json({"event": "mark", "stream_sid": "MZ1", "mark": {"name": "turn"}})
+        ws.send_json(
+            {
+                "event": "mark",
+                "sequence_number": "15",
+                "stream_sid": "MZ1",
+                "mark": {"name": "turn"},
+            }
+        )
         with pytest.raises(WebSocketDisconnect):
             ws.receive_json()
 
     assert slept == [2]
     assert seen["fields"]["Digits"] == "1"
+    session_store._sessions.pop("CA_TEST", None)

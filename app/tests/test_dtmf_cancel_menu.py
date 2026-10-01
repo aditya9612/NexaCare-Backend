@@ -233,7 +233,10 @@ async def test_digit_3_one_patient_one_confirmed_then_dtmf_1_cancels(monkeypatch
     assert data.appointment_id == 11
     assert data.reason == "Cancelled via voice assistant"
     assert user_id is None
-    assert "Your appointment has been cancelled successfully." in _body(second)
+    assert (
+        "Your appointment has been successfully cancelled. "
+        "Thank you for calling NexaCare. Have a nice day."
+    ) in _body(second)
     assert "<Hangup/>" in _body(second)
 
 
@@ -299,7 +302,8 @@ async def test_digit_3_multiple_patients_multiple_appointments(monkeypatch):
     assert store["CA_CANCEL"]["cancel_pending_id"] == 240
     text = _body(await service_menu(_request("1"), db=object()))
     assert [call[0].appointment_id for call in service.calls] == [240]
-    assert "cancelled successfully" in text
+    assert "successfully cancelled" in text
+    assert "Thank you for calling NexaCare" in text
 
 
 async def test_digit_3_patient_dtmf_selects_second_patient(monkeypatch):
@@ -343,7 +347,8 @@ async def test_digit_3_appointment_dtmf_selects_exact_id_then_confirm(monkeypatc
 
     text = _body(await service_menu(_request("1"), db=object()))
     assert service.calls[0][0].appointment_id == 22
-    assert "cancelled successfully" in text
+    assert "successfully cancelled" in text
+    assert "Thank you for calling NexaCare" in text
 
 
 async def test_digit_3_final_dtmf_2_does_not_cancel(monkeypatch):
@@ -471,7 +476,11 @@ async def test_digit_3_session_appointment_terminal_uses_other_cancellable(monke
 
 async def test_digit_3_speaks_selected_language(monkeypatch):
     cases = (
-        ("en", "en-IN", "Your appointment has been cancelled successfully."),
+        (
+            "en",
+            "en-IN",
+            "Your appointment has been successfully cancelled. Thank you for calling NexaCare. Have a nice day.",
+        ),
         ("hi", "hi-IN", "आपका अपॉइंटमेंट सफलतापूर्वक रद्द कर दिया गया है।"),
         ("mr", "mr-IN", "आपली अपॉइंटमेंट यशस्वीरित्या रद्द करण्यात आली आहे."),
     )

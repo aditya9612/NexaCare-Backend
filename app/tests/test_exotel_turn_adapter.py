@@ -262,6 +262,10 @@ def test_keypad_dtmf_plays_turn_and_keeps_socket_open(monkeypatch, digit):
         assert opening_mark["mark"]["name"] == "open-1"
 
         ws.send_json(dtmf_event)
+        # Opening mark not acked yet → still "playing" → clear then next prompt.
+        cleared = ws.receive_json()
+        assert cleared["event"] == "clear"
+        assert cleared["stream_sid"] == "MZ1"
         media = ws.receive_json()
         assert media["event"] == "media"
         assert media["stream_sid"] == "MZ1"
@@ -278,6 +282,183 @@ def test_keypad_dtmf_plays_turn_and_keeps_socket_open(monkeypatch, digit):
     assert seen["fields"]["CallSid"] == "CA_TEST"
     assert seen["fields"]["SpeechResult"] == ""
     assert seen["fields"]["Digits"] == digit
+
+
+def test_dtmf_during_menu_playback_clears_then_plays_selection(monkeypatch):
+    """Digit mid-prompt must flush Exotel buffer and jump to that digit's flow."""
+    seen: dict = {}
+
+    class _Db:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            raise AssertionError("dtmf turn should not roll back")
+
+    class _Session:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def opening(call_sid, from_number, to_number):
+        return "<Response><Say>Hello</Say><Gather><Say>Menu</Say></Gather></Response>"
+
+    async def pcm(twiml, rate):
+        # Multi-chunk menu so DTMF can arrive before mark is sent.
+        if "Next" in twiml or "ask name" in twiml.lower() or "Hangup" in twiml:
+            return b"\x10\x00" * 1600, True, False
+        return b"\x10\x00" * 1600 * 8, True, False
+
+    async def fake_menu(request, db):
+        seen["fields"] = await _webhook_fields(request)
+        return Response(
+            content=b"<Response><Say>ask name</Say></Response>",
+            media_type="application/xml",
+        )
+
+    async def fake_get_session(call_sid):
+        return {
+            "step": "service_menu",
+            "call_sid": call_sid,
+            "twilio_language": "en-IN",
+        }
+
+    monkeypatch.setattr("app.agent.exotel_voicebot.opening_twiml", opening)
+    monkeypatch.setattr("app.agent.exotel_voicebot.speakable_pcm", pcm)
+    monkeypatch.setattr("app.agent.router.service_menu", fake_menu)
+    monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: _Session())
+    monkeypatch.setattr("app.agent.session_store.get_session", fake_get_session)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/agent/v1/voice")
+    client = TestClient(app)
+
+    with client.websocket_connect("/agent/v1/voice/incoming?sample-rate=8000") as ws:
+        ws.send_json({"event": "connected"})
+        ws.send_json(
+            {
+                "event": "start",
+                "stream_sid": "MZ1",
+                "start": {
+                    "stream_sid": "MZ1",
+                    "call_sid": "CA_BARGE",
+                    "from": "08951395076",
+                    "to": "02048565100",
+                    "media_format": {"encoding": "audio/x-raw", "sample_rate": "8000"},
+                },
+            }
+        )
+        first = ws.receive_json()
+        assert first["event"] == "media"
+
+        ws.send_json(
+            {
+                "event": "dtmf",
+                "stream_sid": "MZ1",
+                "dtmf": {"digit": "1", "duration": "100"},
+            }
+        )
+
+        # Drain any already-queued menu chunks, then expect clear + next prompt.
+        events = []
+        for _ in range(20):
+            ev = ws.receive_json()
+            events.append(ev)
+            if ev.get("event") == "clear":
+                break
+        assert events[-1]["event"] == "clear"
+        assert events[-1]["stream_sid"] == "MZ1"
+
+        media = ws.receive_json()
+        assert media["event"] == "media"
+        mark = ws.receive_json()
+        assert mark["event"] == "mark"
+        assert mark["mark"]["name"] == "turn"
+
+        ws.send_json({"event": "mark", "stream_sid": "MZ1", "mark": {"name": "turn"}})
+        ws.send_json({"event": "stop", "stop": {"reason": "callended", "call_sid": "CA_BARGE"}})
+
+    assert seen["fields"]["Digits"] == "1"
+    assert seen["fields"]["CallSid"] == "CA_BARGE"
+
+
+def test_dtmf_after_playback_ack_skips_clear(monkeypatch):
+    """Once Exotel acks the mark, digit should not send a redundant clear."""
+    seen: dict = {}
+
+    class _Db:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            raise AssertionError("dtmf turn should not roll back")
+
+    class _Session:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def opening(call_sid, from_number, to_number):
+        return "<Response><Say>Hello</Say><Gather><Say>Menu</Say></Gather></Response>"
+
+    async def pcm(twiml, rate):
+        return b"\x10\x00" * 1600, True, False
+
+    async def fake_turn(request, db):
+        seen["fields"] = await _webhook_fields(request)
+        return Response(content=b"<Response><Say>Next</Say></Response>", media_type="application/xml")
+
+    async def no_session(call_sid):
+        return None
+
+    monkeypatch.setattr("app.agent.exotel_voicebot.opening_twiml", opening)
+    monkeypatch.setattr("app.agent.exotel_voicebot.speakable_pcm", pcm)
+    monkeypatch.setattr("app.agent.router.conversation_turn", fake_turn)
+    monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: _Session())
+    monkeypatch.setattr("app.agent.session_store.get_session", no_session)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/agent/v1/voice")
+    client = TestClient(app)
+
+    with client.websocket_connect("/agent/v1/voice/incoming?sample-rate=8000") as ws:
+        ws.send_json({"event": "connected"})
+        ws.send_json(
+            {
+                "event": "start",
+                "stream_sid": "MZ1",
+                "start": {
+                    "stream_sid": "MZ1",
+                    "call_sid": "CA_ACK",
+                    "from": "08951395076",
+                    "to": "02048565100",
+                    "media_format": {"encoding": "audio/x-raw", "sample_rate": "8000"},
+                },
+            }
+        )
+        assert ws.receive_json()["event"] == "media"
+        assert ws.receive_json()["mark"]["name"] == "open-1"
+        ws.send_json({"event": "mark", "stream_sid": "MZ1", "mark": {"name": "open-1"}})
+
+        ws.send_json(
+            {
+                "event": "dtmf",
+                "stream_sid": "MZ1",
+                "dtmf": {"digit": "2", "duration": "100"},
+            }
+        )
+        media = ws.receive_json()
+        assert media["event"] == "media"
+        mark = ws.receive_json()
+        assert mark["event"] == "mark"
+        assert mark["mark"]["name"] == "turn"
+        ws.send_json({"event": "stop", "stop": {"reason": "callended", "call_sid": "CA_ACK"}})
+
+    assert seen["fields"]["Digits"] == "2"
 
 
 def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
@@ -387,6 +568,8 @@ def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
                 "dtmf": {"digit": "1", "duration": "100"},
             }
         )
+        cleared = ws.receive_json()
+        assert cleared["event"] == "clear"
         media = ws.receive_json()
         assert media["event"] == "media"
         mark = ws.receive_json()

@@ -3,7 +3,10 @@ Exotel Voicebot / AgentStream socket for /agent/v1/voice/incoming.
 
 Exotel is the WebSocket client. This module only accepts that socket, plays
 audio the existing HTTP voice handlers already return, and feeds caller
-speech back into those same handlers. It does not replace them.
+speech/DTMF back into those same handlers. It does not replace them.
+
+DTMF during outbound playback cancels the send task and emits Exotel's
+`clear` event so unplayed menu audio is flushed (Twilio Gather-like barge-in).
 """
 
 from __future__ import annotations
@@ -35,14 +38,19 @@ logger = logging.getLogger("nexacare.agent.exotel_voicebot")
 
 _MIN_CHUNK = 3200
 _MAX_CHUNK = 99840  # 100000 rounded down to a multiple of 320
+# ~200ms @ 8kHz PCM16 — small enough that Exotel `clear` can drop unplayed queue.
+_BARGE_CHUNK = 3200
 _FRAME = 320
 _SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 
 
-def iter_pcm_chunks(pcm: bytes) -> list[bytes]:
+def iter_pcm_chunks(pcm: bytes, max_chunk: int = _MAX_CHUNK) -> list[bytes]:
     """Exotel rejects or drops playback when a chunk is not 3200..100000 and a multiple of 320."""
     if not pcm:
         return []
+    size = max(_MIN_CHUNK, min(int(max_chunk or _MAX_CHUNK), _MAX_CHUNK))
+    if size % _FRAME:
+        size -= size % _FRAME
     if len(pcm) % 2:
         pcm = pcm[:-1]
     if len(pcm) % _FRAME:
@@ -50,8 +58,8 @@ def iter_pcm_chunks(pcm: bytes) -> list[bytes]:
     if len(pcm) < _MIN_CHUNK:
         pcm += b"\x00" * (_MIN_CHUNK - len(pcm))
     chunks: list[bytes] = []
-    for offset in range(0, len(pcm), _MAX_CHUNK):
-        piece = pcm[offset : offset + _MAX_CHUNK]
+    for offset in range(0, len(pcm), size):
+        piece = pcm[offset : offset + size]
         if len(piece) < _MIN_CHUNK:
             piece += b"\x00" * (_MIN_CHUNK - len(piece))
         if len(piece) % _FRAME:
@@ -520,26 +528,44 @@ def _mark_name(event: dict[str, Any]) -> str:
     return str(value or "").strip()
 
 
-async def _send_pcm(websocket: WebSocket, stream_sid: str, pcm: bytes, mark_name: str) -> None:
-    for chunk in iter_pcm_chunks(pcm):
+async def _clear_pcm(websocket: WebSocket, stream_sid: str) -> None:
+    """Flush Exotel's unplayed outbound buffer (DTMF / barge-in)."""
+    await websocket.send_text(
+        json.dumps({"event": "clear", "stream_sid": stream_sid})
+    )
+
+
+async def _send_pcm(
+    websocket: WebSocket,
+    stream_sid: str,
+    pcm: bytes,
+    mark_name: str,
+    *,
+    max_chunk: int = _BARGE_CHUNK,
+) -> None:
+    """Stream PCM in small chunks so a cancel + clear can interrupt mid-prompt."""
+    try:
+        for chunk in iter_pcm_chunks(pcm, max_chunk=max_chunk):
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "event": "media",
+                        "stream_sid": stream_sid,
+                        "media": {"payload": base64.b64encode(chunk).decode("ascii")},
+                    }
+                )
+            )
         await websocket.send_text(
             json.dumps(
                 {
-                    "event": "media",
+                    "event": "mark",
                     "stream_sid": stream_sid,
-                    "media": {"payload": base64.b64encode(chunk).decode("ascii")},
+                    "mark": {"name": mark_name},
                 }
             )
         )
-    await websocket.send_text(
-        json.dumps(
-            {
-                "event": "mark",
-                "stream_sid": stream_sid,
-                "mark": {"name": mark_name},
-            }
-        )
-    )
+    except asyncio.CancelledError:
+        raise
 
 
 async def handle_exotel_voicebot(websocket: WebSocket) -> None:
@@ -559,6 +585,46 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
     silence_ms = 0
     busy = False
     close_after_mark = False
+    play_task: asyncio.Task | None = None
+
+    async def _stop_outbound(*, send_clear: bool) -> None:
+        """Cancel in-flight PCM send and optionally flush Exotel's play queue."""
+        nonlocal play_task, awaiting_mark, discarded
+        task = play_task
+        play_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("exotel voicebot play task failed during interrupt")
+        if send_clear and stream_sid:
+            try:
+                await _clear_pcm(websocket, stream_sid)
+                logger.info(
+                    "exotel voicebot barge-in clear call_sid=%s stream_sid=%s",
+                    call_sid,
+                    stream_sid,
+                )
+            except Exception:
+                logger.exception("exotel voicebot clear failed call_sid=%s", call_sid)
+        awaiting_mark = False
+        discarded = 0
+
+    def _begin_outbound(pcm: bytes, name: str, hangup_after: bool = False) -> None:
+        nonlocal play_task, awaiting_mark, mark_name, discarded, close_after_mark
+        if not pcm or not stream_sid:
+            return
+        mark_name = name
+        awaiting_mark = True
+        discarded = 0
+        close_after_mark = hangup_after
+        play_task = asyncio.create_task(
+            _send_pcm(websocket, stream_sid, pcm, name),
+            name=f"exotel-play-{name}",
+        )
 
     try:
         while True:
@@ -603,11 +669,13 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                     logger.exception("exotel voicebot opening failed call_sid=%s", call_sid)
                     pcm, should_close = b"", False
                 if pcm and stream_sid:
-                    mark_name = "open-1"
-                    awaiting_mark = True
-                    discarded = 0
-                    await _send_pcm(websocket, stream_sid, pcm, mark_name)
+                    _begin_outbound(pcm, "open-1")
                 if should_close:
+                    if play_task is not None:
+                        try:
+                            await play_task
+                        except asyncio.CancelledError:
+                            pass
                     await websocket.close()
                     return
                 continue
@@ -647,10 +715,16 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
             if name == "dtmf" and not busy:
                 digit = _dtmf_digit(event)
                 if digit and stream_sid:
+                    # Stop menu/prompt audio immediately, then run the digit flow.
+                    playing = awaiting_mark or (
+                        play_task is not None and not play_task.done()
+                    )
+                    await _stop_outbound(send_clear=playing)
+                    close_after_mark = False
                     busy = True
                     ignore_media = True
                     try:
-                        closed, sent, language, hangup_after = await _run_input(
+                        closed, pcm, language, hangup_after = await _run_input(
                             websocket,
                             stream_sid,
                             call_sid,
@@ -667,11 +741,8 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                         ignore_media = False
                     if closed:
                         return
-                    if sent:
-                        awaiting_mark = True
-                        mark_name = "turn"
-                        discarded = 0
-                        close_after_mark = hangup_after
+                    if pcm:
+                        _begin_outbound(pcm, "turn", hangup_after=hangup_after)
                 continue
 
             if name != "media" or busy:
@@ -700,7 +771,12 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                         _transcribe, heard, sample_rate, language
                     )
                     if transcript:
-                        closed, sent, language, hangup_after = await _run_input(
+                        playing = awaiting_mark or (
+                            play_task is not None and not play_task.done()
+                        )
+                        await _stop_outbound(send_clear=playing)
+                        close_after_mark = False
+                        closed, pcm, language, hangup_after = await _run_input(
                             websocket,
                             stream_sid,
                             call_sid,
@@ -711,11 +787,8 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                         )
                         if closed:
                             return
-                        if sent:
-                            awaiting_mark = True
-                            mark_name = "turn"
-                            discarded = 0
-                            close_after_mark = hangup_after
+                        if pcm:
+                            _begin_outbound(pcm, "turn", hangup_after=hangup_after)
                 except Exception:
                     logger.exception("exotel voicebot turn failed call_sid=%s", call_sid)
                 finally:
@@ -723,6 +796,13 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                     ignore_media = False
     except WebSocketDisconnect:
         logger.info("exotel voicebot disconnected call_sid=%s", call_sid or "-")
+    finally:
+        if play_task is not None and not play_task.done():
+            play_task.cancel()
+            try:
+                await play_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 async def _run_input(
@@ -733,7 +813,13 @@ async def _run_input(
     digits: str,
     sample_rate: int,
     language: str,
-) -> tuple[bool, bool, str, bool]:
+) -> tuple[bool, bytes, str, bool]:
+    """
+    Resolve the next TwiML turn for speech/DTMF.
+
+    Returns (closed, pcm, language, hangup_after_mark). Caller is responsible for
+    barge-in clear and outbound playback so DTMF can interrupt mid-prompt.
+    """
     twiml = await _existing_input_twiml(call_sid, speech, digits)
     from app.agent import session_store
 
@@ -742,16 +828,18 @@ async def _run_input(
         language = str(state["twilio_language"])
     hangup_after = bool(state and state.get("cancel_hangup_after_playback"))
     pcm, _expects, should_close = await speakable_pcm(twiml, sample_rate)
-    if pcm:
-        await _send_pcm(websocket, stream_sid, pcm, "turn")
     if hangup_after:
         if pcm:
-            return False, True, language, True
+            return False, pcm, language, True
         await asyncio.sleep(2)
         await websocket.close()
-        return True, False, language, False
+        return True, b"", language, False
     # Keypad 1-4 must play the existing turn and leave this socket open.
     keep_alive = digits in {"1", "2", "3", "4"}
     if should_close and not keep_alive:
+        # Legacy hangup: play once then close without waiting for mark.
+        if pcm:
+            await _send_pcm(websocket, stream_sid, pcm, "turn")
         await websocket.close()
-    return should_close and not keep_alive, bool(pcm), language, False
+        return True, b"", language, False
+    return False, pcm, language, False

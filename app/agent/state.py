@@ -67,6 +67,7 @@ class BookingCallState(TypedDict):
     cancel_candidates: Optional[list]
     cancel_pending_id: Optional[int]
     cancel_list_truncated: bool
+    cancel_hangup_after_playback: bool  # Exotel: close socket after success PCM mark
 
     # ── Phase 6 conversation memory ────────────────────────────────────────
     current_topic: Optional[str]

@@ -44,6 +44,10 @@ MAX_PATIENTS = 5
 MAX_APPOINTMENTS = 9
 MAX_RETRIES = 2
 CANCELLABLE = (AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED)
+_CANCEL_SUCCESS_EN = (
+    "Your appointment has been successfully cancelled. "
+    "Thank you for calling NexaCare. Have a nice day."
+)
 
 DIGIT_WORDS = {
     "en": ("1", "2", "3", "4", "5", "6", "7", "8", "9"),
@@ -563,4 +567,8 @@ async def _handle_confirm_digit(db: AsyncSession, call_sid: str, state: dict, di
         return _hangup(state, cancel_failed(language))
 
     logger.info("  ↳ [%s] Appointment %s cancelled", call_sid, pending_id)
-    return _hangup(state, cancel_success(language))
+    await session_store.update_session(
+        call_sid, {"cancel_hangup_after_playback": True}
+    )
+    text = _CANCEL_SUCCESS_EN if language == "en" else cancel_success(language)
+    return _hangup(state, text)

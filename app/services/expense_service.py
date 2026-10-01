@@ -99,7 +99,11 @@ class ExpenseService:
             if not vendor:
                 raise NotFoundException(f"Vendor with ID {data.vendor_id} not found")
 
-        expense = Expense(**data.model_dump())
+        from app.models.user_model import User
+        user = await self.db.get(User, user_id)
+        hospital_id = user.hospital_id if user else None
+
+        expense = Expense(hospital_id=hospital_id, **data.model_dump())
         expense = await self.expense_repo.create(expense)
         await self.audit_repo.create("create", "expense", user_id=user_id, resource_id=str(expense.id))
 
@@ -117,7 +121,10 @@ class ExpenseService:
 
         return ExpenseResponse.model_validate(expense)
 
-    async def list_expenses(self, query: ExpenseQuery):
+    async def list_expenses(self, query: ExpenseQuery, current_user = None):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         # Resolve pharmacy category ID
         from app.models.expense_model import ExpenseCategory
         from sqlalchemy import select, func, or_
@@ -163,7 +170,8 @@ class ExpenseService:
                 status=query.status,
                 start_date=query.start_date,
                 end_date=query.end_date,
-                description=query.description
+                description=query.description,
+                hospital_id=hospital_id,
             )
 
         purchases_list = []
@@ -174,6 +182,8 @@ class ExpenseService:
             purchase_stmt = select(Purchase).options(
                 selectinload(Purchase.supplier)
             )
+            if hospital_id is not None:
+                purchase_stmt = purchase_stmt.where(Purchase.hospital_id == hospital_id)
             if query.vendor_id is not None:
                 purchase_stmt = purchase_stmt.where(Purchase.supplier_id == query.vendor_id)
             if query.status:

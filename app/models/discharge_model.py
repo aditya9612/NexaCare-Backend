@@ -9,6 +9,9 @@ class Discharge(Base):
     __tablename__ = "discharges"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     discharge_number: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     
     appointment_id: Mapped[int] = mapped_column(Integer, ForeignKey("appointments.id"), index=True, nullable=False)

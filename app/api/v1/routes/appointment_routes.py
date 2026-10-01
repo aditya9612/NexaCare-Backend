@@ -42,7 +42,7 @@ async def create_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "create")),
 ):
-    appointment = await AppointmentService(db).create(data, current_user.id)
+    appointment = await AppointmentService(db).create(data, current_user.id, current_user=current_user)
     return APIResponse(message="Appointment booked", data=appointment)
 
 
@@ -181,7 +181,7 @@ async def reschedule_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "update")),
 ):
-    appointment = await AppointmentService(db).reschedule(data, current_user.id)
+    appointment = await AppointmentService(db).reschedule(data, current_user.id, current_user=current_user)
     return APIResponse(message="Appointment rescheduled", data=appointment)
 
 
@@ -192,7 +192,7 @@ async def cancel_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "update")),
 ):
-    appointment = await AppointmentService(db).cancel(data, current_user.id)
+    appointment = await AppointmentService(db).cancel(data, current_user.id, current_user=current_user)
     return APIResponse(message="Appointment cancelled", data=appointment)
 
 
@@ -203,7 +203,7 @@ async def confirm_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "approve")),
 ):
-    appointment = await AppointmentService(db).confirm(data, current_user.id)
+    appointment = await AppointmentService(db).confirm(data, current_user.id, current_user=current_user)
     return APIResponse(message="Appointment confirmed", data=appointment)
 
 @router.patch("/{appointment_id}/check-in", response_model=APIResponse[AppointmentCheckInResponse])
@@ -401,7 +401,7 @@ async def get_appointment_token(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    token = await AppointmentService(db).get_token(appointment_id)
+    token = await AppointmentService(db).get_token(appointment_id, current_user=current_user)
     return APIResponse(message="Token retrieved", data=token)
 
 
@@ -412,7 +412,7 @@ async def get_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    appointment = await AppointmentService(db).get_by_id(appointment_id)
+    appointment = await AppointmentService(db).get_by_id(appointment_id, current_user=current_user)
     return APIResponse(message="Appointment retrieved", data=appointment)
 
 
@@ -440,7 +440,7 @@ async def update_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "update")),
 ):
-    appointment = await AppointmentService(db).update(appointment_id, data, current_user.id)
+    appointment = await AppointmentService(db).update(appointment_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Appointment updated", data=appointment)
 
 
@@ -451,5 +451,5 @@ async def delete_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "delete")),
 ):
-    await AppointmentService(db).delete(appointment_id, current_user.id)
+    await AppointmentService(db).delete(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(message="Appointment deleted", data=MessageResponse(message="Deleted"))

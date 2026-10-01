@@ -33,3 +33,18 @@ class User(Base, TimestampMixin):
     role = relationship("Role", back_populates="users", lazy="joined")
     hospital = relationship("Hospital", back_populates="users")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def first_name(self) -> str:
+        if not self.full_name:
+            return ""
+        parts = self.full_name.strip().split(" ", 1)
+        return parts[0] if parts else ""
+
+    @property
+    def last_name(self) -> str:
+        if not self.full_name:
+            return ""
+        parts = self.full_name.strip().split(" ", 1)
+        return parts[1] if len(parts) > 1 else ""
+

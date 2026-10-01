@@ -44,7 +44,7 @@ async def create_lab_test(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    test = await LabService(db).create_test(data, current_user.id)
+    test = await LabService(db).create_test(data, current_user.id, current_user=current_user)
     return APIResponse(message="Lab test created", data=test)
 
 
@@ -111,7 +111,7 @@ async def get_lab_test(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    test = await LabService(db).get_test(test_id)
+    test = await LabService(db).get_test(test_id, current_user=current_user)
     return APIResponse(message="Lab test retrieved", data=test)
 
 
@@ -123,7 +123,7 @@ async def update_lab_test(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    test = await LabService(db).update_test(test_id, data, current_user.id)
+    test = await LabService(db).update_test(test_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Lab test updated", data=test)
 
 
@@ -134,7 +134,7 @@ async def delete_lab_test(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_test(test_id, current_user.id)
+    await LabService(db).delete_test(test_id, current_user.id, current_user=current_user)
     return APIResponse(message="Lab test deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -214,7 +214,7 @@ async def create_test_order(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    order = await LabService(db).create_order(data, current_user.id)
+    order = await LabService(db).create_order(data, current_user.id, current_user=current_user)
     return APIResponse(message="Test order created", data=order)
 
 
@@ -254,7 +254,7 @@ async def get_test_order(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    order = await LabService(db).get_order(order_id)
+    order = await LabService(db).get_order(order_id, current_user=current_user)
     return APIResponse(message="Test order retrieved", data=order)
 
 
@@ -266,7 +266,7 @@ async def update_test_order_legacy(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    order = await LabService(db).update_order(order_id, data, current_user.id)
+    order = await LabService(db).update_order(order_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Test order updated", data=order)
 
 

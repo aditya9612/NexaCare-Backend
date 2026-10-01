@@ -1,6 +1,6 @@
 from typing import Annotated, Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 async def get_current_user(
     db: DbSession,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    x_hospital_id: Annotated[int | None, Header(alias="X-Hospital-Id", description="Tenant Hospital ID (Super Admin override)")] = None,
 ) -> User:
     token = credentials.credentials
     try:
@@ -50,6 +51,15 @@ async def get_current_user(
             iat_dt = datetime.fromtimestamp(iat, tz=timezone.utc).replace(tzinfo=None)
             if iat_dt < user.last_logout_at:
                 raise UnauthorizedException("Token has been revoked by logout")
+
+    role_name = user.role.name if user.role else ""
+    if x_hospital_id is not None and role_name == UserRole.SUPER_ADMIN:
+        try:
+            user.active_hospital_id = int(x_hospital_id)
+        except (ValueError, TypeError):
+            user.active_hospital_id = None
+    else:
+        user.active_hospital_id = None
 
     return user
 
@@ -88,3 +98,36 @@ def require_permission(resource: str, action: str) -> Callable:
 
 
 AdminUser = Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN))]
+
+
+async def get_tenant_hospital_id(
+    user: CurrentUser,
+    x_hospital_id: Annotated[int | None, Header(description="Tenant Hospital ID (Super Admin override)")] = None,
+) -> int | None:
+    """
+    Resolves the active tenant (hospital_id) for the current request.
+    - If user is Super Admin: can pass X-Hospital-Id header to scope to a tenant, or None for global view.
+    - If user is Hospital Staff/Doctor/Admin: strictly restricted to their user.hospital_id.
+    """
+    role_name = user.role.name if user.role else ""
+    if role_name == UserRole.SUPER_ADMIN:
+        return x_hospital_id if x_hospital_id is not None else getattr(user, "active_hospital_id", user.hospital_id)
+    return user.hospital_id
+
+
+def resolve_tenant_id(user: User | None) -> int | None:
+    """
+    Convenience function to extract tenant hospital_id from a User instance.
+    Returns active_hospital_id if explicitly set on Super Admin, or user.hospital_id for tenant users.
+    Returns None for Super Admin without active_hospital_id override.
+    """
+    if not user:
+        return None
+    role_name = user.role.name if user.role else ""
+    if role_name == UserRole.SUPER_ADMIN:
+        return getattr(user, "active_hospital_id", None)
+    return user.hospital_id
+
+
+TenantHospitalId = Annotated[int | None, Depends(get_tenant_hospital_id)]
+

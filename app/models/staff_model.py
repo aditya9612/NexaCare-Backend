@@ -9,6 +9,9 @@ class Staff(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "staff"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     full_name: Mapped[str] = mapped_column(String(200), index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)

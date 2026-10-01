@@ -436,9 +436,19 @@ async def _existing_input_twiml(
             "SpeechResult": speech,
         }
     elif handler_name == "service_menu":
+        # Service menu Gather is DTMF-only (numDigits=1). Never map STT into Digits —
+        # filler like "हो." was counted as invalid input, burned retries, and hung up.
+        if not digits:
+            logger.info(
+                "exotel voicebot ignoring speech on DTMF service menu "
+                "call_sid=%s speech=%r",
+                call_sid,
+                (speech[:80] + "…") if len(speech) > 80 else speech,
+            )
+            return ""
         form = {
             "CallSid": call_sid,
-            "Digits": digits or speech,
+            "Digits": digits,
         }
     else:
         form = {
@@ -498,6 +508,18 @@ def _dtmf_digit(event: dict[str, Any]) -> str:
     return ""
 
 
+def _mark_name(event: dict[str, Any]) -> str:
+    """Read the playback mark label from either Exotel mark payload shape."""
+    raw = event.get("mark")
+    if isinstance(raw, dict):
+        value = raw.get("name")
+    elif isinstance(raw, str):
+        value = raw
+    else:
+        value = event.get("name")
+    return str(value or "").strip()
+
+
 async def _send_pcm(websocket: WebSocket, stream_sid: str, pcm: bytes, mark_name: str) -> None:
     for chunk in iter_pcm_chunks(pcm):
         await websocket.send_text(
@@ -536,6 +558,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
     speech_ms = 0
     silence_ms = 0
     busy = False
+    close_after_mark = False
 
     try:
         while True:
@@ -590,13 +613,18 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                 continue
 
             if name == "mark" and awaiting_mark:
-                got = str((event.get("mark") or {}).get("name") or "")
+                got = _mark_name(event)
                 if got == mark_name:
                     awaiting_mark = False
                     discarded = 0
                     speech.clear()
                     speech_ms = 0
                     silence_ms = 0
+                    if close_after_mark:
+                        close_after_mark = False
+                        await asyncio.sleep(2)
+                        await websocket.close()
+                        return
                 continue
 
             if name == "media" and ignore_media:
@@ -604,7 +632,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
 
             if name == "media" and awaiting_mark:
                 discarded += 1
-                if discarded >= 50:
+                if discarded >= 50 and not close_after_mark:
                     awaiting_mark = False
                     speech.clear()
                     speech_ms = 0
@@ -622,7 +650,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                     busy = True
                     ignore_media = True
                     try:
-                        closed, sent, language = await _run_input(
+                        closed, sent, language, hangup_after = await _run_input(
                             websocket,
                             stream_sid,
                             call_sid,
@@ -643,6 +671,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                         awaiting_mark = True
                         mark_name = "turn"
                         discarded = 0
+                        close_after_mark = hangup_after
                 continue
 
             if name != "media" or busy:
@@ -671,7 +700,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                         _transcribe, heard, sample_rate, language
                     )
                     if transcript:
-                        closed, sent, language = await _run_input(
+                        closed, sent, language, hangup_after = await _run_input(
                             websocket,
                             stream_sid,
                             call_sid,
@@ -686,6 +715,7 @@ async def handle_exotel_voicebot(websocket: WebSocket) -> None:
                             awaiting_mark = True
                             mark_name = "turn"
                             discarded = 0
+                            close_after_mark = hangup_after
                 except Exception:
                     logger.exception("exotel voicebot turn failed call_sid=%s", call_sid)
                 finally:
@@ -703,18 +733,25 @@ async def _run_input(
     digits: str,
     sample_rate: int,
     language: str,
-) -> tuple[bool, bool, str]:
+) -> tuple[bool, bool, str, bool]:
     twiml = await _existing_input_twiml(call_sid, speech, digits)
     from app.agent import session_store
 
     state = await session_store.get_session(call_sid)
     if state and state.get("twilio_language"):
         language = str(state["twilio_language"])
+    hangup_after = bool(state and state.get("cancel_hangup_after_playback"))
     pcm, _expects, should_close = await speakable_pcm(twiml, sample_rate)
     if pcm:
         await _send_pcm(websocket, stream_sid, pcm, "turn")
+    if hangup_after:
+        if pcm:
+            return False, True, language, True
+        await asyncio.sleep(2)
+        await websocket.close()
+        return True, False, language, False
     # Keypad 1-4 must play the existing turn and leave this socket open.
     keep_alive = digits in {"1", "2", "3", "4"}
     if should_close and not keep_alive:
         await websocket.close()
-    return should_close and not keep_alive, bool(pcm), language
+    return should_close and not keep_alive, bool(pcm), language, False

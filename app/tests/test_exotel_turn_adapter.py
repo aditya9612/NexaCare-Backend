@@ -4,7 +4,7 @@ import base64
 import inspect
 
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from app.agent.exotel_voicebot import (
@@ -29,6 +29,14 @@ def test_route_for_step_matches_http_gather_actions():
     assert _route_for_step("greeting") == ("/agent/v1/voice/menu", "service_menu")
     assert _route_for_step("service_menu") == ("/agent/v1/voice/menu", "service_menu")
     assert _route_for_step("collect_name") == (
+        "/agent/v1/voice/turn",
+        "conversation_turn",
+    )
+    assert _route_for_step("reschedule_select_appointment") == (
+        "/agent/v1/voice/turn",
+        "conversation_turn",
+    )
+    assert _route_for_step("select_slot") == (
         "/agent/v1/voice/turn",
         "conversation_turn",
     )
@@ -118,6 +126,30 @@ async def test_greeting_digit_routes_to_service_menu(monkeypatch):
     assert seen["fields"]["CallSid"] == "CA_EXOTEL"
     assert seen["fields"]["Digits"] == "1"
     assert session.db.committed is True
+
+
+async def test_service_menu_ignores_speech_without_dtmf(monkeypatch):
+    """STT filler must not be treated as Digits or burn menu retries."""
+    session = _session_factory()
+
+    async def fake_get_session(call_sid):
+        return {"step": "greeting", "call_sid": call_sid}
+
+    async def boom_menu(*_a, **_k):
+        raise AssertionError("speech-only input must not hit service_menu")
+
+    async def boom_turn(*_a, **_k):
+        raise AssertionError("greeting speech must not hit /turn")
+
+    monkeypatch.setattr("app.agent.session_store.get_session", fake_get_session)
+    monkeypatch.setattr("app.agent.router.service_menu", boom_menu)
+    monkeypatch.setattr("app.agent.router.conversation_turn", boom_turn)
+    monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: session)
+
+    twiml = await _existing_input_twiml("CA_EXOTEL", "हो.", "")
+
+    assert twiml == ""
+    assert session.db.committed is False
 
 
 async def test_language_select_digit_routes_to_lang(monkeypatch):
@@ -246,3 +278,136 @@ def test_keypad_dtmf_plays_turn_and_keeps_socket_open(monkeypatch, digit):
     assert seen["fields"]["CallSid"] == "CA_TEST"
     assert seen["fields"]["SpeechResult"] == ""
     assert seen["fields"]["Digits"] == digit
+
+
+def test_cancel_success_plays_then_waits_mark_sleeps_and_hangs_up(monkeypatch):
+    import asyncio
+
+    from app.agent import session_store
+
+    slept: list[float] = []
+    seen: dict = {}
+    redis: dict = {}
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    async def cache_get(key):
+        value = redis.get(key)
+        return dict(value) if isinstance(value, dict) else value
+
+    async def cache_set(key, value, ttl=300):
+        redis[key] = dict(value) if isinstance(value, dict) else value
+        return True
+
+    class _Db:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            raise AssertionError("dtmf turn should not roll back")
+
+    class _Session:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def opening(call_sid, from_number, to_number):
+        return "<Response><Say>Hello</Say><Gather><Say>Menu</Say></Gather></Response>"
+
+    async def pcm(twiml, rate):
+        if "Hangup" in twiml:
+            return b"\x10\x00" * 1600, False, True
+        return b"\x10\x00" * 1600, True, False
+
+    async def fake_turn(request, db):
+        seen["fields"] = await _webhook_fields(request)
+        await session_store.update_session(
+            seen["fields"]["CallSid"], {"cancel_hangup_after_playback": True}
+        )
+        return Response(
+            content=(
+                b"<Response><Say>Your appointment has been successfully cancelled. "
+                b"Thank you for calling NexaCare. Have a nice day.</Say><Hangup/></Response>"
+            ),
+            media_type="application/xml",
+        )
+
+    monkeypatch.setattr("app.agent.session_store.cache_get", cache_get)
+    monkeypatch.setattr("app.agent.session_store.cache_set", cache_set)
+    monkeypatch.setattr("app.agent.exotel_voicebot.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.agent.exotel_voicebot.opening_twiml", opening)
+    monkeypatch.setattr("app.agent.exotel_voicebot.speakable_pcm", pcm)
+    monkeypatch.setattr("app.agent.router.conversation_turn", fake_turn)
+    monkeypatch.setattr("app.agent.exotel_voicebot.AsyncSessionLocal", lambda: _Session())
+
+    session_store._sessions.pop("CA_TEST", None)
+    asyncio.run(
+        session_store.create_session("CA_TEST", "08951395076", "http://localhost")
+    )
+    asyncio.run(
+        session_store.update_session(
+            "CA_TEST", {"step": "collect_name", "twilio_language": "en-IN"}
+        )
+    )
+    reloaded = asyncio.run(session_store.get_session("CA_TEST"))
+    assert reloaded is not None
+    assert reloaded.get("cancel_hangup_after_playback") is False
+
+    app = FastAPI()
+    app.include_router(router, prefix="/agent/v1/voice")
+    client = TestClient(app)
+
+    with client.websocket_connect("/agent/v1/voice/incoming?sample-rate=8000") as ws:
+        ws.send_json({"event": "connected"})
+        ws.send_json(
+            {
+                "event": "start",
+                "stream_sid": "MZ1",
+                "start": {
+                    "stream_sid": "MZ1",
+                    "call_sid": "CA_TEST",
+                    "from": "08951395076",
+                    "to": "02048565100",
+                    "media_format": {"encoding": "audio/x-raw", "sample_rate": "8000"},
+                },
+            }
+        )
+        opening_media = ws.receive_json()
+        assert opening_media["event"] == "media"
+        opening_mark = ws.receive_json()
+        assert opening_mark["mark"]["name"] == "open-1"
+
+        ws.send_json(
+            {
+                "event": "dtmf",
+                "stream_sid": "MZ1",
+                "dtmf": {"digit": "1", "duration": "100"},
+            }
+        )
+        media = ws.receive_json()
+        assert media["event"] == "media"
+        mark = ws.receive_json()
+        assert mark["event"] == "mark"
+        assert mark["mark"]["name"] == "turn"
+        assert slept == []
+        after_pcm = asyncio.run(session_store.get_session("CA_TEST"))
+        assert after_pcm is not None
+        assert after_pcm.get("cancel_hangup_after_playback") is True
+
+        ws.send_json(
+            {
+                "event": "mark",
+                "sequence_number": "15",
+                "stream_sid": "MZ1",
+                "mark": {"name": "turn"},
+            }
+        )
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+
+    assert slept == [2]
+    assert seen["fields"]["Digits"] == "1"
+    session_store._sessions.pop("CA_TEST", None)

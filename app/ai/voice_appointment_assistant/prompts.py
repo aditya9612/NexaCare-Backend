@@ -148,6 +148,128 @@ def cancel_success(language: str) -> str:
     }.get(language, "Your appointment has been cancelled successfully.")
 
 
+def cancel_patient_not_found(language: str) -> str:
+    return {
+        "en": "We could not find a patient record for this phone number. Goodbye.",
+        "hi": "इस फोन नंबर के लिए मरीज का रिकॉर्ड नहीं मिला। अलविदा।",
+        "mr": "या फोन नंबरसाठी रुग्णाची नोंद सापडली नाही. नमस्कार.",
+    }.get(language, "We could not find a patient record for this phone number. Goodbye.")
+
+
+def cancel_no_appointment(language: str) -> str:
+    return {
+        "en": "You do not have an upcoming confirmed or pending appointment to cancel. Goodbye.",
+        "hi": "रद्द करने के लिए आपकी कोई आगामी कन्फर्म या पेंडिंग अपॉइंटमेंट नहीं है। अलविदा।",
+        "mr": "रद्द करण्यासाठी तुमची कोणतीही पुढील कन्फर्म किंवा पेंडिंग अपॉइंटमेंट नाही. नमस्कार.",
+    }.get(language, "You do not have an upcoming confirmed or pending appointment to cancel. Goodbye.")
+
+
+def cancel_terminal(language: str) -> str:
+    return {
+        "en": "This appointment is already completed or cancelled and cannot be cancelled. Goodbye.",
+        "hi": "यह अपॉइंटमेंट पहले ही पूरी हो चुकी है या रद्द हो चुकी है, इसलिए इसे रद्द नहीं किया जा सकता। अलविदा।",
+        "mr": "ही अपॉइंटमेंट आधीच पूर्ण झाली आहे किंवा रद्द झाली आहे, त्यामुळे ती रद्द करता येणार नाही. नमस्कार.",
+    }.get(language, "This appointment is already completed or cancelled and cannot be cancelled. Goodbye.")
+
+
+def cancel_failed(language: str) -> str:
+    return {
+        "en": "We could not cancel your appointment. Please call again. Goodbye.",
+        "hi": "हम आपका अपॉइंटमेंट रद्द नहीं कर सके। कृपया फिर से कॉल करें। अलविदा।",
+        "mr": "आम्ही तुमची अपॉइंटमेंट रद्द करू शकलो नाही. कृपया पुन्हा कॉल करा. नमस्कार.",
+    }.get(language, "We could not cancel your appointment. Please call again. Goodbye.")
+
+
+def cancel_declined(language: str) -> str:
+    return {
+        "en": "Your appointment has not been cancelled. Goodbye.",
+        "hi": "आपका अपॉइंटमेंट रद्द नहीं किया गया। अलविदा।",
+        "mr": "आपली अपॉइंटमेंट रद्द करण्यात आलेली नाही. नमस्कार.",
+    }.get(language, "Your appointment has not been cancelled. Goodbye.")
+
+
+def cancel_invalid_selection(language: str) -> str:
+    return {
+        "en": "That was not a valid selection.",
+        "hi": "यह चयन मान्य नहीं है।",
+        "mr": "तो निवड वैध नाही.",
+    }.get(language, "That was not a valid selection.")
+
+
+def cancel_patients_intro(language: str) -> str:
+    return {
+        "en": "Several patients are linked to this mobile number.",
+        "hi": "इस मोबाइल नंबर से कई मरीज जुड़े हुए हैं।",
+        "mr": "तुमच्या मोबाइल नंबरशी अनेक रुग्ण जोडलेले आहेत.",
+    }.get(language, "Several patients are linked to this mobile number.")
+
+
+def cancel_patient_option(language: str, name: str, digit_word: str) -> str:
+    return {
+        "en": f"For {name}, press {digit_word}.",
+        "hi": f"{name} के लिए {digit_word} दबाएं।",
+        "mr": f"{name} यांच्यासाठी {digit_word} दाबा.",
+    }.get(language, f"For {name}, press {digit_word}.")
+
+
+def cancel_appointments_intro(language: str, name: str) -> str:
+    return {
+        "en": f"{name} has more than one appointment.",
+        "hi": f"{name} की कई अपॉइंटमेंट हैं।",
+        "mr": f"{name} यांच्या अनेक अपॉइंटमेंट आहेत.",
+    }.get(language, f"{name} has more than one appointment.")
+
+
+def cancel_appointments_choose(language: str) -> str:
+    return {
+        "en": "Press the number of the appointment you want to cancel.",
+        "hi": "रद्द करने के लिए अपॉइंटमेंट का नंबर दबाएं।",
+        "mr": "रद्द करण्यासाठी अपॉइंटमेंटचा क्रमांक दाबा.",
+    }.get(language, "Press the number of the appointment you want to cancel.")
+
+
+def cancel_showing_next_nine(language: str) -> str:
+    return {
+        "en": "Only the next 9 upcoming appointments are being listed.",
+        "hi": "केवल अगली 9 अपॉइंटमेंट बताई जा रही हैं।",
+        "mr": "फक्त पुढील 9 अपॉइंटमेंट सांगितल्या जात आहेत.",
+    }.get(language, "Only the next 9 upcoming appointments are being listed.")
+
+
+def cancel_confirm(language: str, name: str, when: str) -> str:
+    return {
+        "en": (
+            f"{name} has an appointment {when}. "
+            "To cancel, press 1. To keep it, press 2."
+        ),
+        "hi": (
+            f"{name} की {when} अपॉइंटमेंट है। "
+            "रद्द करने के लिए 1 दबाएं। रद्द न करने के लिए 2 दबाएं।"
+        ),
+        "mr": (
+            f"{name} यांची {when} अपॉइंटमेंट आहे. "
+            "रद्द करण्यासाठी एक दाबा. रद्द न करण्यासाठी दोन दाबा."
+        ),
+    }.get(language, f"{name} has an appointment {when}. To cancel, press 1. To keep it, press 2.")
+
+
+def cancel_final_confirm(language: str, name: str, when: str) -> str:
+    return {
+        "en": (
+            f"{name}'s appointment {when} will be cancelled. "
+            "To cancel, press 1. To keep it, press 2."
+        ),
+        "hi": (
+            f"{name} की {when} अपॉइंटमेंट रद्द की जाएगी। "
+            "रद्द करने के लिए 1 दबाएं। रद्द न करने के लिए 2 दबाएं।"
+        ),
+        "mr": (
+            f"{name} यांची {when} ची अपॉइंटमेंट रद्द करायची आहे. "
+            "रद्द करण्यासाठी एक दाबा. रद्द न करण्यासाठी दोन दाबा."
+        ),
+    }.get(language, f"{name}'s appointment {when} will be cancelled. To cancel, press 1. To keep it, press 2.")
+
+
 def reschedule_success(language: str) -> str:
     return {
         "en": "Your appointment has been rescheduled successfully. Goodbye.",

@@ -12,7 +12,7 @@ class DischargeRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, discharge_id: int) -> Discharge | None:
+    async def get_by_id(self, discharge_id: int, hospital_id: int | None = None) -> Discharge | None:
         query = (
             select(Discharge)
             .where(Discharge.id == discharge_id)
@@ -24,10 +24,12 @@ class DischargeRepository:
                 selectinload(Discharge.billing),
             )
         )
+        if hospital_id is not None:
+            query = query.where(Discharge.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def get_by_appointment_id(self, appointment_id: int) -> Discharge | None:
+    async def get_by_appointment_id(self, appointment_id: int, hospital_id: int | None = None) -> Discharge | None:
         query = (
             select(Discharge)
             .where(Discharge.appointment_id == appointment_id)
@@ -40,10 +42,12 @@ class DischargeRepository:
                 selectinload(Discharge.billing),
             )
         )
+        if hospital_id is not None:
+            query = query.where(Discharge.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def get_all_active(self) -> list[Discharge]:
+    async def get_all_active(self, hospital_id: int | None = None) -> list[Discharge]:
         query = (
             select(Discharge)
             .where(Discharge.discharge_status.in_(["PENDING_CLEARANCES", "CLEARED"]))
@@ -55,6 +59,8 @@ class DischargeRepository:
                 selectinload(Discharge.bed).selectinload(Bed.room),
             )
         )
+        if hospital_id is not None:
+            query = query.where(Discharge.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -69,7 +75,7 @@ class DischargeRepository:
         await self.db.refresh(discharge)
         return discharge
 
-    async def count_today_discharged(self, on_date: date | None = None, nurse_id: int | None = None) -> int:
+    async def count_today_discharged(self, on_date: date | None = None, nurse_id: int | None = None, hospital_id: int | None = None) -> int:
         from app.utils.helpers import get_today_ist
         from app.models.patient_model import Patient
         target_date = on_date or get_today_ist()
@@ -86,6 +92,8 @@ class DischargeRepository:
                 ),
             )
         )
+        if hospital_id is not None:
+            query = query.where(Discharge.hospital_id == hospital_id)
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             query = query.join(

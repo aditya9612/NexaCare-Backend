@@ -24,8 +24,10 @@ class BedAllocationRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def get_floor_by_number(self, number: int) -> Optional[Floor]:
+    async def get_floor_by_number(self, number: int, hospital_id: Optional[int] = None) -> Optional[Floor]:
         query = select(Floor).where(Floor.number == number)
+        if hospital_id is not None:
+            query = query.where(Floor.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -34,12 +36,15 @@ class BedAllocationRepository:
         floor_id: Optional[int] = None,
         floor_number: Optional[int] = None,
         floor_type: Optional[str] = None,
+        hospital_id: Optional[int] = None,
     ) -> List[Floor]:
         query = (
             select(Floor)
             .options(selectinload(Floor.rooms).selectinload(Room.beds).selectinload(Bed.patient))
             .order_by(Floor.number.asc())
         )
+        if hospital_id is not None:
+            query = query.where(Floor.hospital_id == hospital_id)
         if floor_id is not None:
             query = query.where(Floor.id == floor_id)
         if floor_number is not None:
@@ -118,6 +123,7 @@ class BedAllocationRepository:
         bed_type: Optional[str] = None,
         room_id: Optional[int] = None,
         floor_id: Optional[int] = None,
+        hospital_id: Optional[int] = None,
     ) -> List[Bed]:
         query = (
             select(Bed)
@@ -127,6 +133,8 @@ class BedAllocationRepository:
                 selectinload(Bed.room).selectinload(Room.floor),
             )
         )
+        if hospital_id is not None:
+            query = query.where(Bed.hospital_id == hospital_id)
         if status:
             query = query.where(func.lower(Bed.status) == status.strip().lower())
         if bed_type:

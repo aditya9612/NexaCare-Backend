@@ -686,7 +686,7 @@ class VoiceAssistantService:
                 appointment_time=new_time,
                 notes="Rescheduled via voice assistant",
             ),
-            user_id=0,
+            user_id=None,
         )
         state.appointment_id = appt.id
 
@@ -697,7 +697,7 @@ class VoiceAssistantService:
             return
         await AppointmentService(self.db).cancel(
             CancelRequest(appointment_id=appt.id, reason="Cancelled via voice assistant"),
-            user_id=0,
+            user_id=None,
         )
         state.appointment_id = appt.id
 

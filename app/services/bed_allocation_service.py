@@ -1,5 +1,5 @@
 import io
-from typing import List, Optional
+from typing import Any, List, Optional
 from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
@@ -63,11 +63,15 @@ class BedAllocationService:
         room_id: Optional[int] = None,
         room_number: Optional[int] = None,
         room_type: Optional[str] = None,
+        current_user: Any | None = None,
     ) -> List[Floor]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         floors = await self.repo.list_floors(
             floor_id=floor_id,
             floor_number=floor_number,
             floor_type=floor_type,
+            hospital_id=hospital_id,
         )
 
         status_clean = status.strip().lower() if status else None
@@ -117,8 +121,10 @@ class BedAllocationService:
 
         return filtered_floors
 
-    async def create_floor(self, data: FloorCreate) -> Floor:
-        existing = await self.repo.get_floor_by_number(data.number)
+    async def create_floor(self, data: FloorCreate, current_user: Optional[Any] = None) -> Floor:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        existing = await self.repo.get_floor_by_number(data.number, hospital_id=hospital_id)
         if existing:
             raise ConflictException(f"Floor number {data.number} already exists")
 
@@ -127,6 +133,7 @@ class BedAllocationService:
             name=data.name,
             type=data.type,
             description=data.description,
+            hospital_id=hospital_id,
         )
         floor = await self.repo.create_floor(floor)
 
@@ -139,6 +146,7 @@ class BedAllocationService:
                     type=r_data.type,
                     capacity=r_data.capacity,
                     description=r_data.description,
+                    hospital_id=hospital_id,
                 )
                 room = await self.repo.create_room(room)
                 # Auto-create beds up to room capacity
@@ -148,6 +156,7 @@ class BedAllocationService:
                         name=f"Bed {i}",
                         type=room.type,
                         status="Available",
+                        hospital_id=hospital_id,
                     )
                     await self.repo.create_bed(bed)
 
@@ -223,6 +232,7 @@ class BedAllocationService:
             type=data.type,
             capacity=data.capacity,
             description=data.description,
+            hospital_id=floor.hospital_id,
         )
         room = await self.repo.create_room(room)
 
@@ -232,6 +242,7 @@ class BedAllocationService:
                 name=f"Bed {i}",
                 type=room.type,
                 status="Available",
+                hospital_id=floor.hospital_id,
             )
             await self.repo.create_bed(bed)
 
@@ -240,6 +251,7 @@ class BedAllocationService:
             message=f"Created room {room.name} under floor {floor.name}.",
             floor_id=floor_id,
             room_id=room.id,
+            hospital_id=floor.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
@@ -343,6 +355,7 @@ class BedAllocationService:
             name=data.name,
             type=data.type,
             status=data.status or "Available",
+            hospital_id=room.hospital_id,
         )
         bed = await self.repo.create_bed(bed)
 
@@ -352,6 +365,7 @@ class BedAllocationService:
             floor_id=room.floor_id,
             room_id=room.id,
             bed_id=bed.id,
+            hospital_id=room.hospital_id,
         )
         await self.repo.create_activity_log(log)
 

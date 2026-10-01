@@ -11,8 +11,15 @@ class PatientRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self, nurse_id: int | None = None, allowed_patient_ids: list[int] | None = None):
+    def _base_query(
+        self,
+        nurse_id: int | None = None,
+        allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
+    ):
         query = select(Patient).where(Patient.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if allowed_patient_ids is not None:
             query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
@@ -36,9 +43,10 @@ class PatientRepository:
         end_date: date | None = None,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> list[Patient]:
         from datetime import datetime, time
-        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
+        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
         if start_date:
             start_dt = datetime.combine(start_date, time.min)
             query = query.where(Patient.created_at >= start_dt)
@@ -57,9 +65,12 @@ class PatientRepository:
         end_date: date | None = None,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         from datetime import datetime, time
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if allowed_patient_ids is not None:
             query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
@@ -81,13 +92,13 @@ class PatientRepository:
         result = await self.db.scalar(query)
         return result or 0
 
-    async def get_by_id(self, patient_id: int) -> Patient | None:
+    async def get_by_id(self, patient_id: int, hospital_id: int | None = None) -> Patient | None:
         result = await self.db.execute(
-            self._base_query().where(Patient.id == patient_id)
+            self._base_query(hospital_id=hospital_id).where(Patient.id == patient_id)
         )
         return result.scalar_one_or_none()
 
-    async def get_by_phone(self, phone: str) -> Patient | None:
+    async def get_by_phone(self, phone: str, hospital_id: int | None = None) -> Patient | None:
         from app.utils.phone_utils import indian_mobile_last10
 
         last10 = indian_mobile_last10(phone)
@@ -95,7 +106,7 @@ class PatientRepository:
             return None
         # Exact match first — prefer account holders (no guardian)
         result = await self.db.execute(
-            self._base_query()
+            self._base_query(hospital_id=hospital_id)
             .where(Patient.phone == phone)
             .order_by(Patient.guardian_patient_id.is_(None).desc(), Patient.id.asc())
         )
@@ -104,7 +115,7 @@ class PatientRepository:
             return hit
         # Match any stored format ending with same 10 digits
         result = await self.db.execute(
-            self._base_query()
+            self._base_query(hospital_id=hospital_id)
             .where(Patient.phone.is_not(None))
             .order_by(Patient.guardian_patient_id.is_(None).desc(), Patient.id.asc())
         )
@@ -113,17 +124,37 @@ class PatientRepository:
                 return patient
         return None
 
-    async def list_dependents(self, guardian_patient_id: int) -> list[Patient]:
+    async def list_by_phone(self, phone: str, limit: int = 5) -> list[Patient]:
+        """All non-deleted patients whose stored phone matches this mobile (max `limit`)."""
+        from app.utils.phone_utils import indian_mobile_last10
+
+        last10 = indian_mobile_last10(phone)
+        if not last10:
+            return []
         result = await self.db.execute(
             self._base_query()
+            .where(Patient.phone.is_not(None))
+            .order_by(Patient.id.asc())
+        )
+        matched: dict[int, Patient] = {}
+        for patient in result.scalars().all():
+            if indian_mobile_last10(patient.phone) == last10:
+                matched[patient.id] = patient
+                if len(matched) >= limit:
+                    break
+        return list(matched.values())[:limit]
+
+    async def list_dependents(self, guardian_patient_id: int, hospital_id: int | None = None) -> list[Patient]:
+        result = await self.db.execute(
+            self._base_query(hospital_id=hospital_id)
             .where(Patient.guardian_patient_id == guardian_patient_id)
             .order_by(Patient.id.asc())
         )
         return list(result.scalars().all())
 
-    async def get_by_email(self, email: str) -> Patient | None:
+    async def get_by_email(self, email: str, hospital_id: int | None = None) -> Patient | None:
         result = await self.db.execute(
-            self._base_query().where(Patient.email == email)
+            self._base_query(hospital_id=hospital_id).where(Patient.email == email)
         )
         return result.scalar_one_or_none()
 
@@ -166,8 +197,9 @@ class PatientRepository:
         limit: int = 20,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> list[Patient]:
-        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids).where(self._search_filter(q))
+        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id).where(self._search_filter(q))
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
@@ -176,8 +208,11 @@ class PatientRepository:
         q: str,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False), self._search_filter(q))
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if allowed_patient_ids is not None:
             query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
@@ -203,8 +238,9 @@ class PatientRepository:
         limit: int = 20,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> list[Patient]:
-        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
+        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
         if gender:
             query = query.where(Patient.gender == gender)
         if blood_group:
@@ -227,8 +263,11 @@ class PatientRepository:
         status: str | None = None,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if allowed_patient_ids is not None:
             query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
@@ -256,6 +295,7 @@ class PatientRepository:
         self,
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
+        hospital_id: int | None = None,
     ) -> dict[str, int]:
         from datetime import datetime, time
         import calendar
@@ -286,6 +326,8 @@ class PatientRepository:
                 )
             ).label("this_month"),
         ).select_from(Patient).where(Patient.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if allowed_patient_ids is not None:
             query = query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
@@ -309,6 +351,9 @@ class PatientRepository:
                 Appointment.appointment_status.notin_(["Cancelled", "cancelled", "CANCELLED"]),
             )
         )
+        if hospital_id is not None:
+            admitted_subq = admitted_subq.where(Appointment.hospital_id == hospital_id)
+
         occupied_bed_subq = (
             select(Bed.patient_id)
             .where(
@@ -316,6 +361,9 @@ class PatientRepository:
                 Bed.patient_id.isnot(None),
             )
         )
+        if hospital_id is not None:
+            occupied_bed_subq = occupied_bed_subq.where(Bed.hospital_id == hospital_id)
+
         ipd_query = (
             select(func.count(Patient.id))
             .select_from(Patient)
@@ -327,6 +375,8 @@ class PatientRepository:
                 ),
             )
         )
+        if hospital_id is not None:
+            ipd_query = ipd_query.where(Patient.hospital_id == hospital_id)
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             ipd_query = ipd_query.join(

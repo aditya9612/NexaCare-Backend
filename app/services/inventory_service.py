@@ -82,16 +82,9 @@ class InventoryService:
             raise ConflictException("Inventory item with this name already exists.")
 
         sku = data.sku
-        if sku:
-            existing = await self.item_repo.get_by_sku(sku)
-            if existing:
-                raise ConflictException("Inventory item with this SKU already exists")
-        else:
-            while True:
-                sku = generate_code("SKU")
-                existing = await self.item_repo.get_by_sku(sku)
-                if not existing:
-                    break
+        existing = await self.item_repo.get_by_sku(sku)
+        if existing:
+            raise ConflictException("Inventory item with this SKU already exists")
 
         barcode = data.barcode
         if barcode:

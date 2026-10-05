@@ -156,7 +156,7 @@ def _body(response) -> str:
     return raw.decode() if isinstance(raw, bytes) else raw
 
 
-<<<<<<< HEAD
+
 async def _confirm_cancel(monkeypatch, patients, appts, service):
     _install(monkeypatch, patients, appts, service)
     first = await service_menu(_request("3"), db=object())
@@ -540,7 +540,7 @@ async def test_digit_3_not_found_and_generic_error(monkeypatch):
     assert "not yet implemented" not in error_text
 
 
-<<<<<<< HEAD
+
 async def test_digit_2_reschedule_single_appointment_offers_slots(monkeypatch):
     store = _session(monkeypatch, language="en", base_url="http://localhost:8000")
 

@@ -1012,7 +1012,7 @@ async def service_menu(
                 state = await session_store.get_session(call_sid)
                 return xml(
                     reschedule_node.build_select_appointment_twiml(state, candidates)
-
+                )
             except Exception as exc:
                 logger.error(f"  ✗ [{call_sid}] Reschedule start failed: {exc}")
                 logger.error(traceback.format_exc())

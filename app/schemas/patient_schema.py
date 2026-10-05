@@ -490,8 +490,6 @@ class PatientSearchQuery(BaseSchema):
 class PatientFilterQuery(BaseSchema):
     gender: str | None = None
     blood_group: str | None = None
-    city: str | None = None
-    state: str | None = None
     status: str | None = None
     page: int = 1
     size: int = 20
@@ -505,16 +503,6 @@ class PatientFilterQuery(BaseSchema):
     @classmethod
     def val_blood_group(cls, v: str | None) -> str | None:
         return validate_blood_group_field(v)
-
-    @field_validator("city")
-    @classmethod
-    def val_city(cls, v: str | None) -> str | None:
-        return validate_city_field(v)
-
-    @field_validator("state")
-    @classmethod
-    def val_state(cls, v: str | None) -> str | None:
-        return validate_state_field(v)
 
     @field_validator("status")
     @classmethod
@@ -656,7 +644,7 @@ class PatientListResponse(BaseSchema):
     pages: int
     active_count: int
     inactive_count: int
-    cities_count: int
+    new_today: int = 0
     this_month: int = 0
     ipd: int = 0
     opd: int = 0

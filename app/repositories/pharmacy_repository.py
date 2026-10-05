@@ -774,6 +774,53 @@ class PurchaseRepository:
     async def count_all(self) -> int:
         return (await self.db.scalar(select(func.count()).select_from(Purchase).where(Purchase.is_deleted.is_(False)))) or 0
 
+    async def get_summary_stats(self) -> dict:
+        base_where = Purchase.is_deleted.is_(False)
+
+        total_orders = (
+            await self.db.scalar(
+                select(func.count()).select_from(Purchase).where(base_where)
+            )
+        ) or 0
+
+        pending_orders = (
+            await self.db.scalar(
+                select(func.count())
+                .select_from(Purchase)
+                .where(
+                    base_where,
+                    func.lower(Purchase.status).in_(["pending", "ordered"]),
+                )
+            )
+        ) or 0
+
+        completed_orders = (
+            await self.db.scalar(
+                select(func.count())
+                .select_from(Purchase)
+                .where(
+                    base_where,
+                    func.lower(Purchase.status).in_(["received", "completed"]),
+                )
+            )
+        ) or 0
+
+        total_spent = (
+            await self.db.scalar(
+                select(func.coalesce(func.sum(Purchase.total_amount), 0.0)).where(
+                    base_where,
+                    func.lower(Purchase.status).in_(["received", "completed"]),
+                )
+            )
+        ) or 0.0
+
+        return {
+            "total_orders": total_orders,
+            "pending_orders": pending_orders,
+            "completed_orders": completed_orders,
+            "total_spent": float(total_spent),
+        }
+
 
     async def get_by_id(self, purchase_id: int) -> Purchase | None:
         result = await self.db.execute(self._base_query().where(Purchase.id == purchase_id))

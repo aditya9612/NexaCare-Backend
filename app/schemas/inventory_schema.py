@@ -9,7 +9,7 @@ from app.schemas.vendor_schema import VendorCreate, VendorUpdate, VendorResponse
 
 class InventoryItemCreate(BaseSchema):
     name: str = Field(..., min_length=1, max_length=255)
-    sku: Optional[str] = Field(None, min_length=1, max_length=100)
+    sku: str = Field(..., min_length=1, max_length=100)
     barcode: Optional[str] = Field(None, min_length=1, max_length=100)
     category: str = Field(..., min_length=1, max_length=100)
     quantity: int = Field(0, ge=0)
@@ -45,20 +45,18 @@ class InventoryItemCreate(BaseSchema):
 
     @field_validator("sku")
     @classmethod
-    def validate_sku(cls, v: Optional[str]) -> Optional[str]:
+    def validate_sku(cls, v: str) -> str:
         import re
-        if v is not None:
-            stripped = v.strip()
-            if len(stripped) < 1:
-                raise ValueError("SKU cannot be empty or only spaces")
-            if len(v) != len(stripped):
-                raise ValueError("SKU cannot contain leading or trailing spaces")
-            if not re.match(r"^[a-zA-Z0-9\-_]+$", stripped):
-                raise ValueError("SKU must contain only alphanumeric characters, hyphens, or underscores")
-            if len(stripped) > 100:
-                raise ValueError("SKU length cannot exceed 100 characters")
-            return stripped
-        return v
+        stripped = v.strip()
+        if len(stripped) < 1:
+            raise ValueError("SKU cannot be empty or only spaces")
+        if len(v) != len(stripped):
+            raise ValueError("SKU cannot contain leading or trailing spaces")
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]*[0-9][a-zA-Z0-9]*$", stripped):
+            raise ValueError("SKU must start with a letter and contain a hyphen separating alphanumeric prefix and numeric suffix")
+        if len(stripped) > 100:
+            raise ValueError("SKU length cannot exceed 100 characters")
+        return stripped
 
     @field_validator("description")
     @classmethod
@@ -426,13 +424,10 @@ class ConsumptionReport(BaseSchema):
 
 
 class InventoryDashboardResponse(BaseSchema):
-    total_registered_items: int
     stock_alerts: int
     active_warehouse_units: int
     inactive_warehouse_units: int
-    total_warehouse_units: int = 0
     total_warehouses: int = 0
-    warehouse_count: int = 0
     total_vendors: int
     total_items: int
     total_quantity: int
@@ -447,14 +442,28 @@ class StockSummary(BaseSchema):
     low_stock_count: int = 0
     expired_count: int = 0
     total_value: float = 0.0
-    total_registered_items: int = 0
     stock_alerts: int = 0
     active_warehouse_units: int = 0
     inactive_warehouse_units: int = 0
-    total_warehouse_units: int = 0
     total_warehouses: int = 0
-    warehouse_count: int = 0
     total_vendors: int = 0
+
+
+class InventorySummaryResponse(BaseSchema):
+    stock_on_hand: int = 0
+    inward_restocks: int = 0
+    outward_issued: int = 0
+    reorder_alerts: int = 0
+
+
+class InventoryPaginatedWithSummaryResponse(BaseSchema):
+    items: List[InventoryItemResponse] = []
+    total: int
+    page: int
+    size: int
+    pages: int
+    summary: InventorySummaryResponse
+
 
 
 

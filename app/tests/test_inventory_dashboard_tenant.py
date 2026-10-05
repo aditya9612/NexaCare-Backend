@@ -103,7 +103,7 @@ async def test_dashboard_tenant_isolation():
     # All 10 required fields must be present
     required_fields = [
         "total_items", "total_quantity", "low_stock_count", "expired_count",
-        "total_value", "total_registered_items", "stock_alerts",
+        "total_value", "stock_alerts",
         "active_warehouse_units", "inactive_warehouse_units", "total_vendors",
     ]
     for f in required_fields:
@@ -111,7 +111,6 @@ async def test_dashboard_tenant_isolation():
 
     # Hospital-A only: 3 items — Hospital B's item must NOT appear
     assert data["total_items"] == 3, f"Expected 3, got {data['total_items']}"
-    assert data["total_registered_items"] == 3
     assert data["total_quantity"] == 155        # 100 + 5 + 50
     assert data["low_stock_count"] == 1         # iA2 (qty 5 <= reorder 10)
     assert data["expired_count"] == 1           # iA3

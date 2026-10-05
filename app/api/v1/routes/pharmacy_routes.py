@@ -32,6 +32,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionStatusUpdate,
     PrescriptionUpdate,
     PurchaseCreate,
+    PurchaseListResponse,
     PurchaseResponse,
     SalesReport,
     SupplierCreate,
@@ -736,7 +737,7 @@ async def create_purchase(
     return APIResponse(message="Purchase created", data=purchase)
 
 
-@router.get("/purchases", response_model=APIResponse[PaginatedResult[PurchaseResponse]])
+@router.get("/purchases", response_model=APIResponse[PurchaseListResponse])
 async def list_purchases(
     db: DbSession,
     current_user: CurrentUser,

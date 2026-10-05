@@ -179,7 +179,7 @@ class PatientService:
                     "pages": 0,
                     "active_count": 0,
                     "inactive_count": 0,
-                    "cities_count": 0,
+                    "new_today": 0,
                     "this_month": 0,
                     "ipd": 0,
                     "opd": 0,
@@ -197,7 +197,7 @@ class PatientService:
                 "pages": 0,
                 "active_count": 0,
                 "inactive_count": 0,
-                "cities_count": 0,
+                "new_today": 0,
             }
 
         skip = (page - 1) * size
@@ -405,8 +405,6 @@ class PatientService:
         self,
         gender: str | None = None,
         blood_group: str | None = None,
-        city: str | None = None,
-        state: str | None = None,
         status: str | None = None,
         page: int = 1,
         size: int = 20,
@@ -428,12 +426,12 @@ class PatientService:
 
         skip = (page - 1) * size
         items = await self.repo.filter_patients(
-            gender=gender, blood_group=blood_group, city=city, state=state, status=status,
+            gender=gender, blood_group=blood_group, status=status,
             skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
             hospital_id=hospital_id,
         )
         total = await self.repo.count_filter(
-            gender=gender, blood_group=blood_group, city=city, state=state, status=status,
+            gender=gender, blood_group=blood_group, status=status,
             nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
             hospital_id=hospital_id,
         )

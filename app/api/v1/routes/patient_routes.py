@@ -173,8 +173,6 @@ async def search_patients(
 def get_patient_filter_query(
     gender: str | None = None,
     blood_group: str | None = None,
-    city: str | None = None,
-    state: str | None = None,
     status: str | None = None,
     page: int = 1,
     size: int = 20,
@@ -183,8 +181,6 @@ def get_patient_filter_query(
         return PatientFilterQuery(
             gender=gender,
             blood_group=blood_group,
-            city=city,
-            state=state,
             status=status,
             page=page,
             size=size,
@@ -203,8 +199,6 @@ async def filter_patients(
     result = await PatientService(db).filter_patients(
         gender=params.gender,
         blood_group=params.blood_group,
-        city=params.city,
-        state=params.state,
         status=params.status,
         page=params.page,
         size=params.size,

@@ -15,7 +15,7 @@ async def create_department(
     current_user: CurrentUser,
     _: User = Depends(require_permission("departments", "create")),
 ):
-    department = await DepartmentService(db).create(data)
+    department = await DepartmentService(db).create(data, current_user=current_user)
     return APIResponse(message="Department created successfully", data=department)
 
 @router.get("", response_model=APIResponse[PaginatedResult[DepartmentResponse]])
@@ -33,6 +33,7 @@ async def list_departments(
         size=size,
         search=search,
         all_records=all_records,
+        current_user=current_user,
     )
     return APIResponse(message="Departments retrieved", data=result)
 

@@ -237,10 +237,11 @@ async def list_medicines(
 ):
     service = PharmacyService(db)
     if q:
-        result = await service.search_medicines(q, page=page, size=size)
+        result = await service.search_medicines(q, page=page, size=size, current_user=current_user)
     else:
         result = await service.list_medicines(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order, category=category,
+            current_user=current_user,
         )
     return APIResponse(message="Medicines retrieved", data=result)
 
@@ -252,7 +253,7 @@ async def get_medicine(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    medicine = await PharmacyService(db).get_medicine(medicine_id)
+    medicine = await PharmacyService(db).get_medicine(medicine_id, current_user=current_user)
     return APIResponse(message="Medicine retrieved", data=medicine)
 
 
@@ -264,7 +265,7 @@ async def update_medicine(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
-    medicine = await PharmacyService(db).update_medicine(medicine_id, data, current_user.id)
+    medicine = await PharmacyService(db).update_medicine(medicine_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Medicine updated", data=medicine)
 
 
@@ -275,7 +276,7 @@ async def delete_medicine(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_medicine(medicine_id, current_user.id)
+    await PharmacyService(db).delete_medicine(medicine_id, current_user.id, current_user=current_user)
     return APIResponse(message="Medicine deleted", data=MessageResponse(message="Soft deleted"))
 
 

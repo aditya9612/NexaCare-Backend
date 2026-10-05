@@ -12,6 +12,9 @@ class Appointment(Base, TimestampMixin):
     __tablename__ = "appointments"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     appointment_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("doctors.id"), index=True)

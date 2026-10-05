@@ -1,3 +1,4 @@
+from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.exceptions import ConflictException, NotFoundException, BadRequestException
@@ -108,7 +109,7 @@ class StaffService:
         nurse_license = data_dict.pop("license_number", None)
         nurse_shift = data_dict.pop("shift", None)
 
-        staff = Staff(**data_dict)
+        staff = Staff(hospital_id=hospital_id, **data_dict)
         staff = await self.repo.create(staff)
 
         # If staff member is a Nurse, create linked Nurse profile
@@ -120,6 +121,7 @@ class StaffService:
             nurse = Nurse(
                 nurse_code=nurse_code,
                 user_id=user.id,
+                hospital_id=hospital_id,
                 license_number=nurse_license,
                 department_id=data.department_id,
                 shift=nurse_shift,
@@ -144,18 +146,22 @@ class StaffService:
         department_id: int | None = None,
         status: int | None = None,
         role_name: str | None = None,
+        current_user: Any | None = None,
     ):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
         items = await self.repo.list_all(
-            skip=skip, limit=size, q=q, department_id=department_id, status=status, role_name=role_name
+            skip=skip, limit=size, q=q, department_id=department_id, status=status, role_name=role_name,
+            hospital_id=hospital_id,
         )
-        total = await self.repo.count_all(q=q, department_id=department_id, status=status, role_name=role_name)
+        total = await self.repo.count_all(q=q, department_id=department_id, status=status, role_name=role_name, hospital_id=hospital_id)
         
-        # Calculate overall global counts (not affected by pagination, search query, department, or status filters)
-        total_staff = await self.repo.count_all()
-        active_staff = await self.repo.count_all(status=1)
-        inactive_staff = await self.repo.count_all(status=0)
-        role_counts = await self.repo.get_role_counts()
+        # Calculate overall global counts scoped by tenant
+        total_staff = await self.repo.count_all(hospital_id=hospital_id)
+        active_staff = await self.repo.count_all(status=1, hospital_id=hospital_id)
+        inactive_staff = await self.repo.count_all(status=0, hospital_id=hospital_id)
+        role_counts = await self.repo.get_role_counts(hospital_id=hospital_id)
 
         paginated = build_paginated_result(
             [StaffResponse.model_validate(item) for item in items],

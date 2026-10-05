@@ -50,10 +50,10 @@ class DischargeService:
         self.final_bill_repo = FinalBillRepository(db)
 
     async def initiate_discharge(
-        self, data: DischargeInitiateRequest, doctor_user_id: int
+        self, data: DischargeInitiateRequest, doctor_user_id: int, hospital_id: int | None = None
     ) -> DischargeResponse:
         # 1. Verify appointment exists
-        appointment = await self.appointment_repo.get_by_id(data.appointment_id)
+        appointment = await self.appointment_repo.get_by_id(data.appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException(f"Appointment with id {data.appointment_id} not found")
 
@@ -143,6 +143,7 @@ class DischargeService:
         admission_notes_val = appointment.notes or None
 
         discharge = Discharge(
+            hospital_id=appointment.hospital_id or hospital_id,
             discharge_number=generate_discharge_number(),
             appointment_id=appointment.id,
             patient_id=effective_patient_id,
@@ -168,24 +169,24 @@ class DischargeService:
         discharge = await self.repo.create(discharge)
         return DischargeResponse.model_validate(discharge)
 
-    async def get_by_id(self, discharge_id: int) -> DischargeResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+    async def get_by_id(self, discharge_id: int, hospital_id: int | None = None) -> DischargeResponse:
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
         return DischargeResponse.model_validate(discharge)
 
-    async def get_by_appointment(self, appointment_id: int) -> DischargeResponse:
-        discharge = await self.repo.get_by_appointment_id(appointment_id)
+    async def get_by_appointment(self, appointment_id: int, hospital_id: int | None = None) -> DischargeResponse:
+        discharge = await self.repo.get_by_appointment_id(appointment_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"No discharge found for appointment {appointment_id}")
         return DischargeResponse.model_validate(discharge)
 
-    async def list_active_discharges(self) -> list[DischargeResponse]:
-        items = await self.repo.get_all_active()
+    async def list_active_discharges(self, hospital_id: int | None = None) -> list[DischargeResponse]:
+        items = await self.repo.get_all_active(hospital_id=hospital_id)
         return [DischargeResponse.model_validate(d) for d in items]
 
-    async def get_clearance_status(self, discharge_id: int) -> DischargeClearanceStatus:
-        discharge = await self.repo.get_by_id(discharge_id)
+    async def get_clearance_status(self, discharge_id: int, hospital_id: int | None = None) -> DischargeClearanceStatus:
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -210,9 +211,9 @@ class DischargeService:
 
     # --- STEP 3: PHARMACY CLEARANCE ---
     async def clear_pharmacy(
-        self, discharge_id: int, user_id: int, data: ClearPharmacyRequest | None = None
+        self, discharge_id: int, user_id: int, data: ClearPharmacyRequest | None = None, hospital_id: int | None = None
     ) -> DischargeResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -242,9 +243,9 @@ class DischargeService:
 
     # --- STEP 4: IPD FINAL BILL GENERATION (Idempotent & Consolidates Pharmacy) ---
     async def generate_ipd_final_bill(
-        self, discharge_id: int, data: GenerateIPDBillRequest, user_id: int
+        self, discharge_id: int, data: GenerateIPDBillRequest, user_id: int, hospital_id: int | None = None
     ) -> IPDFinalBillResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -637,6 +638,8 @@ class DischargeService:
             existing_final_bill = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
 
         if existing_final_bill:
+            if not getattr(existing_final_bill, "hospital_id", None) and getattr(discharge, "hospital_id", None):
+                existing_final_bill.hospital_id = discharge.hospital_id
             existing_final_bill.bed_id = effective_bed_id
             existing_final_bill.doctor_id = discharge.doctor_id
             existing_final_bill.bed_charges = bed_charges
@@ -675,6 +678,7 @@ class DischargeService:
             final_bill = await self.final_bill_repo.update(existing_final_bill)
         else:
             final_bill = IPDFinalBill(
+                hospital_id=discharge.hospital_id or hospital_id,
                 bill_number=f"IPD-BILL-{utc_now().strftime('%Y%m%d')}-{discharge.id:04d}",
                 discharge_id=discharge.id,
                 patient_id=discharge.patient_id,
@@ -724,9 +728,9 @@ class DischargeService:
 
     # --- STEP 5: BILLING CLEARANCE (Separate Verification Stage) ---
     async def clear_billing(
-        self, discharge_id: int, user_id: int, data: ClearBillingRequest | None = None
+        self, discharge_id: int, user_id: int, data: ClearBillingRequest | None = None, hospital_id: int | None = None
     ) -> DischargeResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -751,9 +755,9 @@ class DischargeService:
 
     # --- STEP 6: PAYMENT ALLOCATION & STRICT OUTSTANDING CHECK ---
     async def clear_payment(
-        self, discharge_id: int, data: ClearPaymentRequest, user_id: int
+        self, discharge_id: int, data: ClearPaymentRequest, user_id: int, hospital_id: int | None = None
     ) -> DischargeResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -915,16 +919,23 @@ class DischargeService:
         discharge = await self.repo.update(discharge)
         return DischargeResponse.model_validate(discharge)
 
-    async def get_final_bill_by_discharge_id(self, discharge_id: int) -> IPDFinalBillResponse:
-        final_bill = await self.final_bill_repo.get_by_discharge_id_with_items(discharge_id)
+    async def get_final_bill_by_discharge_id(self, discharge_id: int, hospital_id: int | None = None) -> IPDFinalBillResponse:
+        final_bill = await self.final_bill_repo.get_by_discharge_id_with_items(discharge_id, hospital_id=hospital_id)
         if not final_bill:
             raise NotFoundException(f"Final bill for discharge {discharge_id} not found")
         return IPDFinalBillResponse.model_validate(final_bill)
 
     async def list_final_bills(
-        self, skip: int = 0, limit: int = 50, patient_id: int | None = None, status: str | None = None
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        patient_id: int | None = None,
+        status: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[IPDFinalBillSummaryResponse]:
-        bills = await self.final_bill_repo.list_all_final_bills(skip=skip, limit=limit, patient_id=patient_id, status=status)
+        bills = await self.final_bill_repo.list_all_final_bills(
+            skip=skip, limit=limit, patient_id=patient_id, status=status, hospital_id=hospital_id
+        )
         results = []
         for b in bills:
             pat_name = f"{b.patient.first_name} {b.patient.last_name}" if getattr(b, "patient", None) else None
@@ -949,9 +960,9 @@ class DischargeService:
 
     # --- STEP 8: DOCTOR FINAL APPROVAL ---
     async def doctor_approve_discharge(
-        self, discharge_id: int, doctor_user_id: int
+        self, discharge_id: int, doctor_user_id: int, hospital_id: int | None = None
     ) -> DischargeResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -1047,8 +1058,8 @@ class DischargeService:
 
         return DischargeResponse.model_validate(discharge)
 
-    async def get_gate_pass(self, discharge_id: int) -> DischargeGatePassResponse:
-        discharge = await self.repo.get_by_id(discharge_id)
+    async def get_gate_pass(self, discharge_id: int, hospital_id: int | None = None) -> DischargeGatePassResponse:
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 
@@ -1084,14 +1095,14 @@ class DischargeService:
             issued_at=discharge.doctor_approved_at or utc_now(),
         )
 
-    async def download_gate_pass_pdf(self, discharge_id: int) -> bytes:
+    async def download_gate_pass_pdf(self, discharge_id: int, hospital_id: int | None = None) -> bytes:
         import io
         from reportlab.lib.pagesizes import letter
         from reportlab.lib import colors
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 
-        discharge = await self.repo.get_by_id(discharge_id)
+        discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
 

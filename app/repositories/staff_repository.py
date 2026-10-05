@@ -10,12 +10,15 @@ class StaffRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return (
+    def _base_query(self, hospital_id: int | None = None):
+        query = (
             select(Staff)
             .options(selectinload(Staff.department), selectinload(Staff.role))
             .where(Staff.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            query = query.where(Staff.hospital_id == hospital_id)
+        return query
 
     async def create(self, staff: Staff) -> Staff:
         self.db.add(staff)
@@ -49,8 +52,9 @@ class StaffRepository:
         role_name: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ) -> list[Staff]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if q:
             clean_q = " ".join(q.split()).lower()
             pattern = f"%{clean_q}%"
@@ -81,8 +85,11 @@ class StaffRepository:
         department_id: int | None = None,
         status: int | None = None,
         role_name: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Staff.hospital_id == hospital_id)
         if q:
             clean_q = " ".join(q.split()).lower()
             pattern = f"%{clean_q}%"
@@ -103,18 +110,20 @@ class StaffRepository:
             query = query.where(func.lower(Staff.role_name) == role_name.strip().lower())
         return await self.db.scalar(query) or 0
 
-    async def list_by_department(self, department_id: int) -> list[Staff]:
+    async def list_by_department(self, department_id: int, hospital_id: int | None = None) -> list[Staff]:
         result = await self.db.execute(
-            self._base_query().where(Staff.department_id == department_id)
+            self._base_query(hospital_id=hospital_id).where(Staff.department_id == department_id)
         )
         return list(result.scalars().all())
 
-    async def get_role_counts(self) -> dict[str, int]:
+    async def get_role_counts(self, hospital_id: int | None = None) -> dict[str, int]:
         query = (
             select(Staff.role_name, func.count(Staff.id))
             .where(Staff.is_deleted.is_(False))
-            .group_by(Staff.role_name)
         )
+        if hospital_id is not None:
+            query = query.where(Staff.hospital_id == hospital_id)
+        query = query.group_by(Staff.role_name)
         result = await self.db.execute(query)
         return {row[0].strip().lower(): row[1] for row in result.all() if row[0]}
 

@@ -45,6 +45,7 @@ from app.api.v1.routes import (
 
     room_tariff_routes,
     discharge_routes,
+    bed_allocation_routes,
 
 )
 from app.api import settings
@@ -58,6 +59,7 @@ api_router.include_router(patient_routes.router, prefix="/patients", tags=["Pati
 api_router.include_router(doctor_routes.router, prefix="/doctors", tags=["Doctors"])
 api_router.include_router(appointment_routes.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(dashboard_routes.router, prefix="/dashboard", tags=["Dashboard"])
+api_router.include_router(bed_allocation_routes.router, prefix="/bed-allocation", tags=["Bed Allocation"])
 api_router.include_router(nurse_routes.router, prefix="/nurses", tags=["Nurses"])
 api_router.include_router(nurse_routes.singular_router, prefix="/nurse", tags=["Nurses"])
 api_router.include_router(staff_routes.router, prefix="/staff", tags=["Staff"])

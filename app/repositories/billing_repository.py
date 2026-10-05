@@ -12,12 +12,15 @@ class BillingRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return (
+    def _base_query(self, hospital_id: int | None = None):
+        query = (
             select(Billing)
             .where(Billing.is_deleted.is_(False))
             .options(selectinload(Billing.items), selectinload(Billing.payments))
         )
+        if hospital_id is not None:
+            query = query.where(Billing.hospital_id == hospital_id)
+        return query
 
     async def list_all(
         self,
@@ -28,8 +31,9 @@ class BillingRepository:
         status: str | None = None,
         patient_id: int | None = None,
         bill_type: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Billing]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if status:
             query = query.where(Billing.status == status)
         if patient_id:
@@ -55,8 +59,11 @@ class BillingRepository:
         status: str | None = None,
         patient_id: int | None = None,
         bill_type: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Billing).where(Billing.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Billing.hospital_id == hospital_id)
         if status:
             query = query.where(Billing.status == status)
         if patient_id:
@@ -140,13 +147,13 @@ class BillingRepository:
         result = await self.db.scalar(query)
         return result or 0
 
-    async def get_by_id(self, billing_id: int) -> Billing | None:
-        result = await self.db.execute(self._base_query().where(Billing.id == billing_id))
+    async def get_by_id(self, billing_id: int, hospital_id: int | None = None) -> Billing | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Billing.id == billing_id))
         return result.scalar_one_or_none()
 
-    async def get_by_id_for_update(self, billing_id: int) -> Billing | None:
+    async def get_by_id_for_update(self, billing_id: int, hospital_id: int | None = None) -> Billing | None:
         result = await self.db.execute(
-            self._base_query().where(Billing.id == billing_id).with_for_update()
+            self._base_query(hospital_id=hospital_id).where(Billing.id == billing_id).with_for_update()
         )
         return result.scalar_one_or_none()
 

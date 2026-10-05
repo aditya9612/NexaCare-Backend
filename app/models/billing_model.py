@@ -11,6 +11,9 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "billings"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     bill_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     subtotal: Mapped[float] = mapped_column(Float, default=0.0)

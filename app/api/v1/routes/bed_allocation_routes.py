@@ -50,6 +50,7 @@ async def list_floors(
         room_id=room_id,
         room_number=room_number,
         room_type=room_type,
+        current_user=current_user,
     )
     return APIResponse(message="Floors retrieved successfully", data=floors)
 
@@ -72,7 +73,7 @@ async def create_floor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "create")),
 ):
-    floor = await BedAllocationService(db).create_floor(data)
+    floor = await BedAllocationService(db).create_floor(data, current_user=current_user)
     return APIResponse(message="Floor created successfully", data=floor)
 
 

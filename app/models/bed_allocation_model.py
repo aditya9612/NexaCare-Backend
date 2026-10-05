@@ -11,6 +11,9 @@ class Floor(Base, TimestampMixin):
     __tablename__ = "floors"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     number: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(100))
     type: Mapped[str] = mapped_column(String(50))  # General, ICU, Emergency, Deluxe
@@ -23,6 +26,9 @@ class Room(Base, TimestampMixin):
     __tablename__ = "rooms"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     floor_id: Mapped[int] = mapped_column(Integer, ForeignKey("floors.id", ondelete="CASCADE"), index=True)
     number: Mapped[int] = mapped_column(Integer, index=True)
     name: Mapped[str] = mapped_column(String(100))
@@ -38,6 +44,9 @@ class Bed(Base, TimestampMixin):
     __tablename__ = "beds"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     room_id: Mapped[int] = mapped_column(Integer, ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(100))
     type: Mapped[str] = mapped_column(String(50))  # General, ICU, Ventilator, Deluxe, etc.
@@ -56,6 +65,9 @@ class BedActivityLog(Base, TimestampMixin):
     __tablename__ = "bed_activity_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     type: Mapped[str] = mapped_column(String(50))  # allocation, release, transfer, crud
     message: Mapped[str] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

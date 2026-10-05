@@ -13,6 +13,9 @@ class LabTest(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "lab_tests"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     test_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     test_name: Mapped[str] = mapped_column(String(255), index=True)
     category: Mapped[str] = mapped_column(String(100), index=True)
@@ -33,6 +36,9 @@ class TestOrder(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "test_orders"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     order_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     doctor_id: Mapped[int | None] = mapped_column(ForeignKey("doctors.id"), nullable=True)

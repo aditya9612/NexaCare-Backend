@@ -37,6 +37,7 @@ from app.agent.conversation import (
 from app.agent.nodes import language as lang_node
 from app.agent.nodes import greeting as greet_node
 from app.agent.nodes import booking as book_node
+from app.agent.nodes import cancel as cancel_node
 from app.core.constants import TelephonyProviderType
 from app.core.dependencies import DbSession
 from app.services.faq_retrieval_service import TRANSFER_PHRASES, FaqRetrievalService
@@ -906,6 +907,11 @@ async def service_menu(
             logger.error(f"  ✗ [{call_sid}] No session found at /menu")
             return xml(_error_twiml("Your session has expired. Please call again."))
 
+        if state.get("service") == "cancel" and state.get("cancel_step"):
+            twiml = await cancel_node.handle_cancel_digit(db, call_sid, state, digit or "")
+            logger.info(f"  ↳ [{call_sid}] Cancel step={state.get('cancel_step')} digit={digit!r}")
+            return xml(twiml)
+
         result = greet_node.process_service_menu(digit)
         logger.info(f"  ↳ [{call_sid}] service result: {result}")
 
@@ -935,116 +941,9 @@ async def service_menu(
             return xml(twiml)
 
         if service == "cancel":
-            from app.ai.voice_appointment_assistant.prompts import (
-                cancel_failed,
-                cancel_no_appointment,
-                cancel_patient_not_found,
-                cancel_success,
-                cancel_terminal,
-            )
-            from app.core.constants import AppointmentStatus
-            from app.core.exceptions import BadRequestException, NotFoundException
-            from app.schemas.appointment_schema import CancelRequest
-            from app.services.appointment_service import AppointmentService
-            from app.services.sarvam_tts import speak
-            from app.services.voice_assistant_service import VoiceAssistantService
-
-            spoken_language = state.get("language") or "en"
-            twilio_lang = state["twilio_language"]
-            base_url = state.get("base_url") or ""
-
-            def _say_hangup(text: str) -> str:
-                return (
-                    '<?xml version="1.0" encoding="UTF-8"?><Response>'
-                    f"{speak(text, twilio_lang, base_url, allow_generate=False)}"
-                    "<Hangup/></Response>"
-                )
-
-            async def _cancel_related_patient_ids(voice, patient, phone: str) -> list[int]:
-                from app.utils.phone_utils import indian_mobile_last10
-
-                ids: set[int] = set()
-
-                async def _add_patient_and_dependents(person) -> None:
-                    person_id = getattr(person, "id", None)
-                    if person_id is None:
-                        return
-                    ids.add(person_id)
-                    for dep in await voice.patient_repo.list_dependents(person_id):
-                        dep_id = getattr(dep, "id", None)
-                        if dep_id is not None:
-                            ids.add(dep_id)
-
-                await _add_patient_and_dependents(patient)
-                guardian_id = getattr(patient, "guardian_patient_id", None)
-                if guardian_id is not None:
-                    ids.add(guardian_id)
-                    for dep in await voice.patient_repo.list_dependents(guardian_id):
-                        dep_id = getattr(dep, "id", None)
-                        if dep_id is not None:
-                            ids.add(dep_id)
-
-                last10 = indian_mobile_last10(phone) if phone else ""
-                if last10:
-                    for match in await voice.patient_repo.search(last10, limit=50):
-                        if indian_mobile_last10(getattr(match, "phone", None)) != last10:
-                            continue
-                        await _add_patient_and_dependents(match)
-                return list(ids)
-
-            try:
-                session_appointment_id = state.get("appointment_id")
-                if session_appointment_id:
-                    appt = await AppointmentService(db).get_by_id(int(session_appointment_id))
-                else:
-                    voice = VoiceAssistantService(db)
-                    phone = state.get("from_number") or ""
-                    patient = await voice._find_patient(phone) if phone else None
-                    if patient is None and state.get("patient_id"):
-                        patient = await voice.patient_repo.get_by_id(state["patient_id"])
-                    if not patient:
-                        logger.info(f"  ↳ [{call_sid}] Cancel: patient not found")
-                        return xml(_say_hangup(cancel_patient_not_found(spoken_language)))
-
-                    patient_ids = await _cancel_related_patient_ids(voice, patient, phone)
-                    appointments = await voice.appointment_repo.list_all(
-                        patient_id=patient_ids,
-                        status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING],
-                        limit=50,
-                    )
-                    if not appointments:
-                        logger.info(f"  ↳ [{call_sid}] Cancel: no upcoming appointment")
-                        return xml(_say_hangup(cancel_no_appointment(spoken_language)))
-                    if len(appointments) != 1 or len(appointments) >= 50:
-                        logger.info(
-                            f"  ↳ [{call_sid}] Cancel: {len(appointments)} cancellable "
-                            "appointments; no selection step exists"
-                        )
-                        return xml(_say_hangup(cancel_failed(spoken_language)))
-                    appt = appointments[0]
-
-                await AppointmentService(db).cancel(
-                    CancelRequest(
-                        appointment_id=appt.id,
-                        reason="Cancelled via voice assistant",
-                    ),
-                    user_id=None,
-                )
-                logger.info(f"  ↳ [{call_sid}] Appointment {appt.id} cancelled")
-                return xml(_say_hangup(cancel_success(spoken_language)))
-            except BadRequestException as exc:
-                detail = str(getattr(exc, "detail", "") or "")
-                logger.error(f"  ✗ [{call_sid}] Cancel rejected: {detail}")
-                if "terminal" in detail.lower():
-                    return xml(_say_hangup(cancel_terminal(spoken_language)))
-                return xml(_say_hangup(cancel_failed(spoken_language)))
-            except NotFoundException as exc:
-                logger.error(f"  ✗ [{call_sid}] Cancel not found: {exc}")
-                return xml(_say_hangup(cancel_failed(spoken_language)))
-            except Exception as exc:
-                logger.error(f"  ✗ [{call_sid}] Cancel failed: {exc}")
-                logger.error(traceback.format_exc())
-                return xml(_say_hangup(cancel_failed(spoken_language)))
+            twiml = await cancel_node.start_cancel_flow(db, call_sid, state)
+            logger.info(f"  ↳ [{call_sid}] Returning cancel TwiML")
+            return xml(twiml)
 
         if service == "reschedule":
             from app.agent.nodes import reschedule as reschedule_node

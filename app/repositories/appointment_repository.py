@@ -30,6 +30,7 @@ class AppointmentRepository:
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
         query = self._apply_filters(
@@ -46,6 +47,7 @@ class AppointmentRepository:
             admission_status=admission_status,
             triage_level=triage_level,
             disposition=disposition,
+            hospital_id=hospital_id,
         )
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -66,6 +68,7 @@ class AppointmentRepository:
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Appointment)
         query = self._apply_filters(
@@ -82,6 +85,7 @@ class AppointmentRepository:
             admission_status=admission_status,
             triage_level=triage_level,
             disposition=disposition,
+            hospital_id=hospital_id,
         )
         return await self.db.scalar(query) or 0
 
@@ -100,7 +104,10 @@ class AppointmentRepository:
         admission_status=None,
         triage_level=None,
         disposition=None,
+        hospital_id: int | None = None,
     ):
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
         if patient_id:
             if isinstance(patient_id, (list, tuple, set)):
                 query = query.where(Appointment.patient_id.in_(patient_id))
@@ -197,12 +204,15 @@ class AppointmentRepository:
             query = query.where(func.lower(Appointment.disposition) == func.lower(str(disposition).strip()))
         return query
 
-    async def get_by_id(self, appointment_id: int) -> Appointment | None:
-        result = await self.db.execute(
+    async def get_by_id(self, appointment_id: int, hospital_id: int | None = None) -> Appointment | None:
+        query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
             .where(Appointment.id == appointment_id)
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def exists_conflict(

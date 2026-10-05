@@ -102,6 +102,11 @@ async def init_db():
             print("Running lab...")
             await _seed_lab_technician_permissions(session)
             await _seed_doctor_and_pharmacist_lab_permissions(session)
+            await _seed_expense_permissions(session)
+
+            print("Running default super admin seed...")
+            await _seed_default_super_admin(session)
+            await _seed_nurse_adesh(session)
 
             # Ensure any missing columns are created
             from sqlalchemy import text
@@ -247,7 +252,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         _grant(nurse_role, "appointments", [PermissionAction.READ, PermissionAction.UPDATE])
         _grant(nurse_role, "patients", [PermissionAction.READ, PermissionAction.UPDATE])
         _grant(nurse_role, "doctors", [PermissionAction.READ])
-        _grant(nurse_role, "nurses", [PermissionAction.READ])
+        _grant(nurse_role, "nurses", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE])
         _grant(nurse_role, "departments", [PermissionAction.READ])
         _grant(nurse_role, "bed_allocation", [PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.ASSIGN])
         _grant(nurse_role, "icu_telemetry", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])

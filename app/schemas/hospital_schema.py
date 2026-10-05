@@ -4,11 +4,15 @@ from app.schemas.common_schema import BaseSchema
 from app.utils.phone_utils import validate_phone_field
 
 class HospitalBase(BaseSchema):
-    name: str = Field(..., min_length=2, max_length=255)
-    email: EmailStr
+    name: str = Field(..., max_length=255)
+    email: str
     phone: str | None = Field(None, max_length=20)
     address: str | None = Field(None, max_length=500)
     website: str | None = Field(None, max_length=255)
+
+
+class HospitalCreate(HospitalBase):
+    email: EmailStr
 
     @field_validator("name", "address", "website")
     @classmethod
@@ -26,8 +30,6 @@ class HospitalBase(BaseSchema):
             self.phone = validate_phone_field(self.phone)
         return self
 
-class HospitalCreate(HospitalBase):
-    pass
 
 class HospitalUpdate(BaseSchema):
     name: str | None = Field(None, min_length=2, max_length=255)
@@ -52,6 +54,7 @@ class HospitalUpdate(BaseSchema):
         if self.phone:
             self.phone = validate_phone_field(self.phone)
         return self
+
 
 class HospitalResponse(HospitalBase):
     id: int

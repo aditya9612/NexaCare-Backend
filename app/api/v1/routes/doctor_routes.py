@@ -286,7 +286,7 @@ async def search_doctors(
     size: int = 20,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    result = await DoctorService(db).search(q, page=page, size=size)
+    result = await DoctorService(db).search(q, page=page, size=size, current_user=current_user)
     return APIResponse(message="Search results", data=result)
 
 
@@ -296,7 +296,7 @@ async def list_available_doctors(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    doctors = await DoctorService(db).list_available()
+    doctors = await DoctorService(db).list_available(current_user=current_user)
     return APIResponse(message="Available doctors", data=doctors)
 
 
@@ -626,7 +626,7 @@ async def get_doctor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    doctor = await DoctorService(db).get_by_id(doctor_id)
+    doctor = await DoctorService(db).get_by_id(doctor_id, current_user=current_user)
     return APIResponse(message="Doctor retrieved", data=doctor)
 
 
@@ -689,7 +689,7 @@ async def update_doctor(
         data = DoctorUpdate(**update_args)
     except ValidationError as e:
         raise RequestValidationError(e.errors())
-    result = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image)
+    result = await DoctorService(db).update(doctor_id, data, current_user.id, image_file=profile_image, current_user=current_user)
     return APIResponse(message="Doctor updated", data=result)
 
 
@@ -700,7 +700,7 @@ async def delete_doctor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "delete")),
 ):
-    await DoctorService(db).delete(doctor_id, current_user.id)
+    await DoctorService(db).delete(doctor_id, current_user.id, current_user=current_user)
     return APIResponse(message="Doctor deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -711,7 +711,7 @@ async def doctor_appointments(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    appointments = await DoctorService(db).get_appointments(doctor_id)
+    appointments = await DoctorService(db).get_appointments(doctor_id, current_user=current_user)
     return APIResponse(message="Appointments retrieved", data=appointments)
 
 
@@ -723,7 +723,7 @@ async def doctor_schedule(
     _: User = Depends(require_permission("doctors", "read")),
 ):
     """Retrieve doctor working schedules (day_of_week: 0=Monday, 6=Sunday)."""
-    schedule = await DoctorService(db).get_schedule(doctor_id)
+    schedule = await DoctorService(db).get_schedule(doctor_id, current_user=current_user)
     return APIResponse(message="Schedule retrieved", data=schedule)
 
 
@@ -736,7 +736,7 @@ async def add_doctor_schedule(
     _: User = Depends(require_permission("doctors", "update")),
 ):
     """Add a working schedule slot for a doctor (day_of_week: 0=Monday, 6=Sunday)."""
-    schedule = await DoctorService(db).add_schedule(doctor_id, data, current_user.id)
+    schedule = await DoctorService(db).add_schedule(doctor_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Schedule added", data=schedule)
 
 

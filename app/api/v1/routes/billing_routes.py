@@ -107,7 +107,7 @@ async def create_billing(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "create")),
 ):
-    billing = await BillingService(db).create(data, current_user.id)
+    billing = await BillingService(db).create(data, current_user.id, current_user=current_user)
     return APIResponse(message="Bill created successfully", data=billing)
 
 
@@ -141,6 +141,7 @@ async def list_billings(
             date_filter=date_filter,
             start_date=start_date, end_date=end_date,
             bill_type=bill_type,
+            current_user=current_user,
         )
     else:
         result = await service.list_billings(
@@ -149,6 +150,7 @@ async def list_billings(
             date_filter=date_filter,
             start_date=start_date, end_date=end_date,
             bill_type=bill_type,
+            current_user=current_user,
         )
     return APIResponse(message="Bills retrieved", data=result)
 
@@ -229,7 +231,7 @@ async def get_billing(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    billing = await BillingService(db).get_by_id(billing_id)
+    billing = await BillingService(db).get_by_id(billing_id, current_user=current_user)
     return APIResponse(message="Bill retrieved", data=billing)
 
 
@@ -241,7 +243,7 @@ async def update_billing(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    billing = await BillingService(db).update(billing_id, data, current_user.id)
+    billing = await BillingService(db).update(billing_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Bill updated", data=billing)
 
 
@@ -253,7 +255,7 @@ async def cancel_billing(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    billing = await BillingService(db).cancel(billing_id, current_user.id)
+    billing = await BillingService(db).cancel(billing_id, current_user.id, current_user=current_user)
     return APIResponse(message="Bill cancelled successfully", data=billing)
 
 @router.delete("/{billing_id}", response_model=APIResponse[MessageResponse])
@@ -263,7 +265,7 @@ async def delete_billing(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "delete")),
 ):
-    await BillingService(db).delete(billing_id, current_user.id)
+    await BillingService(db).delete(billing_id, current_user.id, current_user=current_user)
     return APIResponse(message="Bill deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -275,7 +277,7 @@ async def collect_payment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    payment = await BillingService(db).collect_payment(billing_id, data, current_user.id)
+    payment = await BillingService(db).collect_payment(billing_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Payment collected", data=payment)
 
 
@@ -287,7 +289,7 @@ async def process_refund(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "approve")),
 ):
-    payment = await BillingService(db).process_refund(billing_id, data, current_user.id)
+    payment = await BillingService(db).process_refund(billing_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Refund processed", data=payment)
 
 
@@ -298,7 +300,7 @@ async def download_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "export")),
 ):
-    _, pdf_bytes = await BillingService(db).generate_invoice(billing_id, current_user.id)
+    _, pdf_bytes = await BillingService(db).generate_invoice(billing_id, current_user.id, current_user=current_user)
     print("DEBUG: type(pdf_bytes) =", type(pdf_bytes))
     if isinstance(pdf_bytes, bytes):
         print("DEBUG: len(pdf_bytes) =", len(pdf_bytes))

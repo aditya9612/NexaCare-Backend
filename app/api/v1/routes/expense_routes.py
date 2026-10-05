@@ -258,7 +258,7 @@ async def list_expenses(
         end_date=end_date,
         description=description
     )
-    result = await ExpenseService(db).list_expenses(query)
+    result = await ExpenseService(db).list_expenses(query, current_user=current_user)
     return APIResponse(message="Expenses retrieved", data=result)
 
 

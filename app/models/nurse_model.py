@@ -11,6 +11,9 @@ class Nurse(Base, TimestampMixin):
     __tablename__ = "nurses"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     nurse_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     license_number: Mapped[str] = mapped_column(String(100), unique=True)

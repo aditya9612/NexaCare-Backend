@@ -144,6 +144,10 @@ class PatientService:
         matched_ids = (await self.db.scalars(stmt)).all()
         return list(set(matched_ids))
 
+    def _resolve_tenant_hospital_id(self, current_user) -> int | None:
+        from app.core.dependencies import resolve_tenant_id
+        return resolve_tenant_id(current_user)
+
     async def list_patients(
         self,
         page: int = 1,
@@ -156,6 +160,8 @@ class PatientService:
     ):
         if start_date and end_date and start_date > end_date:
             raise BadRequestException("Start date cannot be greater than end date")
+
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
 
         # Resolve nurse_id if role is Nurse
         nurse_id = None
@@ -204,12 +210,14 @@ class PatientService:
             end_date=end_date,
             nurse_id=nurse_id,
             allowed_patient_ids=allowed_patient_ids,
+            hospital_id=hospital_id,
         )
         total = await self.repo.count_all(
             start_date=start_date,
             end_date=end_date,
             nurse_id=nurse_id,
             allowed_patient_ids=allowed_patient_ids,
+            hospital_id=hospital_id,
         )
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
@@ -219,7 +227,7 @@ class PatientService:
         paginated = build_paginated_result(
             patient_responses, total, page, size
         )
-        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
+        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
         return {
             "items": paginated.items,
             "total": paginated.total,
@@ -234,7 +242,8 @@ class PatientService:
         if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
             raise NotFoundException("Patient not found")
 
-        patient = await self.repo.get_by_id(patient_id)
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        patient = await self.repo.get_by_id(patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
         lab_history = []
@@ -245,10 +254,11 @@ class PatientService:
         return res
 
     async def create(
-        self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None
+        self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None, current_user = None
     ) -> PatientCreateResponse:
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
         if data.phone:
-            existing_phone = await self.repo.get_by_phone(data.phone)
+            existing_phone = await self.repo.get_by_phone(data.phone, hospital_id=hospital_id)
             if existing_phone:
                 raise ConflictException("Patient with this phone number already exists")
 
@@ -276,6 +286,11 @@ class PatientService:
 
         patient_data_dict = data.model_dump()
         patient_data_dict["user_id"] = user_match_id
+        if current_user and hasattr(current_user, "hospital_id") and current_user.hospital_id:
+            patient_data_dict["hospital_id"] = current_user.hospital_id
+        elif getattr(data, "hospital_id", None):
+            patient_data_dict["hospital_id"] = data.hospital_id
+
         patient = Patient(patient_code=generate_mrn(), **patient_data_dict)
         patient = await self.repo.create(patient)
 
@@ -289,22 +304,26 @@ class PatientService:
                 uploaded_by=user_id,
             )
             await self.repo.add_document(doc)
-
         await self.audit_repo.create("create", "patients", user_id=user_id, resource_id=str(patient.id))
         return PatientCreateResponse.model_validate(patient)
 
-    async def update(self, patient_id: int, data: PatientUpdate, user_id: int) -> PatientResponse:
-        patient = await self.repo.get_by_id(patient_id)
+    async def update(self, patient_id: int, data: PatientUpdate, user_id: int, current_user = None) -> PatientResponse:
+        allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+        if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
+            raise NotFoundException("Patient not found")
+
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        patient = await self.repo.get_by_id(patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
 
         if data.phone is not None and data.phone != patient.phone:
-            existing_phone = await self.repo.get_by_phone(data.phone)
+            existing_phone = await self.repo.get_by_phone(data.phone, hospital_id=hospital_id)
             if existing_phone:
                 raise ConflictException("Patient with this phone number already exists")
 
         if data.email is not None and data.email != patient.email:
-            existing_email = await self.repo.get_by_email(data.email)
+            existing_email = await self.repo.get_by_email(data.email, hospital_id=hospital_id)
             if existing_email:
                 raise ConflictException("Patient with this email already exists")
 
@@ -314,8 +333,13 @@ class PatientService:
         await self.audit_repo.create("update", "patients", user_id=user_id, resource_id=str(patient.id))
         return PatientResponse.model_validate(patient)
 
-    async def delete(self, patient_id: int, user_id: int) -> None:
-        patient = await self.repo.get_by_id(patient_id)
+    async def delete(self, patient_id: int, user_id: int, current_user = None) -> None:
+        allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+        if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
+            raise NotFoundException("Patient not found")
+
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        patient = await self.repo.get_by_id(patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
         await self.repo.soft_delete(patient)
@@ -339,6 +363,7 @@ class PatientService:
                 room_id=bed.room_id,
                 bed_id=bed.id,
                 patient_id=patient_id,
+                hospital_id=hospital_id,
             )
             self.db.add(log)
             
@@ -350,6 +375,7 @@ class PatientService:
         await self.audit_repo.create("delete", "patients", user_id=user_id, resource_id=str(patient.id))
 
     async def search(self, q: str, page: int = 1, size: int = 20, current_user = None):
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
         nurse_id = None
         if current_user and current_user.role and current_user.role.name.lower() == "nurse":
             from app.models.nurse_model import Nurse
@@ -364,8 +390,8 @@ class PatientService:
             return build_paginated_result([], 0, page, size)
 
         skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
-        total = await self.repo.count_search(q, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids)
+        items = await self.repo.search(q, skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
+        total = await self.repo.count_search(q, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
         patient_ids = [p.id for p in items]
@@ -384,6 +410,7 @@ class PatientService:
         size: int = 20,
         current_user = None,
     ):
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
         nurse_id = None
         if current_user and current_user.role and current_user.role.name.lower() == "nurse":
             from app.models.nurse_model import Nurse
@@ -401,10 +428,12 @@ class PatientService:
         items = await self.repo.filter_patients(
             gender=gender, blood_group=blood_group, status=status,
             skip=skip, limit=size, nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
+            hospital_id=hospital_id,
         )
         total = await self.repo.count_filter(
             gender=gender, blood_group=blood_group, status=status,
             nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids,
+            hospital_id=hospital_id,
         )
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
@@ -415,32 +444,32 @@ class PatientService:
             patient_responses, total, page, size
         )
 
-    async def get_appointments(self, patient_id: int):
-        await self.get_by_id(patient_id)
+    async def get_appointments(self, patient_id: int, current_user = None):
+        await self.get_by_id(patient_id, current_user=current_user)
         from app.schemas.appointment_schema import AppointmentResponse
 
         appointments = await self.repo.get_appointments(patient_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_history(self, patient_id: int):
-        return await self.get_appointments(patient_id)
+    async def get_history(self, patient_id: int, current_user = None):
+        return await self.get_appointments(patient_id, current_user=current_user)
 
-    async def add_family_member(self, patient_id: int, data: FamilyMemberCreate, user_id: int) -> FamilyMemberResponse:
-        await self.get_by_id(patient_id)
+    async def add_family_member(self, patient_id: int, data: FamilyMemberCreate, user_id: int, current_user = None) -> FamilyMemberResponse:
+        await self.get_by_id(patient_id, current_user=current_user)
         member = FamilyMember(patient_id=patient_id, **data.model_dump())
         member = await self.repo.add_family_member(member)
         await self.audit_repo.create("create", "family_members", user_id=user_id, resource_id=str(member.id))
         return FamilyMemberResponse.model_validate(member)
 
-    async def list_family_members(self, patient_id: int) -> list[FamilyMemberResponse]:
-        await self.get_by_id(patient_id)
+    async def list_family_members(self, patient_id: int, current_user = None) -> list[FamilyMemberResponse]:
+        await self.get_by_id(patient_id, current_user=current_user)
         members = await self.repo.list_family_members(patient_id)
         return [FamilyMemberResponse.model_validate(m) for m in members]
 
     async def upload_document(
-        self, patient_id: int, file: UploadFile, document_type: str, user_id: int
+        self, patient_id: int, file: UploadFile, document_type: str, user_id: int, current_user = None
     ) -> PatientDocumentResponse:
-        await self.get_by_id(patient_id)
+        await self.get_by_id(patient_id, current_user=current_user)
         file_path = await save_upload_file(file, settings.UPLOAD_DIR)
         doc = PatientDocument(
             patient_id=patient_id,
@@ -453,13 +482,13 @@ class PatientService:
         await self.audit_repo.create("upload", "patient_documents", user_id=user_id, resource_id=str(doc.id))
         return PatientDocumentResponse.model_validate(doc)
 
-    async def list_documents(self, patient_id: int) -> list[PatientDocumentResponse]:
-        await self.get_by_id(patient_id)
+    async def list_documents(self, patient_id: int, current_user = None) -> list[PatientDocumentResponse]:
+        await self.get_by_id(patient_id, current_user=current_user)
         docs = await self.repo.list_documents(patient_id)
         return [PatientDocumentResponse.model_validate(d) for d in docs]
 
-    async def get_document(self, patient_id: int, document_id: int) -> PatientDocument:
-        await self.get_by_id(patient_id)
+    async def get_document(self, patient_id: int, document_id: int, current_user = None) -> PatientDocument:
+        await self.get_by_id(patient_id, current_user=current_user)
         doc = await self.repo.get_document(document_id)
         if not doc:
             raise NotFoundException("Document not found")
@@ -467,8 +496,8 @@ class PatientService:
             raise BadRequestException("Document does not belong to this patient")
         return doc
 
-    async def delete_document(self, patient_id: int, document_id: int, user_id: int) -> None:
-        doc = await self.get_document(patient_id, document_id)
+    async def delete_document(self, patient_id: int, document_id: int, user_id: int, current_user = None) -> None:
+        doc = await self.get_document(patient_id, document_id, current_user=current_user)
         import os
         if os.path.exists(doc.file_path):
             try:
@@ -478,11 +507,15 @@ class PatientService:
         await self.repo.delete_document(doc)
         await self.audit_repo.create("delete", "patient_documents", user_id=user_id, resource_id=str(document_id))
 
-    async def delete_family_member(self, patient_id: int, member_id: int, user_id: int) -> None:
-        await self.get_by_id(patient_id)
+    async def delete_family_member(self, patient_id: int, member_id: int, user_id: int, current_user = None) -> None:
+        await self.get_by_id(patient_id, current_user=current_user)
         member = await self.repo.get_family_member(member_id)
         if not member:
             raise NotFoundException("Family member not found")
+        if member.patient_id != patient_id:
+            raise BadRequestException("Family member does not belong to this patient")
+        await self.repo.delete_family_member(member)
+        await self.audit_repo.create("delete", "family_members", user_id=user_id, resource_id=str(member_id))
         if member.patient_id != patient_id:
             raise BadRequestException("Family member does not belong to this patient")
         await self.repo.delete_family_member(member)

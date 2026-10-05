@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import math
-from typing import Optional
+from typing import Any, Optional
 
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -200,7 +200,10 @@ class PharmacyService:
         self.db.add(inv_item)
         await self.db.flush()
 
-        medicine = Medicine(sku=sku, inventory_item_id=inv_item.id, **data.model_dump())
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user.hospital_id if user else None
+
+        medicine = Medicine(sku=sku, inventory_item_id=inv_item.id, hospital_id=hospital_id, **data.model_dump())
         medicine = await self.medicine_repo.create(medicine)
         await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
         return MedicineResponse.model_validate(medicine)
@@ -208,27 +211,38 @@ class PharmacyService:
     async def list_medicines(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None,
+        current_user: Any | None = None,
     ):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
-        items = await self.medicine_repo.list_all(skip=skip, limit=size, sort_by=sort_by,
-                                                   sort_order=sort_order, category=category)
-        total = await self.medicine_repo.count_all(category=category)
+        items = await self.medicine_repo.list_all(
+            skip=skip, limit=size, sort_by=sort_by,
+            sort_order=sort_order, category=category, hospital_id=hospital_id
+        )
+        total = await self.medicine_repo.count_all(category=category, hospital_id=hospital_id)
         return build_paginated_result([MedicineResponse.model_validate(m) for m in items], total, page, size)
 
-    async def search_medicines(self, q: str, page: int = 1, size: int = 20):
+    async def search_medicines(self, q: str, page: int = 1, size: int = 20, current_user: Any | None = None):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
-        items = await self.medicine_repo.search(q, skip=skip, limit=size)
-        total = await self.medicine_repo.count_search(q)
+        items = await self.medicine_repo.search(q, skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.medicine_repo.count_search(q, hospital_id=hospital_id)
         return build_paginated_result([MedicineResponse.model_validate(m) for m in items], total, page, size)
 
-    async def get_medicine(self, medicine_id: int) -> MedicineResponse:
-        medicine = await self.medicine_repo.get_by_id(medicine_id)
+    async def get_medicine(self, medicine_id: int, current_user: Any | None = None) -> MedicineResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=hospital_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
         return MedicineResponse.model_validate(medicine)
 
-    async def update_medicine(self, medicine_id: int, data: MedicineUpdate, user_id: int) -> MedicineResponse:
-        medicine = await self.medicine_repo.get_by_id(medicine_id)
+    async def update_medicine(self, medicine_id: int, data: MedicineUpdate, user_id: int, current_user: Any | None = None) -> MedicineResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=hospital_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
 
@@ -254,8 +268,10 @@ class PharmacyService:
         await self.audit_repo.create("update", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
         return MedicineResponse.model_validate(medicine)
 
-    async def delete_medicine(self, medicine_id: int, user_id: int) -> None:
-        medicine = await self.medicine_repo.get_by_id(medicine_id)
+    async def delete_medicine(self, medicine_id: int, user_id: int, current_user: Any | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=hospital_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
         await self.medicine_repo.soft_delete(medicine)

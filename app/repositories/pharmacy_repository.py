@@ -800,7 +800,7 @@ class PurchaseRepository:
                 .select_from(Purchase)
                 .where(
                     base_where,
-                    func.lower(Purchase.status).in_(["received", "completed"]),
+                    func.lower(Purchase.status).in_(["received", "completed", "delivered"]),
                 )
             )
         ) or 0
@@ -809,7 +809,7 @@ class PurchaseRepository:
             await self.db.scalar(
                 select(func.coalesce(func.sum(Purchase.total_amount), 0.0)).where(
                     base_where,
-                    func.lower(Purchase.status).in_(["received", "completed"]),
+                    func.lower(Purchase.status).in_(["received", "completed", "delivered"]),
                 )
             )
         ) or 0.0

@@ -203,6 +203,35 @@ class NurseCommunicationService:
             created_at=alert.created_at,
         )
 
+    async def get_nurse_emergency_alerts(self, user_id: int) -> list[EmergencyAlertResponse]:
+        nurse = await self._get_nurse_by_user_id(user_id)
+        alerts = await self.repo.get_emergency_alerts_by_nurse(nurse.id)
+        return [
+            EmergencyAlertResponse(
+                id=alert.id,
+                patient_id=alert.patient_id,
+                nurse_id=alert.nurse_id,
+                emergency_type=alert.emergency_type,
+                message=alert.message,
+                created_at=alert.created_at,
+            )
+            for alert in alerts
+        ]
+
+    async def get_nurse_emergency_alert_by_id(self, alert_id: int, user_id: int) -> EmergencyAlertResponse:
+        nurse = await self._get_nurse_by_user_id(user_id)
+        alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+        if not alert:
+            raise NotFoundException("Emergency alert not found")
+        return EmergencyAlertResponse(
+            id=alert.id,
+            patient_id=alert.patient_id,
+            nurse_id=alert.nurse_id,
+            emergency_type=alert.emergency_type,
+            message=alert.message,
+            created_at=alert.created_at,
+        )
+
     async def _notify_emergency_channels(self, patient_id: int, message: str) -> None:
         title = "Patient Emergency Alert"
         notif_service = NotificationService(self.db)

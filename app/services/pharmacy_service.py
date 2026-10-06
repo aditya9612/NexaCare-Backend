@@ -1732,18 +1732,24 @@ class PharmacyService:
                 expiry_date=item_data.expiry_date,
                 line_total=line_total,
             ))
+        is_received_status = bool(
+            data.status and data.status.strip().lower() in ("delivered", "received")
+        )
         purchase = Purchase(
             purchase_number=generate_purchase_number(),
             supplier_id=data.supplier_id,
             total_amount=total,
             ordered_at=utc_now(),
             notes=data.notes,
-            status=data.status or "Pending",
+            status=PurchaseStatus.RECEIVED if is_received_status else (data.status or "Pending"),
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
 
         purchase = await self.purchase_repo.get_by_id(purchase.id)
+        if is_received_status:
+            purchase = await self._process_stock_receipt(purchase, user_id)
+
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
 
         from app.services.transaction_history_service import TransactionHistoryService
@@ -1907,6 +1913,73 @@ class PharmacyService:
             tx.deleted_at = utc_now()
             await self.db.flush()
 
+    async def _process_stock_receipt(self, purchase: Purchase, user_id: int) -> Purchase:
+        from sqlalchemy import select
+        from app.models.inventory_model import Warehouse
+        from app.models.user_model import User
+        from app.services.stock_movement_service import StockMovementService
+        from app.utils.helpers import utc_now
+
+        if purchase.received_at is not None:
+            return purchase
+
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
+
+        # Determine the warehouse. In this architecture, we use the PHARMACY warehouse
+        warehouse_id = None
+        try:
+            wh_res = await self.db.execute(
+                select(Warehouse.id).where(
+                    Warehouse.code == "PHARMACY",
+                    Warehouse.hospital_id == hospital_id,
+                    Warehouse.hospital_id.isnot(None),
+                )
+            )
+            warehouse_id = wh_res.scalar() if wh_res else None
+        except Exception:
+            pass
+
+        purchase.status = PurchaseStatus.RECEIVED
+        purchase.received_at = utc_now()
+        purchase.received_by = user_id
+
+        # Phase 4 Stock Movement: Process items and integrate with Ledger
+        for item in purchase.items or []:
+            medicine = await self.medicine_repo.get_by_id(item.medicine_id)
+            if medicine and getattr(medicine, "inventory_item_id", None) and warehouse_id:
+                await StockMovementService.create_movement(
+                    db=self.db,
+                    item_id=medicine.inventory_item_id,
+                    warehouse_id=warehouse_id,
+                    transaction_type="PURCHASE_RECEIPT",
+                    direction="IN",
+                    quantity=item.quantity,
+                    batch_id=None,
+                    unit_cost=item.unit_price,
+                    reference_type="PHARMACY_PURCHASE_RECEIPT",
+                    reference_id=purchase.id,
+                    notes=f"Received from purchase {purchase.purchase_number}",
+                    performed_by=user_id,
+                )
+
+            # Legacy backward compatibility update for older APIs
+            if medicine:
+                await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+
+        await self.purchase_repo.update(purchase)
+
+        await self.audit_repo.create(
+            "receive",
+            "pharmacy_purchase",
+            user_id=user_id,
+            resource_id=str(purchase.id),
+        )
+
+        await self.db.flush()
+        reloaded = await self.purchase_repo.get_by_id(purchase.id)
+        return reloaded or purchase
+
     async def receive_purchase_order(
         self,
         purchase_order_id: int,
@@ -1915,13 +1988,6 @@ class PharmacyService:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         from app.models.pharmacy_model import Purchase
-        from app.models.inventory_model import Warehouse
-        from app.services.stock_movement_service import StockMovementService
-        from app.utils.helpers import utc_now
-
-        from app.models.user_model import User
-        user_record = await self.db.scalar(select(User).where(User.id == current_user.id))
-        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
 
         # 1. Lock the purchase for concurrency safety
         purchase = None
@@ -1943,58 +2009,15 @@ class PharmacyService:
             raise NotFoundException("Purchase not found")
 
         current_status = purchase.status.lower() if purchase.status else ""
-        if current_status == "received":
+        if current_status in ("received", "delivered") or purchase.received_at is not None:
             raise BadRequestException("Purchase Order already received")
 
         allowed_statuses = {"ordered", "pending", "partially_received", "draft"}
         if current_status not in allowed_statuses:
             raise BadRequestException("Invalid Purchase Order status")
 
-        # Determine the warehouse. In this architecture, we use the PHARMACY warehouse
-        warehouse_id = None
-        try:
-            wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
-            warehouse_id = wh_res.scalar() if wh_res else None
-        except Exception:
-            pass
-
-        purchase.status = "received"
-        purchase.received_at = utc_now()
-        purchase.received_by = current_user.id
-
-        # Phase 4 Stock Movement: Process items and integrate with Ledger
-        for item in purchase.items or []:
-            medicine = await self.medicine_repo.get_by_id(item.medicine_id)
-            if medicine and getattr(medicine, "inventory_item_id", None) and warehouse_id:
-                await StockMovementService.create_movement(
-                    db=self.db,
-                    item_id=medicine.inventory_item_id,
-                    warehouse_id=warehouse_id,
-                    transaction_type="PURCHASE_RECEIPT",
-                    direction="IN",
-                    quantity=item.quantity,
-                    batch_id=None,
-                    unit_cost=item.unit_price,
-                    reference_type="PHARMACY_PURCHASE_RECEIPT",
-                    reference_id=purchase.id,
-                    notes=f"Received from purchase {purchase.purchase_number}",
-                    performed_by=current_user.id
-                )
-
-            # Legacy backward compatibility update for older APIs
-            if medicine:
-                await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
-
-        await self.purchase_repo.update(purchase)
-
-        await self.audit_repo.create(
-            "receive",
-            "pharmacy_purchase",
-            user_id=current_user.id,
-            resource_id=str(purchase.id),
-        )
-
-        await self.db.flush()
+        user_id = current_user.id if hasattr(current_user, "id") else int(current_user)
+        purchase = await self._process_stock_receipt(purchase, user_id)
         return self._purchase_response(purchase)
 
     async def get_sales_report(self, period: str = "all") -> SalesReport:

@@ -224,6 +224,7 @@ async def list_nurse_daily_tasks(
     nurse_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    date: date | None = Query(None, description="Filter daily tasks by date (YYYY-MM-DD). Defaults to today (IST)."),
     page: int = 1,
     size: int = 20,
     patient_id: int | None = None,
@@ -235,6 +236,7 @@ async def list_nurse_daily_tasks(
 ):
     result = await NurseService(db).list_daily_tasks(
         nurse_id=nurse_id,
+        task_date=date,
         page=page,
         size=size,
         patient_id=patient_id,
@@ -727,6 +729,25 @@ async def create_emergency_alert(
 ):
     result = await NurseCommunicationService(db).create_emergency_alert(data, current_user.id)
     return APIResponse(message="Emergency alert recorded successfully", data=result)
+
+
+@singular_router.get("/emergency-alerts", response_model=APIResponse[List[EmergencyAlertResponse]])
+async def list_nurse_emergency_alerts(
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).get_nurse_emergency_alerts(current_user.id)
+    return APIResponse(message="Emergency alerts retrieved successfully", data=result)
+
+
+@singular_router.get("/emergency-alerts/{alert_id}", response_model=APIResponse[EmergencyAlertResponse])
+async def get_nurse_emergency_alert(
+    alert_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).get_nurse_emergency_alert_by_id(alert_id, current_user.id)
+    return APIResponse(message="Emergency alert retrieved successfully", data=result)
 
 
 

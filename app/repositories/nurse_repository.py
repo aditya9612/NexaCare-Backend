@@ -18,6 +18,7 @@ from app.models.nurse_model import (
     PatientVital,
 )
 from app.models.patient_model import Patient
+from app.models.user_model import User
 
 
 class NurseRepository:
@@ -69,6 +70,18 @@ class NurseRepository:
 
     async def get_by_id(self, nurse_id: int, hospital_id: int | None = None) -> Nurse | None:
         result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Nurse.id == nurse_id))
+        return result.scalar_one_or_none()
+
+    async def get_by_id_with_details(self, nurse_id: int) -> Nurse | None:
+        query = (
+            select(Nurse)
+            .options(
+                selectinload(Nurse.user).selectinload(User.role),
+                selectinload(Nurse.department),
+            )
+            .where(Nurse.id == nurse_id)
+        )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_license(self, license_number: str) -> Nurse | None:

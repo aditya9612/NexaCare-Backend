@@ -1,5 +1,6 @@
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+import math
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -66,7 +67,9 @@ from app.schemas.pharmacy_schema import (
     PrescriptionUpdate,
     PurchaseCreate,
     PurchaseItemResponse,
+    PurchaseListResponse,
     PurchaseResponse,
+    PurchaseSummary,
     SalesReport,
     SupplierCreate,
     SupplierResponse,
@@ -499,6 +502,8 @@ class PharmacyService:
         appointment_id: int | None = None,
         department_id: int | None = None,
         assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
         current_user: Any | None = None,
     ):
         hospital_id = resolve_tenant_id(current_user)
@@ -515,6 +520,8 @@ class PharmacyService:
             appointment_id=appointment_id,
             department_id=department_id,
             assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
             hospital_id=hospital_id,
         )
         total = await self.prescription_repo.count_all(
@@ -524,6 +531,8 @@ class PharmacyService:
             appointment_id=appointment_id,
             department_id=department_id,
             assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
             hospital_id=hospital_id,
         )
 
@@ -1855,6 +1864,9 @@ class PharmacyService:
                 expiry_date=item_data.expiry_date,
                 line_total=line_total,
             ))
+        is_received_status = bool(
+            data.status and data.status.strip().lower() in ("delivered", "received")
+        )
         purchase = Purchase(
             purchase_number=generate_purchase_number(),
             supplier_id=data.supplier_id,
@@ -1862,10 +1874,14 @@ class PharmacyService:
             total_amount=total,
             ordered_at=utc_now(),
             notes=data.notes,
-            status=data.status or "Pending",
+            status=PurchaseStatus.RECEIVED if is_received_status else (data.status or "Pending"),
             created_by=user_id,
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
+
+        purchase = await self.purchase_repo.get_by_id(purchase.id)
+        if is_received_status:
+            purchase = await self._process_stock_receipt(purchase, user_id)
 
         purchase = await self.purchase_repo.get_by_id(purchase.id, hospital_id=hospital_id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
@@ -1885,12 +1901,30 @@ class PharmacyService:
 
         return self._purchase_response(purchase)
 
-    async def list_purchases(self, page: int = 1, size: int = 20, current_user=None):
+    async def list_purchases(self, page: int = 1, size: int = 20, current_user=None) -> PurchaseListResponse:
         hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
         items = await self.purchase_repo.list_all(skip=skip, limit=size, hospital_id=hospital_id)
         total = await self.purchase_repo.count_all(hospital_id=hospital_id)
-        return build_paginated_result([self._purchase_response(p) for p in items], total, page, size)
+        summary_stats = await self.purchase_repo.get_summary_stats(hospital_id=hospital_id)
+
+        pages = math.ceil(total / size) if size > 0 else 0
+
+        summary = PurchaseSummary(
+            total_orders=summary_stats["total_orders"],
+            pending_orders=summary_stats["pending_orders"],
+            completed_orders=summary_stats["completed_orders"],
+            total_spent=summary_stats["total_spent"],
+        )
+
+        return PurchaseListResponse(
+            items=[self._purchase_response(p) for p in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            summary=summary,
+        )
 
     def _purchase_response(self, purchase: Purchase) -> PurchaseResponse:
         items_resp = []
@@ -2019,18 +2053,18 @@ class PharmacyService:
             tx.deleted_at = utc_now()
             await self.db.flush()
 
-    async def receive_purchase_order(
-        self,
-        purchase_order_id: int,
-        current_user,
-    ) -> PurchaseResponse:
+    async def _process_stock_receipt(self, purchase: Purchase, user_id: int) -> Purchase:
         from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-        from app.models.pharmacy_model import Purchase
         from app.models.inventory_model import Warehouse
+        from app.models.user_model import User
         from app.services.stock_movement_service import StockMovementService
         from app.utils.helpers import utc_now
 
+        if purchase.received_at is not None:
+            return purchase
+
+        user_record = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
         hospital_id = await self._resolve_hospital_id(current_user, getattr(current_user, "id", None))
 
         # 1. Lock the purchase for concurrency safety
@@ -2064,6 +2098,13 @@ class PharmacyService:
         # Determine the warehouse. In this architecture, we use the PHARMACY warehouse
         warehouse_id = None
         try:
+            wh_res = await self.db.execute(
+                select(Warehouse.id).where(
+                    Warehouse.code == "PHARMACY",
+                    Warehouse.hospital_id == hospital_id,
+                    Warehouse.hospital_id.isnot(None),
+                )
+            )
             wh_query = select(Warehouse.id).where(Warehouse.code == 'PHARMACY')
             if hospital_id is not None:
                 wh_query = wh_query.where(Warehouse.hospital_id == hospital_id)
@@ -2072,9 +2113,9 @@ class PharmacyService:
         except Exception:
             pass
 
-        purchase.status = "received"
+        purchase.status = PurchaseStatus.RECEIVED
         purchase.received_at = utc_now()
-        purchase.received_by = current_user.id
+        purchase.received_by = user_id
 
         # Phase 4 Stock Movement: Process items and integrate with Ledger
         for item in purchase.items or []:
@@ -2092,7 +2133,7 @@ class PharmacyService:
                     reference_type="PHARMACY_PURCHASE_RECEIPT",
                     reference_id=purchase.id,
                     notes=f"Received from purchase {purchase.purchase_number}",
-                    performed_by=current_user.id
+                    performed_by=user_id,
                 )
 
             # Legacy backward compatibility update for older APIs
@@ -2104,11 +2145,55 @@ class PharmacyService:
         await self.audit_repo.create(
             "receive",
             "pharmacy_purchase",
-            user_id=current_user.id,
+            user_id=user_id,
             resource_id=str(purchase.id),
         )
 
         await self.db.flush()
+        reloaded = await self.purchase_repo.get_by_id(purchase.id)
+        return reloaded or purchase
+
+    async def receive_purchase_order(
+        self,
+        purchase_order_id: int,
+        current_user,
+    ) -> PurchaseResponse:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from app.models.pharmacy_model import Purchase
+
+        hospital_id = resolve_tenant_id(current_user)
+
+        # 1. Lock the purchase for concurrency safety
+        purchase = None
+        try:
+            stmt = select(Purchase).options(selectinload(Purchase.items)).where(Purchase.id == purchase_order_id, Purchase.is_deleted.is_(False))
+            if hospital_id is not None:
+                stmt = stmt.where(Purchase.hospital_id == hospital_id)
+            res = await self.db.execute(stmt.with_for_update())
+            purchase = res.scalars().first() if res else None
+        except Exception:
+            pass
+
+        if not purchase:
+            purchase = await self.purchase_repo.get_by_id(purchase_order_id, hospital_id=hospital_id)
+
+        if not purchase:
+            raise NotFoundException("Purchase not found")
+
+        if getattr(purchase, "is_deleted", False):
+            raise NotFoundException("Purchase not found")
+
+        current_status = purchase.status.lower() if purchase.status else ""
+        if current_status in ("received", "delivered") or purchase.received_at is not None:
+            raise BadRequestException("Purchase Order already received")
+
+        allowed_statuses = {"ordered", "pending", "partially_received", "draft"}
+        if current_status not in allowed_statuses:
+            raise BadRequestException("Invalid Purchase Order status")
+
+        user_id = current_user.id if hasattr(current_user, "id") else int(current_user)
+        purchase = await self._process_stock_receipt(purchase, user_id)
         return self._purchase_response(purchase)
 
     async def get_sales_report(self, period: str = "all", current_user=None) -> SalesReport:

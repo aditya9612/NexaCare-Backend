@@ -537,6 +537,7 @@ class DashboardService:
             queue_skipped = 0
 
         return ReceptionDashboardResponse(
+            total_appointments=today_scheduled_appointments,
             total_registered_patients=total_registered_patients,
             today_scheduled_appointments=today_scheduled_appointments,
             checked_in_patients=checked_in_patients,

@@ -1274,24 +1274,12 @@ class BillingService:
 
         res = await self.db.execute(pharmacy_stmt)
         p_row = res.first()
-        pharm_total_bill = round(float(p_row[0] if p_row else 0.0), 2)
-        pharm_paid_bill = round(float(p_row[1] if p_row else 0.0), 2)
-        pharm_pending_bill = round(max(0.0, float(p_row[2] if p_row else 0.0)), 2)
-        pharm_bills_count = int(p_row[3] if p_row else 0)
-        pharm_payment_count = int(p_row[4] if (p_row and p_row[4] is not None) else 0)
+        pharm_total_bill = round(float(p_row[0] if (p_row and len(p_row) > 0 and p_row[0] is not None) else 0.0), 2)
+        pharm_paid_bill = round(float(p_row[1] if (p_row and len(p_row) > 1 and p_row[1] is not None) else 0.0), 2)
+        pharm_pending_bill = round(max(0.0, float(p_row[2] if (p_row and len(p_row) > 2 and p_row[2] is not None) else 0.0)), 2)
+        pharm_bills_count = int(p_row[3] if (p_row and len(p_row) > 3 and p_row[3] is not None) else 0)
+        pharm_payment_count = int(p_row[4] if (p_row and len(p_row) > 4 and p_row[4] is not None) else 0)
         pharm_collected = pharm_paid_bill
-
-        # 3. Overall Combined Totals
-        overall_total_bill = round(reception_total_bill + pharm_total_bill, 2)
-        overall_paid_bill = round(reception_paid_bill + pharm_paid_bill, 2)
-        overall_pending_bill = round(reception_pending_bill + pharm_pending_bill, 2)
-        overall_collected = max(0.0, round(reception_collected + pharm_collected, 2))
-        overall_bills_count = reception_bills_count + pharm_bills_count
-        overall_payment_count = reception_payment_count + pharm_payment_count
-
-        by_method = dict(reception_by_method)
-        if pharm_collected > 0:
-            by_method["pharmacy"] = pharm_collected
 
         date_label = str(resolved_start) if resolved_start == resolved_end else f"{resolved_start} to {resolved_end}"
 
@@ -1319,15 +1307,15 @@ class BillingService:
             filter_type=normalized_filter,
             start_date=str(resolved_start),
             end_date=str(resolved_end),
-            # Overall Summary
-            today_total_bill=overall_total_bill,
-            today_paid_bill=overall_paid_bill,
-            today_pending_bill=overall_pending_bill,
-            today_collected_revenue=overall_collected,
-            bills_count=overall_bills_count,
-            total_collected=overall_collected,
-            payment_count=overall_payment_count,
-            by_method=by_method,
+            # Reception-only Daily Summary
+            today_total_bill=reception_total_bill,
+            today_paid_bill=reception_paid_bill,
+            today_pending_bill=reception_pending_bill,
+            today_collected_revenue=reception_collected,
+            bills_count=reception_bills_count,
+            total_collected=reception_collected,
+            payment_count=reception_payment_count,
+            by_method=reception_by_method,
             # Separate Reception / Appointment Billing & Collection
             reception_total_bill=reception_total_bill,
             reception_paid_bill=reception_paid_bill,

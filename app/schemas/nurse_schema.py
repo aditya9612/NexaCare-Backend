@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
+from app.schemas.department_schema import DepartmentResponse
+from app.schemas.rbac_schema import RoleResponse
 
 
 class NurseCreate(BaseSchema):
@@ -66,6 +68,22 @@ class NurseResponse(BaseSchema):
     shift: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class NurseDetailResponse(NurseResponse):
+    full_name: str
+    email: str
+    phone: str | None = None
+    role_name: str | None = None
+    status: int
+    is_active: bool
+    gender: str | None = None
+    date_of_birth: date | None = None
+    address: str | None = None
+    profile_image: str | None = None
+
+    department: DepartmentResponse | None = None
+    role: RoleResponse | None = None
 
 
 NurseListResponse = PaginatedResponse[NurseResponse]
@@ -309,11 +327,28 @@ NurseNotificationListResponse = PaginatedResponse[NurseNotificationResponse]
 
 
 class PatientVitalCreate(BaseSchema):
-    temperature: float = Field(..., ge=0.0, description="Body temperature in Celsius")
+    temperature: float = Field(..., ge=0.0, description="Body temperature")
+    temperature_unit: str = Field(
+        default="C",
+        description="Temperature unit: Celsius ('C', '°C', 'Celsius') or Fahrenheit ('F', '°F', 'Fahrenheit'). Defaults to 'C'."
+    )
     blood_pressure: str = Field(..., min_length=1, max_length=20, description="Blood pressure reading (e.g. 120/80)")
     pulse_rate: int = Field(..., ge=1, description="Pulse rate in beats per minute")
     oxygen_saturation: float = Field(..., ge=0.0, le=100.0, description="Oxygen saturation percentage")
     recorded_at: datetime = Field(..., description="When the vitals were recorded")
+    notes: str | None = Field(None, description="Optional supplementary instructions or clinical notes")
+
+    @field_validator("temperature_unit")
+    @classmethod
+    def validate_temperature_unit(cls, v: str | None) -> str:
+        if not v:
+            return "C"
+        cleaned = v.strip().lower()
+        if cleaned in ("c", "°c", "celsius"):
+            return "C"
+        if cleaned in ("f", "°f", "fahrenheit"):
+            return "F"
+        raise ValueError("temperature_unit must be Celsius ('C', '°C', 'Celsius') or Fahrenheit ('F', '°F', 'Fahrenheit')")
 
     @field_validator("blood_pressure")
     @classmethod
@@ -329,6 +364,7 @@ class PatientVitalResponse(BaseSchema):
     nurse_id: int
     patient_id: int
     temperature: float
+    temperature_unit: str = "°C"
     blood_pressure: str
     pulse_rate: int
     oxygen_saturation: float

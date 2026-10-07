@@ -1,9 +1,11 @@
 from datetime import date, datetime
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import BillingStatus
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.billing_model import Payment
+from app.models.transaction_history_model import TransactionHistory
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository
 from app.repositories.transaction_repository import TransactionRepository
@@ -188,7 +190,7 @@ class TransactionService:
             select(TransactionHistory).where(
                 TransactionHistory.source_module == source_module,
                 TransactionHistory.source_id == payment.id,
-                TransactionHistory.is_deleted == False
+                TransactionHistory.is_deleted.is_(False)
             )
         )
         hist = hist_res.scalar_one_or_none()
@@ -251,7 +253,8 @@ class TransactionService:
         stmt = update(TransactionHistory).where(
             TransactionHistory.source_module == source_module,
             TransactionHistory.source_id == payment.id,
-            TransactionHistory.is_deleted == False
+            TransactionHistory.is_deleted.is_(False)
+        # pyrefly: ignore [unexpected-keyword]
         ).values(is_deleted=True, deleted_at=utc_now())
         await self.db.execute(stmt)
 

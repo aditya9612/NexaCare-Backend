@@ -62,24 +62,30 @@ class InventoryRepository:
                 func.lower(InventoryItem.barcode).like(pattern),
             )
         )
+        if hospital_id is not None:
+            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
     async def count_search(self, q: str, hospital_id: int | None = None) -> int:
         pattern = f"%{q.lower()}%"
-        base = select(func.count()).select_from(InventoryItem).where(
+        query = select(func.count()).select_from(InventoryItem).where(
             InventoryItem.is_deleted.is_(False),
             or_(
                 func.lower(InventoryItem.name).like(pattern),
                 func.lower(InventoryItem.sku).like(pattern),
+                func.lower(InventoryItem.barcode).like(pattern),
             ),
         )
         if hospital_id is not None:
-            base = base.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
                 Warehouse.hospital_id == hospital_id,
                 Warehouse.is_deleted.is_(False),
             )
-        return (await self.db.scalar(base)) or 0
+        return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, item_id: int, hospital_id: int | None = None) -> InventoryItem | None:
         result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(InventoryItem.id == item_id))
@@ -185,6 +191,55 @@ class InventoryRepository:
             "low_stock_count": low_stock or 0,
             "expired_count": expired or 0,
             "total_value": float(total_value or 0),
+        }
+
+    async def get_inventory_summary(self, hospital_id: int | None = None) -> dict:
+        stock_summary = await self.get_stock_summary(hospital_id=hospital_id)
+
+        inward_query = (
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+            .select_from(StockTransaction)
+            .join(InventoryItem, StockTransaction.item_id == InventoryItem.id)
+            .where(
+                InventoryItem.is_deleted.is_(False),
+                or_(
+                    func.upper(StockTransaction.direction) == "IN",
+                    func.lower(StockTransaction.transaction_type).in_(["inward", "purchase_receipt", "return"])
+                )
+            )
+        )
+
+        outward_query = (
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+            .select_from(StockTransaction)
+            .join(InventoryItem, StockTransaction.item_id == InventoryItem.id)
+            .where(
+                InventoryItem.is_deleted.is_(False),
+                or_(
+                    func.upper(StockTransaction.direction) == "OUT",
+                    func.lower(StockTransaction.transaction_type).in_(["outward", "consumption", "dispense", "transfer"])
+                )
+            )
+        )
+
+        if hospital_id is not None:
+            inward_query = inward_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
+            outward_query = outward_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
+
+        inward_restocks = (await self.db.scalar(inward_query)) or 0
+        outward_issued = (await self.db.scalar(outward_query)) or 0
+
+        return {
+            "stock_on_hand": stock_summary["total_quantity"],
+            "inward_restocks": int(inward_restocks),
+            "outward_issued": int(outward_issued),
+            "reorder_alerts": stock_summary["low_stock_count"],
         }
 
 

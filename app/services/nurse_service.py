@@ -33,6 +33,7 @@ from app.schemas.nurse_schema import (
     NurseHandoverNoteUpdate,
     NurseNotificationResponse,
     NurseResponse,
+    NurseDetailResponse,
     NurseShiftCreate,
     NurseShiftDetailsResponse,
     NurseShiftResponse,
@@ -49,7 +50,9 @@ from app.schemas.nurse_schema import (
     NursePatientAssignmentResponse,
     NurseDashboardResponse,
 )
-from app.utils.helpers import generate_nurse_code, utc_now
+from app.schemas.department_schema import DepartmentResponse
+from app.schemas.rbac_schema import RoleResponse
+from app.utils.helpers import generate_nurse_code, get_today_ist, utc_now
 from app.utils.pagination import build_paginated_result
 
 
@@ -107,6 +110,43 @@ class NurseService:
             [NurseResponse.model_validate(n) for n in items], total, page, size
         )
 
+    @staticmethod
+    def _to_detail_response(nurse: Nurse) -> NurseDetailResponse:
+        user = nurse.user
+        role = user.role if user else None
+        dept = nurse.department
+
+        dept_resp = DepartmentResponse.model_validate(dept) if dept else None
+        role_resp = RoleResponse.model_validate(role) if role else None
+
+        return NurseDetailResponse(
+            id=nurse.id,
+            nurse_code=nurse.nurse_code,
+            user_id=nurse.user_id,
+            license_number=nurse.license_number,
+            department_id=nurse.department_id,
+            shift=nurse.shift,
+            created_at=nurse.created_at,
+            updated_at=nurse.updated_at,
+            full_name=user.full_name if user else "",
+            email=user.email if user else "",
+            phone=user.phone if user else None,
+            role_name=role.name if role else "Nurse",
+            status=1 if (user and user.is_active) else 0,
+            is_active=user.is_active if user else False,
+            gender=user.gender if user else None,
+            date_of_birth=user.date_of_birth if user else None,
+            address=user.address if user else None,
+            profile_image=user.profile_image if user else None,
+            department=dept_resp,
+            role=role_resp,
+        )
+
+    async def get_by_id(self, nurse_id: int) -> NurseDetailResponse:
+        nurse = await self.repo.get_by_id_with_details(nurse_id)
+        if not nurse:
+            raise NotFoundException("Nurse not found")
+        return self._to_detail_response(nurse)
     async def get_by_id(self, nurse_id: int, hospital_id: int | None = None) -> NurseResponse:
         nurse = await self._get_nurse_or_raise(nurse_id, hospital_id=hospital_id)
         return NurseResponse.model_validate(nurse)
@@ -722,10 +762,19 @@ class NurseService:
         assignment = await self.assignment_repo.get_assigned_patient(nurse_id, patient_id)
         if not assignment:
             raise NotFoundException("Patient is not assigned to this nurse")
+        vital_data = data.model_dump()
+        temp_unit = vital_data.pop("temperature_unit", "C")
+
+        temp_val = data.temperature
+        if temp_unit == "F":
+            temp_val = round((data.temperature - 32.0) * 5.0 / 9.0, 2)
+
+        vital_data["temperature"] = temp_val
+
         vital = PatientVital(
             nurse_id=nurse_id,
             patient_id=patient_id,
-            **data.model_dump(),
+            **vital_data,
         )
         vital = await self.vital_repo.create(vital)
         await self.audit_repo.create(
@@ -954,6 +1003,7 @@ class NurseService:
     async def list_daily_tasks(
         self,
         nurse_id: int,
+        task_date: date | None = None,
         page: int = 1,
         size: int = 20,
         patient_id: int | None = None,
@@ -963,7 +1013,7 @@ class NurseService:
         sort_order: str = "desc",
     ):
         await self._get_nurse_or_raise(nurse_id)
-        due_date = utc_now().date()
+        due_date = task_date or get_today_ist()
         skip = (page - 1) * size
         items = await self.task_repo.list_by_nurse(
             nurse_id=nurse_id,
@@ -1455,7 +1505,7 @@ class NurseService:
 
     async def get_dashboard_overview(self, current_user: "User") -> "NurseDashboardResponse":
         from datetime import timezone, timedelta, time, datetime
-        from sqlalchemy import select, func, or_, cast, Date
+        from sqlalchemy import select, func, or_, and_, cast, Date
         from app.models.nurse_model import Nurse, NursePatientAssignment
         from app.models.notification_model import Notification
         from app.models.bed_allocation_model import Bed
@@ -1543,17 +1593,29 @@ class NurseService:
                     )
         upcoming_medications = upcoming_medications_list[:10]
 
-        # 4. Critical Patients (Unique patients with active critical alert notifications)
+        # 4. Critical Patients (Unique active assigned patients with Critical status or active critical alerts)
+        critical_notif_condition = and_(
+            Notification.reference_id == NursePatientAssignment.patient_id,
+            Notification.user_id == current_user.id,
+            Notification.notification_type.in_([
+                "CRITICAL_ALERT",
+                "CRITICAL_PATIENT_ALERT",
+                "PATIENT_EMERGENCY_ALERT",
+                "CRITICAL_VALUE",
+            ]),
+            Notification.is_read.is_(False),
+            Notification.is_deleted.is_(False),
+        )
         critical_patients_count = (await self.db.scalar(
-            select(func.count(func.distinct(Notification.reference_id)))
-            .join(NursePatientAssignment, NursePatientAssignment.patient_id == Notification.reference_id)
+            select(func.count(func.distinct(NursePatientAssignment.patient_id)))
+            .outerjoin(Notification, critical_notif_condition)
             .where(
                 NursePatientAssignment.nurse_id == nurse.id,
                 NursePatientAssignment.status == "Active",
-                Notification.user_id == current_user.id,
-                Notification.notification_type == "CRITICAL_ALERT",
-                Notification.is_read.is_(False),
-                Notification.is_deleted.is_(False)
+                or_(
+                    func.lower(NursePatientAssignment.patient_status) == "critical",
+                    Notification.id.isnot(None),
+                )
             )
         )) or 0
 

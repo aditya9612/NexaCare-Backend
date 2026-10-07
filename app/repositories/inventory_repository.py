@@ -13,14 +13,21 @@ class InventoryRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
+        return query
 
     async def list_all(
         self, skip: int = 0, limit: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, warehouse_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[InventoryItem]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if category:
             query = query.where(InventoryItem.category == category)
         if warehouse_id:
@@ -46,9 +53,9 @@ class InventoryRepository:
             base = base.where(InventoryItem.warehouse_id == warehouse_id)
         return (await self.db.scalar(base)) or 0
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[InventoryItem]:
+    async def search(self, q: str, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[InventoryItem]:
         pattern = f"%{q.lower()}%"
-        query = self._base_query().where(
+        query = self._base_query(hospital_id=hospital_id).where(
             or_(
                 func.lower(InventoryItem.name).like(pattern),
                 func.lower(InventoryItem.sku).like(pattern),
@@ -58,20 +65,24 @@ class InventoryRepository:
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
+    async def count_search(self, q: str, hospital_id: int | None = None) -> int:
         pattern = f"%{q.lower()}%"
-        return (await self.db.scalar(
-            select(func.count()).select_from(InventoryItem).where(
-                InventoryItem.is_deleted.is_(False),
-                or_(
-                    func.lower(InventoryItem.name).like(pattern),
-                    func.lower(InventoryItem.sku).like(pattern),
-                ),
+        base = select(func.count()).select_from(InventoryItem).where(
+            InventoryItem.is_deleted.is_(False),
+            or_(
+                func.lower(InventoryItem.name).like(pattern),
+                func.lower(InventoryItem.sku).like(pattern),
+            ),
+        )
+        if hospital_id is not None:
+            base = base.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
             )
-        )) or 0
+        return (await self.db.scalar(base)) or 0
 
-    async def get_by_id(self, item_id: int) -> InventoryItem | None:
-        result = await self.db.execute(self._base_query().where(InventoryItem.id == item_id))
+    async def get_by_id(self, item_id: int, hospital_id: int | None = None) -> InventoryItem | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(InventoryItem.id == item_id))
         return result.scalar_one_or_none()
 
     async def get_by_id_for_update(self, item_id: int) -> InventoryItem | None:
@@ -114,8 +125,8 @@ class InventoryRepository:
         item.deleted_at = utc_now()
         await self.db.flush()
 
-    async def get_all_active(self) -> list[InventoryItem]:
-        query = self._base_query().options(
+    async def get_all_active(self, hospital_id: int | None = None) -> list[InventoryItem]:
+        query = self._base_query(hospital_id=hospital_id).options(
             selectinload(InventoryItem.warehouse),
             selectinload(InventoryItem.vendor),
             selectinload(InventoryItem.department)
@@ -183,12 +194,17 @@ class StockTransactionRepository:
 
     async def list_all(
         self, skip: int = 0, limit: int = 20, item_id: int | None = None,
-        transaction_type: str | None = None,
+        transaction_type: str | None = None, hospital_id: int | None = None,
     ) -> list[StockTransaction]:
         query = select(StockTransaction).options(
             selectinload(StockTransaction.item),
             selectinload(StockTransaction.warehouse),
         )
+        if hospital_id is not None:
+            query = query.join(Warehouse, StockTransaction.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         if item_id:
             query = query.where(StockTransaction.item_id == item_id)
         if transaction_type:
@@ -198,16 +214,21 @@ class StockTransactionRepository:
         )
         return list(result.scalars().all())
 
-    async def count_all(self, item_id: int | None = None, transaction_type: str | None = None) -> int:
+    async def count_all(self, item_id: int | None = None, transaction_type: str | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(StockTransaction)
+        if hospital_id is not None:
+            query = query.join(Warehouse, StockTransaction.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         if item_id:
             query = query.where(StockTransaction.item_id == item_id)
         if transaction_type:
             query = query.where(func.lower(StockTransaction.transaction_type) == transaction_type.lower())
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, transaction_id: int) -> StockTransaction | None:
-        result = await self.db.execute(
+    async def get_by_id(self, transaction_id: int, hospital_id: int | None = None) -> StockTransaction | None:
+        query = (
             select(StockTransaction)
             .options(
                 selectinload(StockTransaction.item),
@@ -215,6 +236,12 @@ class StockTransactionRepository:
             )
             .where(StockTransaction.id == transaction_id)
         )
+        if hospital_id is not None:
+            query = query.join(Warehouse, StockTransaction.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_reference(self, reference_type: str, reference_id: int) -> StockTransaction | None:
@@ -247,7 +274,7 @@ class StockTransactionRepository:
         await self.db.delete(transaction)
         await self.db.flush()
 
-    async def get_consumption_report(self, start=None, end=None) -> list[dict]:
+    async def get_consumption_report(self, start=None, end=None, hospital_id: int | None = None) -> list[dict]:
         query = (
             select(
                 StockTransaction.item_id,
@@ -262,6 +289,11 @@ class StockTransactionRepository:
                 InventoryItem.is_deleted.is_(False),
             )
         )
+        if hospital_id is not None:
+            query = query.join(Warehouse, StockTransaction.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted.is_(False),
+            )
         if start is not None:
             query = query.where(StockTransaction.transaction_date >= start)
         if end is not None:

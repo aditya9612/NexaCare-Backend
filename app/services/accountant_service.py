@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.dependencies import resolve_tenant_id
 from app.repositories.accountant_repository import AccountantRepository
 from app.schemas.accountant_schema import (
     AccountantDashboardResponse,
@@ -19,8 +20,9 @@ class AccountantService:
     def __init__(self, db: AsyncSession):
         self.repo = AccountantRepository(db)
 
-    async def get_dashboard(self) -> AccountantDashboardResponse:
-        stats = await self.repo.get_dashboard_stats()
+    async def get_dashboard(self, current_user: Any | None = None) -> AccountantDashboardResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        stats = await self.repo.get_dashboard_stats(hospital_id=hospital_id)
 
         now = date.today()
         current_year = now.year
@@ -35,6 +37,7 @@ class AccountantService:
             current_month=current_month,
             days_elapsed=days_elapsed,
             total_days_in_month=total_days_in_month,
+            hospital_id=hospital_id,
         )
 
         # 2. Claim Pending
@@ -45,6 +48,7 @@ class AccountantService:
             current_year=current_year,
             current_month=current_month,
             current_projected=revenue_forecast.projected_revenue,
+            hospital_id=hospital_id,
         )
 
         # 4. Expense Prediction (Past 6 months Actual vs Predicted)
@@ -53,6 +57,7 @@ class AccountantService:
             current_month=current_month,
             days_elapsed=days_elapsed,
             total_days_in_month=total_days_in_month,
+            hospital_id=hospital_id,
         )
 
         return AccountantDashboardResponse(
@@ -70,6 +75,7 @@ class AccountantService:
         current_month: int,
         days_elapsed: int,
         total_days_in_month: int,
+        hospital_id: int | None = None,
     ) -> RevenueForecast:
         current_month_revenue = float(stats.get("monthly_revenue", 0.0))
         projected_revenue = round((current_month_revenue / days_elapsed) * total_days_in_month, 2)
@@ -79,7 +85,7 @@ class AccountantService:
         else:
             prev_month, prev_year = current_month - 1, current_year
 
-        prev_month_revenue = await self.repo.get_month_revenue(prev_year, prev_month)
+        prev_month_revenue = await self.repo.get_month_revenue(prev_year, prev_month, hospital_id=hospital_id)
 
         if prev_month_revenue > 0:
             growth_percentage = round(((projected_revenue - prev_month_revenue) / prev_month_revenue) * 100, 1)
@@ -123,6 +129,7 @@ class AccountantService:
         current_year: int,
         current_month: int,
         current_projected: float,
+        hospital_id: int | None = None,
     ) -> AIRevenueForecast:
         # Build 6-month window
         months_window = self._get_past_months_window(current_year, current_month, count=6)
@@ -133,7 +140,7 @@ class AccountantService:
             calendar.monthrange(current_year, current_month)[1],
         )
 
-        history = await self.repo.get_monthly_revenue_history(start_date, end_date)
+        history = await self.repo.get_monthly_revenue_history(start_date, end_date, hospital_id=hospital_id)
         rev_map = {(row["year"], row["month"]): row["revenue"] for row in history}
 
         chart_data: List[ForecastMonthlyData] = []
@@ -173,6 +180,7 @@ class AccountantService:
         current_month: int,
         days_elapsed: int,
         total_days_in_month: int,
+        hospital_id: int | None = None,
     ) -> ExpensePrediction:
         months_window = self._get_past_months_window(current_year, current_month, count=6)
         start_date = date(months_window[0]["year"], months_window[0]["month"], 1)
@@ -182,7 +190,7 @@ class AccountantService:
             calendar.monthrange(current_year, current_month)[1],
         )
 
-        history = await self.repo.get_monthly_expense_history(start_date, end_date)
+        history = await self.repo.get_monthly_expense_history(start_date, end_date, hospital_id=hospital_id)
         exp_map = {(row["year"], row["month"]): row["expense"] for row in history}
 
         chart_data: List[ForecastMonthlyData] = []

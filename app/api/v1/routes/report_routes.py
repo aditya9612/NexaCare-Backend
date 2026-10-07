@@ -1,7 +1,37 @@
+import calendar
+import re
+from datetime import datetime, date
+
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
-from app.services.report_export_service import ReportExportService
-from app.schemas.report_schema import ExportPayload, ReportFormat
+
+from app.core.dependencies import DbSession, CurrentUser, resolve_tenant_id
 from app.core.report_config import REPORT_CONTENT_TYPES
+from app.schemas.report_schema import (
+    ExportPayload,
+    ReportFormat,
+    FinancialPeriod,
+    DoctorLabReportResponse,
+    LabSummaryResponse,
+    LabPerformanceResponse,
+    LabRevenueResponse,
+    ReportPlaceholderResponse,
+    DailyRevenueResponse,
+    PatientStatisticsResponse,
+    AppointmentTrendsResponse,
+    InventoryStatusResponse,
+    PharmacySalesResponse,
+    PharmacyInventoryResponse,
+    PharmacyExpiryResponse,
+    PharmacyProfitLossResponse,
+    UnifiedAccountantFinancialResponse,
+    AccountantRevenueVsExpenseResponse,
+    AccountantDepartmentWiseResponse,
+)
+from app.services.report_export_service import ReportExportService
+from app.services.report_service import ReportService
+
+router = APIRouter()
 
 
 def export_response(payload: ExportPayload, format: ReportFormat, download: bool, report_name: str, original_result: any):
@@ -31,41 +61,20 @@ def export_response(payload: ExportPayload, format: ReportFormat, download: bool
     return StreamingResponse(stream, media_type=content_type, headers=headers)
 
 
-from app.schemas.report_schema import ReportFormat
-
-from fastapi import Query, HTTPException
-import re
-from datetime import datetime, date
-from app.schemas.report_schema import FinancialPeriod
-from fastapi import APIRouter, Depends
-from app.core.dependencies import DbSession, CurrentUser
-from app.schemas.report_schema import (
-    DoctorLabReportResponse,
-    LabSummaryResponse, LabPerformanceResponse, LabRevenueResponse, 
-    ReportPlaceholderResponse,
-    DailyRevenueResponse,
-    PatientStatisticsResponse,
-    AppointmentTrendsResponse,
-    InventoryStatusResponse,
-    PharmacySalesResponse,
-    PharmacyInventoryResponse,
-    PharmacyExpiryResponse, PharmacyProfitLossResponse,
-    UnifiedAccountantFinancialResponse,
-    AccountantRevenueVsExpenseResponse,
-    AccountantDepartmentWiseResponse,
-)
-from app.services.report_service import ReportService
-
-router = APIRouter()
-
 # ---------------------------------------------------------
 # HOSPITAL ADMIN REPORTS
 # ---------------------------------------------------------
 
 
 @router.get("/admin/daily-revenue", response_model=DailyRevenueResponse)
-async def get_admin_daily_revenue(db: DbSession, current_user: CurrentUser, format: ReportFormat = Query(ReportFormat.JSON), download: bool = Query(False)):
-    data = await ReportService(db).get_daily_revenue(datetime.today(), datetime.today())
+async def get_admin_daily_revenue(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ReportFormat = Query(ReportFormat.JSON),
+    download: bool = Query(False)
+):
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_daily_revenue(datetime.today(), datetime.today(), hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Daily Revenue", data),
         format,
@@ -77,23 +86,37 @@ async def get_admin_daily_revenue(db: DbSession, current_user: CurrentUser, form
 
 @router.get("/admin/patient-statistics", response_model=PatientStatisticsResponse)
 async def get_admin_patient_statistics(
-    db: DbSession, current_user: CurrentUser, format: ReportFormat = Query(ReportFormat.JSON), download: bool = Query(False)
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ReportFormat = Query(ReportFormat.JSON),
+    download: bool = Query(False)
 ):
-    data = await ReportService(db).get_patient_statistics()
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_patient_statistics(hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Patient Statistics", data), format, download, "patient-statistics", data)
 
 
 @router.get("/admin/appointment-trends", response_model=AppointmentTrendsResponse)
 async def get_admin_appointment_trends(
-    db: DbSession, current_user: CurrentUser, format: ReportFormat = Query(ReportFormat.JSON), download: bool = Query(False)
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ReportFormat = Query(ReportFormat.JSON),
+    download: bool = Query(False)
 ):
-    data = await ReportService(db).get_appointment_trends()
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_appointment_trends(hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Appointment Trends", data), format, download, "appointment-trends", data)
 
 
 @router.get("/admin/inventory-status", response_model=InventoryStatusResponse)
-async def get_admin_inventory_status(db: DbSession, current_user: CurrentUser, format: ReportFormat = Query(ReportFormat.JSON), download: bool = Query(False)):
-    data = await ReportService(db).get_inventory_status()
+async def get_admin_inventory_status(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ReportFormat = Query(ReportFormat.JSON),
+    download: bool = Query(False)
+):
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_inventory_status(hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Inventory Status", data), format, download, "inventory-status", data)
 
 
@@ -145,6 +168,7 @@ async def get_accountant_financial_report(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
     download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
 ):
+    hospital_id = resolve_tenant_id(current_user)
     target_date, target_month, target_year = validate_period_filters(
         period, date_filter, month_filter, year_filter
     )
@@ -153,7 +177,8 @@ async def get_accountant_financial_report(
         period=period,
         target_date=target_date,
         month=target_month,
-        year=target_year
+        year=target_year,
+        hospital_id=hospital_id
     )
     
     report_title = f"Accountant {period.value.title()}"
@@ -190,7 +215,8 @@ async def get_accountant_revenue_vs_expense(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
     download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
 ):
-    data = await ReportService(db).get_accountant_revenue_vs_expense(start_date, end_date)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_accountant_revenue_vs_expense(start_date, end_date, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Revenue vs Expense", data),
         format,
@@ -222,7 +248,8 @@ async def get_accountant_department_wise(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
     download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
 ):
-    data = await ReportService(db).get_accountant_department_wise(start_date, end_date)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_accountant_department_wise(start_date, end_date, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Department-wise Financials", data),
         format,
@@ -237,8 +264,6 @@ async def get_accountant_department_wise(
 # ---------------------------------------------------------
 
 
-import calendar
-
 @router.get("/pharmacy/sales", response_model=PharmacySalesResponse)
 async def get_pharmacy_sales(
     db: DbSession, 
@@ -249,6 +274,7 @@ async def get_pharmacy_sales(
     format: ReportFormat = Query(ReportFormat.JSON), 
     download: bool = Query(False)
 ):
+    hospital_id = resolve_tenant_id(current_user)
     if start_date and end_date:
         if start_date > end_date:
             raise HTTPException(status_code=400, detail="start_date cannot be greater than end_date")
@@ -271,19 +297,31 @@ async def get_pharmacy_sales(
         else:
             raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, yearly, or all.")
 
-    data = await ReportService(db).get_pharmacy_sales(s_date, e_date)
+    data = await ReportService(db).get_pharmacy_sales(s_date, e_date, hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Pharmacy Sales", data), format, download, "pharmacy-sales", data)
 
 
 @router.get("/pharmacy/inventory", response_model=PharmacyInventoryResponse)
-async def get_pharmacy_inventory(db: DbSession, current_user: CurrentUser, format: ReportFormat = Query(ReportFormat.JSON), download: bool = Query(False)):
-    data = await ReportService(db).get_pharmacy_inventory()
+async def get_pharmacy_inventory(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ReportFormat = Query(ReportFormat.JSON),
+    download: bool = Query(False)
+):
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_pharmacy_inventory(hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Pharmacy Inventory", data), format, download, "pharmacy-inventory", data)
 
 
 @router.get("/pharmacy/expiry", response_model=PharmacyExpiryResponse)
-async def get_pharmacy_expiry(db: DbSession, current_user: CurrentUser, format: ReportFormat = Query(ReportFormat.JSON), download: bool = Query(False)):
-    data = await ReportService(db).get_pharmacy_expiry()
+async def get_pharmacy_expiry(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: ReportFormat = Query(ReportFormat.JSON),
+    download: bool = Query(False)
+):
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_pharmacy_expiry(hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Pharmacy Expiry", data), format, download, "pharmacy-expiry", data)
 
 
@@ -310,16 +348,14 @@ async def get_pharmacy_profit_loss(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json."),
     download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.")
 ):
-    import calendar
+    hospital_id = resolve_tenant_id(current_user)
     if start_date and end_date:
         if start_date > end_date:
-            from fastapi.exceptions import HTTPException
             raise HTTPException(status_code=400, detail="start_date cannot be greater than end_date")
         s_date = start_date
         e_date = end_date
     else:
         today = date.today()
-        # Fallback if no period is matched, though it defaults to monthly
         effective_period = period or "monthly"
 
         if effective_period == "monthly":
@@ -335,10 +371,9 @@ async def get_pharmacy_profit_loss(
             s_date = None
             e_date = None
         else:
-            from fastapi.exceptions import HTTPException
             raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, yearly, or all.")
 
-    data = await ReportService(db).get_pharmacy_profit_loss(s_date, e_date)
+    data = await ReportService(db).get_pharmacy_profit_loss(s_date, e_date, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Pharmacy Profit and Loss", data),
         format,
@@ -374,7 +409,8 @@ async def get_lab_daily(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
     download: bool = Query(False, description="Set to true to force download")
 ):
-    data = await ReportService(db).get_lab_daily(date_filter)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_lab_daily(date_filter, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Lab Daily", data),
         format,
@@ -406,7 +442,8 @@ async def get_lab_monthly(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
     download: bool = Query(False, description="Set to true to force download")
 ):
-    data = await ReportService(db).get_lab_monthly(month, year)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_lab_monthly(month, year, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Lab Monthly", data),
         format,
@@ -438,7 +475,8 @@ async def get_lab_performance(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
     download: bool = Query(False, description="Set to true to force download")
 ):
-    data = await ReportService(db).get_lab_performance(start_date, end_date)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_lab_performance(start_date, end_date, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Lab Performance", data),
         format,
@@ -470,7 +508,8 @@ async def get_lab_revenue(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
     download: bool = Query(False, description="Set to true to force download")
 ):
-    data = await ReportService(db).get_lab_revenue(start_date, end_date)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_lab_revenue(start_date, end_date, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Lab Revenue", data),
         format,
@@ -507,7 +546,8 @@ async def get_doctor_lab_reports(
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
     download: bool = Query(False, description="Set to true to force download")
 ):
-    data = await ReportService(db).get_doctor_lab_reports(start_date, end_date)
+    hospital_id = resolve_tenant_id(current_user)
+    data = await ReportService(db).get_doctor_lab_reports(start_date, end_date, hospital_id=hospital_id)
     return export_response(
         ReportService.build_export_payload("Doctor Lab Reports", data),
         format,

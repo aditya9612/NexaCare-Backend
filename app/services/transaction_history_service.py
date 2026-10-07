@@ -12,6 +12,7 @@ from app.schemas.transaction_history_schema import (
 )
 from app.utils.helpers import generate_code, utc_now
 from app.utils.pagination import build_paginated_result
+from app.core.dependencies import resolve_tenant_id
 
 
 class TransactionHistoryService:
@@ -21,12 +22,13 @@ class TransactionHistoryService:
         self.audit_repo = AuditRepository(db)
 
     async def create_transaction_history(
-        self, data: TransactionHistoryCreate, user_id: int
+        self, data: TransactionHistoryCreate, user_id: int, current_user = None
     ) -> TransactionHistoryResponse:
         tx_status = (data.status or "completed").strip().lower()
         if tx_status != "completed":
             raise BadRequestException("Transaction history entry can only be created for completed transactions")
 
+        hospital_id = resolve_tenant_id(current_user)
         payment_id = data.transaction_id
         if payment_id is None and data.source_module and data.source_module.strip().lower() in ("payments", "refunds", "transactions"):
             payment_id = data.source_id
@@ -41,6 +43,8 @@ class TransactionHistoryService:
                 raise NotFoundException("Transaction not found")
             if payment and (payment.status or "").strip().lower() != "completed":
                 raise BadRequestException("Cannot create transaction history for a transaction that is not completed")
+            if payment and payment.billing and payment.billing.hospital_id:
+                hospital_id = payment.billing.hospital_id
 
         ref_no = data.reference_no.strip() if (data.reference_no and data.reference_no.strip()) else generate_code("TXN")
         tx_history = TransactionHistory(
@@ -52,6 +56,7 @@ class TransactionHistoryService:
             source_module=data.source_module.strip().lower(),
             source_id=data.source_id,
             event_date=data.event_date or utc_now(),
+            hospital_id=hospital_id,
         )
         tx_history = await self.repo.create(tx_history)
         await self.audit_repo.create("create", "transaction_history", user_id=user_id, resource_id=str(tx_history.id))
@@ -68,6 +73,7 @@ class TransactionHistoryService:
         status: str = "completed",
         event_date: datetime | None = None,
         user_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> TransactionHistory:
         ref_no = reference_no.strip() if (reference_no and reference_no.strip()) else generate_code("TXN")
         tx_history = TransactionHistory(
@@ -79,12 +85,13 @@ class TransactionHistoryService:
             source_module=source_module.strip().lower(),
             source_id=source_id,
             event_date=event_date or utc_now(),
+            hospital_id=hospital_id,
         )
         tx_history = await self.repo.create(tx_history)
         await self.audit_repo.create("create", "transaction_history", user_id=user_id or 1, resource_id=str(tx_history.id))
         return tx_history
 
-    async def _sync_pharmacy_transactions(self) -> None:
+    async def _sync_pharmacy_transactions(self, hospital_id: int | None = None) -> None:
         from app.models.pharmacy_model import PharmacyInvoice, Purchase
         from sqlalchemy import select
         
@@ -98,6 +105,8 @@ class TransactionHistoryService:
             TransactionHistory.id.is_(None),
             PharmacyInvoice.is_deleted == False
         )
+        if hospital_id is not None:
+            invoice_query = invoice_query.where(PharmacyInvoice.hospital_id == hospital_id)
         invoice_result = await self.db.execute(invoice_query)
         invoices_to_sync = invoice_result.scalars().all()
         
@@ -113,7 +122,8 @@ class TransactionHistoryService:
                 status="completed",
                 event_date=invoice.created_at or utc_now(),
                 created_at=invoice.created_at or utc_now(),
-                updated_at=invoice.updated_at or utc_now()
+                updated_at=invoice.updated_at or utc_now(),
+                hospital_id=invoice.hospital_id,
             ))
             # Create PAYMENT_RECEIVED
             self.db.add(TransactionHistory(
@@ -126,7 +136,8 @@ class TransactionHistoryService:
                 status="completed",
                 event_date=invoice.created_at or utc_now(),
                 created_at=invoice.created_at or utc_now(),
-                updated_at=invoice.updated_at or utc_now()
+                updated_at=invoice.updated_at or utc_now(),
+                hospital_id=invoice.hospital_id,
             ))
 
         # Sync Purchases
@@ -138,6 +149,8 @@ class TransactionHistoryService:
         ).where(
             TransactionHistory.id.is_(None)
         )
+        if hospital_id is not None:
+            purchase_query = purchase_query.where(Purchase.hospital_id == hospital_id)
         purchase_result = await self.db.execute(purchase_query)
         purchases_to_sync = purchase_result.scalars().all()
         
@@ -152,7 +165,8 @@ class TransactionHistoryService:
                 status="completed",
                 event_date=purchase.created_at or utc_now(),
                 created_at=purchase.created_at or utc_now(),
-                updated_at=purchase.updated_at or utc_now()
+                updated_at=purchase.updated_at or utc_now(),
+                hospital_id=purchase.hospital_id,
             ))
 
         if invoices_to_sync or purchases_to_sync:
@@ -170,9 +184,11 @@ class TransactionHistoryService:
         end_date: date | datetime | None = None,
         reference_no: str | None = None,
         q: str | None = None,
+        current_user = None,
     ):
+        hospital_id = resolve_tenant_id(current_user)
         # TODO: Move pharmacy synchronization to a dedicated background task or specific trigger workflow
-        # await self._sync_pharmacy_transactions()
+        # await self._sync_pharmacy_transactions(hospital_id=hospital_id)
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip,
@@ -185,6 +201,7 @@ class TransactionHistoryService:
             end_date=end_date,
             reference_no=reference_no,
             q=q,
+            hospital_id=hospital_id,
         )
         total = await self.repo.count_all(
             event_type=event_type,
@@ -193,27 +210,31 @@ class TransactionHistoryService:
             end_date=end_date,
             reference_no=reference_no,
             q=q,
+            hospital_id=hospital_id,
         )
         responses = [TransactionHistoryResponse.model_validate(item) for item in items]
         return build_paginated_result(responses, total, page, size)
 
-    async def get_transaction_history(self, tx_id: int) -> TransactionHistoryResponse:
-        tx_history = await self.repo.get_by_id(tx_id)
+    async def get_transaction_history(self, tx_id: int, current_user = None) -> TransactionHistoryResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        tx_history = await self.repo.get_by_id(tx_id, hospital_id=hospital_id)
         if not tx_history:
             raise NotFoundException("Transaction History record not found")
         return TransactionHistoryResponse.model_validate(tx_history)
 
-    async def delete_transaction_history(self, tx_id: int, user_id: int) -> None:
-        tx_history = await self.repo.get_by_id(tx_id)
+    async def delete_transaction_history(self, tx_id: int, user_id: int, current_user = None) -> None:
+        hospital_id = resolve_tenant_id(current_user)
+        tx_history = await self.repo.get_by_id(tx_id, hospital_id=hospital_id)
         if not tx_history:
             raise NotFoundException("Transaction History record not found")
         await self.repo.soft_delete(tx_history)
         await self.audit_repo.create("delete", "transaction_history", user_id=user_id, resource_id=str(tx_id))
 
-    async def get_dashboard_summary(self) -> DashboardSummaryResponse:
+    async def get_dashboard_summary(self, current_user = None) -> DashboardSummaryResponse:
+        hospital_id = resolve_tenant_id(current_user)
         # TODO: Move pharmacy synchronization to a dedicated background task or specific trigger workflow
-        # await self._sync_pharmacy_transactions()
-        stats = await self.repo.get_aggregated_stats()
+        # await self._sync_pharmacy_transactions(hospital_id=hospital_id)
+        stats = await self.repo.get_aggregated_stats(hospital_id=hospital_id)
 
         counts = {
             "EXPENSE_RECORDED": 0,

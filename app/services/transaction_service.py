@@ -11,6 +11,7 @@ from app.schemas.transaction_schema import TransactionCreate, TransactionUpdate,
 from app.services.billing_service import BillingService
 from app.utils.helpers import utc_now
 from app.utils.pagination import build_paginated_result
+from app.core.dependencies import resolve_tenant_id
 
 
 class TransactionService:
@@ -20,8 +21,9 @@ class TransactionService:
         self.billing_repo = BillingRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def create_transaction(self, data: TransactionCreate, user_id: int) -> TransactionResponse:
-        billing = await self.billing_repo.get_by_id(data.billing_id)
+    async def create_transaction(self, data: TransactionCreate, user_id: int, current_user = None) -> TransactionResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.billing_repo.get_by_id(data.billing_id, hospital_id=hospital_id)
         if not billing:
             raise NotFoundException("Billing record not found")
 
@@ -114,7 +116,8 @@ class TransactionService:
                 source_module="refunds" if is_refund else "payments",
                 source_id=payment.id,
                 status=payment.status,
-                user_id=user_id
+                user_id=user_id,
+                hospital_id=billing.hospital_id,
             )
 
             await BillingService(self.db)._recalculate_billing(billing)
@@ -122,18 +125,20 @@ class TransactionService:
         await self.audit_repo.create("create", "transaction", user_id=user_id, resource_id=str(payment.id))
         return TransactionResponse.model_validate(payment)
 
-    async def get_transaction(self, transaction_id: int) -> TransactionResponse:
-        payment = await self.repo.get_by_id(transaction_id)
+    async def get_transaction(self, transaction_id: int, current_user = None) -> TransactionResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        payment = await self.repo.get_by_id(transaction_id, hospital_id=hospital_id)
         if not payment:
             raise NotFoundException("Transaction not found")
         return TransactionResponse.model_validate(payment)
 
-    async def update_transaction(self, transaction_id: int, data: TransactionUpdate, user_id: int) -> TransactionResponse:
-        payment = await self.repo.get_by_id(transaction_id)
+    async def update_transaction(self, transaction_id: int, data: TransactionUpdate, user_id: int, current_user = None) -> TransactionResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        payment = await self.repo.get_by_id(transaction_id, hospital_id=hospital_id)
         if not payment:
             raise NotFoundException("Transaction not found")
 
-        billing = await self.billing_repo.get_by_id(payment.billing_id)
+        billing = await self.billing_repo.get_by_id(payment.billing_id, hospital_id=hospital_id)
         if not billing:
             raise NotFoundException("Billing record not found")
 
@@ -193,6 +198,8 @@ class TransactionService:
             hist.event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
             if payment.transaction_ref:
                 hist.reference_no = payment.transaction_ref
+            if billing.hospital_id:
+                hist.hospital_id = billing.hospital_id
         elif new_completed:
             from app.services.transaction_history_service import TransactionHistoryService
             event_type = "REFUND_ISSUED" if payment.is_refund else "PAYMENT_RECEIVED"
@@ -206,18 +213,20 @@ class TransactionService:
                 source_module=source_module,
                 source_id=payment.id,
                 status=payment.status,
-                user_id=user_id
+                user_id=user_id,
+                hospital_id=billing.hospital_id,
             )
 
         await self.audit_repo.create("update", "transaction", user_id=user_id, resource_id=str(payment.id))
         return TransactionResponse.model_validate(payment)
 
-    async def delete_transaction(self, transaction_id: int, user_id: int) -> None:
-        payment = await self.repo.get_by_id(transaction_id)
+    async def delete_transaction(self, transaction_id: int, user_id: int, current_user = None) -> None:
+        hospital_id = resolve_tenant_id(current_user)
+        payment = await self.repo.get_by_id(transaction_id, hospital_id=hospital_id)
         if not payment:
             raise NotFoundException("Transaction not found")
 
-        billing = await self.billing_repo.get_by_id(payment.billing_id)
+        billing = await self.billing_repo.get_by_id(payment.billing_id, hospital_id=hospital_id)
         if not billing:
             raise NotFoundException("Billing record not found")
 
@@ -260,7 +269,9 @@ class TransactionService:
         start_date: date | datetime | None = None,
         end_date: date | datetime | None = None,
         q: str | None = None,
+        current_user = None,
     ):
+        hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
         items = await self.repo.list_all(
             skip=skip,
@@ -273,6 +284,7 @@ class TransactionService:
             start_date=start_date,
             end_date=end_date,
             q=q,
+            hospital_id=hospital_id,
         )
         total = await self.repo.count_all(
             billing_id=billing_id,
@@ -281,11 +293,13 @@ class TransactionService:
             start_date=start_date,
             end_date=end_date,
             q=q,
+            hospital_id=hospital_id,
         )
         responses = [TransactionResponse.model_validate(item) for item in items]
         return build_paginated_result(responses, total, page, size)
 
-    async def generate_transactions_bulk_template(self):
+    async def generate_transactions_bulk_template(self, current_user = None):
+        hospital_id = resolve_tenant_id(current_user)
         from io import BytesIO
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -320,7 +334,10 @@ class TransactionService:
             
         # Prefer an actual active/existing bill number from the database.
         # If no bill exists, leave the sample cell blank.
-        stmt = select(Billing.bill_number).where(Billing.is_deleted == False).limit(1)
+        stmt = select(Billing.bill_number).where(Billing.is_deleted == False)
+        if hospital_id is not None:
+            stmt = stmt.where(Billing.hospital_id == hospital_id)
+        stmt = stmt.limit(1)
         res = await self.db.execute(stmt)
         bill_number = res.scalar_one_or_none()
         
@@ -359,7 +376,8 @@ class TransactionService:
         stream.seek(0)
         return stream
 
-    async def import_transactions_from_excel(self, file, user_id: int) -> dict:
+    async def import_transactions_from_excel(self, file, user_id: int, current_user = None) -> dict:
+        hospital_id = resolve_tenant_id(current_user)
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
@@ -408,6 +426,8 @@ class TransactionService:
                 from sqlalchemy import select
                 
                 stmt = select(Billing).where(Billing.bill_number == bill_number, Billing.is_deleted == False)
+                if hospital_id is not None:
+                    stmt = stmt.where(Billing.hospital_id == hospital_id)
                 res = await self.db.execute(stmt)
                 billing = res.scalar_one_or_none()
                 if not billing:
@@ -518,7 +538,7 @@ class TransactionService:
                 )
 
                 # Process row sequentially using existing financial validations
-                await self.create_transaction(txn_create, user_id)
+                await self.create_transaction(txn_create, user_id, current_user=current_user)
                 created += 1
 
             except ValidationError as e:
@@ -544,7 +564,7 @@ class TransactionService:
                 failed += 1
                 errors.append({
                     "row": row_idx,
-                    "error": str(e)
+                    "error": str(e.error if hasattr(e, 'error') else str(e))
                 })
                 
         await self.db.flush()
@@ -563,8 +583,10 @@ class TransactionService:
         status: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
-        q: str | None = None
+        q: str | None = None,
+        current_user = None,
     ):
+        hospital_id = resolve_tenant_id(current_user)
         from io import BytesIO
         from datetime import datetime, date
         from sqlalchemy import select
@@ -576,7 +598,8 @@ class TransactionService:
             status=status,
             start_date=start_date,
             end_date=end_date,
-            q=q
+            q=q,
+            hospital_id=hospital_id,
         )
         
         # Load associated billing records for bill_number/patient lookup
@@ -584,7 +607,17 @@ class TransactionService:
         from app.models.patient_model import Patient
         
         b_stmt = select(Billing.id, Billing.bill_number, Billing.patient_id)
+        if hospital_id is not None:
+            b_stmt = b_stmt.where(Billing.hospital_id == hospital_id)
         b_res = await self.db.execute(b_stmt)
+        billing_map = {row[0]: (row[1], row[2]) for row in b_res.all()}
+        
+        # Fetch patients names
+        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
+        if hospital_id is not None:
+            p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
+        p_res = await self.db.execute(p_stmt)
+        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
         billing_map = {row[0]: (row[1], row[2]) for row in b_res.all()}
         
         # Fetch patients names

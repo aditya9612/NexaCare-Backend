@@ -22,7 +22,7 @@ async def create_transaction_history(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "create")),
 ):
-    tx_history = await TransactionHistoryService(db).create_transaction_history(data, current_user.id)
+    tx_history = await TransactionHistoryService(db).create_transaction_history(data, current_user.id, current_user=current_user)
     return APIResponse(message="Transaction History entry created successfully", data=tx_history)
 
 
@@ -53,6 +53,7 @@ async def list_transaction_histories(
         end_date=end_date,
         reference_no=reference,
         q=q,
+        current_user=current_user,
     )
     return APIResponse(message="Transaction History retrieved successfully", data=result)
 
@@ -63,7 +64,7 @@ async def get_dashboard_summary(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    summary = await TransactionHistoryService(db).get_dashboard_summary()
+    summary = await TransactionHistoryService(db).get_dashboard_summary(current_user=current_user)
     return APIResponse(message="Dashboard financial summary retrieved successfully", data=summary)
 
 
@@ -74,7 +75,7 @@ async def get_transaction_history(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    tx_history = await TransactionHistoryService(db).get_transaction_history(id)
+    tx_history = await TransactionHistoryService(db).get_transaction_history(id, current_user=current_user)
     return APIResponse(message="Transaction History details retrieved successfully", data=tx_history)
 
 
@@ -85,5 +86,5 @@ async def delete_transaction_history(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "delete")),
 ):
-    await TransactionHistoryService(db).delete_transaction_history(id, current_user.id)
+    await TransactionHistoryService(db).delete_transaction_history(id, current_user.id, current_user=current_user)
     return APIResponse(message="Transaction History deleted successfully", data=MessageResponse(message="Soft deleted"))

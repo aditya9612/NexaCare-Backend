@@ -283,36 +283,53 @@ class SampleRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_all(self, skip: int = 0, limit: int = 20, status: str | None = None, department_id: int | None = None) -> list[Sample]:
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None,
+    ) -> list[Sample]:
         query = select(Sample).join(TestOrder, Sample.test_order_id == TestOrder.id)
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
         if status:
             query = query.where(Sample.status == status)
         if department_id:
-                query = query.where(TestOrder.department_id == department_id)
+            query = query.where(TestOrder.department_id == department_id)
         result = await self.db.execute(query.order_by(Sample.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, status: str | None = None, department_id: int | None = None) -> int:
+    async def count_all(
+        self,
+        status: str | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None,
+    ) -> int:
         query = select(func.count()).select_from(Sample).join(TestOrder, Sample.test_order_id == TestOrder.id)
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
         if status:
             query = query.where(Sample.status == status)
         if department_id:
             query = query.where(TestOrder.department_id == department_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, sample_id: int) -> Sample | None:
-        result = await self.db.execute(
-            select(Sample).where(Sample.id == sample_id)
-        )
+    async def get_by_id(self, sample_id: int, hospital_id: int | None = None) -> Sample | None:
+        query = select(Sample).where(Sample.id == sample_id)
+        if hospital_id is not None:
+            query = query.join(TestOrder, Sample.test_order_id == TestOrder.id).where(TestOrder.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none() 
 
-    async def get_by_test_order(self, test_order_id: int) -> Sample | None:
+    async def get_by_test_order(self, test_order_id: int, hospital_id: int | None = None) -> Sample | None:
+        query = select(Sample).where(Sample.test_order_id == test_order_id)
+        if hospital_id is not None:
+            query = query.join(TestOrder, Sample.test_order_id == TestOrder.id).where(TestOrder.hospital_id == hospital_id)
         result = await self.db.execute(
-            select(Sample)
-            .where(Sample.test_order_id == test_order_id)
-            .order_by(Sample.created_at.desc())
-            .limit(1)
-       )
+            query.order_by(Sample.created_at.desc()).limit(1)
+        )
         return result.scalar_one_or_none()       
 
     async def create(self, sample: Sample) -> Sample:
@@ -336,12 +353,20 @@ class TestResultRepository:
         self.db = db
 
     async def list_all(
-        self, skip: int = 0, limit: int = 20, test_order_id: int | None = None, is_critical: bool | None = None, department_id: int | None = None
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        test_order_id: int | None = None,
+        is_critical: bool | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[TestResult]:
         query = (
             select(TestResult)
             .join(TestOrder, TestResult.test_order_id == TestOrder.id)
         )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
         if test_order_id:
             query = query.where(TestResult.test_order_id == test_order_id)
         if is_critical is not None:
@@ -351,12 +376,20 @@ class TestResultRepository:
         result = await self.db.execute(query.order_by(TestResult.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self, test_order_id: int | None = None, is_critical: bool | None = None, department_id: int | None = None) -> int:
+    async def count_all(
+        self,
+        test_order_id: int | None = None,
+        is_critical: bool | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None,
+    ) -> int:
         query = (
             select(func.count())
             .select_from(TestResult)
             .join(TestOrder, TestResult.test_order_id == TestOrder.id)
         )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
         if test_order_id:
             query = query.where(TestResult.test_order_id == test_order_id)
         if is_critical is not None:
@@ -365,10 +398,11 @@ class TestResultRepository:
             query = query.where(TestOrder.department_id == department_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_test_order(self, test_order_id: int) -> TestResult | None:
-        result = await self.db.execute(
-            select(TestResult).where(TestResult.test_order_id == test_order_id)
-        )
+    async def get_by_test_order(self, test_order_id: int, hospital_id: int | None = None) -> TestResult | None:
+        query = select(TestResult).where(TestResult.test_order_id == test_order_id)
+        if hospital_id is not None:
+            query = query.join(TestOrder, TestResult.test_order_id == TestOrder.id).where(TestOrder.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()    
 
     async def create(self, result: TestResult) -> TestResult:
@@ -377,10 +411,11 @@ class TestResultRepository:
         await self.db.refresh(result)
         return result
 
-    async def get_by_id(self, result_id: int) -> TestResult | None:
-        result = await self.db.execute(
-            select(TestResult).where(TestResult.id == result_id)
-        )
+    async def get_by_id(self, result_id: int, hospital_id: int | None = None) -> TestResult | None:
+        query = select(TestResult).where(TestResult.id == result_id)
+        if hospital_id is not None:
+            query = query.join(TestOrder, TestResult.test_order_id == TestOrder.id).where(TestOrder.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def update(self, result: TestResult) -> TestResult:
@@ -394,12 +429,15 @@ class TestResultRepository:
         limit: int = 50,
         current_user_id: int | None = None,
         department_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[TestResult]:
         query = (
             select(TestResult)
             .join(TestOrder, TestResult.test_order_id == TestOrder.id)
             .where(TestResult.is_critical.is_(True))
         )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
 
         if current_user_id and department_id:
             query = query.where(
@@ -431,12 +469,15 @@ class LabReportRepository:
        department_id: int | None = None,
        generated_by: int | None = None,
        doctor_id: int | None = None,
+       hospital_id: int | None = None,
     ) -> list[LabReport]:
         query = (
            select(LabReport)
            .join(TestOrder, LabReport.test_order_id == TestOrder.id)
            .where(TestOrder.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
 
         if status:
             query = query.where(LabReport.status == status)
@@ -466,6 +507,7 @@ class LabReportRepository:
         department_id: int | None = None,
         generated_by: int | None = None,
         doctor_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = (
             select(func.count())
@@ -473,6 +515,8 @@ class LabReportRepository:
             .join(TestOrder, LabReport.test_order_id == TestOrder.id)
             .where(TestOrder.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
 
         if status:
             query = query.where(LabReport.status == status)
@@ -493,8 +537,11 @@ class LabReportRepository:
         
         return (await self.db.scalar(query)) or 0
       
-    async def get_by_id(self, report_id: int) -> LabReport | None:
-        result = await self.db.execute(select(LabReport).where(LabReport.id == report_id))
+    async def get_by_id(self, report_id: int, hospital_id: int | None = None) -> LabReport | None:
+        query = select(LabReport).where(LabReport.id == report_id)
+        if hospital_id is not None:
+            query = query.join(TestOrder, LabReport.test_order_id == TestOrder.id).where(TestOrder.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def create(self, report: LabReport) -> LabReport:
@@ -516,9 +563,10 @@ class LabReportRepository:
         self,
         report_id: int,
         remarks: str,
-        rejected_by: int
+        rejected_by: int,
+        hospital_id: int | None = None,
     ) -> LabReport | None:
-        report = await self.get_by_id(report_id)
+        report = await self.get_by_id(report_id, hospital_id=hospital_id)
         if not report:
             return None
         from app.core.constants import LabReportStatus
@@ -529,7 +577,7 @@ class LabReportRepository:
         return report
 
 
-    async def get_upcoming_lab_reports(self, doctor_id: int, limit: int = 10) -> list[LabReport]:
+    async def get_upcoming_lab_reports(self, doctor_id: int, limit: int = 10, hospital_id: int | None = None) -> list[LabReport]:
         from app.core.constants import LabReportStatus
         from app.models.patient_model import Patient
         query = (
@@ -542,8 +590,9 @@ class LabReportRepository:
                 Patient.is_deleted.is_(False),
                 LabReport.status == LabReportStatus.PENDING_APPROVAL
             )
-            .order_by(LabReport.created_at.desc())
-            .limit(limit)
         )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
+        query = query.order_by(LabReport.created_at.desc()).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())

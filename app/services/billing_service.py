@@ -305,7 +305,8 @@ class BillingService:
             source_module="billing",
             source_id=billing.id,
             status="completed",
-            user_id=user_id
+            user_id=user_id,
+            hospital_id=billing.hospital_id,
         )
 
         try:
@@ -761,7 +762,8 @@ class BillingService:
                 source_module="payments",
                 source_id=invoice.id,
                 status="completed",
-                user_id=user_id
+                user_id=user_id,
+                hospital_id=invoice.hospital_id,
             )
 
             return PaymentResponse(
@@ -865,7 +867,8 @@ class BillingService:
             source_module="payments",
             source_id=payment.id,
             status="completed",
-            user_id=user_id
+            user_id=user_id,
+            hospital_id=billing.hospital_id,
         )
 
         try:
@@ -942,7 +945,8 @@ class BillingService:
                 source_module="refunds",
                 source_id=return_record.id,
                 status="completed",
-                user_id=user_id
+                user_id=user_id,
+                hospital_id=invoice.hospital_id,
             )
 
             return PaymentResponse(
@@ -987,7 +991,8 @@ class BillingService:
             source_module="refunds",
             source_id=payment.id,
             status="completed",
-            user_id=user_id
+            user_id=user_id,
+            hospital_id=billing.hospital_id,
         )
 
         try:
@@ -1118,14 +1123,16 @@ class BillingService:
         await self.audit_repo.create("export", "billing", user_id=user_id, resource_id=str(billing.id))
         return path, pdf_bytes
 
-    async def get_pending_payments(self, page: int = 1, size: int = 20):
+    async def get_pending_payments(self, page: int = 1, size: int = 20, current_user: Any | None = None):
+        hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
-        items = await self.repo.get_pending_payments(skip=skip, limit=size)
-        total = await self.repo.count_pending_payments()
+        items = await self.repo.get_pending_payments(skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.repo.count_pending_payments(hospital_id=hospital_id)
         return build_paginated_result([self._to_response(b) for b in items], total, page, size)
 
-    async def get_revenue_summary(self) -> BillingSummary:
-        data = await self.repo.get_revenue_summary()
+    async def get_revenue_summary(self, current_user: Any | None = None) -> BillingSummary:
+        hospital_id = resolve_tenant_id(current_user)
+        data = await self.repo.get_revenue_summary(hospital_id=hospital_id)
 
         from app.models.pharmacy_model import PharmacyInvoice
         from sqlalchemy import select, func
@@ -1136,6 +1143,9 @@ class BillingService:
         ).where(
             PharmacyInvoice.is_deleted == False
         )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
         res = await self.db.execute(pharmacy_stmt)
         row = res.first()
 
@@ -1147,12 +1157,16 @@ class BillingService:
             PharmacyInvoice.is_deleted == False,
             PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount
         )
+        if hospital_id is not None:
+            pharm_pending_count_stmt = pharm_pending_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
         pharm_pending_count = await self.db.scalar(pharm_pending_count_stmt) or 0
 
         pharm_overdue_count_stmt = select(func.count(PharmacyInvoice.id)).where(
             PharmacyInvoice.is_deleted == False,
             PharmacyInvoice.status == "overdue"
         )
+        if hospital_id is not None:
+            pharm_overdue_count_stmt = pharm_overdue_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
         pharm_overdue = await self.db.scalar(pharm_overdue_count_stmt) or 0
 
         data["total_revenue"] = round(data["total_revenue"] + pharm_collected, 2)
@@ -1169,10 +1183,12 @@ class BillingService:
         filter_type: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        current_user: Any | None = None,
     ) -> DailyCollectionSummary:
         from datetime import date, datetime, timedelta
         from app.utils.helpers import get_today_ist
 
+        hospital_id = resolve_tenant_id(current_user)
         today = get_today_ist()
         raw_filter = (filter_type or "").strip().lower()
 
@@ -1220,7 +1236,7 @@ class BillingService:
             resolved_start = today
             resolved_end = today
 
-        data = await self.repo.get_daily_collection(resolved_start, resolved_end)
+        data = await self.repo.get_daily_collection(resolved_start, resolved_end, hospital_id=hospital_id)
 
         start = datetime.combine(resolved_start, datetime.min.time())
         end = datetime.combine(resolved_end, datetime.max.time())
@@ -1253,6 +1269,9 @@ class BillingService:
             PharmacyInvoice.created_at >= start,
             PharmacyInvoice.created_at <= end,
         )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
         res = await self.db.execute(pharmacy_stmt)
         p_row = res.first()
         pharm_total_bill = round(float(p_row[0] if p_row else 0.0), 2)
@@ -1329,13 +1348,14 @@ class BillingService:
             pharmacy_collection=pharmacy_summary,
         )
 
-    async def get_yearly_report(self, year: int | None = None) -> RevenueReport:
+    async def get_yearly_report(self, year: int | None = None, current_user: Any | None = None) -> RevenueReport:
+        hospital_id = resolve_tenant_id(current_user)
         target_year = year or utc_now().year
         start = datetime.combine(date(target_year, 1, 1), datetime.min.time())
         end = datetime.combine(date(target_year, 12, 31), datetime.max.time())
         label = str(target_year)
 
-        data = await self.repo.get_period_report(start, end)
+        data = await self.repo.get_period_report(start, end, hospital_id=hospital_id)
 
         from app.models.pharmacy_model import PharmacyInvoice
         from sqlalchemy import select, func
@@ -1349,6 +1369,9 @@ class BillingService:
             PharmacyInvoice.created_at >= start,
             PharmacyInvoice.created_at <= end
         )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
         res = await self.db.execute(pharmacy_stmt)
         row = res.first()
 
@@ -1364,6 +1387,8 @@ class BillingService:
             PharmacyInvoice.created_at <= end,
             PharmacyInvoice.paid_amount > 0.0
         )
+        if hospital_id is not None:
+            pharm_pay_count_stmt = pharm_pay_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
         pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
 
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
@@ -1381,7 +1406,9 @@ class BillingService:
         target_date: date | None = None,
         year: int | None = None,
         month: int | None = None,
+        current_user: Any | None = None,
     ) -> RevenueReport:
+        hospital_id = resolve_tenant_id(current_user)
         if period == "monthly":
             import calendar
             now = utc_now()
@@ -1412,7 +1439,7 @@ class BillingService:
                 start = datetime.combine(date(y, 1, 1), datetime.min.time())
                 end = datetime.combine(date(y, 12, 31), datetime.max.time())
                 label = str(y)
-        data = await self.repo.get_period_report(start, end)
+        data = await self.repo.get_period_report(start, end, hospital_id=hospital_id)
 
         from app.models.pharmacy_model import PharmacyInvoice
         from sqlalchemy import select, func
@@ -1426,6 +1453,9 @@ class BillingService:
             PharmacyInvoice.created_at >= start,
             PharmacyInvoice.created_at <= end
         )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
         res = await self.db.execute(pharmacy_stmt)
         row = res.first()
 
@@ -1441,6 +1471,8 @@ class BillingService:
             PharmacyInvoice.created_at <= end,
             PharmacyInvoice.paid_amount > 0.0
         )
+        if hospital_id is not None:
+            pharm_pay_count_stmt = pharm_pay_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
         pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
 
         data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
@@ -1803,8 +1835,10 @@ class BillingService:
         end_date: date | None = None,
         q: str | None = None,
         sort_by: str = "created_at",
-        sort_order: str = "desc"
+        sort_order: str = "desc",
+        current_user: Any | None = None,
     ):
+        hospital_id = resolve_tenant_id(current_user)
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
         from sqlalchemy import select, or_, func, union_all
@@ -1839,6 +1873,10 @@ class BillingService:
             sort_field_p.label("sort_val"),
             PharmacyInvoice.id.label("tie_breaker")
         ).where(PharmacyInvoice.is_deleted == False)
+
+        if hospital_id is not None:
+            b_query = b_query.where(Billing.hospital_id == hospital_id)
+            p_query = p_query.where(PharmacyInvoice.hospital_id == hospital_id)
 
         if status:
             b_query = b_query.where(Billing.status == status)
@@ -2073,6 +2111,9 @@ class InsuranceService:
         claim = await self.claim_repo.create(claim)
         await self.audit_repo.create("create", "billing_claim", user_id=user_id, resource_id=str(claim.id))
 
+        billing = await self.repo.get_by_id(claim.billing_id)
+        hospital_id = billing.hospital_id if billing else None
+
         from app.services.transaction_history_service import TransactionHistoryService
         await TransactionHistoryService(self.db).create_event(
             event_type="INSURANCE_CLAIM",
@@ -2082,7 +2123,8 @@ class InsuranceService:
             source_module="insurance",
             source_id=claim.id,
             status="completed",
-            user_id=user_id
+            user_id=user_id,
+            hospital_id=hospital_id,
         )
 
         return InsuranceClaimResponse.model_validate(claim)

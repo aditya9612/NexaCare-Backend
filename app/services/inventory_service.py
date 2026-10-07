@@ -105,29 +105,30 @@ class InventoryService:
     async def list_items(
         self, page: int = 1, size: int = 20, sort_by: str = "created_at",
         sort_order: str = "desc", category: str | None = None, warehouse_id: int | None = None,
+        hospital_id: int | None = None,
     ):
         skip = (page - 1) * size
         items = await self.item_repo.list_all(
             skip=skip, limit=size, sort_by=sort_by, sort_order=sort_order,
-            category=category, warehouse_id=warehouse_id,
+            category=category, warehouse_id=warehouse_id, hospital_id=hospital_id,
         )
-        total = await self.item_repo.count_all(category=category, warehouse_id=warehouse_id)
+        total = await self.item_repo.count_all(category=category, warehouse_id=warehouse_id, hospital_id=hospital_id)
         return build_paginated_result([InventoryItemResponse.model_validate(i) for i in items], total, page, size)
 
-    async def search_items(self, q: str, page: int = 1, size: int = 20):
+    async def search_items(self, q: str, page: int = 1, size: int = 20, hospital_id: int | None = None):
         skip = (page - 1) * size
-        items = await self.item_repo.search(q, skip=skip, limit=size)
-        total = await self.item_repo.count_search(q)
+        items = await self.item_repo.search(q, skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.item_repo.count_search(q, hospital_id=hospital_id)
         return build_paginated_result([InventoryItemResponse.model_validate(i) for i in items], total, page, size)
 
-    async def get_item(self, item_id: int) -> InventoryItemResponse:
-        item = await self.item_repo.get_by_id(item_id)
+    async def get_item(self, item_id: int, hospital_id: int | None = None) -> InventoryItemResponse:
+        item = await self.item_repo.get_by_id(item_id, hospital_id=hospital_id)
         if not item:
             raise NotFoundException("Inventory item not found")
         return InventoryItemResponse.model_validate(item)
 
-    async def update_item(self, item_id: int, data: InventoryItemUpdate, user_id: int) -> InventoryItemResponse:
-        item = await self.item_repo.get_by_id(item_id)
+    async def update_item(self, item_id: int, data: InventoryItemUpdate, user_id: int, hospital_id: int | None = None) -> InventoryItemResponse:
+        item = await self.item_repo.get_by_id(item_id, hospital_id=hospital_id)
         if not item:
             raise NotFoundException("Inventory item not found")
         await self._validate_department(data.department_id)
@@ -146,8 +147,8 @@ class InventoryService:
         await self.audit_repo.create("update", "inventory", user_id=user_id, resource_id=str(item.id))
         return InventoryItemResponse.model_validate(item)
 
-    async def delete_item(self, item_id: int, user_id: int) -> None:
-        item = await self.item_repo.get_by_id(item_id)
+    async def delete_item(self, item_id: int, user_id: int, hospital_id: int | None = None) -> None:
+        item = await self.item_repo.get_by_id(item_id, hospital_id=hospital_id)
         if not item:
             raise NotFoundException("Inventory item not found")
         await self.item_repo.soft_delete(item)
@@ -214,19 +215,20 @@ class InventoryService:
         return data
 
     async def list_transactions(
-        self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None
+        self, page: int = 1, size: int = 20, item_id: int | None = None, transaction_type: str | None = None,
+        hospital_id: int | None = None,
     ):
         skip = (page - 1) * size
         items = await self.transaction_repo.list_all(
-            skip=skip, limit=size, item_id=item_id, transaction_type=transaction_type
+            skip=skip, limit=size, item_id=item_id, transaction_type=transaction_type, hospital_id=hospital_id,
         )
-        total = await self.transaction_repo.count_all(item_id=item_id, transaction_type=transaction_type)
+        total = await self.transaction_repo.count_all(item_id=item_id, transaction_type=transaction_type, hospital_id=hospital_id)
         return build_paginated_result(
             [self._to_transaction_response(t) for t in items], total, page, size
         )
 
-    async def get_transaction(self, transaction_id: int) -> StockTransactionResponse:
-        transaction = await self.transaction_repo.get_by_id(transaction_id)
+    async def get_transaction(self, transaction_id: int, hospital_id: int | None = None) -> StockTransactionResponse:
+        transaction = await self.transaction_repo.get_by_id(transaction_id, hospital_id=hospital_id)
         if not transaction:
             raise NotFoundException("Stock transaction not found")
         return self._to_transaction_response(transaction)
@@ -517,10 +519,10 @@ class InventoryService:
             "errors": errors,
         }
 
-    async def export_items(self, format_type: str) -> tuple[BytesIO | bytes, str]:
+    async def export_items(self, format_type: str, hospital_id: int | None = None) -> tuple[BytesIO | bytes, str]:
         from datetime import date, datetime
 
-        items = await self.item_repo.get_all_active()
+        items = await self.item_repo.get_all_active(hospital_id=hospital_id)
 
         if format_type == "excel":
             import openpyxl
@@ -828,7 +830,7 @@ class InventoryService:
             start = None
             end = None
 
-        raw_data = await self.transaction_repo.get_consumption_report(start, end)
+        raw_data = await self.transaction_repo.get_consumption_report(start, end, hospital_id=hospital_id)
         return [
             ConsumptionReport(
                 period=normalized_period,

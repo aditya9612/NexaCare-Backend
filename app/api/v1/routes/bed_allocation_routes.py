@@ -152,6 +152,7 @@ async def list_beds(
         bed_type=bed_type,
         room_id=room_id,
         floor_id=floor_id,
+        current_user=current_user,
     )
     return APIResponse(message="Beds retrieved successfully", data=beds)
 
@@ -246,7 +247,7 @@ async def list_activity_logs(
     limit: int = 50,
     _: User = Depends(require_permission("bed_allocation", "read")),
 ):
-    logs = await BedAllocationService(db).list_activity_logs(limit)
+    logs = await BedAllocationService(db).list_activity_logs(limit, current_user=current_user)
     return APIResponse(message="Activity logs retrieved successfully", data=logs)
 
 
@@ -257,7 +258,7 @@ async def get_analytics_summary(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
 ):
-    summary = await BedAllocationService(db).get_analytics_summary()
+    summary = await BedAllocationService(db).get_analytics_summary(current_user=current_user)
     return APIResponse(message="Bed analytics summary retrieved successfully", data=summary)
 
 
@@ -267,7 +268,7 @@ async def get_icu_analytics(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
 ):
-    analytics = await BedAllocationService(db).get_icu_analytics()
+    analytics = await BedAllocationService(db).get_icu_analytics(current_user=current_user)
     return APIResponse(message="ICU bed analytics retrieved successfully", data=analytics)
 
 
@@ -281,7 +282,7 @@ async def get_cleaning_queue(
     """
     List all beds currently in 'Cleaning' status awaiting housekeeping sanitization.
     """
-    beds = await BedAllocationService(db).get_cleaning_queue()
+    beds = await BedAllocationService(db).get_cleaning_queue(current_user=current_user)
     return APIResponse(message="Beds awaiting cleaning retrieved successfully", data=beds)
 
 
@@ -326,6 +327,7 @@ async def export_bed_allocation(
             status=status,
             room_id=room_id,
             bed_type=bed_type,
+            current_user=current_user,
         )
         return Response(
             content=csv_data,
@@ -338,6 +340,7 @@ async def export_bed_allocation(
             status=status,
             room_id=room_id,
             bed_type=bed_type,
+            current_user=current_user,
         )
         return StreamingResponse(
             excel_io,
@@ -350,6 +353,7 @@ async def export_bed_allocation(
             status=status,
             room_id=room_id,
             bed_type=bed_type,
+            current_user=current_user,
         )
         return APIResponse(message="Bed allocation export data retrieved successfully", data=items)
 

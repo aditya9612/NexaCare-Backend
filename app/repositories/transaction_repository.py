@@ -8,8 +8,11 @@ class TransactionRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Payment)
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Payment)
+        if hospital_id is not None:
+            query = query.join(Payment.billing).where(Billing.hospital_id == hospital_id)
+        return query
 
     async def list_all(
         self,
@@ -23,8 +26,14 @@ class TransactionRepository:
         start_date: date | datetime | None = None,
         end_date: date | datetime | None = None,
         q: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Payment]:
-        query = self._base_query()
+        query = select(Payment)
+        has_joined_billing = False
+
+        if hospital_id is not None:
+            query = query.join(Payment.billing).where(Billing.hospital_id == hospital_id)
+            has_joined_billing = True
 
         if billing_id is not None:
             query = query.where(Payment.billing_id == billing_id)
@@ -49,7 +58,10 @@ class TransactionRepository:
 
         if q is not None and q.strip() != "":
             pattern = f"%{q.lower().strip()}%"
-            query = query.join(Payment.billing).where(
+            if not has_joined_billing:
+                query = query.join(Payment.billing)
+                has_joined_billing = True
+            query = query.where(
                 or_(
                     func.lower(Payment.payment_method).like(pattern),
                     func.lower(Payment.transaction_ref).like(pattern),
@@ -75,8 +87,14 @@ class TransactionRepository:
         start_date: date | datetime | None = None,
         end_date: date | datetime | None = None,
         q: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
-        query = select(func.count()).select_from(Payment)
+        query = select(func.count(Payment.id)).select_from(Payment)
+        has_joined_billing = False
+
+        if hospital_id is not None:
+            query = query.join(Payment.billing).where(Billing.hospital_id == hospital_id)
+            has_joined_billing = True
 
         if billing_id is not None:
             query = query.where(Payment.billing_id == billing_id)
@@ -101,7 +119,10 @@ class TransactionRepository:
 
         if q is not None and q.strip() != "":
             pattern = f"%{q.lower().strip()}%"
-            query = query.join(Payment.billing).where(
+            if not has_joined_billing:
+                query = query.join(Payment.billing)
+                has_joined_billing = True
+            query = query.where(
                 or_(
                     func.lower(Payment.payment_method).like(pattern),
                     func.lower(Payment.transaction_ref).like(pattern),
@@ -112,8 +133,11 @@ class TransactionRepository:
 
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, payment_id: int) -> Payment | None:
-        result = await self.db.execute(self._base_query().where(Payment.id == payment_id))
+    async def get_by_id(self, payment_id: int, hospital_id: int | None = None) -> Payment | None:
+        query = select(Payment).where(Payment.id == payment_id)
+        if hospital_id is not None:
+            query = query.join(Payment.billing).where(Billing.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def create(self, payment: Payment) -> Payment:
@@ -141,8 +165,14 @@ class TransactionRepository:
         q: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ) -> list[Payment]:
-        query = self._base_query()
+        query = select(Payment)
+        has_joined_billing = False
+
+        if hospital_id is not None:
+            query = query.join(Payment.billing).where(Billing.hospital_id == hospital_id)
+            has_joined_billing = True
 
         if billing_id is not None:
             query = query.where(Payment.billing_id == billing_id)
@@ -167,7 +197,10 @@ class TransactionRepository:
 
         if q is not None and q.strip() != "":
             pattern = f"%{q.lower().strip()}%"
-            query = query.join(Payment.billing).where(
+            if not has_joined_billing:
+                query = query.join(Payment.billing)
+                has_joined_billing = True
+            query = query.where(
                 or_(
                     func.lower(Payment.payment_method).like(pattern),
                     func.lower(Payment.transaction_ref).like(pattern),

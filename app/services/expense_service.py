@@ -1,5 +1,6 @@
 from io import BytesIO
 from datetime import date
+from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
@@ -31,37 +32,46 @@ class ExpenseService:
         self.audit_repo = AuditRepository(db)
 
     # --- Expense Category Services ---
-    async def create_category(self, data: ExpenseCategoryCreate, user_id: int) -> ExpenseCategoryResponse:
-        existing = await self.category_repo.get_by_name(data.name)
+    async def create_category(self, data: ExpenseCategoryCreate, user_id: int, current_user: Any | None = None) -> ExpenseCategoryResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        existing = await self.category_repo.get_by_name(data.name, hospital_id=hospital_id)
         if existing:
             raise ConflictException(f"Expense category with name '{data.name}' already exists")
 
-        category = ExpenseCategory(**data.model_dump())
+        category = ExpenseCategory(hospital_id=hospital_id, **data.model_dump())
         category = await self.category_repo.create(category)
         await self.audit_repo.create("create", "expense_category", user_id=user_id, resource_id=str(category.id))
         return ExpenseCategoryResponse.model_validate(category)
 
-    async def list_categories(self, page: int = 1, size: int = 20):
+    async def list_categories(self, page: int = 1, size: int = 20, current_user: Any | None = None):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
-        categories = await self.category_repo.list_all(skip=skip, limit=size)
-        total = await self.category_repo.count_all()
+        categories = await self.category_repo.list_all(skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.category_repo.count_all(hospital_id=hospital_id)
         return build_paginated_result(
             [ExpenseCategoryResponse.model_validate(c) for c in categories], total, page, size
         )
 
-    async def get_category(self, category_id: int) -> ExpenseCategoryResponse:
-        category = await self.category_repo.get_by_id(category_id)
+    async def get_category(self, category_id: int, current_user: Any | None = None) -> ExpenseCategoryResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        category = await self.category_repo.get_by_id(category_id, hospital_id=hospital_id)
         if not category:
             raise NotFoundException(f"Expense category with ID {category_id} not found")
         return ExpenseCategoryResponse.model_validate(category)
 
-    async def update_category(self, category_id: int, data: ExpenseCategoryUpdate, user_id: int) -> ExpenseCategoryResponse:
-        category = await self.category_repo.get_by_id(category_id)
+    async def update_category(self, category_id: int, data: ExpenseCategoryUpdate, user_id: int, current_user: Any | None = None) -> ExpenseCategoryResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        category = await self.category_repo.get_by_id(category_id, hospital_id=hospital_id)
         if not category:
             raise NotFoundException(f"Expense category with ID {category_id} not found")
 
         if data.name:
-            existing = await self.category_repo.get_by_name(data.name)
+            existing = await self.category_repo.get_by_name(data.name, hospital_id=hospital_id)
             if existing and existing.id != category_id:
                 raise ConflictException(f"Expense category with name '{data.name}' already exists")
 
@@ -72,12 +82,14 @@ class ExpenseService:
         await self.audit_repo.create("update", "expense_category", user_id=user_id, resource_id=str(category.id))
         return ExpenseCategoryResponse.model_validate(category)
 
-    async def delete_category(self, category_id: int, user_id: int) -> None:
-        category = await self.category_repo.get_by_id(category_id)
+    async def delete_category(self, category_id: int, user_id: int, current_user: Any | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        category = await self.category_repo.get_by_id(category_id, hospital_id=hospital_id)
         if not category:
             raise NotFoundException(f"Expense category with ID {category_id} not found")
 
-        expense_count = await self.expense_repo.count_all(category_id=category_id)
+        expense_count = await self.expense_repo.count_all(category_id=category_id, hospital_id=hospital_id)
         if expense_count > 0:
             raise BadRequestException("Cannot delete category as it is linked to one or more expenses")
 
@@ -87,9 +99,16 @@ class ExpenseService:
     # --- Vendor Services Removed (Centralized in VendorService) ---
 
     # --- Expense Services ---
-    async def create_expense(self, data: ExpenseCreate, user_id: int) -> ExpenseResponse:
+    async def create_expense(self, data: ExpenseCreate, user_id: int, current_user: Any | None = None) -> ExpenseResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        if hospital_id is None:
+            from app.models.user_model import User
+            user = await self.db.get(User, user_id)
+            hospital_id = user.hospital_id if user else None
+
         # Validate Category
-        category = await self.category_repo.get_by_id(data.category_id)
+        category = await self.category_repo.get_by_id(data.category_id, hospital_id=hospital_id)
         if not category:
             raise NotFoundException(f"Expense category with ID {data.category_id} not found")
 
@@ -98,10 +117,6 @@ class ExpenseService:
             vendor = await self.vendor_repo.get_by_id(data.vendor_id)
             if not vendor:
                 raise NotFoundException(f"Vendor with ID {data.vendor_id} not found")
-
-        from app.models.user_model import User
-        user = await self.db.get(User, user_id)
-        hospital_id = user.hospital_id if user else None
 
         expense = Expense(hospital_id=hospital_id, **data.model_dump())
         expense = await self.expense_repo.create(expense)
@@ -116,7 +131,8 @@ class ExpenseService:
             source_module="expenses",
             source_id=expense.id,
             status="completed",
-            user_id=user_id
+            user_id=user_id,
+            hospital_id=hospital_id,
         )
 
         return ExpenseResponse.model_validate(expense)
@@ -303,8 +319,11 @@ class ExpenseService:
         return build_paginated_result(paginated, total, query.page, query.size)
 
 
-    async def get_expense(self, expense_id: int) -> ExpenseResponse:
-        expense = await self.expense_repo.get_by_id(expense_id)
+    async def get_expense(self, expense_id: int, current_user: Any | None = None) -> ExpenseResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        expense = await self.expense_repo.get_by_id(expense_id, hospital_id=hospital_id)
         if expense:
             resp = ExpenseResponse.model_validate(expense)
             resp.source = "expense"
@@ -316,6 +335,8 @@ class ExpenseService:
         from sqlalchemy import select
         
         stmt = select(Purchase).where(Purchase.id == expense_id).options(selectinload(Purchase.supplier))
+        if hospital_id is not None:
+            stmt = stmt.where(Purchase.hospital_id == hospital_id)
         res = await self.db.execute(stmt)
         p = res.scalar_one_or_none()
         if p:
@@ -387,13 +408,18 @@ class ExpenseService:
 
         raise NotFoundException(f"Expense with ID {expense_id} not found")
 
-    async def update_expense(self, expense_id: int, data: ExpenseUpdate, user_id: int) -> ExpenseResponse:
-        expense = await self.expense_repo.get_by_id(expense_id)
+    async def update_expense(self, expense_id: int, data: ExpenseUpdate, user_id: int, current_user: Any | None = None) -> ExpenseResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        expense = await self.expense_repo.get_by_id(expense_id, hospital_id=hospital_id)
         if not expense:
             # Check if it is a pharmacy purchase to raise a helpful message
             from app.models.pharmacy_model import Purchase
             from sqlalchemy import select
             stmt = select(Purchase).where(Purchase.id == expense_id)
+            if hospital_id is not None:
+                stmt = stmt.where(Purchase.hospital_id == hospital_id)
             res = await self.db.execute(stmt)
             p = res.scalar_one_or_none()
             if p:
@@ -401,7 +427,7 @@ class ExpenseService:
             raise NotFoundException(f"Expense with ID {expense_id} not found")
 
         if data.category_id is not None:
-            category = await self.category_repo.get_by_id(data.category_id)
+            category = await self.category_repo.get_by_id(data.category_id, hospital_id=hospital_id)
             if not category:
                 raise NotFoundException(f"Expense category with ID {data.category_id} not found")
 
@@ -417,7 +443,7 @@ class ExpenseService:
         if "status" not in data.model_fields_set:
             await self._update_expense_status(expense.id)
         # Re-fetch with loaded relationships
-        expense = await self.expense_repo.get_by_id(expense.id)
+        expense = await self.expense_repo.get_by_id(expense.id, hospital_id=hospital_id)
         await self.audit_repo.create("update", "expense", user_id=user_id, resource_id=str(expense.id))
 
         # Sync transaction history
@@ -439,6 +465,7 @@ class ExpenseService:
             tx_history.description = f"Expense Recorded: {expense.description or ''}"
             tx_history.event_date = event_datetime
             tx_history.status = expense.status
+            tx_history.hospital_id = hospital_id
             from app.repositories.transaction_history_repository import TransactionHistoryRepository
             await TransactionHistoryRepository(self.db).update(tx_history)
         else:
@@ -452,15 +479,19 @@ class ExpenseService:
                 source_id=expense.id,
                 status=expense.status,
                 event_date=event_datetime,
-                user_id=user_id
+                user_id=user_id,
+                hospital_id=hospital_id,
             )
 
         resp = ExpenseResponse.model_validate(expense)
         resp.source = "expense"
         return resp
 
-    async def delete_expense(self, expense_id: int, user_id: int) -> None:
-        expense = await self.expense_repo.get_by_id(expense_id)
+    async def delete_expense(self, expense_id: int, user_id: int, current_user: Any | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        expense = await self.expense_repo.get_by_id(expense_id, hospital_id=hospital_id)
         if expense:
             await self.expense_repo.soft_delete(expense)
             await self.audit_repo.create("delete", "expense", user_id=user_id, resource_id=str(expense.id))
@@ -470,6 +501,8 @@ class ExpenseService:
         from app.models.pharmacy_model import Purchase
         from sqlalchemy import select
         stmt = select(Purchase).where(Purchase.id == expense_id)
+        if hospital_id is not None:
+            stmt = stmt.where(Purchase.hospital_id == hospital_id)
         res = await self.db.execute(stmt)
         p = res.scalar_one_or_none()
         if p:
@@ -481,8 +514,11 @@ class ExpenseService:
 
         raise NotFoundException(f"Expense with ID {expense_id} not found")
 
-    async def get_expense_summary(self, start_date: date | None = None, end_date: date | None = None) -> ExpenseSummaryResponse:
-        summary = await self.expense_repo.get_summary(start_date, end_date)
+    async def get_expense_summary(self, start_date: date | None = None, end_date: date | None = None, current_user: Any | None = None) -> ExpenseSummaryResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        summary = await self.expense_repo.get_summary(start_date, end_date, hospital_id=hospital_id)
 
         # Now query and aggregate pharmacy purchases (expenses)
         from app.models.pharmacy_model import Purchase, Supplier
@@ -491,6 +527,8 @@ class ExpenseService:
         from datetime import datetime
 
         purchase_filter = []
+        if hospital_id is not None:
+            purchase_filter.append(Purchase.hospital_id == hospital_id)
         if start_date is not None:
             start_dt = datetime.combine(start_date, datetime.min.time())
             purchase_filter.append(Purchase.ordered_at >= start_dt)
@@ -653,19 +691,22 @@ class ExpenseService:
         return ExpenseSummaryResponse.model_validate(summary)
 
     # --- Vendor Payment Services ---
-    async def create_payment(self, data: VendorPaymentCreate, user_id: int) -> VendorPaymentResponse:
+    async def create_payment(self, data: VendorPaymentCreate, user_id: int, current_user: Any | None = None) -> VendorPaymentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         # Validate vendor
         vendor = await self.vendor_repo.get_by_id(data.vendor_id)
         if not vendor:
             raise NotFoundException(f"Vendor with ID {data.vendor_id} not found")
 
         # Validate expense
-        expense = await self.expense_repo.get_by_id(data.expense_id)
+        expense = await self.expense_repo.get_by_id(data.expense_id, hospital_id=hospital_id)
         if not expense:
             raise NotFoundException(f"Expense with ID {data.expense_id} not found")
 
         # Fetch all existing active/non-deleted vendor payments for the selected expense
-        existing_payments = await self.payment_repo.get_payments_by_expense(expense.id)
+        existing_payments = await self.payment_repo.get_payments_by_expense(expense.id, hospital_id=hospital_id)
 
         exp_status = str(expense.status).strip().lower() if expense.status else ""
         if existing_payments or exp_status == "paid":
@@ -686,22 +727,31 @@ class ExpenseService:
         await self.audit_repo.create("create", "vendor_payment", user_id=user_id, resource_id=str(payment.id))
         return VendorPaymentResponse.model_validate(payment)
 
-    async def list_payments(self, page: int = 1, size: int = 20, vendor_id: int | None = None, expense_id: int | None = None):
+    async def list_payments(self, page: int = 1, size: int = 20, vendor_id: int | None = None, expense_id: int | None = None, current_user: Any | None = None):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         skip = (page - 1) * size
-        payments = await self.payment_repo.list_all(skip=skip, limit=size, vendor_id=vendor_id, expense_id=expense_id)
-        total = await self.payment_repo.count_all(vendor_id=vendor_id, expense_id=expense_id)
+        payments = await self.payment_repo.list_all(skip=skip, limit=size, vendor_id=vendor_id, expense_id=expense_id, hospital_id=hospital_id)
+        total = await self.payment_repo.count_all(vendor_id=vendor_id, expense_id=expense_id, hospital_id=hospital_id)
         return build_paginated_result(
             [VendorPaymentResponse.model_validate(p) for p in payments], total, page, size
         )
 
-    async def get_payment(self, payment_id: int) -> VendorPaymentResponse:
-        payment = await self.payment_repo.get_by_id(payment_id)
+    async def get_payment(self, payment_id: int, current_user: Any | None = None) -> VendorPaymentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        payment = await self.payment_repo.get_by_id(payment_id, hospital_id=hospital_id)
         if not payment:
             raise NotFoundException(f"Vendor payment with ID {payment_id} not found")
         return VendorPaymentResponse.model_validate(payment)
 
-    async def update_payment(self, payment_id: int, data: VendorPaymentUpdate, user_id: int) -> VendorPaymentResponse:
-        payment = await self.payment_repo.get_by_id(payment_id)
+    async def update_payment(self, payment_id: int, data: VendorPaymentUpdate, user_id: int, current_user: Any | None = None) -> VendorPaymentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        payment = await self.payment_repo.get_by_id(payment_id, hospital_id=hospital_id)
         if not payment:
             raise NotFoundException(f"Vendor payment with ID {payment_id} not found")
 
@@ -713,14 +763,14 @@ class ExpenseService:
                 raise NotFoundException(f"Vendor with ID {data.vendor_id} not found")
 
         target_expense_id = data.expense_id if data.expense_id is not None else payment.expense_id
-        target_expense = await self.expense_repo.get_by_id(target_expense_id)
+        target_expense = await self.expense_repo.get_by_id(target_expense_id, hospital_id=hospital_id)
         if not target_expense:
             raise NotFoundException(f"Expense with ID {target_expense_id} not found")
 
         target_amount = data.amount if data.amount is not None else payment.amount
 
         # Fetch existing payments for target expense
-        existing_payments = await self.payment_repo.get_payments_by_expense(target_expense_id)
+        existing_payments = await self.payment_repo.get_payments_by_expense(target_expense_id, hospital_id=hospital_id)
 
         # Exclude the current payment being updated from the total of other payments
         other_payments_total = sum(
@@ -746,8 +796,11 @@ class ExpenseService:
         await self.audit_repo.create("update", "vendor_payment", user_id=user_id, resource_id=str(payment.id))
         return VendorPaymentResponse.model_validate(payment)
 
-    async def delete_payment(self, payment_id: int, user_id: int) -> None:
-        payment = await self.payment_repo.get_by_id(payment_id)
+    async def delete_payment(self, payment_id: int, user_id: int, current_user: Any | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        payment = await self.payment_repo.get_by_id(payment_id, hospital_id=hospital_id)
         if not payment:
             raise NotFoundException(f"Vendor payment with ID {payment_id} not found")
 
@@ -1000,7 +1053,10 @@ class ExpenseService:
             "errors": errors
         }
 
-    async def _get_all_combined_expenses(self) -> list[ExpenseResponse]:
+    async def _get_all_combined_expenses(self, current_user: Any | None = None) -> list[ExpenseResponse]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         from app.models.expense_model import ExpenseCategory
         from sqlalchemy import select, func, or_
         from sqlalchemy.orm import selectinload
@@ -1010,6 +1066,8 @@ class ExpenseService:
         cat_stmt = select(ExpenseCategory.id, ExpenseCategory.name).where(
             func.lower(ExpenseCategory.name) == "pharmacy"
         )
+        if hospital_id is not None:
+            cat_stmt = cat_stmt.where(ExpenseCategory.hospital_id == hospital_id)
         cat_res = await self.db.execute(cat_stmt)
         cat_row = cat_res.first()
         if cat_row:
@@ -1024,7 +1082,8 @@ class ExpenseService:
             skip=0,
             limit=1000000,
             sort_by="created_at",
-            sort_order="desc"
+            sort_order="desc",
+            hospital_id=hospital_id,
         )
 
         # Fetch all pharmacy purchases
@@ -1032,6 +1091,8 @@ class ExpenseService:
         purchase_stmt = select(Purchase).options(
             selectinload(Purchase.supplier)
         ).where(Purchase.is_deleted == False)
+        if hospital_id is not None:
+            purchase_stmt = purchase_stmt.where(Purchase.hospital_id == hospital_id)
         purch_res = await self.db.execute(purchase_stmt)
         purchases_list = list(purch_res.scalars().unique().all())
 
@@ -1099,10 +1160,10 @@ class ExpenseService:
         all_items.sort(key=get_date_sort, reverse=True)
         return all_items
 
-    async def export_expenses(self, format_type: str) -> tuple[BytesIO | bytes, str]:
+    async def export_expenses(self, format_type: str, current_user: Any | None = None) -> tuple[BytesIO | bytes, str]:
         from datetime import date, datetime
         
-        expenses = await self._get_all_combined_expenses()
+        expenses = await self._get_all_combined_expenses(current_user=current_user)
         
         if format_type == "excel":
             import openpyxl

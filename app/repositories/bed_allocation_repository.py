@@ -179,40 +179,68 @@ class BedAllocationRepository:
         await self.db.flush()
         return log
 
-    async def list_activity_logs(self, limit: int = 50) -> List[BedActivityLog]:
-        query = select(BedActivityLog).order_by(BedActivityLog.timestamp.desc()).limit(limit)
+    async def list_activity_logs(self, limit: int = 50, hospital_id: Optional[int] = None) -> List[BedActivityLog]:
+        query = select(BedActivityLog)
+        if hospital_id is not None:
+            query = query.where(BedActivityLog.hospital_id == hospital_id)
+        query = query.order_by(BedActivityLog.timestamp.desc()).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
     # Analytics Helpers
-    async def count_floors(self) -> int:
-        return await self.db.scalar(select(func.count(Floor.id))) or 0
+    async def count_floors(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Floor.id))
+        if hospital_id is not None:
+            q = q.where(Floor.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
-    async def count_rooms(self) -> int:
-        return await self.db.scalar(select(func.count(Room.id))) or 0
+    async def count_rooms(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Room.id))
+        if hospital_id is not None:
+            q = q.where(Room.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
-    async def count_beds(self) -> int:
-        return await self.db.scalar(select(func.count(Bed.id))) or 0
+    async def count_beds(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Bed.id))
+        if hospital_id is not None:
+            q = q.where(Bed.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
-    async def count_occupied_beds(self) -> int:
-        return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status == "Occupied")) or 0
+    async def count_occupied_beds(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Bed.id)).where(Bed.status == "Occupied")
+        if hospital_id is not None:
+            q = q.where(Bed.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
-    async def count_available_beds(self) -> int:
-        return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status == "Available")) or 0
+    async def count_available_beds(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Bed.id)).where(Bed.status == "Available")
+        if hospital_id is not None:
+            q = q.where(Bed.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
-    async def count_reserved_beds(self) -> int:
-        return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status == "Reserved")) or 0
+    async def count_reserved_beds(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Bed.id)).where(Bed.status == "Reserved")
+        if hospital_id is not None:
+            q = q.where(Bed.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
-    async def count_maint_clean_beds(self) -> int:
-        return await self.db.scalar(select(func.count(Bed.id)).where(Bed.status.in_(["Cleaning", "Maintenance"]))) or 0
+    async def count_maint_clean_beds(self, hospital_id: Optional[int] = None) -> int:
+        q = select(func.count(Bed.id)).where(Bed.status.in_(["Cleaning", "Maintenance"]))
+        if hospital_id is not None:
+            q = q.where(Bed.hospital_id == hospital_id)
+        return await self.db.scalar(q) or 0
 
 
-    async def get_icu_bed_stats(self):
-        total = await self.db.scalar(select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu")) or 0
-        occupied = await self.db.scalar(
-            select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu", Bed.status == "Occupied")
-        ) or 0
-        available = await self.db.scalar(
-            select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu", Bed.status == "Available")
-        ) or 0
+    async def get_icu_bed_stats(self, hospital_id: Optional[int] = None):
+        q_tot = select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu")
+        q_occ = select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu", Bed.status == "Occupied")
+        q_avail = select(func.count(Bed.id)).where(func.lower(Bed.type) == "icu", Bed.status == "Available")
+        if hospital_id is not None:
+            q_tot = q_tot.where(Bed.hospital_id == hospital_id)
+            q_occ = q_occ.where(Bed.hospital_id == hospital_id)
+            q_avail = q_avail.where(Bed.hospital_id == hospital_id)
+
+        total = await self.db.scalar(q_tot) or 0
+        occupied = await self.db.scalar(q_occ) or 0
+        available = await self.db.scalar(q_avail) or 0
         return total, occupied, available

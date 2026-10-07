@@ -150,6 +150,7 @@ async def get_pharmacy_dashboard(
         time_filter=resolved_filter,
         start_date=resolved_start,
         end_date=resolved_end,
+        current_user=current_user,
     )
     return APIResponse(message="Pharmacy dashboard summary retrieved", data=dashboard_data)
 
@@ -164,7 +165,7 @@ async def create_medicine(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    medicine = await PharmacyService(db).create_medicine(data, current_user.id)
+    medicine = await PharmacyService(db).create_medicine(data, current_user.id, current_user=current_user)
     return APIResponse(message="Medicine created", data=medicine)
 
 
@@ -195,7 +196,7 @@ async def upload_medicines_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
 
-    result = await PharmacyService(db).import_medicines_from_excel(file, current_user.id)
+    result = await PharmacyService(db).import_medicines_from_excel(file, current_user.id, current_user=current_user)
     return APIResponse(message="Medicine bulk upload processed", data=result)
 
 
@@ -206,7 +207,7 @@ async def export_medicines_list(
     format: MedicineExportFormat = Query(MedicineExportFormat.EXCEL),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    data, media_type = await PharmacyService(db).export_medicines(format.value)
+    data, media_type = await PharmacyService(db).export_medicines(format.value, current_user=current_user)
 
     if format == MedicineExportFormat.EXCEL:
         return StreamingResponse(
@@ -287,7 +288,7 @@ async def create_prescription(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    prescription = await PharmacyService(db).create_prescription(data, current_user.id)
+    prescription = await PharmacyService(db).create_prescription(data, current_user.id, current_user=current_user)
     return APIResponse(message="Prescription created", data=prescription)
 
 
@@ -343,10 +344,9 @@ async def list_prescriptions(
         appointment_id=appointment_id,
         department_id=department_id,
         assigned_patient_ids=assigned_patient_ids,
+        current_user=current_user,
     )
     return APIResponse(message="Prescriptions retrieved", data=result)
-
-
 
 
 @router.get("/prescriptions/{prescription_id}")
@@ -360,7 +360,8 @@ async def get_prescription(
     doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
     prescription = await PharmacyService(db).get_prescription(
         prescription_id,
-        doctor_id=doctor.id if doctor else None
+        doctor_id=doctor.id if doctor else None,
+        current_user=current_user,
     )
     return APIResponse(message="Prescription retrieved", data=prescription)
 
@@ -394,6 +395,7 @@ async def download_prescription(
         prescription_id=prescription_id,
         doctor_id=doctor.id if doctor else None,
         user_id=current_user.id,
+        current_user=current_user,
     )
 
 
@@ -432,7 +434,8 @@ async def update_prescription_status(
     prescription = await PharmacyService(db).update_prescription_status(
         prescription_id=prescription_id,
         data=data,
-        user_id=current_user.id
+        user_id=current_user.id,
+        current_user=current_user,
     )
     return APIResponse(message="Prescription status updated", data=prescription)
 
@@ -450,6 +453,7 @@ async def dispense_prescription(
         prescription_id=prescription_id,
         user_id=current_user.id,
         data=data,
+        current_user=current_user,
     )
     return APIResponse(message="Prescription dispensed and invoice generated successfully", data=result)
 
@@ -470,7 +474,8 @@ async def delete_prescription(
     await PharmacyService(db).delete_prescription(
         prescription_id=prescription_id,
         doctor_id=doctor.id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        current_user=current_user,
     )
     return APIResponse(message="Prescription deleted", data=MessageResponse(message="Deleted successfully"))
 
@@ -483,7 +488,7 @@ async def create_pharmacy_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    invoice = await PharmacyService(db).create_invoice(data, current_user.id)
+    invoice = await PharmacyService(db).create_invoice(data, current_user.id, current_user=current_user)
     return APIResponse(message="Pharmacy invoice created", data=invoice)
 
 
@@ -504,6 +509,7 @@ async def list_pharmacy_invoices(
         status=status,
         patient_name=patient_name,
         invoice_date=invoice_date,
+        current_user=current_user,
     )
     return APIResponse(message="Pharmacy invoices retrieved", data=result)
 
@@ -515,7 +521,7 @@ async def get_pharmacy_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    invoice = await PharmacyService(db).get_invoice_by_id(invoice_id)
+    invoice = await PharmacyService(db).get_invoice_by_id(invoice_id, current_user=current_user)
     return APIResponse(message="Pharmacy invoice retrieved", data=invoice)
 
 
@@ -527,7 +533,7 @@ async def update_pharmacy_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
-    invoice = await PharmacyService(db).update_invoice(invoice_id, data)
+    invoice = await PharmacyService(db).update_invoice(invoice_id, data, current_user=current_user)
     return APIResponse(message="Pharmacy invoice updated", data=invoice)
 
 
@@ -543,6 +549,7 @@ async def return_pharmacy_invoice_items(
         invoice_id=invoice_id,
         data=data,
         user_id=current_user.id,
+        current_user=current_user,
     )
     return APIResponse(message="Medicine return processed and inventory restocked successfully", data=return_obj)
 
@@ -555,7 +562,7 @@ async def list_pharmacy_returns(
     size: int = 20,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    result = await PharmacyService(db).list_returns(page=page, size=size)
+    result = await PharmacyService(db).list_returns(page=page, size=size, current_user=current_user)
     return APIResponse(message="Pharmacy returns retrieved", data=result)
 
 
@@ -566,7 +573,7 @@ async def get_pharmacy_return(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    return_obj = await PharmacyService(db).get_return_by_id(return_id)
+    return_obj = await PharmacyService(db).get_return_by_id(return_id, current_user=current_user)
     return APIResponse(message="Pharmacy return retrieved", data=return_obj)
 
 
@@ -577,7 +584,7 @@ async def download_pharmacy_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    return await PharmacyService(db).download_invoice(invoice_id)
+    return await PharmacyService(db).download_invoice(invoice_id, current_user=current_user)
 
 
 @router.delete("/invoices/{invoice_id}", response_model=APIResponse[MessageResponse])
@@ -587,7 +594,7 @@ async def delete_pharmacy_invoice(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_invoice(invoice_id)
+    await PharmacyService(db).delete_invoice(invoice_id, current_user=current_user)
     return APIResponse(message="Pharmacy invoice deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -624,7 +631,7 @@ async def upload_suppliers_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await PharmacyService(db).import_suppliers_from_excel(file, current_user.id)
+    result = await PharmacyService(db).import_suppliers_from_excel(file, current_user.id, current_user=current_user)
     return APIResponse(message="Suppliers bulk upload processed", data=result)
 
 
@@ -635,7 +642,7 @@ async def export_suppliers(
     format: SupplierExportFormat = Query(SupplierExportFormat.EXCEL),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    data, media_type = await PharmacyService(db).export_suppliers(format.value)
+    data, media_type = await PharmacyService(db).export_suppliers(format.value, current_user=current_user)
     
     if format == SupplierExportFormat.EXCEL:
         return StreamingResponse(
@@ -658,7 +665,7 @@ async def create_supplier(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    supplier = await PharmacyService(db).create_supplier(data, current_user.id)
+    supplier = await PharmacyService(db).create_supplier(data, current_user.id, current_user=current_user)
     return APIResponse(message="Supplier created", data=supplier)
 
 
@@ -670,7 +677,7 @@ async def list_suppliers(
     size: int = 20,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    result = await PharmacyService(db).list_suppliers(page=page, size=size)
+    result = await PharmacyService(db).list_suppliers(page=page, size=size, current_user=current_user)
     return APIResponse(message="Suppliers retrieved", data=result)
 
 @router.get("/suppliers/{supplier_id}", response_model=APIResponse[SupplierResponse])
@@ -680,7 +687,7 @@ async def get_supplier(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    supplier = await PharmacyService(db).get_supplier(supplier_id)
+    supplier = await PharmacyService(db).get_supplier(supplier_id, current_user=current_user)
     return APIResponse(message="Supplier retrieved", data=supplier)
 
 @router.put("/suppliers/{supplier_id}", response_model=APIResponse[SupplierResponse])
@@ -691,7 +698,7 @@ async def update_supplier(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
-    supplier = await PharmacyService(db).update_supplier(supplier_id, data, current_user.id)
+    supplier = await PharmacyService(db).update_supplier(supplier_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Supplier updated", data=supplier)
 
 
@@ -702,7 +709,7 @@ async def delete_supplier(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_supplier(supplier_id, current_user.id)
+    await PharmacyService(db).delete_supplier(supplier_id, current_user.id, current_user=current_user)
     return APIResponse(message="Supplier deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -714,7 +721,7 @@ async def create_purchase(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    purchase = await PharmacyService(db).create_purchase(data, current_user.id)
+    purchase = await PharmacyService(db).create_purchase(data, current_user.id, current_user=current_user)
     return APIResponse(message="Purchase created", data=purchase)
 
 
@@ -726,7 +733,7 @@ async def list_purchases(
     size: int = 20,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    result = await PharmacyService(db).list_purchases(page=page, size=size)
+    result = await PharmacyService(db).list_purchases(page=page, size=size, current_user=current_user)
     return APIResponse(message="Purchases retrieved", data=result)
 
 @router.get("/purchases/{purchase_id}", response_model=APIResponse[PurchaseResponse])
@@ -736,7 +743,7 @@ async def get_purchase(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    purchase = await PharmacyService(db).get_purchase(purchase_id)
+    purchase = await PharmacyService(db).get_purchase(purchase_id, current_user=current_user)
     return APIResponse(message="Purchase retrieved", data=purchase)
 
 
@@ -749,7 +756,7 @@ async def update_purchase(
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     purchase = await PharmacyService(db).update_purchase(
-        purchase_id, data, current_user.id
+        purchase_id, data, current_user.id, current_user=current_user
     )
     return APIResponse(message="Purchase updated", data=purchase)
 
@@ -762,7 +769,7 @@ async def delete_purchase(
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
     await PharmacyService(db).delete_purchase(
-        purchase_id, current_user.id
+        purchase_id, current_user.id, current_user=current_user
     )
     return APIResponse(
         message="Purchase deleted",
@@ -793,7 +800,7 @@ async def low_stock_alerts(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    alerts = await PharmacyService(db).get_low_stock()
+    alerts = await PharmacyService(db).get_low_stock(current_user=current_user)
     return APIResponse(message="Low stock alerts", data=alerts)
 
 
@@ -813,7 +820,7 @@ async def expiry_alerts(
     ),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    alerts = await PharmacyService(db).get_expiry_alerts(days=days)
+    alerts = await PharmacyService(db).get_expiry_alerts(days=days, current_user=current_user)
     return APIResponse(message="Expiry alerts", data=alerts)
 
 
@@ -824,7 +831,7 @@ async def sales_report(
     period: str = "all",
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    report = await PharmacyService(db).get_sales_report(period=period)
+    report = await PharmacyService(db).get_sales_report(period=period, current_user=current_user)
     return APIResponse(message="Sales report", data=report)
 
 
@@ -835,5 +842,5 @@ async def get_inventory_overview(
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    overview = await PharmacyService(db).get_inventory_overview()
+    overview = await PharmacyService(db).get_inventory_overview(current_user=current_user)
     return APIResponse(message="Pharmacy inventory overview retrieved", data=overview)

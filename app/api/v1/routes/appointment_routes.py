@@ -60,7 +60,8 @@ async def search_scheduled_doctor(
         appointment_date=appointment_date,
         appointment_time=appointment_time,
         department_id=department_id,
-        specialization=specialization
+        specialization=specialization,
+        current_user=current_user,
     )
     return APIResponse(message="Scheduled doctors retrieved successfully", data=results)
 
@@ -110,7 +111,7 @@ async def calendar_view(
     doctor_id: int | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    appointments = await AppointmentService(db).get_calendar(start_date, end_date, doctor_id)
+    appointments = await AppointmentService(db).get_calendar(start_date, end_date, doctor_id, current_user=current_user)
     return APIResponse(message="Calendar data", data=appointments)
 
 
@@ -120,7 +121,7 @@ async def today_appointments(
     current_user: CurrentUser,
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    appointments = await AppointmentService(db).get_today()
+    appointments = await AppointmentService(db).get_today(current_user=current_user)
     return APIResponse(message="Today's appointments", data=appointments)
 
 
@@ -131,7 +132,7 @@ async def upcoming_appointments(
     limit: int = 20,
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    appointments = await AppointmentService(db).get_upcoming(limit)
+    appointments = await AppointmentService(db).get_upcoming(limit, current_user=current_user)
     return APIResponse(message="Upcoming appointments", data=appointments)
 
 
@@ -170,6 +171,7 @@ async def confirmed_visits(
         doctor_id=doctor_id,
         department_id=department_id,
         appointment_date=appointment_date,
+        current_user=current_user,
     )
     return APIResponse(message="Confirmed visits retrieved", data=result)
 
@@ -213,7 +215,7 @@ async def check_in_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).check_in(appointment_id, current_user.id)
+    appointment = await AppointmentService(db).check_in(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Patient checked in successfully",
         data=AppointmentCheckInResponse(
@@ -232,7 +234,7 @@ async def check_out_appointment(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).check_out(appointment_id, current_user.id)
+    appointment = await AppointmentService(db).check_out(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Patient checked out successfully",
         data=AppointmentCheckOutResponse(
@@ -251,7 +253,7 @@ async def generate_queue_token(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).generate_queue_token(appointment_id, current_user.id)
+    appointment = await AppointmentService(db).generate_queue_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Queue token generated successfully",
         data=QueueTokenResponse(
@@ -268,7 +270,7 @@ async def get_today_queue(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointments = await AppointmentService(db).get_today_queue()
+    appointments = await AppointmentService(db).get_today_queue(current_user=current_user)
     return APIResponse(
         message="Today's queue retrieved successfully",
         data=[AppointmentResponse.model_validate(a) for a in appointments]
@@ -281,7 +283,7 @@ async def get_current_queue(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).get_current_queue()
+    appointment = await AppointmentService(db).get_current_queue(current_user=current_user)
     return APIResponse(
         message="Current queue item retrieved successfully",
         data=AppointmentResponse.model_validate(appointment) if appointment else None
@@ -295,7 +297,7 @@ async def call_next_token(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).call_next_token(appointment_id, current_user.id)
+    appointment = await AppointmentService(db).call_next_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Next token called successfully",
         data=QueueStatusResponse(
@@ -313,7 +315,7 @@ async def complete_token(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).complete_token(appointment_id, current_user.id)
+    appointment = await AppointmentService(db).complete_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Token completed successfully",
         data=QueueStatusResponse(
@@ -331,7 +333,7 @@ async def skip_token(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
 ):
-    appointment = await AppointmentService(db).skip_token(appointment_id, current_user.id)
+    appointment = await AppointmentService(db).skip_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Token skipped successfully",
         data=QueueStatusResponse(
@@ -348,7 +350,7 @@ async def get_pending_admissions(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.DOCTOR)),
 ):
-    result = await AppointmentService(db).get_pending_admissions()
+    result = await AppointmentService(db).get_pending_admissions(current_user=current_user)
     return APIResponse(message="Pending admissions retrieved successfully", data=result)
 
 
@@ -360,7 +362,7 @@ async def recommend_admission(
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST)),
 ):
-    result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id)
+    result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Admission recommended successfully", data=result)
 
 
@@ -375,7 +377,7 @@ async def update_appointment_triage(
     """
     Nurse or Doctor records/updates ESI Triage Level (1-5) and triage assessment notes.
     """
-    result = await AppointmentService(db).update_triage(appointment_id, data, current_user.id)
+    result = await AppointmentService(db).update_triage(appointment_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Triage level updated successfully", data=result)
 
 
@@ -390,7 +392,7 @@ async def update_appointment_disposition(
     """
     Doctor sets final clinical disposition (ADMIT / REFER / DISCHARGE / OBSERVED) with referral details.
     """
-    result = await AppointmentService(db).update_disposition(appointment_id, data, current_user.id)
+    result = await AppointmentService(db).update_disposition(appointment_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Disposition updated successfully", data=result)
 
 
@@ -424,7 +426,7 @@ async def download_appointment(
     _: User = Depends(require_permission("appointments", "read")),
 ):
     from fastapi import Response
-    pdf_bytes = await AppointmentService(db).download_appointment_pdf(appointment_id)
+    pdf_bytes = await AppointmentService(db).download_appointment_pdf(appointment_id, current_user=current_user)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

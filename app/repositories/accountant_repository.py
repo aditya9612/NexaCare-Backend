@@ -13,13 +13,17 @@ class AccountantRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_dashboard_stats(self) -> Dict[str, Any]:
+    async def get_dashboard_stats(self, hospital_id: int | None = None) -> Dict[str, Any]:
         now = datetime.now()
         current_month = now.month
         current_year = now.year
         today = now.date()
 
         # 1. OPD Billings Counts & Amounts
+        b_filter = [Billing.is_deleted.is_(False)]
+        if hospital_id is not None:
+            b_filter.append(Billing.hospital_id == hospital_id)
+
         b_stats_res = await self.db.execute(
             select(
                 func.count(),
@@ -28,11 +32,15 @@ class AccountantRepository:
                 func.coalesce(func.sum(case((Billing.status == "overdue", 1), else_=0)), 0),
                 func.coalesce(func.sum(Billing.total_amount), 0),
                 func.coalesce(func.sum(Billing.balance_amount), 0)
-            ).where(Billing.is_deleted.is_(False))
+            ).where(*b_filter)
         )
         b_total, b_paid, b_pending, b_overdue, b_billed, b_pending_amount = b_stats_res.one()
 
         # 2. IPD Final Bills Counts & Amounts
+        ipd_filter = [IPDFinalBill.is_deleted.is_(False)]
+        if hospital_id is not None:
+            ipd_filter.append(IPDFinalBill.hospital_id == hospital_id)
+
         ipd_stats_res = await self.db.execute(
             select(
                 func.count(),
@@ -43,7 +51,7 @@ class AccountantRepository:
                     func.sum(case((IPDFinalBill.status == "paid", 0.0), else_=IPDFinalBill.balance_amount)),
                     0.0
                 )
-            ).where(IPDFinalBill.is_deleted.is_(False))
+            ).where(*ipd_filter)
         )
         ipd_total, ipd_paid, ipd_pending, ipd_billed, ipd_pending_amount = ipd_stats_res.one()
 
@@ -56,11 +64,11 @@ class AccountantRepository:
         pending_amount = b_pending_amount + ipd_pending_amount
 
         # 4. OPD Payments (Revenue, Refunds, Collections)
-        p_stats_res = await self.db.execute(
+        p_query = (
             select(
                 func.coalesce(func.sum(case((Payment.is_refund.is_(False), Payment.amount), else_=0)), 0),
                 func.coalesce(func.sum(case((Payment.is_refund.is_(True), Payment.amount), else_=0)), 0),
-                func.count(),
+                func.count(Payment.id),
                 func.coalesce(func.sum(case((
                     and_(Payment.is_refund.is_(False), func.month(Payment.payment_date) == current_month, func.year(Payment.payment_date) == current_year),
                     Payment.amount
@@ -74,14 +82,20 @@ class AccountantRepository:
                     Payment.amount
                 ), else_=0)), 0)
             )
+            .join(Billing, Payment.billing_id == Billing.id)
+            .where(Billing.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            p_query = p_query.where(Billing.hospital_id == hospital_id)
+
+        p_stats_res = await self.db.execute(p_query)
         b_revenue, b_refunds, b_payments_count, b_monthly_revenue, b_yearly_revenue, b_today_collection = p_stats_res.one()
 
         # 5. IPD Revenue & Refunds
         ipd_dt = func.coalesce(IPDFinalBill.settled_at, IPDFinalBill.updated_at, IPDFinalBill.created_at)
         ipd_amount_expr = case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)
         
-        ipd_rev_res = await self.db.execute(
+        ipd_rev_query = (
             select(
                 func.coalesce(func.sum(ipd_amount_expr), 0.0),
                 func.coalesce(func.sum(IPDFinalBill.refund_amount), 0.0),
@@ -98,8 +112,13 @@ class AccountantRepository:
                     and_(func.date(ipd_dt) == today, or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0)),
                     ipd_amount_expr
                 ), else_=0.0)), 0.0)
-            ).where(IPDFinalBill.is_deleted.is_(False))
+            )
+            .where(IPDFinalBill.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            ipd_rev_query = ipd_rev_query.where(IPDFinalBill.hospital_id == hospital_id)
+
+        ipd_rev_res = await self.db.execute(ipd_rev_query)
         ipd_revenue, ipd_refunds, ipd_payments_count, ipd_monthly_revenue, ipd_yearly_revenue, ipd_today_collection = ipd_rev_res.one()
 
         total_revenue = b_revenue + ipd_revenue
@@ -110,13 +129,19 @@ class AccountantRepository:
         today_collection = b_today_collection + ipd_today_collection
 
         # 6. Insurance Claims
-        ins_res = await self.db.execute(
+        ins_query = (
             select(
-                func.count(),
+                func.count(InsuranceClaim.id),
                 func.coalesce(func.sum(case((InsuranceClaim.status.in_(["submitted", "pending"]), 1), else_=0)), 0),
                 func.coalesce(func.sum(case((InsuranceClaim.status == "approved", 1), else_=0)), 0)
             )
+            .join(Billing, InsuranceClaim.billing_id == Billing.id)
+            .where(Billing.is_deleted.is_(False))
         )
+        if hospital_id is not None:
+            ins_query = ins_query.where(Billing.hospital_id == hospital_id)
+
+        ins_res = await self.db.execute(ins_query)
         insurance_claims, pending_claims, approved_claims = ins_res.one()
 
         return {
@@ -137,7 +162,7 @@ class AccountantRepository:
             "approved_claims": approved_claims,
         }
 
-    async def get_monthly_revenue_history(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    async def get_monthly_revenue_history(self, start_date: date, end_date: date, hospital_id: int | None = None) -> List[Dict[str, Any]]:
         # OPD Payments History
         b_query = (
             select(
@@ -145,13 +170,19 @@ class AccountantRepository:
                 func.month(Payment.payment_date).label("month"),
                 func.coalesce(func.sum(Payment.amount), 0.0).label("revenue"),
             )
+            .join(Billing, Payment.billing_id == Billing.id)
             .where(
+                Billing.is_deleted.is_(False),
                 Payment.payment_date >= start_date,
                 Payment.payment_date <= end_date,
                 Payment.is_refund.is_(False),
             )
-            .group_by(func.year(Payment.payment_date), func.month(Payment.payment_date))
-            .order_by(func.year(Payment.payment_date), func.month(Payment.payment_date))
+        )
+        if hospital_id is not None:
+            b_query = b_query.where(Billing.hospital_id == hospital_id)
+
+        b_query = b_query.group_by(func.year(Payment.payment_date), func.month(Payment.payment_date)).order_by(
+            func.year(Payment.payment_date), func.month(Payment.payment_date)
         )
         b_result = await self.db.execute(b_query)
 
@@ -172,8 +203,12 @@ class AccountantRepository:
                 ipd_dt <= end_date,
                 or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0),
             )
-            .group_by(func.year(ipd_dt), func.month(ipd_dt))
-            .order_by(func.year(ipd_dt), func.month(ipd_dt))
+        )
+        if hospital_id is not None:
+            ipd_query = ipd_query.where(IPDFinalBill.hospital_id == hospital_id)
+
+        ipd_query = ipd_query.group_by(func.year(ipd_dt), func.month(ipd_dt)).order_by(
+            func.year(ipd_dt), func.month(ipd_dt)
         )
         ipd_result = await self.db.execute(ipd_query)
 
@@ -192,7 +227,7 @@ class AccountantRepository:
             for k in sorted_keys
         ]
 
-    async def get_monthly_expense_history(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    async def get_monthly_expense_history(self, start_date: date, end_date: date, hospital_id: int | None = None) -> List[Dict[str, Any]]:
         query = (
             select(
                 func.year(Expense.expense_date).label("year"),
@@ -204,8 +239,12 @@ class AccountantRepository:
                 Expense.expense_date >= start_date,
                 Expense.expense_date <= end_date,
             )
-            .group_by(func.year(Expense.expense_date), func.month(Expense.expense_date))
-            .order_by(func.year(Expense.expense_date), func.month(Expense.expense_date))
+        )
+        if hospital_id is not None:
+            query = query.where(Expense.hospital_id == hospital_id)
+
+        query = query.group_by(func.year(Expense.expense_date), func.month(Expense.expense_date)).order_by(
+            func.year(Expense.expense_date), func.month(Expense.expense_date)
         )
         result = await self.db.execute(query)
         return [
@@ -213,17 +252,24 @@ class AccountantRepository:
             for row in result.all()
         ]
 
-    async def get_month_revenue(self, year: int, month: int) -> float:
-        b_val = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
+    async def get_month_revenue(self, year: int, month: int, hospital_id: int | None = None) -> float:
+        b_q = (
+            select(func.coalesce(func.sum(Payment.amount), 0.0))
+            .join(Billing, Payment.billing_id == Billing.id)
+            .where(
+                Billing.is_deleted.is_(False),
                 func.year(Payment.payment_date) == year,
                 func.month(Payment.payment_date) == month,
                 Payment.is_refund.is_(False),
             )
-        ) or 0.0
+        )
+        if hospital_id is not None:
+            b_q = b_q.where(Billing.hospital_id == hospital_id)
+
+        b_val = (await self.db.scalar(b_q)) or 0.0
 
         ipd_dt = func.coalesce(IPDFinalBill.settled_at, IPDFinalBill.updated_at, IPDFinalBill.created_at)
-        ipd_val = await self.db.scalar(
+        ipd_q = (
             select(
                 func.coalesce(
                     func.sum(case((IPDFinalBill.status == "paid", IPDFinalBill.net_total), else_=IPDFinalBill.advance_adjusted)),
@@ -235,6 +281,10 @@ class AccountantRepository:
                 func.month(ipd_dt) == month,
                 or_(IPDFinalBill.status == "paid", IPDFinalBill.advance_adjusted > 0),
             )
-        ) or 0.0
+        )
+        if hospital_id is not None:
+            ipd_q = ipd_q.where(IPDFinalBill.hospital_id == hospital_id)
 
-        return round(float(b_val + ipd_val), 2)
+        ipd_val = (await self.db.scalar(ipd_q)) or 0.0
+
+        return round(float(b_val + ipd_val), 2)

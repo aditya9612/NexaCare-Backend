@@ -134,14 +134,14 @@ class DoctorMedicalRecordService:
 
         return response_data
 
-    async def list_reports(self, page: int = 1, size: int = 20, user_id: int | None = None):
+    async def list_reports(self, page: int = 1, size: int = 20, user_id: int | None = None, hospital_id: int | None = None):
         logged_in_doctor_id = None
         if user_id is not None:
             logged_in_doctor_id = await self._get_doctor_id(user_id)
 
         skip = (page - 1) * size
-        items = await self.repo.list_records(skip=skip, limit=size, doctor_id=logged_in_doctor_id)
-        total = await self.repo.count_records(doctor_id=logged_in_doctor_id)
+        items = await self.repo.list_records(skip=skip, limit=size, doctor_id=logged_in_doctor_id, hospital_id=hospital_id)
+        total = await self.repo.count_records(doctor_id=logged_in_doctor_id, hospital_id=hospital_id)
 
         res_list = []
         for item in items:
@@ -158,8 +158,8 @@ class DoctorMedicalRecordService:
             size,
         )
 
-    async def get_report_by_id(self, record_id: int, user_id: int | None = None) -> MedicalRecordResponse:
-        record = await self.repo.get_record_by_id(record_id)
+    async def get_report_by_id(self, record_id: int, user_id: int | None = None, hospital_id: int | None = None) -> MedicalRecordResponse:
+        record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 
@@ -183,8 +183,9 @@ class DoctorMedicalRecordService:
         notes: str | None,
         file: UploadFile | None,
         user_id: int,
+        hospital_id: int | None = None,
     ) -> MedicalRecordResponse:
-        record = await self.repo.get_record_by_id(record_id)
+        record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 
@@ -241,8 +242,8 @@ class DoctorMedicalRecordService:
 
         return response_data
 
-    async def delete_report(self, record_id: int, user_id: int) -> None:
-        record = await self.repo.get_record_by_id(record_id)
+    async def delete_report(self, record_id: int, user_id: int, hospital_id: int | None = None) -> None:
+        record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 
@@ -253,8 +254,8 @@ class DoctorMedicalRecordService:
         await self.repo.delete_record(record)
         await self.audit_repo.create("delete", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
 
-    async def get_report_file(self, record_id: int, user_id: int | None = None):
-        record = await self.repo.get_record_by_id(record_id)
+    async def get_report_file(self, record_id: int, user_id: int | None = None, hospital_id: int | None = None):
+        record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
 
         if not record:
             raise NotFoundException("Medical record not found")

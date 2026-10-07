@@ -78,30 +78,40 @@ class DashboardService:
         self.db = db
         self.appointment_repo = AppointmentRepository(db)
 
-    async def admin_dashboard(self) -> AdminDashboardResponse:
-        total_patients = await self.db.scalar(
-            select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
-        ) or 0
-        total_doctors = await self.db.scalar(
-            select(func.count()).select_from(Doctor).where(Doctor.is_deleted.is_(False))
-        ) or 0
-        total_appointments = await self.db.scalar(select(func.count()).select_from(Appointment)) or 0
-        today = date.today()
-        today_appointments = await self.db.scalar(
-            select(func.count()).select_from(Appointment).where(Appointment.appointment_date == today)
-        ) or 0
+    async def admin_dashboard(self, current_user: User | None = None) -> AdminDashboardResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
 
-        revenue = await self.db.scalar(
-            select(func.coalesce(func.sum(Billing.paid_amount), 0.0)).where(Billing.is_deleted.is_(False))
-        ) or 0.0
+        patients_q = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
+        doctors_q = select(func.count()).select_from(Doctor).where(Doctor.is_deleted.is_(False))
+        appts_q = select(func.count()).select_from(Appointment)
+        today = get_today_ist()
+        today_appts_q = select(func.count()).select_from(Appointment).where(Appointment.appointment_date == today)
+        revenue_q = select(func.coalesce(func.sum(Billing.paid_amount), 0.0)).where(Billing.is_deleted.is_(False))
 
         dept_query = (
             select(Department.department_name, func.count(Appointment.id))
             .select_from(Department)
             .join(Doctor, Doctor.department_id == Department.department_id)
             .join(Appointment, Appointment.doctor_id == Doctor.id)
-            .group_by(Department.department_name)
         )
+
+        if hospital_id is not None:
+            patients_q = patients_q.where(Patient.hospital_id == hospital_id)
+            doctors_q = doctors_q.where(Doctor.hospital_id == hospital_id)
+            appts_q = appts_q.where(Appointment.hospital_id == hospital_id)
+            today_appts_q = today_appts_q.where(Appointment.hospital_id == hospital_id)
+            revenue_q = revenue_q.where(Billing.hospital_id == hospital_id)
+            dept_query = dept_query.where(Department.hospital_id == hospital_id)
+
+        dept_query = dept_query.group_by(Department.department_name)
+
+        total_patients = await self.db.scalar(patients_q) or 0
+        total_doctors = await self.db.scalar(doctors_q) or 0
+        total_appointments = await self.db.scalar(appts_q) or 0
+        today_appointments = await self.db.scalar(today_appts_q) or 0
+        revenue = await self.db.scalar(revenue_q) or 0.0
+
         dept_result = await self.db.execute(dept_query)
         department_statistics = [
             DepartmentStat(department=row[0] or "Unknown", count=row[1])
@@ -327,10 +337,14 @@ class DashboardService:
         date_filter: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        current_user: User | None = None,
     ) -> ReceptionDashboardResponse:
         from datetime import datetime, time
         from app.models.audit_log_model import AuditLog
         from app.core.constants import DoctorAvailability
+        from app.core.dependencies import resolve_tenant_id
+
+        hospital_id = resolve_tenant_id(current_user)
 
         resolved_start, resolved_end = resolve_reception_date_filter(
             date_filter=date_filter,
@@ -343,168 +357,182 @@ class DashboardService:
 
         # 1. total_registered_patients (overall active patients in system)
         try:
-            total_registered_patients = await self.db.scalar(
-                select(func.count(Patient.id)).where(
-                    Patient.is_deleted.is_(False)
-                )
-            ) or 0
+            q = select(func.count(Patient.id)).where(Patient.is_deleted.is_(False))
+            if hospital_id is not None:
+                q = q.where(Patient.hospital_id == hospital_id)
+            total_registered_patients = await self.db.scalar(q) or 0
         except Exception:
             total_registered_patients = 0
 
         # 2. today_scheduled_appointments (scheduled appointments in date range)
         try:
-            today_scheduled_appointments = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            today_scheduled_appointments = await self.db.scalar(q) or 0
         except Exception:
             today_scheduled_appointments = 0
 
         # 3. checked_in_patients
         try:
-            checked_in_patients = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in"])
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.appointment_status.in_(["Checked In", "Checked-In", "checked_in", "checked-in"])
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            checked_in_patients = await self.db.scalar(q) or 0
         except Exception:
             checked_in_patients = 0
 
         # 4. waiting_patients
         try:
-            waiting_patients = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.appointment_status.in_(["Waiting", "waiting", "Pending", "pending"])
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.appointment_status.in_(["Waiting", "waiting", "Pending", "pending"])
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            waiting_patients = await self.db.scalar(q) or 0
         except Exception:
             waiting_patients = 0
 
         # 5. completed_visits
         try:
-            completed_visits = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.appointment_status.in_([AppointmentStatus.COMPLETED, "Checked-Out"])
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.appointment_status.in_([AppointmentStatus.COMPLETED, "Checked-Out"])
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            completed_visits = await self.db.scalar(q) or 0
         except Exception:
             completed_visits = 0
 
         # 6. cancelled_appointments
         try:
-            cancelled_appointments = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.appointment_status == AppointmentStatus.CANCELLED
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.appointment_status == AppointmentStatus.CANCELLED
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            cancelled_appointments = await self.db.scalar(q) or 0
         except Exception:
             cancelled_appointments = 0
 
         # 7. available_doctors (real-time availability on duty)
         try:
-            available_doctors = await self.db.scalar(
-                select(func.count(Doctor.id)).where(
-                    Doctor.availability_status == DoctorAvailability.AVAILABLE,
-                    Doctor.is_deleted.is_(False)
-                )
-            ) or 0
+            q = select(func.count(Doctor.id)).where(
+                Doctor.availability_status == DoctorAvailability.AVAILABLE,
+                Doctor.is_deleted.is_(False)
+            )
+            if hospital_id is not None:
+                q = q.where(Doctor.hospital_id == hospital_id)
+            available_doctors = await self.db.scalar(q) or 0
         except Exception:
             available_doctors = 0
 
         # 8. walk_in_patients
         try:
-            walk_in_patients = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.appointment_type.in_(["walk-in", "walk_in", "walk in", "Walk-In", "Walk_In", "Walk In"])
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.appointment_type.in_(["walk-in", "walk_in", "walk in", "Walk-In", "Walk_In", "Walk In"])
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            walk_in_patients = await self.db.scalar(q) or 0
         except Exception:
             walk_in_patients = 0
 
         # 9. pending_billing
         try:
-            pending_billing = await self.db.scalar(
-                select(func.count(Billing.id)).where(
-                    Billing.is_deleted.is_(False),
-                    Billing.status == "pending",
-                    Billing.created_at >= start_of_day,
-                    Billing.created_at <= end_of_day
-                )
-            ) or 0
+            q = select(func.count(Billing.id)).where(
+                Billing.is_deleted.is_(False),
+                Billing.status == "pending",
+                Billing.created_at >= start_of_day,
+                Billing.created_at <= end_of_day
+            )
+            if hospital_id is not None:
+                q = q.where(Billing.hospital_id == hospital_id)
+            pending_billing = await self.db.scalar(q) or 0
         except Exception:
             pending_billing = 0
 
         # 10. rescheduled_appointments
         try:
-            rescheduled_appointments = await self.db.scalar(
-                select(func.count(func.distinct(AuditLog.resource_id))).where(
-                    AuditLog.action == "reschedule",
-                    AuditLog.resource == "appointments",
-                    AuditLog.created_at >= start_of_day,
-                    AuditLog.created_at <= end_of_day
-                )
-            ) or 0
+            q = select(func.count(func.distinct(AuditLog.resource_id))).where(
+                AuditLog.action == "reschedule",
+                AuditLog.resource == "appointments",
+                AuditLog.created_at >= start_of_day,
+                AuditLog.created_at <= end_of_day
+            )
+            if hospital_id is not None:
+                q = q.where(AuditLog.hospital_id == hospital_id)
+            rescheduled_appointments = await self.db.scalar(q) or 0
         except Exception:
             rescheduled_appointments = 0
 
         # Today's Queue stats
         try:
-            queue_waiting = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.queue_status == "WAITING"
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.queue_status == "WAITING"
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            queue_waiting = await self.db.scalar(q) or 0
         except Exception:
             queue_waiting = 0
 
         try:
-            queue_current_apt = await self.db.scalar(
+            q = (
                 select(Appointment.queue_token)
                 .where(
                     Appointment.appointment_date >= resolved_start,
                     Appointment.appointment_date <= resolved_end,
                     Appointment.queue_status.in_(["CALLED", "IN_PROGRESS"])
                 )
-                .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
-                .limit(1)
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            queue_current_apt = await self.db.scalar(
+                q.order_by(Appointment.updated_at.desc(), Appointment.id.desc()).limit(1)
             )
             queue_current = queue_current_apt or "None"
         except Exception:
             queue_current = "None"
 
         try:
-            queue_completed = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.queue_status == "COMPLETED"
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.queue_status == "COMPLETED"
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            queue_completed = await self.db.scalar(q) or 0
         except Exception:
             queue_completed = 0
 
         try:
-            queue_skipped = await self.db.scalar(
-                select(func.count(Appointment.id)).where(
-                    Appointment.appointment_date >= resolved_start,
-                    Appointment.appointment_date <= resolved_end,
-                    Appointment.queue_status == "SKIPPED"
-                )
-            ) or 0
+            q = select(func.count(Appointment.id)).where(
+                Appointment.appointment_date >= resolved_start,
+                Appointment.appointment_date <= resolved_end,
+                Appointment.queue_status == "SKIPPED"
+            )
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            queue_skipped = await self.db.scalar(q) or 0
         except Exception:
             queue_skipped = 0
 

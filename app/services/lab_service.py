@@ -653,14 +653,16 @@ class LabService:
 
     # --- Samples ---
     async def collect_sample(self, data: SampleCreate, current_user) -> SampleResponse:
-        order = await self.order_repo.get_by_id(data.test_order_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        order = await self.order_repo.get_by_id(data.test_order_id, hospital_id=hospital_id)
         if not order:
             raise NotFoundException("Test order not found")
 
         # Check if sample already exists for this test order
         if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
             raise BadRequestException("Cannot collect sample for a completed or cancelled test order")
-        existing_sample = await self.sample_repo.get_by_test_order(data.test_order_id)
+        existing_sample = await self.sample_repo.get_by_test_order(data.test_order_id, hospital_id=hospital_id)
         if existing_sample:
             raise ConflictException("Sample has already been collected for this test order")
 
@@ -733,21 +735,28 @@ class LabService:
             staff = result.scalar_one_or_none()
             department_id = staff.department_id if staff else None
 
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         items = await self.sample_repo.list_all(
             skip=skip,
             limit=size,
             status=status,
             department_id=department_id,
+            hospital_id=hospital_id,
         )
 
         total = await self.sample_repo.count_all(
             status=status,
             department_id=department_id,
+            hospital_id=hospital_id,
         )
         return build_paginated_result([SampleResponse.model_validate(s) for s in items], total, page, size)
 
-    async def get_sample(self, sample_id: int) -> SampleResponse:
-        sample = await self.sample_repo.get_by_id(sample_id)
+    async def get_sample(self, sample_id: int, current_user=None) -> SampleResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        sample = await self.sample_repo.get_by_id(sample_id, hospital_id=hospital_id)
 
         if not sample:
             raise NotFoundException("Sample not found")
@@ -759,8 +768,11 @@ class LabService:
         sample_id: int,
         data: SampleUpdate,
         user_id: int,
+        current_user=None,
     ) -> SampleResponse:
-        sample = await self.sample_repo.get_by_id(sample_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        sample = await self.sample_repo.get_by_id(sample_id, hospital_id=hospital_id)
 
         if not sample:
             raise NotFoundException("Sample not found")
@@ -788,8 +800,11 @@ class LabService:
         self,
         sample_id: int,
         user_id: int,
+        current_user=None,
     ) -> None:
-        sample = await self.sample_repo.get_by_id(sample_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        sample = await self.sample_repo.get_by_id(sample_id, hospital_id=hospital_id)
 
         if not sample:
             raise NotFoundException("Sample not found")
@@ -806,7 +821,7 @@ class LabService:
         remaining_count = remaining_count_res.scalar() or 0
 
         if remaining_count == 0:
-            order = await self.order_repo.get_by_id(test_order_id)
+            order = await self.order_repo.get_by_id(test_order_id, hospital_id=hospital_id)
             if order:
                 order.status = LabOrderStatus.ORDERED
                 await self.order_repo.update(order)
@@ -825,7 +840,9 @@ class LabService:
         current_user,
         document: UploadFile | None = None,
     ) -> TestResultResponse:
-        sample = await self.sample_repo.get_by_id(data.sample_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        sample = await self.sample_repo.get_by_id(data.sample_id, hospital_id=hospital_id)
         if not sample:
             raise NotFoundException("Sample not found")
 
@@ -834,7 +851,7 @@ class LabService:
                 "You cannot enter test result before collecting sample"
             )
 
-        order = await self.order_repo.get_by_id(sample.test_order_id)
+        order = await self.order_repo.get_by_id(sample.test_order_id, hospital_id=hospital_id)
         if not order:
             raise NotFoundException("Test order not found")
         if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
@@ -854,9 +871,9 @@ class LabService:
             if order.department_id != staff.department_id:
                 raise BadRequestException(
                     "You can enter test results only for test orders of your department"
-            )     
+                )     
 
-        existing_result = await self.result_repo.get_by_test_order(sample.test_order_id)
+        existing_result = await self.result_repo.get_by_test_order(sample.test_order_id, hospital_id=hospital_id)
         if existing_result:
             raise BadRequestException("Test result already exists for this test order.")
 
@@ -912,12 +929,30 @@ class LabService:
             if not staff or not staff.department_id:
                 raise BadRequestException("Lab technician department is not assigned")
             department_id = staff.department_id
-        items = await self.result_repo.list_all(skip=skip, limit=size, test_order_id=test_order_id, is_critical=is_critical, department_id=department_id)
-        total = await self.result_repo.count_all(test_order_id=test_order_id, is_critical=is_critical, department_id=department_id)
+
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        items = await self.result_repo.list_all(
+            skip=skip,
+            limit=size,
+            test_order_id=test_order_id,
+            is_critical=is_critical,
+            department_id=department_id,
+            hospital_id=hospital_id,
+        )
+        total = await self.result_repo.count_all(
+            test_order_id=test_order_id,
+            is_critical=is_critical,
+            department_id=department_id,
+            hospital_id=hospital_id,
+        )
         return build_paginated_result([TestResultResponse.model_validate(r) for r in items], total, page, size)
  
-    async def get_result(self, result_id: int) -> TestResultResponse:
-        result = await self.result_repo.get_by_id(result_id)
+    async def get_result(self, result_id: int, current_user=None) -> TestResultResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        result = await self.result_repo.get_by_id(result_id, hospital_id=hospital_id)
 
         if not result:
             raise NotFoundException("Test result not found")
@@ -931,8 +966,11 @@ class LabService:
         data,
         user_id: int,
         document=None,
+        current_user=None,
     ) -> TestResultResponse:
-        result = await self.result_repo.get_by_id(result_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        result = await self.result_repo.get_by_id(result_id, hospital_id=hospital_id)
 
         if not result:
             raise NotFoundException("Test result not found")
@@ -954,7 +992,7 @@ class LabService:
         )
 
         try:
-            order = await self.order_repo.get_by_id(result.test_order_id)
+            order = await self.order_repo.get_by_id(result.test_order_id, hospital_id=hospital_id)
             if order:
                 await NotificationService(self.db).create_critical_value_alert(result, order)
         except Exception as e:
@@ -978,14 +1016,18 @@ class LabService:
 
             department_id = staff.department_id  
 
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         results = await self.result_repo.get_critical_alerts(  
             current_user_id=current_user.id,
             department_id=department_id, 
+            hospital_id=hospital_id,
         )
 
         alerts = []
         for r in results:
-            order = await self.order_repo.get_by_id(r.test_order_id)
+            order = await self.order_repo.get_by_id(r.test_order_id, hospital_id=hospital_id)
             alerts.append(CriticalAlert(
                 result_id=r.id,
                 test_order_id=r.test_order_id,
@@ -1052,11 +1094,14 @@ class LabService:
         return path
 
     async def create_report(self, data: LabReportCreate, current_user) -> LabReportResponse:
-        result = await self.result_repo.get_by_id(data.test_result_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
         if not result:
             raise NotFoundException("Test result not found")
 
-        order = await self.order_repo.get_by_id(result.test_order_id)
+        order = await self.order_repo.get_by_id(result.test_order_id, hospital_id=hospital_id)
         if not order:
             from sqlalchemy import text
             raw_order = await self.db.execute(
@@ -1073,7 +1118,7 @@ class LabService:
                     f"Test order not found (No record exists in test_orders table with ID={result.test_order_id})"
                 )
 
-        sample = await self.sample_repo.get_by_test_order(result.test_order_id)
+        sample = await self.sample_repo.get_by_test_order(result.test_order_id, hospital_id=hospital_id)
 
         if not sample or sample.status != SampleStatus.COLLECTED:
             raise BadRequestException(
@@ -1154,6 +1199,9 @@ class LabService:
         else:
             generated_by = current_user.id
 
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         items = await self.report_repo.list_all(
             skip=skip,
             limit=size,
@@ -1161,6 +1209,7 @@ class LabService:
             department_id=department_id,
             generated_by=generated_by,
             doctor_id=doctor_id,
+            hospital_id=hospital_id,
         )
 
         total = await self.report_repo.count_all(
@@ -1168,6 +1217,7 @@ class LabService:
             department_id=department_id,
             generated_by=generated_by,
             doctor_id=doctor_id,
+            hospital_id=hospital_id,
         )
 
         return build_paginated_result(
@@ -1178,12 +1228,14 @@ class LabService:
         )
     
     async def get_report(self, report_id: int, current_user) -> LabReportResponse:
-        report = await self.report_repo.get_by_id(report_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
 
         if not report:
            raise NotFoundException("Lab report not found")
 
-        await self._validate_lab_report_access(report, current_user, "read")
+        await self._validate_lab_report_access(report, current_user, "read", hospital_id=hospital_id)
 
         return LabReportResponse.model_validate(report)
 
@@ -1192,6 +1244,7 @@ class LabService:
         report: LabReport,
         current_user,
         action: str,
+        hospital_id: int | None = None,
     ) -> None:
         role_name = (
             current_user.role.name.lower()
@@ -1212,7 +1265,7 @@ class LabService:
                 "Lab technician department is not assigned"
             )
 
-        order = await self.order_repo.get_by_id(report.test_order_id)
+        order = await self.order_repo.get_by_id(report.test_order_id, hospital_id=hospital_id)
 
         if not order:
             raise NotFoundException("Test order not found")
@@ -1236,7 +1289,9 @@ class LabService:
         data: LabReportTechnicianVerifyRequest,
         current_user,
     ) -> LabReportResponse:
-        report = await self.report_repo.get_by_id(report_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
@@ -1256,14 +1311,15 @@ class LabService:
             report,
             current_user,
             "verify as technician",
+            hospital_id=hospital_id,
         )
 
-        order = await self.order_repo.get_by_id(report.test_order_id)
+        order = await self.order_repo.get_by_id(report.test_order_id, hospital_id=hospital_id)
         if not order:
             raise NotFoundException("Test order not found")
 
         # Verify that test results exist before technician can verify
-        results_count = await self.result_repo.count_all(test_order_id=order.id)
+        results_count = await self.result_repo.count_all(test_order_id=order.id, hospital_id=hospital_id)
         if results_count == 0:
             raise BadRequestException("Cannot verify lab report before test results are entered.")
 
@@ -1315,7 +1371,9 @@ class LabService:
         data: LabReportDoctorVerifyRequest,
         current_user,
     ) -> LabReportResponse:
-        report = await self.report_repo.get_by_id(report_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
@@ -1343,7 +1401,7 @@ class LabService:
                 report.doctor_remarks = data.doctor_remarks
                 report.summary = data.doctor_remarks
 
-            order = await self.order_repo.get_by_id(report.test_order_id)
+            order = await self.order_repo.get_by_id(report.test_order_id, hospital_id=hospital_id)
             if order:
                 order.status = LabOrderStatus.COMPLETED
                 order.completed_at = utc_now()
@@ -1450,9 +1508,12 @@ class LabService:
         self,
         report_id: int,
         data: RejectLabReportRequest,
-        user_id: int
+        user_id: int,
+        current_user=None,
     ) -> LabReportResponse:
-        report = await self.report_repo.get_by_id(report_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
@@ -1465,7 +1526,8 @@ class LabService:
         report = await self.report_repo.reject_report(
             report_id=report_id,
             remarks=data.remarks,
-            rejected_by=user_id
+            rejected_by=user_id,
+            hospital_id=hospital_id,
         )
 
         await self.audit_repo.create(
@@ -1498,11 +1560,13 @@ class LabService:
         return LabReportResponse.model_validate(report)
 
     async def delete_report(self, report_id: int, current_user) -> None:
-        report = await self.report_repo.get_by_id(report_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
         if not report:
             raise NotFoundException("Lab report not found")
 
-        await self._validate_lab_report_access(report, current_user, "delete")
+        await self._validate_lab_report_access(report, current_user, "delete", hospital_id=hospital_id)
 
         await self.report_repo.delete(report)
         await self.audit_repo.create("delete", "lab_report", user_id=current_user.id, resource_id=str(report_id))

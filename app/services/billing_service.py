@@ -9,6 +9,7 @@ from app.core.exceptions import BadRequestException, NotFoundException, Conflict
 from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
+from app.repositories.hospital_repository import HospitalRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.billing_schema import (
     BillType,
@@ -83,6 +84,7 @@ class BillingService:
         self.repo = BillingRepository(db)
         self.patient_repo = PatientRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.hospital_repo = HospitalRepository(db)
 
     def _to_response(self, billing: Billing) -> BillingResponse:
         data = BillingResponse.model_validate(billing)
@@ -1036,6 +1038,14 @@ class BillingService:
             if not invoice:
                 raise NotFoundException("Billing record not found")
 
+            target_hospital_id = hospital_id or getattr(invoice, "hospital_id", None)
+            hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
+
+            hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
+            hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
+            hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
+            hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
+
             patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
             patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
             patient_phone = patient.phone if patient else "-"
@@ -1055,6 +1065,10 @@ class BillingService:
             path, pdf_bytes = await generate_invoice_pdf(
                 invoice.invoice_number,
                 {
+                    "hospital_name": hospital_name,
+                    "hospital_address": hospital_address,
+                    "hospital_phone": hospital_phone,
+                    "hospital_email": hospital_email,
                     "patient_name": patient_name,
                     "patient_phone": patient_phone,
                     "patient_email": patient_email,
@@ -1076,6 +1090,14 @@ class BillingService:
             await self.audit_repo.create("export", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
             return path, pdf_bytes
 
+        target_hospital_id = hospital_id or getattr(billing, "hospital_id", None)
+        hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
+
+        hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
+        hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
+        hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
+        hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
+
         patient = await self.patient_repo.get_by_id(billing.patient_id)
         patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
         patient_phone = patient.phone if patient else "-"
@@ -1095,6 +1117,10 @@ class BillingService:
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
+                "hospital_name": hospital_name,
+                "hospital_address": hospital_address,
+                "hospital_phone": hospital_phone,
+                "hospital_email": hospital_email,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,

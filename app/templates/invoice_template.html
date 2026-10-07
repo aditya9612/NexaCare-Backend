@@ -7,7 +7,7 @@
   <style>
     @page {
       size: letter;
-      margin: 30pt 40pt 40pt 40pt;
+      margin: 30pt 40pt 60pt 40pt;
     }
 
     body {
@@ -15,12 +15,15 @@
       font-size: 10pt;
       line-height: 1.4;
       color: #333333;
+      position: relative;
+      padding-bottom: 50pt;
     }
 
+    /* Header Section */
     .header-table {
       width: 100%;
       border-bottom: 2px solid #2563eb;
-      padding-bottom: 15px;
+      padding-bottom: 12px;
       margin-bottom: 20px;
     }
 
@@ -28,24 +31,33 @@
       font-size: 20pt;
       font-weight: bold;
       color: #2563eb;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     .brand-sub {
-      font-size: 9pt;
-      color: #666666;
-      margin-top: 3px;
+      font-size: 9.5pt;
+      color: #475569;
+      margin-top: 4px;
+      line-height: 1.4;
     }
 
     .invoice-title {
-      font-size: 18pt;
+      font-size: 20pt;
       font-weight: bold;
       color: #1e293b;
       text-align: right;
+      letter-spacing: 1px;
     }
 
+    /* Info Section (Patient Details & Invoice Information) */
     .info-table {
       width: 100%;
-      margin-bottom: 25px;
+      margin-bottom: 20px;
+      border-collapse: separate;
+      border-spacing: 12px 0;
+      margin-left: -12px;
+      margin-right: -12px;
     }
 
     .info-cell {
@@ -56,17 +68,10 @@
     .info-box {
       background-color: #f8fafc;
       border: 1px solid #e2e8f0;
-      padding: 10px;
-      border-radius: 4px;
-      margin-right: 5px;
-    }
-
-    .info-box-right {
-      background-color: #f8fafc;
-      border: 1px solid #e2e8f0;
-      padding: 10px;
-      border-radius: 4px;
-      margin-left: 5px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      box-sizing: border-box;
+      min-height: 110px;
     }
 
     .section-title {
@@ -78,17 +83,45 @@
       padding-bottom: 3px;
     }
 
+    .info-details-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .info-label {
+      width: 1%;
+      white-space: nowrap;
+      color: #64748b;
+      padding: 3px 12px 3px 0;
+      vertical-align: top;
+    }
+
+    .info-val {
+      padding: 3px 0;
+      vertical-align: top;
+    }
+
+    /* Items Table */
+    .items-section-title {
+      font-size: 11pt;
+      font-weight: bold;
+      color: #1e293b;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 3px;
+    }
+
     .items-table {
       width: 100%;
       border-collapse: collapse;
-      margin-bottom: 25px;
+      margin-bottom: 20px;
     }
 
     .th-header {
       background-color: #2563eb;
       color: #ffffff;
       font-weight: bold;
-      padding: 8px 8px;
+      padding: 8px 10px;
       font-size: 9.5pt;
       border: 1px solid #2563eb;
     }
@@ -100,19 +133,32 @@
       border-right: 1px solid #e2e8f0;
     }
 
+    /* Summary & Totals Section */
     .summary-table {
       width: 100%;
       margin-top: 10px;
+      border-collapse: collapse;
     }
 
     .summary-left {
-      width: 60%;
+      width: 50%;
       vertical-align: top;
     }
 
     .summary-right {
-      width: 40%;
+      width: 50%;
       vertical-align: top;
+    }
+
+    .notes-box {
+      border: 1px solid #e2e8f0;
+      background-color: #fafafa;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 9pt;
+      color: #475569;
+      margin-top: 6px;
+      line-height: 1.4;
     }
 
     .totals-table {
@@ -120,17 +166,34 @@
       border-collapse: collapse;
     }
 
-    .td-total {
-      padding: 5px 10px;
-      text-align: right;
+    .td-total-label {
+      padding: 5px 8px;
+      text-align: left;
+      white-space: nowrap;
     }
 
-    .td-grand-total {
+    .td-total-value {
+      padding: 5px 8px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .td-grand-total-label {
       border-top: 1.5pt solid #1e293b;
       border-bottom: 1.5pt solid #1e293b;
-      padding: 8px 10px;
+      padding: 8px 8px;
+      background-color: #f1f5f9;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .td-grand-total-value {
+      border-top: 1.5pt solid #1e293b;
+      border-bottom: 1.5pt solid #1e293b;
+      padding: 8px 8px;
       background-color: #f1f5f9;
       text-align: right;
+      white-space: nowrap;
     }
 
     .totals-label {
@@ -155,23 +218,38 @@
       color: #2563eb;
     }
 
-    .notes-box {
-      border: 1px solid #e2e8f0;
-      background-color: #fafafa;
-      padding: 8px;
-      border-radius: 4px;
-      font-size: 8.5pt;
-      color: #475569;
-      margin-top: 10px;
-    }
-
+    /* Footer Section - PDF safe anchored */
     .footer {
-      margin-top: 40px;
-      border-top: 1px solid #e2e8f0;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      border-top: 1.5pt solid #cbd5e1;
       padding-top: 10px;
       text-align: center;
-      font-size: 8pt;
-      color: #94a3b8;
+      font-size: 8.5pt;
+      color: #475569;
+      background-color: #ffffff;
+    }
+
+    .footer-thankyou {
+      font-weight: bold;
+      color: #1e293b;
+      font-size: 9pt;
+      margin-bottom: 3px;
+    }
+
+    .footer-disclaimer {
+      font-style: italic;
+      color: #64748b;
+      margin-bottom: 3px;
+    }
+
+    .footer-contact {
+      color: #2563eb;
+      font-weight: 500;
+      font-size: 8.5pt;
+      margin-top: 3px;
     }
 
     .status-text {
@@ -191,17 +269,14 @@
 <body>
 
   <!-- Header Section -->
-  <table class="header-table">
-    <tr>
-      <td style="border: none; padding: 0;">
-        <div class="brand-title">NEXACARE AI 360</div>
-        <div class="brand-sub">NexaCare Hospital | Wing B, Floor 1 | Contact: info@nexacare360.com</div>
-      </td>
-      <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
-        <div class="invoice-title">INVOICE</div>
-      </td>
-    </tr>
-  </table>
+  <div class="header-table">
+    <div class="brand-title">{{ hospital_name | default('NEXACARE HOSPITAL', true) }}</div>
+    <div class="brand-sub">
+      {% if hospital_address %}{{ hospital_address }}{% endif %}
+      {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
+      {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{ hospital_email }}{% endif %}
+    </div>
+  </div>
 
   <!-- Info Section -->
   <table class="info-table">
@@ -209,39 +284,38 @@
       <td class="info-cell" style="border: none; padding: 0;">
         <div class="info-box">
           <div class="section-title">Patient Details</div>
-          <table style="width: 100%; border: none;">
+          <table class="info-details-table">
             <tr>
-              <td style="width: 35%; border: none; padding: 2px 0; color: #64748b;">Name:</td>
-              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ patient_name }}</td>
+              <td class="info-label">Name:</td>
+              <td class="info-val" style="font-weight: bold;">{{ patient_name }}</td>
             </tr>
             <tr>
-              <td style="border: none; padding: 2px 0; color: #64748b;">Phone:</td>
-              <td style="border: none; padding: 2px 0;">{{ patient_phone }}</td>
+              <td class="info-label">Phone:</td>
+              <td class="info-val">{{ patient_phone }}</td>
             </tr>
             <tr>
-              <td style="border: none; padding: 2px 0; color: #64748b;">Email:</td>
-              <td style="border: none; padding: 2px 0;">{{ patient_email }}</td>
+              <td class="info-label">Email:</td>
+              <td class="info-val">{{ patient_email }}</td>
             </tr>
           </table>
         </div>
       </td>
       <td class="info-cell" style="border: none; padding: 0;">
-        <div class="info-box-right">
+        <div class="info-box">
           <div class="section-title">Invoice Information</div>
-          <table style="width: 100%; border: none;">
+          <table class="info-details-table">
             <tr>
-              <td style="width: 45%; border: none; padding: 2px 0; color: #64748b;">Invoice Number:</td>
-              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ invoice_number }}</td>
+              <td class="info-label">Invoice Number:</td>
+              <td class="info-val" style="font-weight: bold;">{{ invoice_number }}</td>
             </tr>
             <tr>
-              <td style="border: none; padding: 2px 0; color: #64748b;">Date:</td>
-              <td style="border: none; padding: 2px 0;">{{ date }}</td>
+              <td class="info-label">Date:</td>
+              <td class="info-val">{{ date }}</td>
             </tr>
             <tr>
-              <td style="border: none; padding: 2px 0; color: #64748b;">Payment Status:</td>
-              <td style="border: none; padding: 2px 0;">
-                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{
-                  status }}</span>
+              <td class="info-label">Payment Status:</td>
+              <td class="info-val">
+                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{ status }}</span>
               </td>
             </tr>
           </table>
@@ -251,14 +325,14 @@
   </table>
 
   <!-- Items Table -->
-  <div class="section-title" style="margin-left: 2px;">Billed Items</div>
+  <div class="items-section-title">Billed Items</div>
   <table class="items-table">
     <thead>
       <tr>
         <th class="th-header" style="width: 8%; text-align: center;">Sr. No.</th>
         <th class="th-header" style="width: 47%; text-align: left;">Description</th>
         <th class="th-header" style="width: 10%; text-align: center;">Qty</th>
-        <th class="th-header" style="width: 15%; text-align: right;">Unit Price (Rs.)</th>
+        <th class="th-header" style="width: 15%; text-align: center;">Unit Price<br>(Rs.)</th>
         <th class="th-header" style="width: 20%; text-align: right;">Total (Rs.)</th>
       </tr>
     </thead>
@@ -278,9 +352,9 @@
   <!-- Summary Section -->
   <table class="summary-table">
     <tr>
-      <td class="summary-left" style="border: none; padding: 0;">
+      <td class="summary-left" style="border: none; padding: 0 15px 0 0;">
         {% if notes %}
-        <div style="font-weight: bold; color: #475569; font-size: 9pt; margin-top: 5px;">Notes & Comments:</div>
+        <div style="font-weight: bold; color: #475569; font-size: 9.5pt; margin-top: 2px;">Notes & Comments:</div>
         <div class="notes-box">
           {{ notes }}
         </div>
@@ -289,38 +363,38 @@
       <td class="summary-right" style="border: none; padding: 0;">
         <table class="totals-table">
           <tr>
-            <td class="td-total totals-label">Subtotal:</td>
-            <td class="td-total totals-value">Rs. {{ subtotal }}</td>
+            <td class="td-total-label totals-label">Subtotal:</td>
+            <td class="td-total-value totals-value">Rs. {{ subtotal }}</td>
           </tr>
           {% if discount_amount != "0.00" %}
           <tr>
-            <td class="td-total totals-label">Discount ({{ discount_percent }}%):</td>
-            <td class="td-total totals-value" style="color: #dc2626;">-Rs. {{ discount_amount }}</td>
+            <td class="td-total-label totals-label">Discount ({{ discount_percent }}%):</td>
+            <td class="td-total-value totals-value" style="color: #dc2626;">-Rs. {{ discount_amount }}</td>
           </tr>
           {% endif %}
           {% if gst_amount != "0.00" %}
           <tr>
-            <td class="td-total totals-label">GST ({{ gst_rate }}%):</td>
-            <td class="td-total totals-value">+Rs. {{ gst_amount }}</td>
+            <td class="td-total-label totals-label">GST ({{ gst_rate }}%):</td>
+            <td class="td-total-value totals-value">+Rs. {{ gst_amount }}</td>
           </tr>
           {% endif %}
           {% if tax_amount != "0.00" %}
           <tr>
-            <td class="td-total totals-label">Other Tax:</td>
-            <td class="td-total totals-value">+Rs. {{ tax_amount }}</td>
+            <td class="td-total-label totals-label">Other Tax:</td>
+            <td class="td-total-value totals-value">+Rs. {{ tax_amount }}</td>
           </tr>
           {% endif %}
           <tr class="grand-total-row">
-            <td class="td-grand-total grand-total-label">Grand Total:</td>
-            <td class="td-grand-total grand-total-value">Rs. {{ total_amount }}</td>
+            <td class="td-grand-total-label grand-total-label">Grand Total:</td>
+            <td class="td-grand-total-value grand-total-value">Rs. {{ total_amount }}</td>
           </tr>
           <tr>
-            <td class="td-total totals-label" style="padding-top: 10px;">Amount Paid:</td>
-            <td class="td-total totals-value" style="padding-top: 10px; color: #16a34a;">Rs. {{ paid_amount }}</td>
+            <td class="td-total-label totals-label" style="padding-top: 10px;">Amount Paid:</td>
+            <td class="td-total-value totals-value" style="padding-top: 10px; color: #16a34a;">Rs. {{ paid_amount }}</td>
           </tr>
           <tr>
-            <td class="td-total totals-label" style="font-weight: bold; color: #1e293b;">Balance Due:</td>
-            <td class="td-total totals-value" style="font-size: 11pt; color: #dc2626;">Rs. {{ balance_amount }}</td>
+            <td class="td-total-label totals-label" style="font-weight: bold; color: #1e293b;">Balance Due:</td>
+            <td class="td-total-value totals-value" style="font-size: 11pt; color: #dc2626;">Rs. {{ balance_amount }}</td>
           </tr>
         </table>
       </td>
@@ -329,9 +403,16 @@
 
   <!-- Footer -->
   <div class="footer">
-    <p>Thank you for choosing NexaCare AI 360. This is a computer-generated invoice and does not require a physical
-      signature.</p>
-    <p style="margin-top: 5px;">Wish you good health!</p>
+    <div class="footer-thankyou">Thank you for choosing {{ hospital_name | default('NexaCare Hospital', true) }}! Wish you good health!</div>
+    <div class="footer-disclaimer">This is a computer-generated invoice and does not require a physical signature.</div>
+    {% if hospital_phone or hospital_email %}
+    <div class="footer-contact">
+      For billing inquiries: 
+      {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
+      {% if hospital_phone and hospital_email %} | {% endif %}
+      {% if hospital_email %}Email: {{ hospital_email }}{% endif %}
+    </div>
+    {% endif %}
   </div>
 
 </body>

@@ -154,7 +154,6 @@ class AppointmentRepository:
                         or_(
                             Appointment.admission_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
                             Appointment.appointment_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
-                            Appointment.admission_recommended.is_(True),
                         )
                     )
                 elif s_lower in ("admitted", "admit"):
@@ -175,7 +174,7 @@ class AppointmentRepository:
                     query = query.where(
                         or_(
                             Appointment.admission_status.in_(["Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"]),
-                            Appointment.admission_recommended.is_(True),
+                            func.lower(Appointment.admission_status).in_(["admit recommended", "admit-recommended", "admit_recommended"]),
                         )
                     )
                 elif adm_lower in ("admitted", "admit"):
@@ -297,7 +296,10 @@ class AppointmentRepository:
         start_date: date,
         end_date: date,
         doctor_id: int | None = None,
+        patient_id: int | list[int] | set[int] | tuple[int, ...] | None = None,
     ) -> list[Appointment]:
+        if patient_id is not None and isinstance(patient_id, (list, tuple, set)) and len(patient_id) == 0:
+            return []
         query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
@@ -306,8 +308,13 @@ class AppointmentRepository:
                 Appointment.appointment_date <= end_date,
             )
         )
-        if doctor_id:
+        if doctor_id is not None:
             query = query.where(Appointment.doctor_id == doctor_id)
+        if patient_id is not None:
+            if isinstance(patient_id, (list, tuple, set)):
+                query = query.where(Appointment.patient_id.in_(list(patient_id)))
+            else:
+                query = query.where(Appointment.patient_id == patient_id)
         query = query.order_by(Appointment.appointment_date, Appointment.appointment_time)
         result = await self.db.execute(query)
         return list(result.scalars().all())

@@ -1052,9 +1052,18 @@ class BillingService:
                 for item in (invoice.items or [])
             ]
 
+            hospital_name = "NexaCare Hospital"
+            target_hosp_id = invoice.hospital_id or hospital_id
+            if target_hosp_id:
+                from app.models.hospital_model import Hospital
+                hosp = await self.db.get(Hospital, target_hosp_id)
+                if hosp and hosp.name:
+                    hospital_name = hosp.name
+
             path, pdf_bytes = await generate_invoice_pdf(
                 invoice.invoice_number,
                 {
+                    "hospital_name": hospital_name,
                     "patient_name": patient_name,
                     "patient_phone": patient_phone,
                     "patient_email": patient_email,
@@ -1092,9 +1101,18 @@ class BillingService:
             for i in billing.items
         ]
 
+        hospital_name = "NexaCare Hospital"
+        target_hosp_id = billing.hospital_id or hospital_id
+        if target_hosp_id:
+            from app.models.hospital_model import Hospital
+            hosp = await self.db.get(Hospital, target_hosp_id)
+            if hosp and hosp.name:
+                hospital_name = hosp.name
+
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
+                "hospital_name": hospital_name,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,

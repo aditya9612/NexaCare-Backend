@@ -710,8 +710,45 @@ class AppointmentService:
         await self._notify_confirmation_safely(appointment, user_id)
         return AppointmentResponse.model_validate(appointment)
 
-    async def get_calendar(self, start_date: date, end_date: date, doctor_id: int | None = None):
-        appointments = await self.repo.get_calendar(start_date, end_date, doctor_id)
+    async def get_calendar(
+        self,
+        start_date: date,
+        end_date: date,
+        doctor_id: int | None = None,
+        current_user = None,
+    ):
+        effective_doctor_id = doctor_id
+        effective_patient_id = None
+
+        if current_user:
+            role_name = ""
+            role_obj = getattr(current_user, "role", None)
+            if role_obj:
+                if isinstance(role_obj, str):
+                    role_name = role_obj.strip().lower()
+                elif hasattr(role_obj, "name"):
+                    role_name = str(role_obj.name).strip().lower()
+
+            if role_name == "doctor":
+                doctor = await self.doctor_repo.get_by_user_id(current_user.id)
+                if not doctor:
+                    return []
+                if doctor_id is not None and doctor_id != doctor.id:
+                    return []
+                effective_doctor_id = doctor.id
+            elif role_name == "patient":
+                from app.services.patient_service import PatientService
+                allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+                if not allowed_ids:
+                    return []
+                effective_patient_id = allowed_ids
+
+        appointments = await self.repo.get_calendar(
+            start_date=start_date,
+            end_date=end_date,
+            doctor_id=effective_doctor_id,
+            patient_id=effective_patient_id,
+        )
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
     async def get_today(self, on_date: date | None = None) -> dict:

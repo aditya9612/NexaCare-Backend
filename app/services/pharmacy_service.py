@@ -413,6 +413,8 @@ class PharmacyService:
                     quantity=item_data.quantity,
                     dispensed_quantity=0,
                     instructions=item_data.instructions,
+                    meal_timing=item_data.meal_timing,
+                    time_of_day=item_data.time_of_day,
                 )
             )
 

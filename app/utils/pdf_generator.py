@@ -26,6 +26,9 @@ def html_to_pdf(html_content: str) -> bytes:
 
     def worker():
         nonlocal pdf_bytes, exc
+        import sys
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         async def _async_pdf():
             font_dir = Path(__file__).resolve().parent.parent / "static" / "fonts"
             

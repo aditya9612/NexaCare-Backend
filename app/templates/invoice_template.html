@@ -24,6 +24,8 @@
       width: 100%;
       border-bottom: 2px solid #2563eb;
       padding-bottom: 12px;
+      margin-bottom: 15px;
+      padding-bottom: 12px;
       margin-bottom: 20px;
     }
 
@@ -43,16 +45,19 @@
     }
 
     .invoice-title {
+      font-size: 16pt;
       font-size: 20pt;
       font-weight: bold;
       color: #1e293b;
       text-align: right;
+      line-height: 1.2;
       letter-spacing: 1px;
     }
 
     /* Info Section (Patient Details & Invoice Information) */
     .info-table {
       width: 100%;
+      margin-bottom: 14px;
       margin-bottom: 20px;
       border-collapse: separate;
       border-spacing: 12px 0;
@@ -68,6 +73,17 @@
     .info-box {
       background-color: #f8fafc;
       border: 1px solid #e2e8f0;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-right: 6px;
+    }
+
+    .info-box-right {
+      background-color: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-left: 6px;
       padding: 12px 14px;
       border-radius: 6px;
       box-sizing: border-box;
@@ -75,10 +91,10 @@
     }
 
     .section-title {
-      font-size: 11pt;
+      font-size: 10.5pt;
       font-weight: bold;
       color: #1e293b;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       border-bottom: 1px solid #cbd5e1;
       padding-bottom: 3px;
     }
@@ -269,12 +285,24 @@
 <body>
 
   <!-- Header Section -->
+  <table class="header-table">
+    <tr>
+      <td style="border: none; padding: 0;">
+        <div class="brand-title">NEXACARE AI 360</div>
+        <div class="brand-sub">NexaCare Hospital | Wing B, Floor 1 | Contact: info@nexacare360.com</div>
+      </td>
+      <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
+        <div class="invoice-title">{{ hospital_name or 'NexaCare Hospital' }}</div>
+      </td>
+    </tr>
+  </table>
   <div class="header-table">
     <div class="brand-title">{{ hospital_name | default('NEXACARE HOSPITAL', true) }}</div>
     <div class="brand-sub">
       {% if hospital_address %}{{ hospital_address }}{% endif %}
       {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
-      {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{ hospital_email }}{% endif %}
+      {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{ hospital_email
+      }}{% endif %}
     </div>
   </div>
 
@@ -286,14 +314,20 @@
           <div class="section-title">Patient Details</div>
           <table class="info-details-table">
             <tr>
+              <td style="width: 55px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Name:</td>
+              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ patient_name }}</td>
               <td class="info-label">Name:</td>
               <td class="info-val" style="font-weight: bold;">{{ patient_name }}</td>
             </tr>
             <tr>
+              <td style="width: 55px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Phone:</td>
+              <td style="border: none; padding: 2px 0;">{{ patient_phone }}</td>
               <td class="info-label">Phone:</td>
               <td class="info-val">{{ patient_phone }}</td>
             </tr>
             <tr>
+              <td style="width: 55px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Email:</td>
+              <td style="border: none; padding: 2px 0;">{{ patient_email }}</td>
               <td class="info-label">Email:</td>
               <td class="info-val">{{ patient_email }}</td>
             </tr>
@@ -305,17 +339,28 @@
           <div class="section-title">Invoice Information</div>
           <table class="info-details-table">
             <tr>
+              <td style="width: 110px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Invoice
+                Number:</td>
+              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ invoice_number }}</td>
               <td class="info-label">Invoice Number:</td>
               <td class="info-val" style="font-weight: bold;">{{ invoice_number }}</td>
             </tr>
             <tr>
+              <td style="width: 110px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Date:</td>
+              <td style="border: none; padding: 2px 0;">{{ date }}</td>
               <td class="info-label">Date:</td>
               <td class="info-val">{{ date }}</td>
             </tr>
             <tr>
+              <td style="width: 110px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Payment
+                Status:</td>
+              <td style="border: none; padding: 2px 0;">
+                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{ status
+                  }}</span>
               <td class="info-label">Payment Status:</td>
               <td class="info-val">
-                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{ status }}</span>
+                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{ status
+                  }}</span>
               </td>
             </tr>
           </table>
@@ -390,11 +435,13 @@
           </tr>
           <tr>
             <td class="td-total-label totals-label" style="padding-top: 10px;">Amount Paid:</td>
-            <td class="td-total-value totals-value" style="padding-top: 10px; color: #16a34a;">Rs. {{ paid_amount }}</td>
+            <td class="td-total-value totals-value" style="padding-top: 10px; color: #16a34a;">Rs. {{ paid_amount }}
+            </td>
           </tr>
           <tr>
             <td class="td-total-label totals-label" style="font-weight: bold; color: #1e293b;">Balance Due:</td>
-            <td class="td-total-value totals-value" style="font-size: 11pt; color: #dc2626;">Rs. {{ balance_amount }}</td>
+            <td class="td-total-value totals-value" style="font-size: 11pt; color: #dc2626;">Rs. {{ balance_amount }}
+            </td>
           </tr>
         </table>
       </td>
@@ -403,11 +450,12 @@
 
   <!-- Footer -->
   <div class="footer">
-    <div class="footer-thankyou">Thank you for choosing {{ hospital_name | default('NexaCare Hospital', true) }}! Wish you good health!</div>
+    <div class="footer-thankyou">Thank you for choosing {{ hospital_name | default('NexaCare Hospital', true) }}! Wish
+      you good health!</div>
     <div class="footer-disclaimer">This is a computer-generated invoice and does not require a physical signature.</div>
     {% if hospital_phone or hospital_email %}
     <div class="footer-contact">
-      For billing inquiries: 
+      For billing inquiries:
       {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
       {% if hospital_phone and hospital_email %} | {% endif %}
       {% if hospital_email %}Email: {{ hospital_email }}{% endif %}

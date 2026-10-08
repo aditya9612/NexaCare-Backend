@@ -92,6 +92,8 @@ class PrescriptionItem(Base, TimestampMixin):
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     dispensed_quantity: Mapped[int] = mapped_column(Integer, default=0)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meal_timing: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    time_of_day: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     prescription: Mapped["Prescription"] = relationship(back_populates="items")
     medicine: Mapped["Medicine"] = relationship()

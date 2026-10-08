@@ -195,6 +195,47 @@ class MedicineResponse(BaseSchema):
     updated_at: datetime
 
 
+VALID_MEAL_TIMINGS: dict[str, str] = {
+    "before meal": "Before Meal",
+    "after meal": "After Meal",
+    "with meal": "With Meal",
+    "empty stomach": "Empty Stomach",
+    "anytime": "Anytime",
+}
+
+VALID_TIME_OF_DAY: dict[str, str] = {
+    "morning": "Morning",
+    "afternoon": "Afternoon",
+    "evening": "Evening",
+    "night": "Night",
+    "bedtime": "Bedtime",
+}
+
+
+def validate_meal_timing_value(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    v_clean = str(v).strip().lower()
+    if not v_clean:
+        return None
+    if v_clean not in VALID_MEAL_TIMINGS:
+        allowed = ", ".join(VALID_MEAL_TIMINGS.values())
+        raise ValueError(f"Invalid meal_timing. Allowed values are: {allowed}")
+    return VALID_MEAL_TIMINGS[v_clean]
+
+
+def validate_time_of_day_value(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    v_clean = str(v).strip().lower()
+    if not v_clean:
+        return None
+    if v_clean not in VALID_TIME_OF_DAY:
+        allowed = ", ".join(VALID_TIME_OF_DAY.values())
+        raise ValueError(f"Invalid time_of_day. Allowed values are: {allowed}")
+    return VALID_TIME_OF_DAY[v_clean]
+
+
 class PrescriptionItemCreate(BaseSchema):
     medicine_id: int
     dosage: str
@@ -203,6 +244,18 @@ class PrescriptionItemCreate(BaseSchema):
     quantity: int = Field(1, ge=1)
     batch_number: str | None = None
     instructions: str | None = None
+    meal_timing: Optional[str] = Field(None, description="Allowed: Before Meal, After Meal, With Meal, Empty Stomach, Anytime")
+    time_of_day: Optional[str] = Field(None, description="Allowed: Morning, Afternoon, Evening, Night, Bedtime")
+
+    @field_validator("meal_timing")
+    @classmethod
+    def validate_meal_timing(cls, v: Optional[str]) -> Optional[str]:
+        return validate_meal_timing_value(v)
+
+    @field_validator("time_of_day")
+    @classmethod
+    def validate_time_of_day(cls, v: Optional[str]) -> Optional[str]:
+        return validate_time_of_day_value(v)
 
 
 class PrescriptionCreate(BaseSchema):
@@ -221,6 +274,18 @@ class PrescriptionItemUpdate(BaseSchema):
     quantity: int = Field(1, ge=1)
     batch_number: str | None = None
     instructions: str | None = None
+    meal_timing: Optional[str] = Field(None, description="Allowed: Before Meal, After Meal, With Meal, Empty Stomach, Anytime")
+    time_of_day: Optional[str] = Field(None, description="Allowed: Morning, Afternoon, Evening, Night, Bedtime")
+
+    @field_validator("meal_timing")
+    @classmethod
+    def validate_meal_timing(cls, v: Optional[str]) -> Optional[str]:
+        return validate_meal_timing_value(v)
+
+    @field_validator("time_of_day")
+    @classmethod
+    def validate_time_of_day(cls, v: Optional[str]) -> Optional[str]:
+        return validate_time_of_day_value(v)
 
 
 class PrescriptionItemResponse(BaseSchema):
@@ -234,6 +299,8 @@ class PrescriptionItemResponse(BaseSchema):
     quantity: int
     dispensed_quantity: int = 0
     instructions: str | None
+    meal_timing: str | None = None
+    time_of_day: str | None = None
 
 
 class PrescriptionResponse(BaseSchema):

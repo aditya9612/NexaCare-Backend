@@ -78,8 +78,8 @@ class NurseService:
             if not dept:
                 raise NotFoundException(f"Department with ID {department_id} not found")
 
-    async def _get_nurse_or_raise(self, nurse_id: int) -> Nurse:
-        nurse = await self.repo.get_by_id(nurse_id)
+    async def _get_nurse_or_raise(self, nurse_id: int, hospital_id: int | None = None) -> Nurse:
+        nurse = await self.repo.get_by_id(nurse_id, hospital_id=hospital_id)
         if not nurse:
             raise NotFoundException("Nurse not found")
         return nurse
@@ -92,17 +92,20 @@ class NurseService:
         shift: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ):
-        skip = (page - 1) * size
+        skip = (page - 1) * size if (page is not None and size is not None) else None
+        limit = size if size is not None else None
         items = await self.repo.list_all(
             skip=skip,
-            limit=size,
+            limit=limit,
             department_id=department_id,
             shift=shift,
             sort_by=sort_by,
             sort_order=sort_order,
+            hospital_id=hospital_id,
         )
-        total = await self.repo.count_all(department_id=department_id, shift=shift)
+        total = await self.repo.count_all(department_id=department_id, shift=shift, hospital_id=hospital_id)
         return build_paginated_result(
             [NurseResponse.model_validate(n) for n in items], total, page, size
         )
@@ -144,8 +147,11 @@ class NurseService:
         if not nurse:
             raise NotFoundException("Nurse not found")
         return self._to_detail_response(nurse)
+    async def get_by_id(self, nurse_id: int, hospital_id: int | None = None) -> NurseResponse:
+        nurse = await self._get_nurse_or_raise(nurse_id, hospital_id=hospital_id)
+        return NurseResponse.model_validate(nurse)
 
-    async def create(self, data: NurseCreate, user_id: int) -> NurseResponse:
+    async def create(self, data: NurseCreate, user_id: int, hospital_id: int | None = None) -> NurseResponse:
         # Validate that the user exists
         user = await self.auth_repo.get_by_id(data.user_id)
         if not user:
@@ -160,13 +166,14 @@ class NurseService:
         if existing:
             raise ConflictException("License number already registered")
         await self._validate_department(data.department_id)
-        nurse = Nurse(nurse_code=generate_nurse_code(), **data.model_dump())
+        target_hospital_id = hospital_id if hospital_id is not None else user.hospital_id
+        nurse = Nurse(nurse_code=generate_nurse_code(), hospital_id=target_hospital_id, **data.model_dump())
         nurse = await self.repo.create(nurse)
         await self.audit_repo.create("create", "nurses", user_id=user_id, resource_id=str(nurse.id))
         return NurseResponse.model_validate(nurse)
 
-    async def update(self, nurse_id: int, data: NurseUpdate, user_id: int) -> NurseResponse:
-        nurse = await self._get_nurse_or_raise(nurse_id)
+    async def update(self, nurse_id: int, data: NurseUpdate, user_id: int, hospital_id: int | None = None) -> NurseResponse:
+        nurse = await self._get_nurse_or_raise(nurse_id, hospital_id=hospital_id)
         if data.license_number and data.license_number != nurse.license_number:
             existing = await self.repo.get_by_license(data.license_number)
             if existing:
@@ -178,8 +185,8 @@ class NurseService:
         await self.audit_repo.create("update", "nurses", user_id=user_id, resource_id=str(nurse.id))
         return NurseResponse.model_validate(nurse)
 
-    async def delete(self, nurse_id: int, user_id: int) -> None:
-        nurse = await self._get_nurse_or_raise(nurse_id)
+    async def delete(self, nurse_id: int, user_id: int, hospital_id: int | None = None) -> None:
+        nurse = await self._get_nurse_or_raise(nurse_id, hospital_id=hospital_id)
         if nurse.user_id:
             from app.models.user_model import User
             user = await self.db.get(User, nurse.user_id)
@@ -188,10 +195,11 @@ class NurseService:
         await self.repo.delete(nurse)
         await self.audit_repo.create("delete", "nurses", user_id=user_id, resource_id=str(nurse_id))
 
-    async def search(self, q: str, page: int = 1, size: int = 20):
-        skip = (page - 1) * size
-        items = await self.repo.search(q, skip=skip, limit=size)
-        total = await self.repo.count_search(q)
+    async def search(self, q: str, page: int = 1, size: int = 20, hospital_id: int | None = None):
+        skip = (page - 1) * size if (page is not None and size is not None) else None
+        limit = size if size is not None else None
+        items = await self.repo.search(q, skip=skip, limit=limit, hospital_id=hospital_id)
+        total = await self.repo.count_search(q, hospital_id=hospital_id)
         return build_paginated_result(
             [NurseResponse.model_validate(n) for n in items], total, page, size
         )
@@ -1168,7 +1176,7 @@ class NurseService:
             size,
         )
 
-    async def list_prescriptions(self, patient_id: int | None = None):
+    async def list_prescriptions(self, patient_id: int | None = None, hospital_id: int | None = None):
         from sqlalchemy import select
         from app.models.nurse_model import NursePrescription
         from app.models.patient_model import Patient
@@ -1180,6 +1188,8 @@ class NurseService:
         ).outerjoin(
             Doctor, NursePrescription.doctor_id == Doctor.id
         )
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if patient_id is not None:
             query = query.where(NursePrescription.patient_id == patient_id)
         
@@ -1388,7 +1398,7 @@ class NurseService:
         await self.db.delete(log)
         await self.db.commit()
 
-    async def list_medication_schedules(self):
+    async def list_medication_schedules(self, hospital_id: int | None = None):
         from sqlalchemy import select
         from app.models.nurse_model import NursePrescription, NurseMedicationLog
         from app.models.patient_model import Patient
@@ -1403,6 +1413,8 @@ class NurseService:
         ).join(
             Doctor, NursePrescription.doctor_id == Doctor.id
         ).where(NursePrescription.status == "active")
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         
         result = await self.db.execute(query)
         rows = result.all()

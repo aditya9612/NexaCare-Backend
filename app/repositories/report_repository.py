@@ -6,7 +6,7 @@ from app.models.expense_model import Expense
 from app.models.pharmacy_model import PharmacyInvoice, Medicine
 from app.models.patient_model import Patient
 from app.models.appointment_model import Appointment
-from app.models.inventory_model import InventoryItem, ReorderAlert
+from app.models.inventory_model import InventoryItem, ReorderAlert, Warehouse
 from app.models.lab_model import TestOrder, LabTest
 from app.core.constants import LabOrderStatus
 
@@ -14,12 +14,17 @@ class ReportRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_daily_revenue(self, start_date: date, end_date: date) -> tuple[float, float]:
+    async def get_daily_revenue(self, start_date: date, end_date: date, hospital_id: int | None = None) -> tuple[float, float]:
         start_of_period = datetime.combine(start_date, datetime.min.time())
         end_of_period = datetime.combine(end_date, datetime.max.time())
 
         # Billing Revenue
-        billing_query = select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
+        billing_query = select(func.coalesce(func.sum(Payment.amount), 0.0)).select_from(Payment)
+        if hospital_id is not None:
+            billing_query = billing_query.join(Billing, Payment.billing_id == Billing.id).where(
+                Billing.hospital_id == hospital_id
+            )
+        billing_query = billing_query.where(
             Payment.status == "completed",
             Payment.is_refund == False,
             Payment.payment_date >= start_of_period,
@@ -28,18 +33,24 @@ class ReportRepository:
         billing_revenue = await self.db.scalar(billing_query) or 0.0
 
         # Pharmacy Revenue
-        pharmacy_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+        pharmacy_filters = [
             PharmacyInvoice.status != "cancelled",
             PharmacyInvoice.is_deleted == False,
             PharmacyInvoice.created_at >= start_of_period,
             PharmacyInvoice.created_at <= end_of_period
-        )
+        ]
+        if hospital_id is not None:
+            pharmacy_filters.append(PharmacyInvoice.hospital_id == hospital_id)
+
+        pharmacy_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(*pharmacy_filters)
         pharmacy_revenue = await self.db.scalar(pharmacy_query) or 0.0
 
         return float(billing_revenue), float(pharmacy_revenue)
 
-    async def get_patient_statistics(self, start_date: date | None = None, end_date: date | None = None) -> dict:
+    async def get_patient_statistics(self, start_date: date | None = None, end_date: date | None = None, hospital_id: int | None = None) -> dict:
         total_filters = [Patient.is_deleted == False]
+        if hospital_id is not None:
+            total_filters.append(Patient.hospital_id == hospital_id)
         if end_date:
             end_dt = datetime.combine(end_date, datetime.max.time())
             total_filters.append(Patient.created_at <= end_dt)
@@ -102,9 +113,12 @@ class ReportRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         doctor_id: int | None = None,
-        department_id: int | None = None
+        department_id: int | None = None,
+        hospital_id: int | None = None
     ) -> dict:
         filters = []
+        if hospital_id is not None:
+            filters.append(Appointment.hospital_id == hospital_id)
         if start_date:
             filters.append(Appointment.appointment_date >= start_date)
         if end_date:
@@ -149,7 +163,8 @@ class ReportRepository:
     async def get_inventory_status(
         self,
         department_id: int | None = None,
-        category: str | None = None
+        category: str | None = None,
+        hospital_id: int | None = None
     ) -> dict:
         filters = [InventoryItem.is_deleted == False]
         if department_id:
@@ -177,7 +192,13 @@ class ReportRepository:
             func.sum(case((
                 (InventoryItem.expiry_date != None) & (InventoryItem.expiry_date < today) & (InventoryItem.is_active == True), 1
             ), else_=0)).label("expired")
-        ).where(*filters)
+        )
+        if hospital_id is not None:
+            metrics_query = metrics_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted == False
+            )
+        metrics_query = metrics_query.where(*filters)
 
         metrics_res = await self.db.execute(metrics_query)
         metrics_row = metrics_res.fetchone()
@@ -193,7 +214,13 @@ class ReportRepository:
         # 2. Reorder Alerts
         alerts_query = select(func.count(func.distinct(ReorderAlert.item_id))).join(
             InventoryItem, ReorderAlert.item_id == InventoryItem.id
-        ).where(
+        )
+        if hospital_id is not None:
+            alerts_query = alerts_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
+                Warehouse.hospital_id == hospital_id,
+                Warehouse.is_deleted == False
+            )
+        alerts_query = alerts_query.where(
             ReorderAlert.status == 'active',
             *filters
         )
@@ -210,11 +237,13 @@ class ReportRepository:
             "reorder_alerts": reorder_alerts
         }
 
-    async def get_pharmacy_sales(self, start_date: date | None, end_date: date | None) -> dict:
+    async def get_pharmacy_sales(self, start_date: date | None, end_date: date | None, hospital_id: int | None = None) -> dict:
         filters = [
             PharmacyInvoice.status != "cancelled",
             PharmacyInvoice.is_deleted == False
         ]
+        if hospital_id is not None:
+            filters.append(PharmacyInvoice.hospital_id == hospital_id)
         
         if start_date and end_date:
             start_of_period = datetime.combine(start_date, datetime.min.time())
@@ -240,8 +269,10 @@ class ReportRepository:
             "average_invoice_value": avg_invoice
         }
 
-    async def get_pharmacy_inventory(self, category: str | None = None) -> dict:
+    async def get_pharmacy_inventory(self, category: str | None = None, hospital_id: int | None = None) -> dict:
         filters = [Medicine.is_deleted == False]
+        if hospital_id is not None:
+            filters.append(Medicine.hospital_id == hospital_id)
         if category:
             filters.append(Medicine.category == category)
 
@@ -277,12 +308,14 @@ class ReportRepository:
             "total_stock_quantity": total_stock_quantity
         }
 
-    async def get_pharmacy_expiry(self, category: str | None = None) -> dict:
+    async def get_pharmacy_expiry(self, category: str | None = None, hospital_id: int | None = None) -> dict:
         filters = [
             Medicine.is_deleted == False,
             Medicine.is_active == True,
             Medicine.expiry_date != None
         ]
+        if hospital_id is not None:
+            filters.append(Medicine.hospital_id == hospital_id)
         if category:
             filters.append(Medicine.category == category)
 
@@ -316,7 +349,7 @@ class ReportRepository:
             "expiring_90_days": exp90
         }
 
-    async def get_lab_test_summary(self, start_date: date, end_date: date, department_id: int | None = None) -> dict:
+    async def get_lab_test_summary(self, start_date: date, end_date: date, department_id: int | None = None, hospital_id: int | None = None) -> dict:
         start_of_period = datetime.combine(start_date, datetime.min.time())
         end_of_period = datetime.combine(end_date, datetime.max.time())
 
@@ -327,6 +360,8 @@ class ReportRepository:
         ]
         if department_id:
             filters.append(TestOrder.department_id == department_id)
+        if hospital_id is not None:
+            filters.append(TestOrder.hospital_id == hospital_id)
 
         metrics_query = select(
             func.coalesce(func.count(TestOrder.id), 0).label("total"),
@@ -353,7 +388,7 @@ class ReportRepository:
             "cancelled_tests": cancelled
         }
 
-    async def get_lab_ordered_value(self, start_date: date, end_date: date, department_id: int | None = None) -> dict:
+    async def get_lab_ordered_value(self, start_date: date, end_date: date, department_id: int | None = None, hospital_id: int | None = None) -> dict:
         start_of_period = datetime.combine(start_date, datetime.min.time())
         end_of_period = datetime.combine(end_date, datetime.max.time())
 
@@ -369,6 +404,8 @@ class ReportRepository:
         ]
         if department_id:
             filters.append(TestOrder.department_id == department_id)
+        if hospital_id is not None:
+            filters.append(TestOrder.hospital_id == hospital_id)
 
         metrics_query = select(
             func.coalesce(func.sum(LabTest.price), 0).label("total_val"),
@@ -390,7 +427,7 @@ class ReportRepository:
             "average_test_value": avg_val
         }
 
-    async def get_lab_technician_workload(self) -> dict:
+    async def get_lab_technician_workload(self, hospital_id: int | None = None) -> dict:
         # Note: The database schema does not capture technician assignment at the TestOrder level.
         # Tests exist in a shared departmental pool. We cannot calculate per-technician pending/in-progress workloads.
         # We adapt the report to accurately reflect this schema limitation by summarizing the unassigned pool.
@@ -398,6 +435,8 @@ class ReportRepository:
         filters = [
             TestOrder.is_deleted == False
         ]
+        if hospital_id is not None:
+            filters.append(TestOrder.hospital_id == hospital_id)
 
         metrics_query = select(
             func.coalesce(func.sum(case((TestOrder.status == LabOrderStatus.ORDERED, 1), else_=0)), 0).label("pending"),
@@ -420,7 +459,7 @@ class ReportRepository:
             "unassigned_completed_tests": completed
         }
 
-    async def get_lab_turnaround_time(self, start_date: date | None = None, end_date: date | None = None, department_id: int | None = None) -> dict:
+    async def get_lab_turnaround_time(self, start_date: date | None = None, end_date: date | None = None, department_id: int | None = None, hospital_id: int | None = None) -> dict:
         filters = [
             TestOrder.is_deleted == False,
             TestOrder.status == LabOrderStatus.COMPLETED,
@@ -436,6 +475,8 @@ class ReportRepository:
             filters.append(TestOrder.completed_at <= end_of_period)
         if department_id:
             filters.append(TestOrder.department_id == department_id)
+        if hospital_id is not None:
+            filters.append(TestOrder.hospital_id == hospital_id)
 
         # MySQL specific turnaround logic: difference between ordered_at and completed_at in seconds, then divide by 60 for minutes
         turnaround_expr = (func.unix_timestamp(TestOrder.completed_at) - func.unix_timestamp(TestOrder.ordered_at)) / 60
@@ -457,17 +498,21 @@ class ReportRepository:
             "maximum_turnaround_minutes": int(row.max_tat) if row and row.max_tat else 0
         }
 
-    async def _get_accountant_financial_report(self, start_time: datetime, end_time: datetime) -> dict:
+    async def _get_accountant_financial_report(self, start_time: datetime, end_time: datetime, hospital_id: int | None = None) -> dict:
         # 1. Billing metrics
-        billing_query = select(
-            func.coalesce(func.sum(Billing.total_amount), 0).label("total_billed"),
-            func.coalesce(func.count(Billing.id), 0).label("total_bills")
-        ).where(
+        billing_filters = [
             Billing.is_deleted == False,
             Billing.status != 'cancelled',
             Billing.created_at >= start_time,
             Billing.created_at <= end_time
-        )
+        ]
+        if hospital_id is not None:
+            billing_filters.append(Billing.hospital_id == hospital_id)
+
+        billing_query = select(
+            func.coalesce(func.sum(Billing.total_amount), 0).label("total_billed"),
+            func.coalesce(func.count(Billing.id), 0).label("total_bills")
+        ).where(*billing_filters)
         
         # 2. Payment metrics
         payment_query = select(
@@ -475,22 +520,33 @@ class ReportRepository:
                 case((Payment.is_refund == False, Payment.amount), else_=-Payment.amount)
             ), 0).label("total_collected"),
             func.coalesce(func.count(Payment.id), 0).label("total_payments")
-        ).where(
+        ).select_from(Payment)
+
+        if hospital_id is not None:
+            payment_query = payment_query.join(Billing, Payment.billing_id == Billing.id).where(
+                Billing.hospital_id == hospital_id
+            )
+
+        payment_query = payment_query.where(
             Payment.status == 'completed',
             Payment.payment_date >= start_time,
             Payment.payment_date <= end_time
         )
 
         # 3. Expense metrics
-        expense_query = select(
-            func.coalesce(func.sum(Expense.amount), 0).label("total_expense"),
-            func.coalesce(func.count(Expense.id), 0).label("total_expenses")
-        ).where(
+        expense_filters = [
             Expense.is_deleted == False,
             Expense.status == 'Paid',
             Expense.expense_date >= start_time.date(),
             Expense.expense_date <= end_time.date()
-        )
+        ]
+        if hospital_id is not None:
+            expense_filters.append(Expense.hospital_id == hospital_id)
+
+        expense_query = select(
+            func.coalesce(func.sum(Expense.amount), 0).label("total_expense"),
+            func.coalesce(func.count(Expense.id), 0).label("total_expenses")
+        ).where(*expense_filters)
 
         b_res = await self.db.execute(billing_query)
         p_res = await self.db.execute(payment_query)
@@ -514,7 +570,7 @@ class ReportRepository:
             "total_expenses": int(e_row.total_expenses) if e_row else 0
         }
 
-    async def get_accountant_revenue_vs_expense(self, start_date: date | None = None, end_date: date | None = None) -> dict:
+    async def get_accountant_revenue_vs_expense(self, start_date: date | None = None, end_date: date | None = None, hospital_id: int | None = None) -> dict:
         import calendar
         now = date.today()
 
@@ -529,7 +585,7 @@ class ReportRepository:
         start_time = datetime.combine(s_date, datetime.min.time())
         end_time = datetime.combine(e_date, datetime.max.time())
         
-        base_result = await self._get_accountant_financial_report(start_time, end_time)
+        base_result = await self._get_accountant_financial_report(start_time, end_time, hospital_id=hospital_id)
 
         billed = base_result["total_billed_amount"]
         collected = base_result["total_collected_amount"]
@@ -547,7 +603,7 @@ class ReportRepository:
             "expense_ratio_percent": round(expense_ratio, 2)
         }
 
-    async def get_accountant_department_wise(self, start_date: date | None = None, end_date: date | None = None) -> dict:
+    async def get_accountant_department_wise(self, start_date: date | None = None, end_date: date | None = None, hospital_id: int | None = None) -> dict:
         import calendar
         from sqlalchemy import and_
         from app.models.department_model import Department
@@ -579,8 +635,11 @@ class ReportRepository:
             .outerjoin(Appointment, Department.department_id == Appointment.department_id)
             .outerjoin(Billing, Appointment.id == Billing.appointment_id)
             .outerjoin(Payment, (Billing.id == Payment.billing_id) & (Payment.status == "completed") & (Payment.is_refund == False) & (Payment.payment_date >= start_time) & (Payment.payment_date <= end_time))
-            .group_by(Department.department_id, Department.department_name)
         )
+        if hospital_id is not None:
+            query = query.where(Department.hospital_id == hospital_id)
+
+        query = query.group_by(Department.department_id, Department.department_name)
         
         result = await self.db.execute(query)
         rows = result.all()
@@ -603,7 +662,7 @@ class ReportRepository:
             "departments": departments
         }
 
-    async def get_pharmacy_profit_loss(self, start_date, end_date) -> dict:
+    async def get_pharmacy_profit_loss(self, start_date, end_date, hospital_id: int | None = None) -> dict:
         from app.models.pharmacy_model import PharmacyInvoice, Purchase, Medicine
         from sqlalchemy import select, func, and_
         from datetime import datetime, date
@@ -616,6 +675,16 @@ class ReportRepository:
         cost_filters = [
             Purchase.status != 'cancelled'
         ]
+
+        med_filters = [
+            Medicine.is_deleted == False,
+            Medicine.is_active == True
+        ]
+
+        if hospital_id is not None:
+            sales_filters.append(PharmacyInvoice.hospital_id == hospital_id)
+            cost_filters.append(Purchase.hospital_id == hospital_id)
+            med_filters.append(Medicine.hospital_id == hospital_id)
 
         if start_date and end_date:
             start_time = datetime.combine(start_date, datetime.min.time())
@@ -634,10 +703,7 @@ class ReportRepository:
             func.coalesce(func.sum(Purchase.total_amount), 0.0).label('total_cost')
         ).where(*cost_filters)
 
-        medicine_query = select(func.count(Medicine.id).label('medicine_count')).where(
-            Medicine.is_deleted == False,
-            Medicine.is_active == True
-        )
+        medicine_query = select(func.count(Medicine.id).label('medicine_count')).where(*med_filters)
 
         sales_result = await self.db.execute(sales_query)
         sales_row = sales_result.first()
@@ -661,22 +727,26 @@ class ReportRepository:
             "medicine_count": medicine_count
         }
 
-    async def get_lab_summary(self, start_time, end_time) -> dict:
+    async def get_lab_summary(self, start_time, end_time, hospital_id: int | None = None) -> dict:
         from app.models.lab_model import TestOrder, LabTest
         from sqlalchemy import select, func, and_, case
         from datetime import datetime, date
         
+        filters = [
+            TestOrder.is_deleted == False,
+            TestOrder.ordered_at >= start_time,
+            TestOrder.ordered_at <= end_time
+        ]
+        if hospital_id is not None:
+            filters.append(TestOrder.hospital_id == hospital_id)
+
         query = select(
             func.count(TestOrder.id).label('total_orders'),
             func.sum(case((TestOrder.status == 'completed', 1), else_=0)).label('completed_orders'),
             func.sum(case((TestOrder.status != 'completed', 1), else_=0)).label('pending_orders'),
             func.coalesce(func.sum(LabTest.price), 0.0).label('total_revenue')
         ).join(LabTest, LabTest.id == TestOrder.lab_test_id).where(
-            and_(
-                TestOrder.is_deleted == False,
-                TestOrder.ordered_at >= start_time,
-                TestOrder.ordered_at <= end_time
-            )
+            *filters
         )
         
         result = await self.db.execute(query)
@@ -689,25 +759,39 @@ class ReportRepository:
             'total_revenue': float(row.total_revenue) if row and row.total_revenue else 0.0
         }
 
-    async def get_lab_performance(self, start_time, end_time) -> dict:
+    async def get_lab_performance(self, start_time, end_time, hospital_id: int | None = None) -> dict:
         from app.models.lab_model import TestOrder
         from sqlalchemy import select, func, and_, case, text
         from datetime import datetime, date
         
+        filters = [
+            TestOrder.is_deleted == False,
+            TestOrder.ordered_at >= start_time,
+            TestOrder.ordered_at <= end_time
+        ]
+        if hospital_id is not None:
+            filters.append(TestOrder.hospital_id == hospital_id)
+
         query = select(
             func.count(TestOrder.id).label('total_orders'),
             func.sum(case((TestOrder.status == 'completed', 1), else_=0)).label('completed_orders')
         ).where(
-            and_(
-                TestOrder.is_deleted == False,
-                TestOrder.ordered_at >= start_time,
-                TestOrder.ordered_at <= end_time
-            )
+            *filters
         )
         
         result = await self.db.execute(query)
         row = result.first()
         
+        avg_filters = [
+            TestOrder.is_deleted == False,
+            TestOrder.status == 'completed',
+            TestOrder.completed_at != None,
+            TestOrder.ordered_at >= start_time,
+            TestOrder.ordered_at <= end_time
+        ]
+        if hospital_id is not None:
+            avg_filters.append(TestOrder.hospital_id == hospital_id)
+
         avg_query = select(
             func.avg(
                 func.timestampdiff(
@@ -715,13 +799,7 @@ class ReportRepository:
                 )
             ).label('avg_hours')
         ).where(
-            and_(
-                TestOrder.is_deleted == False,
-                TestOrder.status == 'completed',
-                TestOrder.completed_at != None,
-                TestOrder.ordered_at >= start_time,
-                TestOrder.ordered_at <= end_time
-            )
+            *avg_filters
         )
         avg_result = await self.db.execute(avg_query)
         avg_row = avg_result.first()
@@ -733,19 +811,28 @@ class ReportRepository:
             'average_turnaround_hours': avg_hours
         }
 
-    async def get_lab_revenue(self, start_time, end_time) -> dict:
+    async def get_lab_revenue(self, start_time, end_time, hospital_id: int | None = None) -> dict:
         from app.models.lab_model import TestOrder, LabTest
-        from sqlalchemy import select, func, and_, case
+        from sqlalchemy import select, func, and_, case, or_
         from datetime import datetime, date
         
+        filters = [
+            TestOrder.is_deleted == False,
+            TestOrder.ordered_at >= start_time,
+            TestOrder.ordered_at <= end_time
+        ]
+        if hospital_id is not None:
+            filters.append(
+                or_(
+                    TestOrder.hospital_id == hospital_id,
+                    and_(TestOrder.hospital_id.is_(None), LabTest.hospital_id == hospital_id)
+                )
+            )
+
         total_query = select(
             func.coalesce(func.sum(LabTest.price), 0.0).label('total_revenue')
         ).select_from(TestOrder).join(LabTest, LabTest.id == TestOrder.lab_test_id).where(
-            and_(
-                TestOrder.is_deleted == False,
-                TestOrder.ordered_at >= start_time,
-                TestOrder.ordered_at <= end_time
-            )
+            *filters
         )
         total_result = await self.db.execute(total_query)
         total_row = total_result.first()
@@ -756,12 +843,8 @@ class ReportRepository:
             func.count(TestOrder.id).label('order_count'),
             func.coalesce(func.sum(LabTest.price), 0.0).label('revenue')
         ).select_from(TestOrder).join(LabTest, LabTest.id == TestOrder.lab_test_id).where(
-            and_(
-                TestOrder.is_deleted == False,
-                TestOrder.ordered_at >= start_time,
-                TestOrder.ordered_at <= end_time
-            )
-        ).group_by(LabTest.test_name).order_by(func.sum(LabTest.price).desc())
+            *filters
+        ).group_by(LabTest.id, LabTest.test_name).order_by(func.sum(LabTest.price).desc())
         
         by_test_result = await self.db.execute(by_test_query)
         revenue_by_test = [
@@ -778,35 +861,46 @@ class ReportRepository:
             'revenue_by_test': revenue_by_test
         }
 
-    async def get_doctor_lab_reports(self, start_time, end_time) -> dict:
+    async def get_doctor_lab_reports(self, start_time, end_time, hospital_id: int | None = None) -> dict:
         from app.models.lab_model import TestOrder
         from app.models.doctor_model import Doctor
-        from sqlalchemy import select, func, and_, case
+        from sqlalchemy import select, func, and_, case, or_
         
+        filters = [
+            TestOrder.is_deleted == False,
+            Doctor.is_deleted == False,
+            TestOrder.ordered_at >= start_time,
+            TestOrder.ordered_at <= end_time
+        ]
+        if hospital_id is not None:
+            filters.append(
+                or_(
+                    TestOrder.hospital_id == hospital_id,
+                    Doctor.hospital_id == hospital_id
+                )
+            )
+
         query = select(
             func.concat(Doctor.first_name, ' ', Doctor.last_name).label('doctor_name'),
             func.count(TestOrder.id).label('total_lab_orders'),
             func.sum(case((TestOrder.status == 'completed', 1), else_=0)).label('completed_reports'),
             func.sum(case((TestOrder.status == 'pending', 1), (TestOrder.status == 'ordered', 1), else_=0)).label('pending_reports'),
             func.sum(case((TestOrder.status == 'cancelled', 1), else_=0)).label('cancelled_reports')
-        ).join(TestOrder, TestOrder.doctor_id == Doctor.id).where(
-            and_(
-                TestOrder.is_deleted == False,
-                TestOrder.ordered_at >= start_time,
-                TestOrder.ordered_at <= end_time
-            )
-        ).group_by(Doctor.id).order_by(func.count(TestOrder.id).desc())
+        ).select_from(TestOrder).join(Doctor, TestOrder.doctor_id == Doctor.id).where(
+            *filters
+        ).group_by(Doctor.id, Doctor.first_name, Doctor.last_name).order_by(func.count(TestOrder.id).desc())
         
         result = await self.db.execute(query)
         reports = [
             {
                 'doctor_name': row.doctor_name,
                 'total_lab_orders': int(row.total_lab_orders),
-                'completed_reports': int(row.completed_reports),
-                'pending_reports': int(row.pending_reports),
-                'cancelled_reports': int(row.cancelled_reports)
+                'completed_reports': int(row.completed_reports or 0),
+                'pending_reports': int(row.pending_reports or 0),
+                'cancelled_reports': int(row.cancelled_reports or 0)
             }
             for row in result.all()
         ]
         
         return {'reports': reports}
+

@@ -1,9 +1,32 @@
-from datetime import datetime, date, date
+from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.report_repository import ReportRepository
 from fastapi import HTTPException
 from pydantic import BaseModel
-from app.schemas.report_schema import DailyRevenueResponse, PatientStatisticsResponse, AppointmentTrendsResponse, InventoryStatusResponse, PharmacySalesResponse, PharmacyInventoryResponse, PharmacyExpiryResponse, LabTestSummaryResponse, LabOrderedValueResponse, LabTechnicianWorkloadResponse, LabTurnaroundTimeResponse, UnifiedAccountantFinancialResponse, AccountantRevenueVsExpenseResponse, AccountantDepartmentWiseResponse, FinancialPeriod, ExportPayload
+from app.schemas.report_schema import (
+    DailyRevenueResponse,
+    PatientStatisticsResponse,
+    AppointmentTrendsResponse,
+    InventoryStatusResponse,
+    PharmacySalesResponse,
+    PharmacyInventoryResponse,
+    PharmacyExpiryResponse,
+    PharmacyProfitLossResponse,
+    LabTestSummaryResponse,
+    LabOrderedValueResponse,
+    LabTechnicianWorkloadResponse,
+    LabTurnaroundTimeResponse,
+    LabSummaryResponse,
+    LabPerformanceResponse,
+    LabRevenueResponse,
+    DoctorLabReportResponse,
+    UnifiedAccountantFinancialResponse,
+    AccountantRevenueVsExpenseResponse,
+    AccountantDepartmentWiseResponse,
+    FinancialPeriod,
+    ExportPayload,
+    CollectionSection
+)
 
 class ReportService:
     def __init__(self, db: AsyncSession):
@@ -16,9 +39,9 @@ class ReportService:
         month: int | str | None = None,
         year: int | str | None = None,
         start_date: date | None = None,
-        end_date: date | None = None
+        end_date: date | None = None,
+        hospital_id: int | None = None
     ) -> UnifiedAccountantFinancialResponse:
-        from datetime import datetime, date, datetime
         import calendar
 
         if isinstance(month, str) and "-" in month:
@@ -62,7 +85,7 @@ class ReportService:
         start_datetime = datetime.combine(s_date, datetime.min.time())
         end_datetime = datetime.combine(e_date, datetime.max.time())
 
-        stats = await self.repo._get_accountant_financial_report(start_datetime, end_datetime)
+        stats = await self.repo._get_accountant_financial_report(start_datetime, end_datetime, hospital_id=hospital_id)
 
         return UnifiedAccountantFinancialResponse(
             period=period,
@@ -71,53 +94,99 @@ class ReportService:
             **stats
         )
 
-    async def get_accountant_revenue_vs_expense(self, start_date: date | None = None, end_date: date | None = None) -> AccountantRevenueVsExpenseResponse:
-        stats = await self.repo.get_accountant_revenue_vs_expense(start_date, end_date)
+    async def get_accountant_revenue_vs_expense(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> AccountantRevenueVsExpenseResponse:
+        stats = await self.repo.get_accountant_revenue_vs_expense(start_date, end_date, hospital_id=hospital_id)
         return AccountantRevenueVsExpenseResponse(**stats)
 
-    async def get_accountant_department_wise(self, start_date: date | None = None, end_date: date | None = None) -> AccountantDepartmentWiseResponse:
-        stats = await self.repo.get_accountant_department_wise(start_date, end_date)
+    async def get_accountant_department_wise(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> AccountantDepartmentWiseResponse:
+        stats = await self.repo.get_accountant_department_wise(start_date, end_date, hospital_id=hospital_id)
         return AccountantDepartmentWiseResponse(**stats)
 
-    async def get_lab_turnaround_time(self, start_date: date | None = None, end_date: date | None = None, department_id: int | None = None) -> LabTurnaroundTimeResponse:
-        stats = await self.repo.get_lab_turnaround_time(start_date, end_date, department_id)
+    async def get_lab_turnaround_time(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None
+    ) -> LabTurnaroundTimeResponse:
+        stats = await self.repo.get_lab_turnaround_time(start_date, end_date, department_id, hospital_id=hospital_id)
         return LabTurnaroundTimeResponse(**stats)
 
-    async def get_lab_technician_workload(self) -> LabTechnicianWorkloadResponse:
-        stats = await self.repo.get_lab_technician_workload()
+    async def get_lab_technician_workload(self, hospital_id: int | None = None) -> LabTechnicianWorkloadResponse:
+        stats = await self.repo.get_lab_technician_workload(hospital_id=hospital_id)
         return LabTechnicianWorkloadResponse(**stats)
 
-    async def get_lab_ordered_value(self, start_date: date | None = None, end_date: date | None = None, department_id: int | None = None) -> LabOrderedValueResponse:
+    async def get_lab_ordered_value(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None
+    ) -> LabOrderedValueResponse:
         s_date = start_date or date.today()
         e_date = end_date or s_date
         
-        stats = await self.repo.get_lab_ordered_value(s_date, e_date, department_id)
+        stats = await self.repo.get_lab_ordered_value(s_date, e_date, department_id, hospital_id=hospital_id)
         return LabOrderedValueResponse(**stats)
 
-    async def get_lab_test_summary(self, start_date: date | None = None, end_date: date | None = None, department_id: int | None = None) -> LabTestSummaryResponse:
+    async def get_lab_test_summary(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None
+    ) -> LabTestSummaryResponse:
         s_date = start_date or date.today()
         e_date = end_date or s_date
         
-        stats = await self.repo.get_lab_test_summary(s_date, e_date, department_id)
+        stats = await self.repo.get_lab_test_summary(s_date, e_date, department_id, hospital_id=hospital_id)
         return LabTestSummaryResponse(**stats)
 
-    async def get_pharmacy_expiry(self, category: str | None = None) -> PharmacyExpiryResponse:
-        stats = await self.repo.get_pharmacy_expiry(category)
+    async def get_pharmacy_expiry(
+        self,
+        category: str | None = None,
+        hospital_id: int | None = None
+    ) -> PharmacyExpiryResponse:
+        stats = await self.repo.get_pharmacy_expiry(category, hospital_id=hospital_id)
         return PharmacyExpiryResponse(**stats)
 
-    async def get_pharmacy_inventory(self, category: str | None = None) -> PharmacyInventoryResponse:
-        stats = await self.repo.get_pharmacy_inventory(category)
+    async def get_pharmacy_inventory(
+        self,
+        category: str | None = None,
+        hospital_id: int | None = None
+    ) -> PharmacyInventoryResponse:
+        stats = await self.repo.get_pharmacy_inventory(category, hospital_id=hospital_id)
         return PharmacyInventoryResponse(**stats)
 
-    async def get_pharmacy_sales(self, start_date: date | None = None, end_date: date | None = None) -> PharmacySalesResponse:
+    async def get_pharmacy_sales(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> PharmacySalesResponse:
         s_date = start_date
         e_date = end_date
         
-        stats = await self.repo.get_pharmacy_sales(s_date, e_date)
+        stats = await self.repo.get_pharmacy_sales(s_date, e_date, hospital_id=hospital_id)
         return PharmacySalesResponse(**stats)
 
-    async def get_inventory_status(self, department_id: int | None = None, category: str | None = None) -> InventoryStatusResponse:
-        stats = await self.repo.get_inventory_status(department_id, category)
+    async def get_inventory_status(
+        self,
+        department_id: int | None = None,
+        category: str | None = None,
+        hospital_id: int | None = None
+    ) -> InventoryStatusResponse:
+        stats = await self.repo.get_inventory_status(department_id, category, hospital_id=hospital_id)
         return InventoryStatusResponse(**stats)
 
     async def get_appointment_trends(
@@ -125,23 +194,34 @@ class ReportService:
         start_date: date | None = None,
         end_date: date | None = None,
         doctor_id: int | None = None,
-        department_id: int | None = None
+        department_id: int | None = None,
+        hospital_id: int | None = None
     ) -> AppointmentTrendsResponse:
         s_date = start_date or date.today()
         e_date = end_date or s_date
         
-        trends = await self.repo.get_appointment_trends(s_date, e_date, doctor_id, department_id)
+        trends = await self.repo.get_appointment_trends(s_date, e_date, doctor_id, department_id, hospital_id=hospital_id)
         return AppointmentTrendsResponse(**trends)
 
-    async def get_patient_statistics(self, start_date: date | None = None, end_date: date | None = None) -> PatientStatisticsResponse:
-        stats = await self.repo.get_patient_statistics(start_date, end_date)
+    async def get_patient_statistics(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> PatientStatisticsResponse:
+        stats = await self.repo.get_patient_statistics(start_date, end_date, hospital_id=hospital_id)
         return PatientStatisticsResponse(**stats)
 
-    async def get_daily_revenue(self, start_date: date | None = None, end_date: date | None = None) -> DailyRevenueResponse:
+    async def get_daily_revenue(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> DailyRevenueResponse:
         s_date = start_date or date.today()
         e_date = end_date or s_date
         
-        billing_rev, pharmacy_rev = await self.repo.get_daily_revenue(s_date, e_date)
+        billing_rev, pharmacy_rev = await self.repo.get_daily_revenue(s_date, e_date, hospital_id=hospital_id)
         total_rev = billing_rev + pharmacy_rev
         return DailyRevenueResponse(
             date=s_date.isoformat(),
@@ -152,8 +232,6 @@ class ReportService:
 
     @staticmethod
     def build_export_payload(title: str, data: BaseModel, filters: dict = None, main_table_title: str = 'Main Data') -> ExportPayload:
-        from datetime import datetime, date, datetime
-        from app.schemas.report_schema import CollectionSection
         data_dict = data.model_dump()
         
         summary = {}
@@ -193,30 +271,37 @@ class ReportService:
             additional_sections=additional_sections
         )
 
-    async def get_pharmacy_profit_loss(self, start_date, end_date):
-        from app.schemas.report_schema import PharmacyProfitLossResponse
-        data = await self.repo.get_pharmacy_profit_loss(start_date, end_date)
+    async def get_pharmacy_profit_loss(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> PharmacyProfitLossResponse:
+        data = await self.repo.get_pharmacy_profit_loss(start_date, end_date, hospital_id=hospital_id)
         return PharmacyProfitLossResponse(**data)
 
-    async def get_lab_daily(self, date_filter: date | None = None):
-        from app.schemas.report_schema import LabSummaryResponse
-        from datetime import datetime, date
-        import calendar
+    async def get_lab_daily(
+        self,
+        date_filter: date | None = None,
+        hospital_id: int | None = None
+    ) -> LabSummaryResponse:
         now = date.today()
         target_date = date_filter or now
         
         start_time = datetime.combine(target_date, datetime.min.time())
         end_time = datetime.combine(target_date, datetime.max.time())
         
-        data = await self.repo.get_lab_summary(start_time, end_time)
-        data['period'] = target_date.strftime('%Y-%M-%d') # typo intentionally fixed below
+        data = await self.repo.get_lab_summary(start_time, end_time, hospital_id=hospital_id)
         data['period'] = target_date.strftime('%Y-%m-%d')
         
         return LabSummaryResponse(**data)
 
-    async def get_lab_monthly(self, month: str | None = None, year: str | None = None):
-        from app.schemas.report_schema import LabSummaryResponse
-        from datetime import datetime, date
+    async def get_lab_monthly(
+        self,
+        month: str | None = None,
+        year: str | None = None,
+        hospital_id: int | None = None
+    ) -> LabSummaryResponse:
         import calendar
         now = date.today()
         m = int(month) if month else now.month
@@ -228,14 +313,17 @@ class ReportService:
         start_time = datetime.combine(s_date, datetime.min.time())
         end_time = datetime.combine(e_date, datetime.max.time())
         
-        data = await self.repo.get_lab_summary(start_time, end_time)
+        data = await self.repo.get_lab_summary(start_time, end_time, hospital_id=hospital_id)
         data['period'] = f"{y}-{m:02d}"
         
         return LabSummaryResponse(**data)
 
-    async def get_lab_performance(self, start_date: date | None = None, end_date: date | None = None):
-        from app.schemas.report_schema import LabPerformanceResponse
-        from datetime import datetime, date
+    async def get_lab_performance(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> LabPerformanceResponse:
         import calendar
         now = date.today()
         s_date = start_date or date(now.year, now.month, 1)
@@ -244,12 +332,15 @@ class ReportService:
         start_time = datetime.combine(s_date, datetime.min.time())
         end_time = datetime.combine(e_date, datetime.max.time())
         
-        data = await self.repo.get_lab_performance(start_time, end_time)
+        data = await self.repo.get_lab_performance(start_time, end_time, hospital_id=hospital_id)
         return LabPerformanceResponse(**data)
 
-    async def get_lab_revenue(self, start_date: date | None = None, end_date: date | None = None):
-        from app.schemas.report_schema import LabRevenueResponse
-        from datetime import datetime, date
+    async def get_lab_revenue(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> LabRevenueResponse:
         import calendar
         now = date.today()
         s_date = start_date or date(now.year, now.month, 1)
@@ -258,12 +349,15 @@ class ReportService:
         start_time = datetime.combine(s_date, datetime.min.time())
         end_time = datetime.combine(e_date, datetime.max.time())
         
-        data = await self.repo.get_lab_revenue(start_time, end_time)
+        data = await self.repo.get_lab_revenue(start_time, end_time, hospital_id=hospital_id)
         return LabRevenueResponse(**data)
 
-    async def get_doctor_lab_reports(self, start_date, end_date):
-        from app.schemas.report_schema import DoctorLabReportResponse
-        from datetime import datetime, date
+    async def get_doctor_lab_reports(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None
+    ) -> DoctorLabReportResponse:
         import calendar
         now = date.today()
         s_date = start_date or date(now.year, now.month, 1)
@@ -272,5 +366,5 @@ class ReportService:
         start_time = datetime.combine(s_date, datetime.min.time())
         end_time = datetime.combine(e_date, datetime.max.time())
         
-        data = await self.repo.get_doctor_lab_reports(start_time, end_time)
+        data = await self.repo.get_doctor_lab_reports(start_time, end_time, hospital_id=hospital_id)
         return DoctorLabReportResponse(**data)

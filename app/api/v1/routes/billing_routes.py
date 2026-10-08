@@ -83,7 +83,8 @@ async def export_billings(
         end_date=end_date,
         q=q,
         sort_by=sort_by,
-        sort_order=sort_order
+        sort_order=sort_order,
+        current_user=current_user,
     )
     
     if format == BillingExportFormat.EXCEL:
@@ -175,6 +176,7 @@ async def daily_collection_report(
         filter_type=active_filter,
         start_date=start_date,
         end_date=end_date,
+        current_user=current_user,
     )
     return APIResponse(message="Daily collection report", data=report)
 
@@ -187,7 +189,7 @@ async def monthly_revenue_report(
     year: int = Query(..., ge=1900, le=2100, description="Select year"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_period_report("monthly", year=year, month=month)
+    report = await BillingService(db).get_period_report("monthly", year=year, month=month, current_user=current_user)
     return APIResponse(message="Monthly revenue report", data=report)
 
 
@@ -198,7 +200,7 @@ async def yearly_revenue_report(
     year: int = Query(..., ge=1900, le=2100, description="Select year"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    report = await BillingService(db).get_yearly_report(year)
+    report = await BillingService(db).get_yearly_report(year, current_user=current_user)
     return APIResponse(message="Yearly revenue report", data=report)
 
 
@@ -210,7 +212,7 @@ async def pending_payments(
     size: int = 20,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    result = await BillingService(db).get_pending_payments(page=page, size=size)
+    result = await BillingService(db).get_pending_payments(page=page, size=size, current_user=current_user)
     return APIResponse(message="Pending payments retrieved", data=result)
 
 
@@ -220,7 +222,7 @@ async def revenue_summary(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    summary = await BillingService(db).get_revenue_summary()
+    summary = await BillingService(db).get_revenue_summary(current_user=current_user)
     return APIResponse(message="Revenue summary", data=summary)
 
 

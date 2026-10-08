@@ -10,8 +10,8 @@ class ClinicalRecordRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return (
+    def _base_query(self, hospital_id: int | None = None):
+        query = (
             select(ClinicalRecord)
             .where(ClinicalRecord.is_deleted.is_(False))
             .options(
@@ -19,6 +19,13 @@ class ClinicalRecordRepository:
                 selectinload(ClinicalRecord.doctor)
             )
         )
+        if hospital_id is not None:
+            from app.models.doctor_model import Doctor
+            query = query.join(Doctor, ClinicalRecord.doctor_id == Doctor.id).where(
+                Doctor.hospital_id == hospital_id,
+                Doctor.is_deleted == False,
+            )
+        return query
 
     async def create(self, record: ClinicalRecord) -> ClinicalRecord:
         self.db.add(record)
@@ -28,8 +35,8 @@ class ClinicalRecordRepository:
         result = await self.db.execute(query)
         return result.scalar_one()
 
-    async def get_by_id(self, record_id: int) -> ClinicalRecord | None:
-        query = self._base_query().where(ClinicalRecord.id == record_id)
+    async def get_by_id(self, record_id: int, hospital_id: int | None = None) -> ClinicalRecord | None:
+        query = self._base_query(hospital_id=hospital_id).where(ClinicalRecord.id == record_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -39,9 +46,10 @@ class ClinicalRecordRepository:
         limit: int = 20,
         patient_id: int | None = None,
         doctor_id: int | None = None,
-        appointment_id: int | None = None
+        appointment_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[ClinicalRecord]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if patient_id is not None:
             query = query.where(ClinicalRecord.patient_id == patient_id)
         if doctor_id is not None:
@@ -57,9 +65,16 @@ class ClinicalRecordRepository:
         self,
         patient_id: int | None = None,
         doctor_id: int | None = None,
-        appointment_id: int | None = None
+        appointment_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(ClinicalRecord).where(ClinicalRecord.is_deleted.is_(False))
+        if hospital_id is not None:
+            from app.models.doctor_model import Doctor
+            query = query.join(Doctor, ClinicalRecord.doctor_id == Doctor.id).where(
+                Doctor.hospital_id == hospital_id,
+                Doctor.is_deleted == False,
+            )
         if patient_id is not None:
             query = query.where(ClinicalRecord.patient_id == patient_id)
         if doctor_id is not None:

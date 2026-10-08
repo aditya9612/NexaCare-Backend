@@ -2,7 +2,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.patient_schema import PatientResponse
@@ -61,7 +61,8 @@ async def create_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "create")),
 ):
-    nurse = await NurseService(db).create(data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    nurse = await NurseService(db).create(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse created", data=nurse)
 
 
@@ -77,6 +78,7 @@ async def list_nurses(
     sort_order: str = "desc",
     _: User = Depends(require_permission("nurses", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     result = await NurseService(db).list_nurses(
         page=page,
         size=size,
@@ -84,6 +86,7 @@ async def list_nurses(
         shift=shift,
         sort_by=sort_by,
         sort_order=sort_order,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Nurses retrieved", data=result)
 
@@ -97,7 +100,8 @@ async def search_nurses(
     size: int = 20,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).search(search_query, page=page, size=size)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await NurseService(db).search(search_query, page=page, size=size, hospital_id=hospital_id)
     return APIResponse(message="Search results", data=result)
 
 
@@ -118,7 +122,8 @@ async def list_medication_schedules(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    schedules = await NurseService(db).list_medication_schedules()
+    hospital_id = resolve_tenant_id(current_user)
+    schedules = await NurseService(db).list_medication_schedules(hospital_id=hospital_id)
     return APIResponse(message="Medication schedules retrieved successfully", data=schedules)
 
 
@@ -129,7 +134,8 @@ async def list_prescriptions(
     patient_id: int | None = None,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    prescriptions = await NurseService(db).list_prescriptions(patient_id)
+    hospital_id = resolve_tenant_id(current_user)
+    prescriptions = await NurseService(db).list_prescriptions(patient_id=patient_id, hospital_id=hospital_id)
     return APIResponse(message="Prescriptions retrieved successfully", data=prescriptions)
 
 
@@ -189,7 +195,8 @@ async def get_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    nurse = await NurseService(db).get_by_id(nurse_id)
+    hospital_id = resolve_tenant_id(current_user)
+    nurse = await NurseService(db).get_by_id(nurse_id, hospital_id=hospital_id)
     return APIResponse(message="Nurse retrieved", data=nurse)
 
 
@@ -201,7 +208,8 @@ async def update_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "update")),
 ):
-    nurse = await NurseService(db).update(nurse_id, data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    nurse = await NurseService(db).update(nurse_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse updated", data=nurse)
 
 
@@ -212,7 +220,8 @@ async def delete_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "delete")),
 ):
-    await NurseService(db).delete(nurse_id, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    await NurseService(db).delete(nurse_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse deleted", data=MessageResponse(message="Deleted successfully"))
 
 

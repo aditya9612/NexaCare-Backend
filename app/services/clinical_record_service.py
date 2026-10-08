@@ -1,3 +1,4 @@
+from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException, BadRequestException, ConflictException
@@ -101,8 +102,11 @@ class ClinicalRecordService:
 
         return resp
 
-    async def get_record(self, record_id: int) -> ClinicalRecordResponse:
-        record = await self.record_repo.get_by_id(record_id)
+    async def get_record(self, record_id: int, hospital_id: int | None = None, current_user: Any | None = None) -> ClinicalRecordResponse:
+        if hospital_id is None and current_user is not None:
+            from app.core.dependencies import resolve_tenant_id
+            hospital_id = resolve_tenant_id(current_user)
+        record = await self.record_repo.get_by_id(record_id, hospital_id=hospital_id)
         if not record:
             raise NotFoundException(f"Clinical record with ID {record_id} not found")
         return self._to_response_schema(record)
@@ -113,14 +117,21 @@ class ClinicalRecordService:
         size: int = 20,
         patient_id: int | None = None,
         doctor_id: int | None = None,
-        appointment_id: int | None = None
+        appointment_id: int | None = None,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
     ):
+        if hospital_id is None and current_user is not None:
+            from app.core.dependencies import resolve_tenant_id
+            hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
         items = await self.record_repo.list_all(
-            skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id
+            skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
+            hospital_id=hospital_id,
         )
         total = await self.record_repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id
+            patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
+            hospital_id=hospital_id,
         )
         return build_paginated_result(
             [self._to_response_schema(r) for r in items], total, page, size

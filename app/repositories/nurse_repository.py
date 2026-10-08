@@ -25,42 +25,51 @@ class NurseRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Nurse).outerjoin(Nurse.department)
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Nurse).outerjoin(Nurse.department)
+        if hospital_id is not None:
+            query = query.where(Nurse.hospital_id == hospital_id)
+        return query
 
     async def list_all(
         self,
-        skip: int = 0,
-        limit: int = 20,
+        skip: int | None = 0,
+        limit: int | None = 20,
         department_id: int | None = None,
         shift: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ) -> list[Nurse]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if department_id:
             query = query.where(Nurse.department_id == department_id)
         if shift:
             query = query.where(Nurse.shift == shift)
         column = getattr(Nurse, sort_by, Nurse.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
-        result = await self.db.execute(query.offset(skip).limit(limit))
+        if skip is not None and limit is not None:
+            query = query.offset(skip).limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def count_all(
         self,
         department_id: int | None = None,
         shift: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Nurse)
+        if hospital_id is not None:
+            query = query.where(Nurse.hospital_id == hospital_id)
         if department_id:
             query = query.where(Nurse.department_id == department_id)
         if shift:
             query = query.where(Nurse.shift == shift)
         return await self.db.scalar(query) or 0
 
-    async def get_by_id(self, nurse_id: int) -> Nurse | None:
-        result = await self.db.execute(self._base_query().where(Nurse.id == nurse_id))
+    async def get_by_id(self, nurse_id: int, hospital_id: int | None = None) -> Nurse | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Nurse.id == nurse_id))
         return result.scalar_one_or_none()
 
     async def get_by_id_with_details(self, nurse_id: int) -> Nurse | None:
@@ -98,21 +107,23 @@ class NurseRepository:
             func.lower(Department.department_name).like(pattern),
         )
 
-    async def search(self, q: str, skip: int = 0, limit: int = 20) -> list[Nurse]:
-        query = self._base_query().where(self._search_filter(q))
-        result = await self.db.execute(query.offset(skip).limit(limit))
+    async def search(self, q: str, skip: int | None = 0, limit: int | None = 20, hospital_id: int | None = None) -> list[Nurse]:
+        query = self._base_query(hospital_id=hospital_id).where(self._search_filter(q))
+        if skip is not None and limit is not None:
+            query = query.offset(skip).limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def count_search(self, q: str) -> int:
-        return (
-            await self.db.scalar(
-                select(func.count())
-                .select_from(Nurse)
-                .outerjoin(Nurse.department)
-                .where(self._search_filter(q))
-            )
-            or 0
+    async def count_search(self, q: str, hospital_id: int | None = None) -> int:
+        query = (
+            select(func.count())
+            .select_from(Nurse)
+            .outerjoin(Nurse.department)
+            .where(self._search_filter(q))
         )
+        if hospital_id is not None:
+            query = query.where(Nurse.hospital_id == hospital_id)
+        return await self.db.scalar(query) or 0
 
     async def create(self, nurse: Nurse) -> Nurse:
         self.db.add(nurse)

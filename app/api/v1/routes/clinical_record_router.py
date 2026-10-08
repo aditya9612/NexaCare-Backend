@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.clinical_record_schema import (
@@ -36,8 +36,10 @@ async def list_clinical_records(
     appointment_id: int | None = Query(None),
     _: User = Depends(require_permission("patients", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     result = await ClinicalRecordService(db).list_records(
-        page=page, size=size, patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id
+        page=page, size=size, patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Records fetched successfully", data=result)
 
@@ -49,7 +51,8 @@ async def get_clinical_record(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    record = await ClinicalRecordService(db).get_record(record_id)
+    hospital_id = resolve_tenant_id(current_user)
+    record = await ClinicalRecordService(db).get_record(record_id, hospital_id=hospital_id)
     return APIResponse(message="Record fetched successfully", data=record)
 
 

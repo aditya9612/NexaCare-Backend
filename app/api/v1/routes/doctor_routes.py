@@ -5,7 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.appointment_schema import AppointmentResponse, DoctorAppointmentListResponse
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -372,10 +372,12 @@ async def view_reports(
     size: int = 20,
     _: User = Depends(require_permission("doctors", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     result = await DoctorMedicalRecordService(db).list_reports(
         page=page,
         size=size,
         user_id=current_user.id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Medical records retrieved", data=result)
 
@@ -387,7 +389,8 @@ async def download_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id, hospital_id=hospital_id)
     return FileResponse(
         path=record.file_path,
         filename=record.file_name,
@@ -407,7 +410,8 @@ async def view_report(
 ):
     if record_id is None:
         return APIResponse(message="No report record_id provided", data=None)
-    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id, hospital_id=hospital_id)
     return FileResponse(
         path=record.file_path,
         filename=record.file_name,
@@ -426,7 +430,8 @@ async def get_medical_record(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id, user_id=current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id, user_id=current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Medical record retrieved", data=record)
 
 
@@ -459,6 +464,7 @@ async def update_medical_record(
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 
+    hospital_id = resolve_tenant_id(current_user)
     record = await DoctorMedicalRecordService(db).update_report(
         record_id=record_id,
         report_title=report_title,
@@ -467,6 +473,7 @@ async def update_medical_record(
         notes=notes,
         file=file,
         user_id=current_user.id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Medical record updated", data=record)
 
@@ -481,7 +488,8 @@ async def delete_medical_record(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "delete")),
 ):
-    await DoctorMedicalRecordService(db).delete_report(record_id, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    await DoctorMedicalRecordService(db).delete_report(record_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(
         message="Medical record deleted",
         data=MessageResponse(message="Record deleted"),
@@ -806,8 +814,9 @@ async def list_doctor_clinical_records(
     size: int = Query(20, ge=1, le=100),
     _: User = Depends(require_permission("doctors", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     from app.services.clinical_record_service import ClinicalRecordService
     result = await ClinicalRecordService(db).list_records(
-        page=page, size=size, doctor_id=doctor_id
+        page=page, size=size, doctor_id=doctor_id, hospital_id=hospital_id
     )
     return APIResponse(message="Records fetched successfully", data=result)

@@ -311,57 +311,71 @@ class AppointmentService:
             if (row.appointment_status or "") in _CANCELLED_SET
         )
         total_appointments = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            hospital_id=hospital_id,
         )
         today_appointments = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            appointment_date=today
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            appointment_date=today, hospital_id=hospital_id,
         )
-        total_today_discharged = await self.discharge_repo.count_today_discharged(on_date=today_ist)
+        total_today_discharged = await self.discharge_repo.count_today_discharged(
+            on_date=today_ist, hospital_id=hospital_id
+        )
         total_scheduled = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         completed = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         cancelled = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         pending = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.PENDING, appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.PENDING, appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         confirmed = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
 
         in_progress = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="In-Progress", appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="In-Progress", appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         checked_in = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Check-in", appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="Check-in", appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         checked_out = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Checked-Out", appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="Checked-Out", appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         admit_recommended = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admit-recommended", appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admit-recommended", appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         admitted = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admitted", appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="admitted", appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
         waiting = await self.repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="waiting", appointment_date=appointment_date
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            status="waiting", appointment_date=appointment_date,
+            hospital_id=hospital_id,
         )
 
         paginated = build_paginated_result(
@@ -468,7 +482,7 @@ class AppointmentService:
             **appointment_data,
         )
         appointment = await self.repo.create(appointment)
-        await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         await self._notify_confirmation_safely(appointment, user_id)
 
         try:
@@ -574,7 +588,7 @@ class AppointmentService:
         elif appointment.appointment_status in (AppointmentStatus.NO_SHOW, "No Show", "no-show", "no_show"):
             appointment.queue_status = "SKIPPED"
         appointment = await self.repo.update(appointment)
-        await self.audit_repo.create("update", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("update", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         return AppointmentResponse.model_validate(appointment)
 
     async def delete(self, appointment_id: int, user_id: int, current_user = None) -> None:
@@ -584,10 +598,8 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
         await self.repo.delete(appointment)
-        await self.audit_repo.create("delete", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("delete", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
 
-    async def reschedule(self, data: RescheduleRequest, user_id: int | None) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(data.appointment_id)
     async def reschedule(self, data: RescheduleRequest, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -606,7 +618,7 @@ class AppointmentService:
         if data.notes:
             appointment.notes = data.notes
         appointment = await self.repo.update(appointment)
-        await self.audit_repo.create("reschedule", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("reschedule", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
 
         try:
             patient = await self.patient_repo.get_by_id(appointment.patient_id)
@@ -633,8 +645,6 @@ class AppointmentService:
 
         return AppointmentResponse.model_validate(appointment)
 
-    async def cancel(self, data: CancelRequest, user_id: int | None) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(data.appointment_id)
     async def cancel(self, data: CancelRequest, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -648,7 +658,7 @@ class AppointmentService:
         if data.reason:
             appointment.notes = data.reason
         appointment = await self.repo.update(appointment)
-        await self.audit_repo.create("cancel", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("cancel", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
 
         try:
             patient = await self.patient_repo.get_by_id(appointment.patient_id)
@@ -706,7 +716,7 @@ class AppointmentService:
             
         appointment.appointment_status = AppointmentStatus.CONFIRMED
         appointment = await self.repo.update(appointment)
-        await self.audit_repo.create("confirm", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("confirm", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         await self._notify_confirmation_safely(appointment, user_id)
         return AppointmentResponse.model_validate(appointment)
 
@@ -717,6 +727,9 @@ class AppointmentService:
         doctor_id: int | None = None,
         current_user = None,
     ):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
         effective_doctor_id = doctor_id
         effective_patient_id = None
 
@@ -743,26 +756,32 @@ class AppointmentService:
                     return []
                 effective_patient_id = allowed_ids
 
-        appointments = await self.repo.get_calendar(
-            start_date=start_date,
-            end_date=end_date,
-            doctor_id=effective_doctor_id,
-            patient_id=effective_patient_id,
-        )
+        repo_kwargs = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "doctor_id": effective_doctor_id,
+            "patient_id": effective_patient_id,
+        }
+        if hospital_id is not None:
+            repo_kwargs["hospital_id"] = hospital_id
+
+        appointments = await self.repo.get_calendar(**repo_kwargs)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self, on_date: date | None = None) -> dict:
+    async def get_today(self, on_date: date | None = None, current_user = None) -> dict:
+        from app.core.dependencies import resolve_tenant_id
         from app.utils.helpers import get_today_ist
+        hospital_id = resolve_tenant_id(current_user)
         if on_date is None:
             on_date = get_today_ist()
-        appointments = await self.repo.get_today(on_date)
+        appointments = await self.repo.get_today(on_date, hospital_id=hospital_id)
         has_updated = False
         today = on_date
         next_num = None
         for a in appointments:
             if not a.queue_token:
                 if next_num is None:
-                    next_tok = await self.repo.get_next_queue_token(a.appointment_date or today)
+                    next_tok = await self.repo.get_next_queue_token(a.appointment_date or today, hospital_id=hospital_id)
                     try:
                         next_num = int(next_tok.replace("T-", ""))
                     except (ValueError, AttributeError):
@@ -807,12 +826,16 @@ class AppointmentService:
             "admitted": admitted_count,
         }
 
-    async def get_upcoming(self, limit: int = 20):
-        appointments = await self.repo.get_upcoming(limit)
+    async def get_upcoming(self, limit: int = 20, current_user = None):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointments = await self.repo.get_upcoming(limit, hospital_id=hospital_id)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def check_in(self, appointment_id: int, user_id: int) -> Appointment:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def check_in(self, appointment_id: int, user_id: int, current_user = None) -> Appointment:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         if appointment.appointment_status in ("Checked-In", "Checked_In", "checked_in"):
@@ -822,7 +845,7 @@ class AppointmentService:
         appointment.appointment_status = "Checked-In"
         appointment.check_in_time = datetime.now()
         if not appointment.queue_token:
-            appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date)
+            appointment.queue_token = await self.repo.get_next_queue_token(appointment.appointment_date, hospital_id=hospital_id)
             if not appointment.token_number:
                 try:
                     appointment.token_number = int(appointment.queue_token.replace("T-", ""))
@@ -834,8 +857,10 @@ class AppointmentService:
         await self._create_queue_notification(appointment, f"Patient checked in for appointment {appointment.appointment_number}")
         return appointment
 
-    async def check_out(self, appointment_id: int, user_id: int) -> Appointment:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def check_out(self, appointment_id: int, user_id: int, current_user = None) -> Appointment:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         
@@ -884,8 +909,10 @@ class AppointmentService:
         await self._create_queue_notification(appointment, f"Patient checked out for appointment {appointment.appointment_number}")
         return appointment
 
-    async def generate_queue_token(self, appointment_id: int, user_id: int) -> Appointment:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def generate_queue_token(self, appointment_id: int, user_id: int, current_user = None) -> Appointment:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
@@ -893,7 +920,7 @@ class AppointmentService:
         if appointment.queue_token:
             raise BadRequestException("Token already generated for this appointment")
 
-        next_token = await self.repo.get_next_queue_token(appointment.appointment_date)
+        next_token = await self.repo.get_next_queue_token(appointment.appointment_date, hospital_id=hospital_id)
 
         appointment.queue_token = next_token
         if not appointment.token_number:
@@ -906,30 +933,35 @@ class AppointmentService:
         await self._create_queue_notification(appointment, f"Queue token {next_token} has been generated.")
         return appointment
 
-    async def get_today_queue(self) -> list[Appointment]:
+    async def get_today_queue(self, current_user = None) -> list[Appointment]:
+        from app.core.dependencies import resolve_tenant_id
         from app.utils.helpers import get_today_ist
         from sqlalchemy import select, case
         from sqlalchemy.orm import joinedload
+        hospital_id = resolve_tenant_id(current_user)
         today = get_today_ist()
-        result = await self.db.execute(
+        query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
             .where(Appointment.appointment_date == today)
-            .order_by(
-                case(
-                    (Appointment.triage_level.isnot(None), Appointment.triage_level),
-                    else_=999,
-                ).asc(),
-                Appointment.id.asc(),
-            )
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        query = query.order_by(
+            case(
+                (Appointment.triage_level.isnot(None), Appointment.triage_level),
+                else_=999,
+            ).asc(),
+            Appointment.id.asc(),
+        )
+        result = await self.db.execute(query)
         appointments = list(result.scalars().unique().all())
         has_updated = False
         next_num = None
         for a in appointments:
             if not a.queue_token:
                 if next_num is None:
-                    next_tok = await self.repo.get_next_queue_token(a.appointment_date or today)
+                    next_tok = await self.repo.get_next_queue_token(a.appointment_date or today, hospital_id=hospital_id)
                     try:
                         next_num = int(next_tok.replace("T-", ""))
                     except (ValueError, AttributeError):
@@ -945,25 +977,31 @@ class AppointmentService:
             await self.db.flush()
         return appointments
 
-    async def get_current_queue(self) -> Appointment | None:
+    async def get_current_queue(self, current_user = None) -> Appointment | None:
+        from app.core.dependencies import resolve_tenant_id
         from app.utils.helpers import get_today_ist
         from sqlalchemy import select
         from sqlalchemy.orm import joinedload
+        hospital_id = resolve_tenant_id(current_user)
         today = get_today_ist()
-        result = await self.db.execute(
+        query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
             .where(
                 Appointment.appointment_date == today,
                 Appointment.queue_status.in_(["CALLED", "IN_PROGRESS"])
             )
-            .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
-            .limit(1)
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        query = query.order_by(Appointment.updated_at.desc(), Appointment.id.desc()).limit(1)
+        result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def call_next_token(self, appointment_id: int, user_id: int) -> Appointment:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def call_next_token(self, appointment_id: int, user_id: int, current_user = None) -> Appointment:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
 
@@ -989,8 +1027,10 @@ class AppointmentService:
         await self._create_queue_notification(appointment, f"Doctor is calling patient (Token {appointment.queue_token})")
         return appointment
 
-    async def complete_token(self, appointment_id: int, user_id: int) -> Appointment:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def complete_token(self, appointment_id: int, user_id: int, current_user = None) -> Appointment:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
             
@@ -1015,8 +1055,10 @@ class AppointmentService:
         await self.db.flush()
         return appointment
 
-    async def skip_token(self, appointment_id: int, user_id: int) -> Appointment:
-        appointment = await self.repo.get_by_id(appointment_id)
+    async def skip_token(self, appointment_id: int, user_id: int, current_user = None) -> Appointment:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
 
@@ -1068,51 +1110,56 @@ class AppointmentService:
             )
 
     async def get_confirmed_visit_list(
-            self,
-            page: int = 1,
-            limit: int = 20,
-            search: str | None = None,
-            doctor_id: int | None = None,
-            department_id: int | None = None,
-            appointment_date: date | None = None,
-        ):
-            skip = (page - 1) * limit
-            items = await self.repo.get_confirmed_appointments(
-                skip=skip, limit=limit, search=search, doctor_id=doctor_id,
-                department_id=department_id, appointment_date=appointment_date,
-            )
-            total = await self.repo.count_confirmed_appointments(
-                search=search, doctor_id=doctor_id,
-                department_id=department_id, appointment_date=appointment_date,
-            )
+        self,
+        page: int = 1,
+        limit: int = 20,
+        search: str | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        appointment_date: date | None = None,
+        current_user = None,
+    ):
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        skip = (page - 1) * limit
+        items = await self.repo.get_confirmed_appointments(
+            skip=skip, limit=limit, search=search, doctor_id=doctor_id,
+            department_id=department_id, appointment_date=appointment_date,
+            hospital_id=hospital_id,
+        )
+        total = await self.repo.count_confirmed_appointments(
+            search=search, doctor_id=doctor_id,
+            department_id=department_id, appointment_date=appointment_date,
+            hospital_id=hospital_id,
+        )
 
-            responses = []
-            for appt in items:
-                p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else ""
-                doc_name = f"Dr. {appt.doctor.first_name} {appt.doctor.last_name}" if appt.doctor else ""
-                dept_name = appt.department.department_name if appt.department else None
+        responses = []
+        for appt in items:
+            p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else ""
+            doc_name = f"Dr. {appt.doctor.first_name} {appt.doctor.last_name}" if appt.doctor else ""
+            dept_name = appt.department.department_name if appt.department else None
 
-                responses.append(
-                    ConfirmedVisitResponse(
-                        appointment_id=appt.id,
-                        appointment_number=appt.appointment_number,
-                        patient_id=appt.patient_id,
-                        patient_name=p_name,
-                        doctor_id=appt.doctor_id,
-                        doctor_name=doc_name,
-                        department_name=dept_name,
-                        appointment_date=appt.appointment_date,
-                        appointment_time=appt.appointment_time,
-                        status=appt.appointment_status,
-                        check_in_time=appt.check_in_time,
-                        queue_token=appt.queue_token,
-                        queue_status=appt.queue_status
-                    )
+            responses.append(
+                ConfirmedVisitResponse(
+                    appointment_id=appt.id,
+                    appointment_number=appt.appointment_number,
+                    patient_id=appt.patient_id,
+                    patient_name=p_name,
+                    doctor_id=appt.doctor_id,
+                    doctor_name=doc_name,
+                    department_name=dept_name,
+                    appointment_date=appt.appointment_date,
+                    appointment_time=appt.appointment_time,
+                    status=appt.appointment_status,
+                    check_in_time=appt.check_in_time,
+                    queue_token=appt.queue_token,
+                    queue_status=appt.queue_status
                 )
+            )
 
-            return build_paginated_result(responses, total, page, limit)
+        return build_paginated_result(responses, total, page, limit)
 
-    async def download_appointment_pdf(self, appointment_id: int) -> bytes:
+    async def download_appointment_pdf(self, appointment_id: int, current_user = None) -> bytes:
         import io
         from reportlab.lib.pagesizes import letter
         from reportlab.lib import colors
@@ -1122,8 +1169,10 @@ class AppointmentService:
         from sqlalchemy.orm import selectinload
         from app.models.clinical_record_model import ClinicalRecord
         from app.models.pharmacy_model import Prescription, PrescriptionItem
+        from app.core.dependencies import resolve_tenant_id
 
-        appointment = await self.repo.get_by_id(appointment_id)
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
 
@@ -1385,10 +1434,14 @@ class AppointmentService:
         appointment_time: time | None = None,
         department_id: int | None = None,
         specialization: str | None = None,
+        current_user = None,
     ) -> list[ScheduledDoctorResponse]:
         from app.models.doctor_model import Doctor, DoctorSchedule
         from sqlalchemy import select
         from datetime import time as dt_time
+        from app.core.dependencies import resolve_tenant_id
+
+        hospital_id = resolve_tenant_id(current_user)
 
         # 1. Convert appointment_date to weekday (0 = Monday, 6 = Sunday)
         day_of_week = appointment_date.weekday()
@@ -1403,6 +1456,8 @@ class AppointmentService:
                 DoctorSchedule.is_active.is_(True)
             )
         )
+        if hospital_id is not None:
+            query = query.where(Doctor.hospital_id == hospital_id)
 
         # Apply filters
         if department_id is not None:
@@ -1457,8 +1512,11 @@ class AppointmentService:
         appointment_id: int,
         data: AdmitRecommendationRequest,
         user_id: int,
+        current_user = None,
     ) -> AdmitRecommendationResponse:
-        appointment = await self.repo.get_by_id(appointment_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
 
@@ -1550,15 +1608,18 @@ class AppointmentService:
         appointment_id: int,
         data: EmergencyTriageRequest,
         user_id: int,
+        current_user = None,
     ) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(appointment_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         appointment.triage_level = data.triage_level
         if data.triage_notes is not None:
             appointment.triage_notes = data.triage_notes
         appointment = await self.repo.update(appointment)
-        await self.audit_repo.create("update_triage", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("update_triage", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         return AppointmentResponse.model_validate(appointment)
 
     async def update_disposition(
@@ -1566,8 +1627,11 @@ class AppointmentService:
         appointment_id: int,
         data: EmergencyDispositionRequest,
         user_id: int,
+        current_user = None,
     ) -> AppointmentResponse:
-        appointment = await self.repo.get_by_id(appointment_id)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
         disp_clean = data.disposition.strip().upper()
@@ -1579,16 +1643,19 @@ class AppointmentService:
         if data.notes:
             appointment.notes = f"{appointment.notes or ''}\n[Disposition Notes]: {data.notes}".strip()
         appointment = await self.repo.update(appointment)
-        await self.audit_repo.create("update_disposition", "appointments", user_id=user_id, resource_id=str(appointment.id))
+        await self.audit_repo.create("update_disposition", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         return AppointmentResponse.model_validate(appointment)
 
-    async def get_pending_admissions(self) -> list[PendingAdmissionItem]:
+    async def get_pending_admissions(self, current_user = None) -> list[PendingAdmissionItem]:
         from app.models.bed_allocation_model import Bed
         from app.models.doctor_model import Doctor
         from app.models.patient_model import Patient
         from app.core.constants import AdmissionStatus
+        from app.core.dependencies import resolve_tenant_id
         from sqlalchemy import select, and_, not_, exists, or_
         from sqlalchemy.orm import selectinload
+
+        hospital_id = resolve_tenant_id(current_user)
 
         admit_rec_variants = [
             "Admit Recommended",
@@ -1656,8 +1723,10 @@ class AppointmentService:
                     )
                 ),
             )
-            .order_by(Appointment.updated_at.desc(), Appointment.id.desc())
         )
+        if hospital_id is not None:
+            stmt = stmt.where(Appointment.hospital_id == hospital_id)
+        stmt = stmt.order_by(Appointment.updated_at.desc(), Appointment.id.desc())
         res = await self.db.execute(stmt)
         appointments = list(res.scalars().all())
 

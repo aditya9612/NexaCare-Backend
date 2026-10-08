@@ -9,8 +9,11 @@ class TransactionHistoryRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(TransactionHistory).where(TransactionHistory.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(TransactionHistory).where(TransactionHistory.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(TransactionHistory.hospital_id == hospital_id)
+        return query
 
     async def list_all(
         self,
@@ -24,8 +27,9 @@ class TransactionHistoryRepository:
         end_date: date | datetime | None = None,
         reference_no: str | None = None,
         q: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[TransactionHistory]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
 
         if event_type is not None:
             query = query.where(func.lower(TransactionHistory.event_type) == event_type.lower().strip())
@@ -76,8 +80,11 @@ class TransactionHistoryRepository:
         end_date: date | datetime | None = None,
         reference_no: str | None = None,
         q: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
-        query = select(func.count()).select_from(TransactionHistory).where(TransactionHistory.is_deleted.is_(False))
+        query = select(func.count(TransactionHistory.id)).select_from(TransactionHistory).where(TransactionHistory.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(TransactionHistory.hospital_id == hospital_id)
 
         if event_type is not None:
             query = query.where(func.lower(TransactionHistory.event_type) == event_type.lower().strip())
@@ -113,8 +120,8 @@ class TransactionHistoryRepository:
 
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, tx_id: int) -> TransactionHistory | None:
-        result = await self.db.execute(self._base_query().where(TransactionHistory.id == tx_id))
+    async def get_by_id(self, tx_id: int, hospital_id: int | None = None) -> TransactionHistory | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(TransactionHistory.id == tx_id))
         return result.scalar_one_or_none()
 
     async def create(self, tx_history: TransactionHistory) -> TransactionHistory:
@@ -133,14 +140,17 @@ class TransactionHistoryRepository:
         tx_history.deleted_at = utc_now()
         await self.db.flush()
 
-    async def get_aggregated_stats(self) -> list[tuple[str, float, int]]:
+    async def get_aggregated_stats(self, hospital_id: int | None = None) -> list[tuple[str, float, int]]:
         query = select(
             TransactionHistory.event_type,
             func.coalesce(func.sum(TransactionHistory.amount), 0.0),
             func.count(TransactionHistory.id)
         ).where(
             TransactionHistory.is_deleted.is_(False)
-        ).group_by(TransactionHistory.event_type)
+        )
+        if hospital_id is not None:
+            query = query.where(TransactionHistory.hospital_id == hospital_id)
+        query = query.group_by(TransactionHistory.event_type)
 
         result = await self.db.execute(query)
         return [(row[0], float(row[1]), int(row[2])) for row in result.all()]

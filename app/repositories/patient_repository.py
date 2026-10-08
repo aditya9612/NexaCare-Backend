@@ -405,6 +405,13 @@ class PatientRepository:
                 ),
             )
         )
+        if hospital_id is not None:
+            opd_query = opd_query.where(
+                Patient.hospital_id == hospital_id,
+                Appointment.hospital_id == hospital_id,
+            )
+        if allowed_patient_ids is not None:
+            opd_query = opd_query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             opd_query = opd_query.join(
@@ -418,7 +425,7 @@ class PatientRepository:
 
         # 4. today_discharge: Unique patients actually discharged today
         today_discharge_count = await DischargeRepository(self.db).count_today_discharged(
-            on_date=today, nurse_id=nurse_id
+            on_date=today, nurse_id=nurse_id, hospital_id=hospital_id
         )
 
         return {

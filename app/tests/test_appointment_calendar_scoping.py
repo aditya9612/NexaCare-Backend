@@ -12,12 +12,13 @@ from app.repositories.appointment_repository import AppointmentRepository
 from app.services.appointment_service import AppointmentService
 
 
-def _create_mock_user(user_id: int, role_name: str) -> User:
+def _create_mock_user(user_id: int, role_name: str, hospital_id: int | None = None) -> User:
     role = MagicMock(spec=Role)
     role.name = role_name
     user = MagicMock(spec=User)
     user.id = user_id
     user.role = role
+    user.hospital_id = hospital_id
     return user
 
 

@@ -794,6 +794,7 @@ class DischargeService:
                             source_id=final_bill.id,
                             status="completed",
                             user_id=user_id,
+                            hospital_id=final_bill.hospital_id,
                         )
                     except Exception:
                         pass
@@ -840,6 +841,7 @@ class DischargeService:
                         source_id=billing.id,
                         status="completed",
                         user_id=user_id,
+                        hospital_id=billing.hospital_id,
                     )
                 except Exception:
                     pass
@@ -905,6 +907,7 @@ class DischargeService:
                         source_id=inv.id,
                         status="completed",
                         user_id=user_id,
+                        hospital_id=inv.hospital_id,
                     )
                 except Exception:
                     pass

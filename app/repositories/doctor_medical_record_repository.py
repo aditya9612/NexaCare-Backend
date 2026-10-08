@@ -33,8 +33,14 @@ class DoctorMedicalRecordRepository:
         skip: int = 0,
         limit: int = 20,
         doctor_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[DoctorMedicalRecord]:
         query = select(DoctorMedicalRecord)
+        if hospital_id is not None:
+            query = query.join(Doctor, DoctorMedicalRecord.doctor_id == Doctor.id).where(
+                Doctor.hospital_id == hospital_id,
+                Doctor.is_deleted == False,
+            )
         if doctor_id is not None:
             query = query.where(DoctorMedicalRecord.doctor_id == doctor_id)
         
@@ -45,8 +51,13 @@ class DoctorMedicalRecordRepository:
         )
         return list(result.scalars().all())
 
-    async def count_records(self, doctor_id: int | None = None) -> int:
+    async def count_records(self, doctor_id: int | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(DoctorMedicalRecord)
+        if hospital_id is not None:
+            query = query.join(Doctor, DoctorMedicalRecord.doctor_id == Doctor.id).where(
+                Doctor.hospital_id == hospital_id,
+                Doctor.is_deleted == False,
+            )
         if doctor_id is not None:
             query = query.where(DoctorMedicalRecord.doctor_id == doctor_id)
         return await self.db.scalar(query) or 0
@@ -54,12 +65,17 @@ class DoctorMedicalRecordRepository:
     async def get_record_by_id(
         self,
         record_id: int,
+        hospital_id: int | None = None,
     ) -> DoctorMedicalRecord | None:
-        result = await self.db.execute(
-            select(DoctorMedicalRecord).where(
-                DoctorMedicalRecord.id == record_id
-            )
+        query = select(DoctorMedicalRecord).where(
+            DoctorMedicalRecord.id == record_id
         )
+        if hospital_id is not None:
+            query = query.join(Doctor, DoctorMedicalRecord.doctor_id == Doctor.id).where(
+                Doctor.hospital_id == hospital_id,
+                Doctor.is_deleted == False,
+            )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_diagnosis(

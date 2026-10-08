@@ -333,7 +333,7 @@ async def get_sample(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    sample = await LabService(db).get_sample(sample_id)
+    sample = await LabService(db).get_sample(sample_id, current_user=current_user)
     return APIResponse(message="Sample retrieved", data=sample)
 
 @router.put("/samples/{sample_id}", response_model=APIResponse[SampleResponse])
@@ -344,7 +344,7 @@ async def update_sample(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    sample = await LabService(db).update_sample(sample_id, data, current_user.id)
+    sample = await LabService(db).update_sample(sample_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Sample updated", data=sample)
 
 @router.delete("/samples/{sample_id}", response_model=APIResponse[MessageResponse])
@@ -354,7 +354,7 @@ async def delete_sample(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_sample(sample_id, current_user.id)
+    await LabService(db).delete_sample(sample_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Sample deleted",
         data=MessageResponse(message="Deleted successfully"),
@@ -413,7 +413,7 @@ async def get_test_result(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).get_result(result_id)
+    result = await LabService(db).get_result(result_id, current_user=current_user)
     return APIResponse(message="Test result retrieved", data=result)
 
 
@@ -441,7 +441,7 @@ async def update_test_result(
         is_critical=is_critical,
         status=status,
     )
-    result = await LabService(db).update_result(result_id, data, current_user.id, document)
+    result = await LabService(db).update_result(result_id, data, current_user.id, document, current_user=current_user)
     return APIResponse(message="Test result updated", data=result)
 
 
@@ -526,7 +526,7 @@ async def reject_lab_report(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    report = await LabService(db).reject_lab_report(report_id, data, current_user.id)
+    report = await LabService(db).reject_lab_report(report_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Lab report rejected successfully.", data=report)
 
 
@@ -553,9 +553,11 @@ async def download_lab_report(
 ):
     from app.repositories.lab_repository import LabReportRepository
     from app.core.exceptions import NotFoundException
+    from app.core.dependencies import resolve_tenant_id
     import os
     
-    report = await LabReportRepository(db).get_by_id(report_id)
+    hospital_id = resolve_tenant_id(current_user)
+    report = await LabReportRepository(db).get_by_id(report_id, hospital_id=hospital_id)
     if not report:
         raise NotFoundException("Report file not found")
 
@@ -563,6 +565,7 @@ async def download_lab_report(
         report,
         current_user,
         "download",
+        hospital_id=hospital_id,
     )
         
     def resolve_disk_path(path_str: str | None) -> str | None:
@@ -589,7 +592,7 @@ async def download_lab_report(
         from app.utils.helpers import utc_now
         from sqlalchemy import select
         
-        order = await TestOrderRepository(db).get_by_id(report.test_order_id)
+        order = await TestOrderRepository(db).get_by_id(report.test_order_id, hospital_id=hospital_id)
         if not order:
             raise NotFoundException("Associated test order not found")
             

@@ -9,6 +9,7 @@ class HospitalBase(BaseSchema):
     phone: str | None = Field(None, max_length=20)
     address: str | None = Field(None, max_length=500)
     website: str | None = Field(None, max_length=255)
+    logo_path: str | None = Field(None, max_length=500)
 
 
 class HospitalCreate(HospitalBase):
@@ -37,6 +38,7 @@ class HospitalUpdate(BaseSchema):
     phone: str | None = Field(None, max_length=20)
     address: str | None = Field(None, max_length=500)
     website: str | None = Field(None, max_length=255)
+    logo_path: str | None = Field(None, max_length=500)
     is_active: bool | None = None
 
     @field_validator("name", "address", "website")

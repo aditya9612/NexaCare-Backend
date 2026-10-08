@@ -262,7 +262,7 @@ async def export_patients(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
             
-    data, media_type = await PatientService(db).export_patients(format.value, status)
+    data, media_type = await PatientService(db).export_patients(format.value, status, current_user=current_user)
     
     if format == PatientExportFormat.EXCEL:
         return StreamingResponse(
@@ -670,6 +670,6 @@ async def list_patient_clinical_records(
 ):
     from app.services.clinical_record_service import ClinicalRecordService
     result = await ClinicalRecordService(db).list_records(
-        page=page, size=size, patient_id=patient_id, current_user=current_user
+        page=page, size=size, patient_id=patient_id
     )
     return APIResponse(message="Records fetched successfully", data=result)

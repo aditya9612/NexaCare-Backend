@@ -59,6 +59,32 @@ class HospitalService:
         await self.audit_repo.create("update", "hospitals", user_id=user_id, resource_id=str(hospital.id))
         return HospitalResponse.model_validate(hospital)
 
+    async def upload_logo(self, id: int, file, user_id: int) -> HospitalResponse:
+        import os
+        hospital = await self.repo.get_by_id(id)
+        if not hospital:
+            raise NotFoundException("Hospital not found")
+
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise BadRequestException("File format not supported. Only PNG, JPG, JPEG, and WEBP images are allowed.")
+
+        from app.utils.file_upload import save_upload_file
+        from app.core.config import settings
+
+        if hospital.logo_path and os.path.exists(hospital.logo_path):
+            try:
+                os.remove(hospital.logo_path)
+            except Exception:
+                pass
+
+        dest_dir = os.path.join(settings.UPLOAD_DIR, "hospitals")
+        logo_file_path = await save_upload_file(file, dest_dir)
+        hospital.logo_path = logo_file_path
+        hospital = await self.repo.update(hospital)
+        await self.audit_repo.create("upload_logo", "hospitals", user_id=user_id, resource_id=str(hospital.id))
+        return HospitalResponse.model_validate(hospital)
+
     async def delete_hospital(self, id: int, user_id: int) -> None:
         hospital = await self.repo.get_by_id(id)
         if not hospital:

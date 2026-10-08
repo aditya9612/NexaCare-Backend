@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, File, UploadFile
 from app.core.dependencies import CurrentUser, DbSession, bearer_scheme
 from app.core.exceptions import ForbiddenException
 from app.core.constants import UserRole
@@ -58,6 +58,16 @@ async def update_hospital(
 ):
     hospital = await HospitalService(db).update_hospital(id, data, current_user.id)
     return APIResponse(message="Hospital updated successfully", data=hospital)
+
+@router.post("/hospitals/{id}/logo", response_model=APIResponse[HospitalResponse])
+async def upload_hospital_logo(
+    id: int,
+    db: DbSession,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_super_admin)
+):
+    hospital = await HospitalService(db).upload_logo(id, file, current_user.id)
+    return APIResponse(message="Hospital logo uploaded successfully", data=hospital)
 
 @router.delete("/hospitals/{id}", response_model=APIResponse[MessageResponse])
 async def deactivate_hospital(

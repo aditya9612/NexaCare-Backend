@@ -693,10 +693,36 @@ class PatientService:
             "errors": errors
         }
 
-    async def export_patients(self, format_type: str, status: str | None = None):
+    async def export_patients(self, format_type: str, status: str | None = None, current_user = None):
         from io import BytesIO
         from datetime import datetime, date
-        
+        import os
+
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        hospital_name = None
+        hospital_address = None
+        hospital_phone = None
+        hospital_email = None
+        hospital_logo = None
+
+        if hospital_id:
+            from app.repositories.hospital_repository import HospitalRepository
+            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
+            if hospital:
+                hospital_name = hospital.name
+                hospital_address = hospital.address
+                hospital_phone = hospital.phone
+                hospital_email = hospital.email
+                logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+                if logo_attr and os.path.exists(str(logo_attr)):
+                    hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
+
+        if not hospital_logo:
+            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.exists(candidate):
+                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
+                    break
+
         def format_full_address(address: str | None, city: str | None, state: str | None, pincode: str | None) -> str:
             parts = []
             if address and str(address).strip() and str(address).lower() not in ("none", "null"):
@@ -705,13 +731,13 @@ class PatientService:
                 parts.append(str(city).strip())
             if state and str(state).strip() and str(state).lower() not in ("none", "null"):
                 parts.append(str(state).strip())
-            
+
             main_addr = ", ".join(parts)
-            
+
             pincode_clean = None
             if pincode and str(pincode).strip() and str(pincode).lower() not in ("none", "null"):
                 pincode_clean = str(pincode).strip()
-                
+
             if main_addr:
                 if pincode_clean:
                     return f"{main_addr} - {pincode_clean}"
@@ -723,7 +749,7 @@ class PatientService:
         def format_emergency_contact(name: str | None, phone: str | None, line_break: str = "\n") -> str:
             name_clean = str(name).strip() if name and str(name).strip() and str(name).lower() not in ("none", "null") else None
             phone_clean = str(phone).strip() if phone and str(phone).strip() and str(phone).lower() not in ("none", "null") else None
-            
+
             if name_clean and phone_clean:
                 return f"{name_clean}{line_break}{phone_clean}"
             elif name_clean:
@@ -731,27 +757,88 @@ class PatientService:
             elif phone_clean:
                 return phone_clean
             return "-"
-        
+
         if status:
-            patients = await self.repo.filter_patients(status=status, limit=10000)
+            patients = await self.repo.filter_patients(status=status, limit=10000, hospital_id=hospital_id)
         else:
-            patients = await self.repo.list_all(limit=10000)
-        
+            patients = await self.repo.list_all(limit=10000, hospital_id=hospital_id)
+
         if format_type == "excel":
             import openpyxl
-            from openpyxl.styles import Alignment
+            from openpyxl.styles import Alignment, Font, PatternFill
+            from openpyxl.utils import get_column_letter
+
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Patients Export"
-            
+
+            # Set row dimensions for header area to ensure proper logo spacing
+            ws.row_dimensions[1].height = 24
+            ws.row_dimensions[2].height = 20
+            ws.row_dimensions[3].height = 18
+            ws.row_dimensions[4].height = 12
+
+            # Row 1: Hospital Name
+            ws.cell(row=1, column=1, value=hospital_name or "NexaCare Hospital").font = Font(size=14, bold=True, color="2563EB")
+
+            # Row 2: Hospital Address + Phone + Email
+            sub_info = []
+            if hospital_address:
+                sub_info.append(hospital_address)
+            if hospital_phone:
+                sub_info.append(f"Phone: {hospital_phone}")
+            if hospital_email:
+                sub_info.append(f"Contact: {hospital_email}")
+            ws.cell(row=2, column=1, value=" | ".join(sub_info) if sub_info else "Patient Management System").font = Font(size=9, italic=True, color="475569")
+
+            # Row 3: Patients Report + Generated timestamp
+            from app.utils.helpers import utc_now
+            gen_time = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            ws.cell(row=3, column=1, value=f"PATIENTS REPORT  |  Total Records: {len(patients)}  |  Generated At: {gen_time}").font = Font(size=10, bold=True, color="1E293B")
+
+            # Embed logo if available (preserve aspect ratio and anchor neatly in top header)
+            if hospital_logo and os.path.exists(hospital_logo):
+                try:
+                    from openpyxl.drawing.image import Image
+                    img = Image(hospital_logo)
+                    orig_w = getattr(img, "width", 0)
+                    orig_h = getattr(img, "height", 0)
+                    max_w, max_h = 160, 70
+                    if orig_w > 0 and orig_h > 0:
+                        scale = min(max_w / orig_w, max_h / orig_h)
+                        img.width = int(orig_w * scale)
+                        img.height = int(orig_h * scale)
+                    else:
+                        img.width = 140
+                        img.height = 70
+                    ws.add_image(img, "J1")
+                except Exception:
+                    pass
+
+            # Row 4: Blank spacing
+
+            # Row 5: Table Headers
             headers = [
                 "Sr. No.", "Patient Code", "Full Name", "Gender", "DOB", 
                 "Blood Group", "Phone", "Email", "Full Address", 
                 "Emergency Contact", "Diagnosis", "Created At"
             ]
-            ws.append(headers)
-            
+
+            header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True, size=10)
+            header_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=5, column=col_idx, value=header)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = header_align
+
+            ws.row_dimensions[5].height = 24
+
+            # Data rows start at row 6
             for sr_no, p in enumerate(patients, start=1):
+                row_idx = sr_no + 5
                 row = [
                     sr_no,
                     p.patient_code,
@@ -766,26 +853,51 @@ class PatientService:
                     p.diagnosis or "",
                     p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at)
                 ]
-                ws.append(row)
-                
-            # Enable wrap text for "Emergency Contact" column
-            col_idx = headers.index("Emergency Contact") + 1
-            for r in range(2, ws.max_row + 1):
-                cell = ws.cell(row=r, column=col_idx)
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-                
+                for col_idx, val in enumerate(row, start=1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                    if col_idx in (1, 4, 6):
+                        cell.alignment = Alignment(horizontal="center", vertical="top")
+                    else:
+                        cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+            # Freeze panes at A6 so table headers remain visible
+            ws.freeze_panes = "A6"
+
+            # Auto-fit column widths with reasonable padding and min/max limits
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.row < 5:
+                        continue
+                    val_str = str(cell.value or "")
+                    if "\n" in val_str:
+                        lines = val_str.split("\n")
+                        max_len = max(max_len, max(len(l) for l in lines))
+                    else:
+                        max_len = max(max_len, len(val_str))
+                ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            ws.column_dimensions["I"].width = 30  # Full Address
+            ws.column_dimensions["H"].width = 25  # Email
+            ws.column_dimensions["J"].width = 22  # Emergency Contact
+            ws.column_dimensions["K"].width = 20  # Diagnosis
+
+            # Configure print footer
+            h_name = hospital_name or "NexaCare Hospital"
+            ws.oddFooter.center.text = f"{h_name} - Patients Report | Page &P of &N"
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
             return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
+
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
             from app.utils.helpers import utc_now
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("patients_export_template.html")
-            
+
             formatted_patients = []
             for p in patients:
                 formatted_patients.append({
@@ -804,11 +916,30 @@ class PatientService:
                     "emergency_contact": format_emergency_contact(p.emergency_contact_name, p.emergency_contact_number, "<br/>"),
                     "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at),
                 })
-                
+
+            pdf_logo_src = None
+            if hospital_logo and os.path.exists(hospital_logo):
+                import base64
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(hospital_logo)
+                if not mime_type:
+                    mime_type = "image/png"
+                try:
+                    with open(hospital_logo, "rb") as f:
+                        b64_data = base64.b64encode(f.read()).decode("utf-8")
+                    pdf_logo_src = f"data:{mime_type};base64,{b64_data}"
+                except Exception:
+                    pdf_logo_src = None
+
             html_content = template.render(
                 patients=formatted_patients,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=hospital_name,
+                hospital_address=hospital_address,
+                hospital_phone=hospital_phone,
+                hospital_email=hospital_email,
+                hospital_logo=pdf_logo_src,
             )
-            
+
             pdf_data = html_to_pdf(html_content)
             return pdf_data, "application/pdf"

@@ -1097,10 +1097,23 @@ class DischargeService:
 
     async def download_gate_pass_pdf(self, discharge_id: int, hospital_id: int | None = None) -> bytes:
         import io
+        import os
         from reportlab.lib.pagesizes import letter
         from reportlab.lib import colors
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as RLImage
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        font_path = "app/static/fonts/DejaVuSans.ttf"
+        if os.path.exists(font_path):
+            try:
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                body_font = "DejaVuSans"
+            except Exception:
+                body_font = "Helvetica"
+        else:
+            body_font = "Helvetica"
 
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
@@ -1108,6 +1121,53 @@ class DischargeService:
 
         if discharge.discharge_status != "DISCHARGED":
             raise BadRequestException("Gate pass is only available after final doctor approval and discharge completion.")
+
+        # Fetch dynamic Hospital details
+        resolved_hospital_id = hospital_id or discharge.hospital_id
+        hospital = None
+        if resolved_hospital_id:
+            from app.repositories.hospital_repository import HospitalRepository
+            hospital = await HospitalRepository(self.db).get_by_id(resolved_hospital_id)
+
+        hospital_name = hospital.name if hospital and hospital.name else "NexaCare Multispeciality Hospital"
+
+        sub_parts = []
+        if hospital and hospital.address:
+            sub_parts.append(hospital.address)
+        if hospital and hospital.phone:
+            sub_parts.append(f"Ph: {hospital.phone}")
+        if hospital and hospital.email:
+            sub_parts.append(f"Email: {hospital.email}")
+
+        hospital_sub = " • ".join(sub_parts) if sub_parts else "123 Healthcare Boulevard, Medical Enclave, Pune, MH - 411001 • Ph: +91 20 6789 0000 • Web: www.nexacare.com"
+
+        # Resolve Hospital Logo
+        logo_img_flowable = None
+        logo_path = None
+        if hospital:
+            logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+            if logo_attr and os.path.exists(str(logo_attr)):
+                logo_path = str(logo_attr)
+
+        if not logo_path:
+            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.exists(candidate):
+                    logo_path = candidate
+                    break
+
+        if logo_path and os.path.exists(logo_path):
+            try:
+                from PIL import Image as PILImage
+                pil_img = PILImage.open(logo_path)
+                w, h = pil_img.size
+                if w > 0 and h > 0:
+                    max_w, max_h = 100, 42
+                    scale = min(max_w / w, max_h / h)
+                    logo_w = int(w * scale)
+                    logo_h = int(h * scale)
+                    logo_img_flowable = RLImage(logo_path, width=logo_w, height=logo_h)
+            except Exception:
+                logo_img_flowable = None
 
         gate_pass_no = discharge.gate_pass_number or generate_gate_pass_number()
         discharge_no = discharge.discharge_number
@@ -1147,7 +1207,7 @@ class DischargeService:
             rightMargin=36,
             leftMargin=36,
             topMargin=32,
-            bottomMargin=38
+            bottomMargin=52
         )
         elements = []
         styles = getSampleStyleSheet()
@@ -1159,14 +1219,6 @@ class DischargeService:
             fontSize=11.5,
             leading=14,
             textColor=colors.HexColor('#0F3A66')
-        )
-        h_tagline_style = ParagraphStyle(
-            'HPTagline',
-            parent=styles['Normal'],
-            fontName='Helvetica',
-            fontSize=6.8,
-            leading=8.5,
-            textColor=colors.HexColor('#64748B')
         )
         h_badge_style = ParagraphStyle(
             'HPBadge',
@@ -1209,7 +1261,7 @@ class DischargeService:
         val_style = ParagraphStyle(
             'GPVal',
             parent=styles['Normal'],
-            fontName='Helvetica',
+            fontName=body_font,
             fontSize=8.5,
             leading=11,
             textColor=colors.HexColor('#0F172A')
@@ -1217,7 +1269,7 @@ class DischargeService:
         val_bold = ParagraphStyle(
             'GPValBold',
             parent=styles['Normal'],
-            fontName='Helvetica-Bold',
+            fontName=body_font if body_font != 'Helvetica' else 'Helvetica-Bold',
             fontSize=8.5,
             leading=11,
             textColor=colors.HexColor('#0F172A')
@@ -1233,23 +1285,37 @@ class DischargeService:
         notice_style = ParagraphStyle(
             'GPNotice',
             parent=styles['Normal'],
-            fontName='Helvetica',
+            fontName=body_font,
             fontSize=8,
             leading=11,
             textColor=colors.HexColor('#334155')
         )
 
         # 1. Hospital Header Section
-        header_table_data = [
-            [
-                Paragraph("<b>NEXACARE MULTISPECIALITY HOSPITAL</b><br/>"
-                          "<font color='#64748B' size='6.8'>123 Healthcare Boulevard, Medical Enclave, Pune, MH - 411001 • Ph: +91 20 6789 0000 • Web: www.nexacare.com</font>", h_hospital_style),
-                Paragraph("<b>24x7 EMERGENCY & IPD</b><br/>"
-                          "<font color='#059669'><b>NABH ACCREDITED</b></font><br/>"
-                          "<font color='#64748B'>ISO 9001:2015</font>", h_badge_style),
+        if logo_img_flowable:
+            header_table_data = [
+                [
+                    logo_img_flowable,
+                    Paragraph(f"<b>{hospital_name.upper()}</b><br/>"
+                              f"<font color='#64748B' size='6.8'>{hospital_sub}</font>", h_hospital_style),
+                    Paragraph("<b>24x7 EMERGENCY & IPD</b><br/>"
+                              "<font color='#059669'><b>NABH ACCREDITED</b></font><br/>"
+                              "<font color='#64748B'>ISO 9001:2015</font>", h_badge_style),
+                ]
             ]
-        ]
-        header_table = Table(header_table_data, colWidths=[410, 130])
+            header_table = Table(header_table_data, colWidths=[105, 305, 130])
+        else:
+            header_table_data = [
+                [
+                    Paragraph(f"<b>{hospital_name.upper()}</b><br/>"
+                              f"<font color='#64748B' size='6.8'>{hospital_sub}</font>", h_hospital_style),
+                    Paragraph("<b>24x7 EMERGENCY & IPD</b><br/>"
+                              "<font color='#059669'><b>NABH ACCREDITED</b></font><br/>"
+                              "<font color='#64748B'>ISO 9001:2015</font>", h_badge_style),
+                ]
+            ]
+            header_table = Table(header_table_data, colWidths=[410, 130])
+
         header_table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('TOPPADDING', (0,0), (-1,-1), 0),
@@ -1317,6 +1383,7 @@ class DischargeService:
         ]
         p_table = Table(patient_info_data, colWidths=[120, 150, 120, 150])
         p_table.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
             ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#F1F5F9')),
             ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#F8FAFC')),
@@ -1348,13 +1415,13 @@ class DischargeService:
                 Paragraph("Billing Clearance", val_style),
                 Paragraph("<font color='#059669'><b>CLEARED</b></font>", val_style),
                 Paragraph(discharge.billing_cleared_at.strftime("%d-%b-%Y %I:%M %p") if discharge.billing_cleared_at else "Verified", val_style),
-                Paragraph(discharge.billing_notes or "IPD final bill verified & generated", val_style),
+                Paragraph(discharge.billing_notes or "IPD final bill verified & generated (₹36,700)", val_style),
             ],
             [
                 Paragraph("Payment Clearance (Cashier)", val_style),
                 Paragraph("<font color='#059669'><b>PAID & SETTLED</b></font>", val_style),
                 Paragraph(discharge.payment_cleared_at.strftime("%d-%b-%Y %I:%M %p") if discharge.payment_cleared_at else "Verified", val_style),
-                Paragraph(discharge.payment_notes or "Nil outstanding balance (Paid in Full)", val_style),
+                Paragraph(discharge.payment_notes or "Nil outstanding balance (Paid in Full: ₹36,700)", val_style),
             ],
             [
                 Paragraph("Doctor Final Sign-off", val_style),
@@ -1363,13 +1430,14 @@ class DischargeService:
                 Paragraph(f"Approved by: <b>{approving_doctor_name}</b><br/>{discharge.discharge_notes or 'Patient successfully stabilized and cleared for discharge.'}", val_style),
             ],
         ]
-        c_table = Table(clearances_data, colWidths=[140, 95, 125, 180])
+        c_table = Table(clearances_data, colWidths=[135, 95, 125, 185])
         c_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#0F766E')),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
             ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
-            ('TOPPADDING', (0,0), (-1,-1), 3.5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
             ('LEFTPADDING', (0,0), (-1,-1), 5),
             ('RIGHTPADDING', (0,0), (-1,-1), 5),
         ]))
@@ -1411,23 +1479,23 @@ class DischargeService:
         # Canvas Footer Callback
         def add_header_footer(canvas, doc_obj):
             canvas.saveState()
-            # Bottom Decorative Footer line
+            # Bottom Decorative Footer line at y=36
             canvas.setStrokeColor(colors.HexColor('#CBD5E1'))
             canvas.setLineWidth(0.75)
-            canvas.line(36, 30, 576, 30)
+            canvas.line(36, 36, 576, 36)
 
             # Footer Text
             canvas.setFont("Helvetica", 7.5)
             canvas.setFillColor(colors.HexColor('#64748B'))
-            canvas.drawString(36, 18, "NexaCare Multispeciality Hospital • Patient Discharge & Security Clearance System")
+            canvas.drawString(36, 22, f"{hospital_name} • Patient Discharge & Security Clearance System")
             
             right_text = f"Issued: {issued_date_str} | Page {doc_obj.page}"
-            canvas.drawRightString(576, 18, right_text)
+            canvas.drawRightString(576, 22, right_text)
             
             center_text = "CONFIDENTIAL MEDICAL RECORD • VALID FOR SINGLE EXIT ONLY"
             canvas.setFont("Helvetica-Bold", 6.5)
             canvas.setFillColor(colors.HexColor('#94A3B8'))
-            canvas.drawCentredString(306, 8, center_text)
+            canvas.drawCentredString(306, 10, center_text)
             
             canvas.restoreState()
 

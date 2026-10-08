@@ -12,6 +12,7 @@ class Hospital(Base, TimestampMixin, SoftDeleteMixin):
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    logo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     users = relationship("User", back_populates="hospital")

@@ -324,12 +324,16 @@ class BedAllocationService:
         bed_type: Optional[str] = None,
         room_id: Optional[int] = None,
         floor_id: Optional[int] = None,
+        current_user: Any | None = None,
     ) -> List[Bed]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         beds = await self.repo.list_beds(
             status=status,
             bed_type=bed_type,
             room_id=room_id,
             floor_id=floor_id,
+            hospital_id=hospital_id,
         )
         for bed in beds:
             if bed.patient and getattr(bed.patient, "is_deleted", False):
@@ -800,18 +804,22 @@ class BedAllocationService:
         return await self.get_bed(target_bed.id)
 
     # Activity Log Services
-    async def list_activity_logs(self, limit: int = 50) -> List[BedActivityLog]:
-        return await self.repo.list_activity_logs(limit)
+    async def list_activity_logs(self, limit: int = 50, current_user: Any | None = None) -> List[BedActivityLog]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        return await self.repo.list_activity_logs(limit, hospital_id=hospital_id)
 
     # Analytics Services
-    async def get_analytics_summary(self) -> BedAnalyticsSummaryResponse:
-        total_floors = await self.repo.count_floors()
-        total_rooms = await self.repo.count_rooms()
-        total_beds = await self.repo.count_beds()
-        occupied_beds = await self.repo.count_occupied_beds()
-        available_beds = await self.repo.count_available_beds()
-        reserved_beds = await self.repo.count_reserved_beds()
-        maint_clean_beds = await self.repo.count_maint_clean_beds()
+    async def get_analytics_summary(self, current_user: Any | None = None) -> BedAnalyticsSummaryResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        total_floors = await self.repo.count_floors(hospital_id=hospital_id)
+        total_rooms = await self.repo.count_rooms(hospital_id=hospital_id)
+        total_beds = await self.repo.count_beds(hospital_id=hospital_id)
+        occupied_beds = await self.repo.count_occupied_beds(hospital_id=hospital_id)
+        available_beds = await self.repo.count_available_beds(hospital_id=hospital_id)
+        reserved_beds = await self.repo.count_reserved_beds(hospital_id=hospital_id)
+        maint_clean_beds = await self.repo.count_maint_clean_beds(hospital_id=hospital_id)
 
         utilization_percentage = 0.0
         if total_beds > 0:
@@ -829,8 +837,10 @@ class BedAllocationService:
         )
 
 
-    async def get_icu_analytics(self) -> ICUAnalyticsResponse:
-        total, occupied, available = await self.repo.get_icu_bed_stats()
+    async def get_icu_analytics(self, current_user: Any | None = None) -> ICUAnalyticsResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        total, occupied, available = await self.repo.get_icu_bed_stats(hospital_id=hospital_id)
 
         utilization_percentage = 0.0
         if total > 0:
@@ -844,14 +854,19 @@ class BedAllocationService:
         )
 
     # Housekeeping & Cleaning Lifecycle Services
-    async def get_cleaning_queue(self) -> List[Bed]:
-        result = await self.db.execute(
+    async def get_cleaning_queue(self, current_user: Any | None = None) -> List[Bed]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        query = (
             select(Bed)
             .where(Bed.status == BedStatus.CLEANING.value)
             .options(
                 selectinload(Bed.room).selectinload(Room.floor)
             )
         )
+        if hospital_id is not None:
+            query = query.where(Bed.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def mark_cleaning_complete(self, bed_id: int, user_id: int, notes: str | None = None) -> Bed:
@@ -871,6 +886,7 @@ class BedAllocationService:
             floor_id=bed.room.floor_id if bed.room else None,
             room_id=bed.room_id,
             bed_id=bed.id,
+            hospital_id=bed.hospital_id,
         )
         await self.repo.create_activity_log(log)
         await self.db.flush()
@@ -883,12 +899,16 @@ class BedAllocationService:
         status: Optional[str] = None,
         room_id: Optional[int] = None,
         bed_type: Optional[str] = None,
+        current_user: Any | None = None,
     ) -> List[BedExportResponse]:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
         beds = await self.repo.list_beds(
             status=status,
             bed_type=bed_type,
             room_id=room_id,
             floor_id=floor_id,
+            hospital_id=hospital_id,
         )
 
         export_items: List[BedExportResponse] = []
@@ -943,11 +963,18 @@ class BedAllocationService:
         status: Optional[str] = None,
         room_id: Optional[int] = None,
         bed_type: Optional[str] = None,
+        current_user: Any | None = None,
     ) -> str:
         import csv
         import io
 
-        items = await self.export_bed_data(floor_id=floor_id, status=status, room_id=room_id, bed_type=bed_type)
+        items = await self.export_bed_data(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+            current_user=current_user,
+        )
         output = io.StringIO()
         writer = csv.writer(output)
 

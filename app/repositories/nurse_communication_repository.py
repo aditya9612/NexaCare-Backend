@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.models.nurse_model import PatientUpdate, EmergencyAlert
+from app.models.nurse_model import Nurse, PatientUpdate, EmergencyAlert
 
 
 class NurseCommunicationRepository:
@@ -17,7 +17,7 @@ class NurseCommunicationRepository:
     async def get_patient_updates(self, patient_id: int) -> list[PatientUpdate]:
         result = await self.db.execute(
             select(PatientUpdate)
-            .options(joinedload(PatientUpdate.nurse).joinedload(PatientUpdate.nurse.user))
+            .options(joinedload(PatientUpdate.nurse).joinedload(Nurse.user))
             .where(PatientUpdate.patient_id == patient_id)
             .order_by(PatientUpdate.created_at.desc())
         )
@@ -27,3 +27,20 @@ class NurseCommunicationRepository:
         self.db.add(emergency_alert)
         await self.db.flush()
         return emergency_alert
+
+    async def get_emergency_alerts_by_nurse(self, nurse_id: int) -> list[EmergencyAlert]:
+        result = await self.db.execute(
+            select(EmergencyAlert)
+            .where(EmergencyAlert.nurse_id == nurse_id)
+            .order_by(EmergencyAlert.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_emergency_alert_by_id(self, alert_id: int, nurse_id: int) -> EmergencyAlert | None:
+        result = await self.db.execute(
+            select(EmergencyAlert).where(
+                EmergencyAlert.id == alert_id,
+                EmergencyAlert.nurse_id == nurse_id,
+            )
+        )
+        return result.scalar_one_or_none()

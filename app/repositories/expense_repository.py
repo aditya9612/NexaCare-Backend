@@ -12,25 +12,30 @@ class ExpenseCategoryRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(ExpenseCategory).where(ExpenseCategory.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(ExpenseCategory).where(ExpenseCategory.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(ExpenseCategory.hospital_id == hospital_id)
+        return query
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[ExpenseCategory]:
-        query = self._base_query().order_by(ExpenseCategory.created_at.desc(), ExpenseCategory.id.desc())
+    async def list_all(self, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[ExpenseCategory]:
+        query = self._base_query(hospital_id=hospital_id).order_by(ExpenseCategory.created_at.desc(), ExpenseCategory.id.desc())
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_all(self) -> int:
+    async def count_all(self, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(ExpenseCategory).where(ExpenseCategory.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(ExpenseCategory.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, category_id: int) -> ExpenseCategory | None:
-        result = await self.db.execute(self._base_query().where(ExpenseCategory.id == category_id))
+    async def get_by_id(self, category_id: int, hospital_id: int | None = None) -> ExpenseCategory | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(ExpenseCategory.id == category_id))
         return result.scalar_one_or_none()
 
-    async def get_by_name(self, name: str) -> ExpenseCategory | None:
+    async def get_by_name(self, name: str, hospital_id: int | None = None) -> ExpenseCategory | None:
         result = await self.db.execute(
-            self._base_query().where(func.lower(ExpenseCategory.name) == name.lower().strip())
+            self._base_query(hospital_id=hospital_id).where(func.lower(ExpenseCategory.name) == name.lower().strip())
         )
         return result.scalar_one_or_none()
 
@@ -130,8 +135,8 @@ class ExpenseRepository:
 
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, expense_id: int) -> Expense | None:
-        query = self._base_query().where(Expense.id == expense_id)
+    async def get_by_id(self, expense_id: int, hospital_id: int | None = None) -> Expense | None:
+        query = self._base_query(hospital_id=hospital_id).where(Expense.id == expense_id)
         query = query.options(selectinload(Expense.category), selectinload(Expense.vendor))
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -163,9 +168,12 @@ class ExpenseRepository:
     async def get_summary(
         self,
         start_date: date | None = None,
-        end_date: date | None = None
+        end_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> dict:
         base_filter = [Expense.is_deleted.is_(False)]
+        if hospital_id is not None:
+            base_filter.append(Expense.hospital_id == hospital_id)
         if start_date is not None:
             base_filter.append(Expense.expense_date >= start_date)
         if end_date is not None:
@@ -321,13 +329,16 @@ class VendorPaymentRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(VendorPayment).where(VendorPayment.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(VendorPayment).where(VendorPayment.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.join(Expense, VendorPayment.expense_id == Expense.id).where(Expense.hospital_id == hospital_id)
+        return query
 
     async def list_all(
-        self, skip: int = 0, limit: int = 20, vendor_id: int | None = None, expense_id: int | None = None
+        self, skip: int = 0, limit: int = 20, vendor_id: int | None = None, expense_id: int | None = None, hospital_id: int | None = None
     ) -> list[VendorPayment]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if vendor_id is not None:
             query = query.where(VendorPayment.vendor_id == vendor_id)
         if expense_id is not None:
@@ -337,21 +348,23 @@ class VendorPaymentRepository:
         )
         return list(result.scalars().all())
 
-    async def count_all(self, vendor_id: int | None = None, expense_id: int | None = None) -> int:
+    async def count_all(self, vendor_id: int | None = None, expense_id: int | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(VendorPayment).where(VendorPayment.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.join(Expense, VendorPayment.expense_id == Expense.id).where(Expense.hospital_id == hospital_id)
         if vendor_id is not None:
             query = query.where(VendorPayment.vendor_id == vendor_id)
         if expense_id is not None:
             query = query.where(VendorPayment.expense_id == expense_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, payment_id: int) -> VendorPayment | None:
-        result = await self.db.execute(self._base_query().where(VendorPayment.id == payment_id))
+    async def get_by_id(self, payment_id: int, hospital_id: int | None = None) -> VendorPayment | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(VendorPayment.id == payment_id))
         return result.scalar_one_or_none()
 
-    async def get_payments_by_expense(self, expense_id: int) -> list[VendorPayment]:
+    async def get_payments_by_expense(self, expense_id: int, hospital_id: int | None = None) -> list[VendorPayment]:
         result = await self.db.execute(
-            self._base_query().where(VendorPayment.expense_id == expense_id)
+            self._base_query(hospital_id=hospital_id).where(VendorPayment.expense_id == expense_id)
         )
         return list(result.scalars().all())
 

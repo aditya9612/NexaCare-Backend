@@ -233,21 +233,23 @@ class AppointmentRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none() is not None
 
-    async def get_next_token(self, doctor_id: int | None, appointment_date: date) -> int:
-        result = await self.db.scalar(
-            select(func.max(Appointment.token_number)).where(
-                Appointment.appointment_date == appointment_date,
-            )
+    async def get_next_token(self, doctor_id: int | None, appointment_date: date, hospital_id: int | None = None) -> int:
+        query = select(func.max(Appointment.token_number)).where(
+            Appointment.appointment_date == appointment_date,
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        result = await self.db.scalar(query)
         return (result or 0) + 1
 
-    async def get_next_queue_token(self, appointment_date: date) -> str:
-        result = await self.db.execute(
-            select(Appointment.queue_token).where(
-                Appointment.appointment_date == appointment_date,
-                Appointment.queue_token.isnot(None)
-            )
+    async def get_next_queue_token(self, appointment_date: date, hospital_id: int | None = None) -> str:
+        query = select(Appointment.queue_token).where(
+            Appointment.appointment_date == appointment_date,
+            Appointment.queue_token.isnot(None)
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         tokens = []
         if hasattr(result, "scalars"):
             sc = result.scalars()
@@ -297,6 +299,7 @@ class AppointmentRepository:
         start_date: date,
         end_date: date,
         doctor_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[Appointment]:
         query = (
             select(Appointment)
@@ -306,63 +309,74 @@ class AppointmentRepository:
                 Appointment.appointment_date <= end_date,
             )
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
         if doctor_id:
             query = query.where(Appointment.doctor_id == doctor_id)
         query = query.order_by(Appointment.appointment_date, Appointment.appointment_time)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_today(self, on_date: date | None = None) -> list[Appointment]:
+    async def get_today(self, on_date: date | None = None, hospital_id: int | None = None) -> list[Appointment]:
         if on_date is None:
             from app.utils.helpers import get_today_ist
             on_date = get_today_ist()
-        result = await self.db.execute(
+        query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
             .where(Appointment.appointment_date == on_date)
-            .order_by(Appointment.appointment_time)
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        query = query.order_by(Appointment.appointment_time)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_upcoming(self, limit: int = 20) -> list[Appointment]:
+    async def get_upcoming(self, limit: int = 20, hospital_id: int | None = None) -> list[Appointment]:
         today = date.today()
-        result = await self.db.execute(
+        query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
             .where(
                 Appointment.appointment_date >= today,
                 Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
             )
-            .order_by(Appointment.appointment_date, Appointment.appointment_time)
-            .limit(limit)
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        query = query.order_by(Appointment.appointment_date, Appointment.appointment_time).limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def count_by_status(self, status: str, on_date: date | None = None) -> int:
+    async def count_by_status(self, status: str, on_date: date | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(Appointment).where(Appointment.appointment_status == status)
         if on_date:
             query = query.where(Appointment.appointment_date == on_date)
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
         return await self.db.scalar(query) or 0
 
-    async def count_today(self) -> int:
+    async def count_today(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Appointment).where(Appointment.appointment_date == date.today())
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
         return (
-            await self.db.scalar(
-                select(func.count()).select_from(Appointment).where(Appointment.appointment_date == date.today())
-            )
+            await self.db.scalar(query)
             or 0
         )
 
-    async def list_needing_voice_reminder(self, target_date: date) -> list[Appointment]:
-        result = await self.db.execute(
-            select(Appointment).where(
-                Appointment.appointment_date == target_date,
-                Appointment.reminder_sent.is_(False),
-                Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
-            )
+    async def list_needing_voice_reminder(self, target_date: date, hospital_id: int | None = None) -> list[Appointment]:
+        query = select(Appointment).where(
+            Appointment.appointment_date == target_date,
+            Appointment.reminder_sent.is_(False),
+            Appointment.appointment_status.in_(list(AppointmentStatus.ACTIVE)),
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_upcoming_appointments(self, doctor_id: int, limit: int = 10) -> list[Appointment]:
+    async def get_upcoming_appointments(self, doctor_id: int, limit: int = 10, hospital_id: int | None = None) -> list[Appointment]:
         from app.utils.helpers import get_today_ist
         from sqlalchemy.orm import joinedload
         current_date = get_today_ist()
@@ -397,9 +411,10 @@ class AppointmentRepository:
                     ),
                 ),
             )
-            .order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc())
-            .limit(limit)
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
+        query = query.order_by(Appointment.appointment_date.asc(), Appointment.appointment_time.asc()).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -411,6 +426,7 @@ class AppointmentRepository:
         doctor_id: int | None = None,
         department_id: int | None = None,
         appointment_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> list[Appointment]:
         from app.models.patient_model import Patient
         from sqlalchemy.orm import joinedload
@@ -418,6 +434,8 @@ class AppointmentRepository:
         query = select(Appointment).where(
             Appointment.appointment_status == AppointmentStatus.CONFIRMED
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
         
         if search:
             search_pattern = f"%{search.lower()}%"
@@ -454,12 +472,15 @@ class AppointmentRepository:
         doctor_id: int | None = None,
         department_id: int | None = None,
         appointment_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         from app.models.patient_model import Patient
         
         query = select(func.count()).select_from(Appointment).where(
             Appointment.appointment_status == AppointmentStatus.CONFIRMED
         )
+        if hospital_id is not None:
+            query = query.where(Appointment.hospital_id == hospital_id)
         
         if search:
             search_pattern = f"%{search.lower()}%"

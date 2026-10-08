@@ -118,9 +118,24 @@ async def init_db():
                 "ALTER TABLE lab_reports ADD COLUMN doctor_verified_by INT NULL",
                 "ALTER TABLE lab_reports ADD COLUMN doctor_verified_at DATETIME NULL",
                 "ALTER TABLE lab_reports ADD COLUMN doctor_remarks TEXT NULL",
+                "ALTER TABLE transaction_history ADD COLUMN hospital_id INT NULL",
             ]:
                 try:
                     await session.execute(text(col_stmt))
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+
+            # Backfill transaction_history.hospital_id from respective source tables if null
+            for backfill_stmt in [
+                "UPDATE transaction_history th JOIN expenses e ON th.source_id = e.id AND th.source_module = 'expenses' SET th.hospital_id = e.hospital_id WHERE th.hospital_id IS NULL",
+                "UPDATE transaction_history th JOIN payments p ON th.source_id = p.id AND th.source_module IN ('payments', 'refunds') JOIN billings b ON p.billing_id = b.id SET th.hospital_id = b.hospital_id WHERE th.hospital_id IS NULL",
+                "UPDATE transaction_history th JOIN billings b ON th.source_id = b.id AND th.source_module = 'billing' SET th.hospital_id = b.hospital_id WHERE th.hospital_id IS NULL",
+                "UPDATE transaction_history th JOIN pharmacy_invoices pi ON th.source_id = pi.id AND th.source_module = 'pharmacy_billing' SET th.hospital_id = pi.hospital_id WHERE th.hospital_id IS NULL",
+                "UPDATE transaction_history th JOIN purchases pu ON th.source_id = pu.id AND th.source_module = 'pharmacy_purchases' SET th.hospital_id = pu.hospital_id WHERE th.hospital_id IS NULL",
+            ]:
+                try:
+                    await session.execute(text(backfill_stmt))
                     await session.commit()
                 except Exception:
                     await session.rollback()

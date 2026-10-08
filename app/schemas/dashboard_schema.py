@@ -70,6 +70,7 @@ class PatientDashboardResponse(BaseModel):
 
 
 class ReceptionDashboardResponse(BaseModel):
+    total_appointments: int = 0
     total_registered_patients: int
     today_scheduled_appointments: int
     checked_in_patients: int

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from sqlalchemy import func, or_, select, case, delete
@@ -142,18 +142,18 @@ class MedicineRepository:
             await self.db.refresh(medicine)
         return medicine
 
-    async def get_low_stock(self, skip: int = 0, limit: int = 50) -> list[Medicine]:
+    async def get_low_stock(self, skip: int = 0, limit: int = 50, hospital_id: int | None = None) -> list[Medicine]:
         query = (
-            self._base_query()
+            self._base_query(hospital_id=hospital_id)
             .where(Medicine.stock_quantity <= Medicine.reorder_level, Medicine.is_active.is_(True))
             .order_by(Medicine.updated_at.desc())
         )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def get_expiry_alerts(self, reference_date: date, days: int = 30, skip: int = 0, limit: int = 50) -> list[Medicine]:
+    async def get_expiry_alerts(self, reference_date: date, days: int = 30, skip: int = 0, limit: int = 50, hospital_id: int | None = None) -> list[Medicine]:
         threshold = reference_date + timedelta(days=days)
-        query = self._base_query().where(
+        query = self._base_query(hospital_id=hospital_id).where(
             Medicine.is_active.is_(True),
             Medicine.expiry_date.isnot(None),
             Medicine.expiry_date <= threshold,
@@ -168,42 +168,46 @@ class MedicineRepository:
         )
         return list(result.scalars().all())
 
-    async def get_dashboard_counts(self, reference_date: date) -> dict:
-        total_medicines = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True)
-            )
-        )) or 0
+    async def get_dashboard_counts(self, reference_date: date, hospital_id: int | None = None) -> dict:
+        total_med_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True)
+        )
+        if hospital_id is not None:
+            total_med_query = total_med_query.where(Medicine.hospital_id == hospital_id)
+        total_medicines = (await self.db.scalar(total_med_query)) or 0
         
-        low_stock = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity <= Medicine.reorder_level
-            )
-        )) or 0
+        low_stock_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity <= Medicine.reorder_level
+        )
+        if hospital_id is not None:
+            low_stock_query = low_stock_query.where(Medicine.hospital_id == hospital_id)
+        low_stock = (await self.db.scalar(low_stock_query)) or 0
         
         threshold = reference_date + timedelta(days=30)
-        expired_alerts = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity > 0,
-                Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date <= threshold
-            )
-        )) or 0
+        expired_alerts_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity > 0,
+            Medicine.expiry_date.isnot(None),
+            Medicine.expiry_date <= threshold
+        )
+        if hospital_id is not None:
+            expired_alerts_query = expired_alerts_query.where(Medicine.hospital_id == hospital_id)
+        expired_alerts = (await self.db.scalar(expired_alerts_query)) or 0
         
-        expired_strict = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity > 0,
-                Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date < reference_date
-            )
-        )) or 0
+        expired_strict_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity > 0,
+            Medicine.expiry_date.isnot(None),
+            Medicine.expiry_date < reference_date
+        )
+        if hospital_id is not None:
+            expired_strict_query = expired_strict_query.where(Medicine.hospital_id == hospital_id)
+        expired_strict = (await self.db.scalar(expired_strict_query)) or 0
         
         return {
             "total_medicines": total_medicines,
@@ -212,43 +216,47 @@ class MedicineRepository:
             "expired_alerts": expired_alerts
         }
 
-    async def get_inventory_counts(self, reference_date: date) -> dict:
+    async def get_inventory_counts(self, reference_date: date, hospital_id: int | None = None) -> dict:
         thirty_days_later = reference_date + timedelta(days=30)
 
-        in_stock = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity > Medicine.reorder_level
-            )
-        )) or 0
+        in_stock_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity > Medicine.reorder_level
+        )
+        if hospital_id is not None:
+            in_stock_query = in_stock_query.where(Medicine.hospital_id == hospital_id)
+        in_stock = (await self.db.scalar(in_stock_query)) or 0
 
-        low_stock = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity > 0,
-                Medicine.stock_quantity <= Medicine.reorder_level
-            )
-        )) or 0
+        low_stock_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity > 0,
+            Medicine.stock_quantity <= Medicine.reorder_level
+        )
+        if hospital_id is not None:
+            low_stock_query = low_stock_query.where(Medicine.hospital_id == hospital_id)
+        low_stock = (await self.db.scalar(low_stock_query)) or 0
 
-        out_of_stock = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.stock_quantity <= 0
-            )
-        )) or 0
+        out_of_stock_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity <= 0
+        )
+        if hospital_id is not None:
+            out_of_stock_query = out_of_stock_query.where(Medicine.hospital_id == hospital_id)
+        out_of_stock = (await self.db.scalar(out_of_stock_query)) or 0
 
-        expiring = (await self.db.scalar(
-            select(func.count(Medicine.id)).where(
-                Medicine.is_deleted.is_(False),
-                Medicine.is_active.is_(True),
-                Medicine.expiry_date.isnot(None),
-                Medicine.expiry_date >= reference_date,
-                Medicine.expiry_date <= thirty_days_later
-            )
-        )) or 0
+        expiring_query = select(func.count(Medicine.id)).where(
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.expiry_date.isnot(None),
+            Medicine.expiry_date >= reference_date,
+            Medicine.expiry_date <= thirty_days_later
+        )
+        if hospital_id is not None:
+            expiring_query = expiring_query.where(Medicine.hospital_id == hospital_id)
+        expiring = (await self.db.scalar(expiring_query)) or 0
 
         return {
             "in_stock_medicines": in_stock,
@@ -262,12 +270,48 @@ class PrescriptionRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return (
+    def _base_query(self, hospital_id: int | None = None):
+        query = (
             select(Prescription)
             .where(Prescription.is_deleted.is_(False))
             .options(selectinload(Prescription.items))
         )
+        if hospital_id is not None:
+            query = query.where(Prescription.hospital_id == hospital_id)
+        return query
+
+    def _apply_filters(
+        self,
+        query,
+        status: str | None = None,
+        doctor_id: int | None = None,
+        patient_id: int | None = None,
+        appointment_id: int | None = None,
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ):
+        if status:
+            query = query.where(Prescription.status == status)
+        if doctor_id is not None:
+            query = query.where(Prescription.doctor_id == doctor_id)
+        if patient_id is not None:
+            query = query.where(Prescription.patient_id == patient_id)
+        if appointment_id is not None:
+            query = query.where(Prescription.appointment_id == appointment_id)
+        if department_id is not None:
+            from app.models.doctor_model import Doctor
+            query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
+        if assigned_patient_ids is not None:
+            query = query.where(Prescription.patient_id.in_(assigned_patient_ids))
+        if start_date is not None:
+            start_dt = datetime.combine(start_date, time.min)
+            query = query.where(Prescription.created_at >= start_dt)
+        if end_date is not None:
+            end_dt = datetime.combine(end_date, time.max)
+            query = query.where(Prescription.created_at <= end_dt)
+        return query
 
     async def list_all(
         self,
@@ -278,22 +322,22 @@ class PrescriptionRepository:
         patient_id: int | None = None,
         appointment_id: int | None = None,
         department_id: int | None = None,
-        assigned_patient_ids: Optional[list[int]] = None
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> list[Prescription]:
-        query = self._base_query()
-        if status:
-            query = query.where(Prescription.status == status)
-        if doctor_id is not None:
-            query = query.where(Prescription.doctor_id == doctor_id)
-        if patient_id is not None:
-            query = query.where(Prescription.patient_id == patient_id)
-        if appointment_id is not None:
-            query = query.where(Prescription.appointment_id == appointment_id)
-        if department_id is not None:
-            from app.models.doctor_model import Doctor
-            query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
-        if assigned_patient_ids is not None:
-            query = query.where(Prescription.patient_id.in_(assigned_patient_ids))
+        query = self._apply_filters(
+            self._base_query(hospital_id=hospital_id),
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
         result = await self.db.execute(query.order_by(Prescription.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().unique().all())
 
@@ -304,26 +348,29 @@ class PrescriptionRepository:
         patient_id: int | None = None,
         appointment_id: int | None = None,
         department_id: int | None = None,
-        assigned_patient_ids: Optional[list[int]] = None
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count()).select_from(Prescription).where(Prescription.is_deleted.is_(False))
-        if status:
-            query = query.where(Prescription.status == status)
-        if doctor_id is not None:
-            query = query.where(Prescription.doctor_id == doctor_id)
-        if patient_id is not None:
-            query = query.where(Prescription.patient_id == patient_id)
-        if appointment_id is not None:
-            query = query.where(Prescription.appointment_id == appointment_id)
-        if department_id is not None:
-            from app.models.doctor_model import Doctor
-            query = query.join(Doctor, Doctor.id == Prescription.doctor_id).where(Doctor.department_id == department_id)
-        if assigned_patient_ids is not None:
-            query = query.where(Prescription.patient_id.in_(assigned_patient_ids))
+        if hospital_id is not None:
+            query = query.where(Prescription.hospital_id == hospital_id)
+        query = self._apply_filters(
+            query,
+            status=status,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, prescription_id: int) -> Prescription | None:
-        result = await self.db.execute(self._base_query().where(Prescription.id == prescription_id))
+    async def get_by_id(self, prescription_id: int, hospital_id: int | None = None) -> Prescription | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Prescription.id == prescription_id))
         return result.scalar_one_or_none()
 
     async def create(self, prescription: Prescription, items: list[PrescriptionItem]) -> Prescription:
@@ -335,6 +382,7 @@ class PrescriptionRepository:
         await self.db.flush()
         await self.db.refresh(prescription)
         return prescription
+
     async def delete_items(self, prescription_id: int) -> None:
         items = await self.db.execute(
             select(PrescriptionItem).where(
@@ -372,12 +420,15 @@ class PharmacyInvoiceRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return (
+    def _base_query(self, hospital_id: int | None = None):
+        query = (
             select(PharmacyInvoice)
             .where(PharmacyInvoice.is_deleted.is_(False))
             .options(selectinload(PharmacyInvoice.items))
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+        return query
 
     def _apply_filters(
         self,
@@ -412,9 +463,10 @@ class PharmacyInvoiceRepository:
         status: str | None = None,
         patient_name: str | None = None,
         invoice_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> list[PharmacyInvoice]:
         query = self._apply_filters(
-            self._base_query(), status=status, patient_name=patient_name, invoice_date=invoice_date
+            self._base_query(hospital_id=hospital_id), status=status, patient_name=patient_name, invoice_date=invoice_date
         )
         result = await self.db.execute(
             query.order_by(PharmacyInvoice.created_at.desc()).offset(skip).limit(limit)
@@ -426,13 +478,16 @@ class PharmacyInvoiceRepository:
         status: str | None = None,
         patient_name: str | None = None,
         invoice_date: date | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         query = select(func.count(PharmacyInvoice.id)).select_from(PharmacyInvoice).where(PharmacyInvoice.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
         query = self._apply_filters(query, status=status, patient_name=patient_name, invoice_date=invoice_date)
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, invoice_id: int) -> PharmacyInvoice | None:
-        result = await self.db.execute(self._base_query().where(PharmacyInvoice.id == invoice_id))
+    async def get_by_id(self, invoice_id: int, hospital_id: int | None = None) -> PharmacyInvoice | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(PharmacyInvoice.id == invoice_id))
         return result.scalar_one_or_none()
 
     async def create(self, invoice: PharmacyInvoice, items: list[PharmacyInvoiceItem]) -> PharmacyInvoice:
@@ -450,13 +505,12 @@ class PharmacyInvoiceRepository:
         await self.db.refresh(invoice)
         return invoice
 
-
     async def soft_delete(self, invoice: PharmacyInvoice) -> None:
         invoice.is_deleted = True
         invoice.deleted_at = utc_now()
         await self.db.flush()
 
-    async def get_sales_report(self, start, end) -> dict:
+    async def get_sales_report(self, start, end, hospital_id: int | None = None) -> dict:
         filters = [
             or_(
                 PharmacyInvoice.is_deleted.is_(False),
@@ -468,6 +522,8 @@ class PharmacyInvoiceRepository:
             ),
             PharmacyInvoice.created_at <= end,
         ]
+        if hospital_id is not None:
+            filters.append(PharmacyInvoice.hospital_id == hospital_id)
         if start is not None:
             filters.append(PharmacyInvoice.created_at >= start)
 
@@ -531,7 +587,7 @@ class PharmacyInvoiceRepository:
             "top_medicines": top_medicines,
         }
 
-    async def get_dashboard_sales(self) -> dict:
+    async def get_dashboard_sales(self, hospital_id: int | None = None) -> dict:
         now = utc_now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_start = today_start + timedelta(days=1)
@@ -541,30 +597,32 @@ class PharmacyInvoiceRepository:
         else:
             next_month_start = month_start.replace(month=month_start.month + 1)
 
-        daily_sales = (await self.db.scalar(
-            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= today_start,
-                PharmacyInvoice.created_at < tomorrow_start
-            )
-        )) or 0.0
+        daily_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.status != "cancelled",
+            PharmacyInvoice.created_at >= today_start,
+            PharmacyInvoice.created_at < tomorrow_start
+        )
+        if hospital_id is not None:
+            daily_query = daily_query.where(PharmacyInvoice.hospital_id == hospital_id)
+        daily_sales = (await self.db.scalar(daily_query)) or 0.0
 
-        monthly_sales = (await self.db.scalar(
-            select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
-                PharmacyInvoice.is_deleted.is_(False),
-                PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= month_start,
-                PharmacyInvoice.created_at < next_month_start
-            )
-        )) or 0.0
+        monthly_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
+            PharmacyInvoice.is_deleted.is_(False),
+            PharmacyInvoice.status != "cancelled",
+            PharmacyInvoice.created_at >= month_start,
+            PharmacyInvoice.created_at < next_month_start
+        )
+        if hospital_id is not None:
+            monthly_query = monthly_query.where(PharmacyInvoice.hospital_id == hospital_id)
+        monthly_sales = (await self.db.scalar(monthly_query)) or 0.0
 
         return {
             "daily_sales": round(float(daily_sales), 2),
             "monthly_sales": round(float(monthly_sales), 2)
         }
 
-    async def get_daily_stock_deductions(self) -> list[dict]:
+    async def get_daily_stock_deductions(self, hospital_id: int | None = None) -> list[dict]:
         query = (
             select(
                 func.date(PharmacyInvoice.created_at).label("sale_date"),
@@ -575,16 +633,17 @@ class PharmacyInvoiceRepository:
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled"
             )
-            .group_by(func.date(PharmacyInvoice.created_at))
-            .order_by(func.date(PharmacyInvoice.created_at).desc())
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+        query = query.group_by(func.date(PharmacyInvoice.created_at)).order_by(func.date(PharmacyInvoice.created_at).desc())
         result = await self.db.execute(query)
         return [
             {"date": row.sale_date, "deduction_quantity": int(row.total_qty or 0)}
             for row in result.all()
         ]
 
-    async def get_most_selling_medicines(self, limit: int = 10) -> list[dict]:
+    async def get_most_selling_medicines(self, limit: int = 10, hospital_id: int | None = None) -> list[dict]:
         query = (
             select(
                 Medicine.id.label("med_id"),
@@ -599,10 +658,10 @@ class PharmacyInvoiceRepository:
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled"
             )
-            .group_by(Medicine.id)
-            .order_by(func.sum(PharmacyInvoiceItem.quantity).desc())
-            .limit(limit)
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+        query = query.group_by(Medicine.id).order_by(func.sum(PharmacyInvoiceItem.quantity).desc()).limit(limit)
         result = await self.db.execute(query)
         return [
             {
@@ -615,7 +674,7 @@ class PharmacyInvoiceRepository:
             for row in result.all()
         ]
 
-    async def get_date_wise_medicines(self) -> list[dict]:
+    async def get_date_wise_medicines(self, hospital_id: int | None = None) -> list[dict]:
         query = (
             select(
                 func.date(PharmacyInvoice.created_at).label("sale_date"),
@@ -628,9 +687,10 @@ class PharmacyInvoiceRepository:
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled"
             )
-            .group_by(func.date(PharmacyInvoice.created_at), Medicine.name)
-            .order_by(func.date(PharmacyInvoice.created_at).desc(), func.sum(PharmacyInvoiceItem.quantity).desc())
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+        query = query.group_by(func.date(PharmacyInvoice.created_at), Medicine.name).order_by(func.date(PharmacyInvoice.created_at).desc(), func.sum(PharmacyInvoiceItem.quantity).desc())
         result = await self.db.execute(query)
         
         from collections import defaultdict
@@ -651,20 +711,26 @@ class SupplierRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[Supplier]:
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Supplier).where(Supplier.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Supplier.hospital_id == hospital_id)
+        return query
+
+    async def list_all(self, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[Supplier]:
         result = await self.db.execute(
-            select(Supplier)
-            .where(Supplier.is_deleted.is_(False))
+            self._base_query(hospital_id=hospital_id)
             .order_by(Supplier.created_at.desc(), Supplier.id.desc())
             .offset(skip)
             .limit(limit)
         )
         return list(result.scalars().all())
 
-    async def count_all(self) -> int:
-        return (await self.db.scalar(
-            select(func.count()).select_from(Supplier).where(Supplier.is_deleted.is_(False))
-        )) or 0
+    async def count_all(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Supplier).where(Supplier.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Supplier.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
     async def create(self, supplier: Supplier) -> Supplier:
         self.db.add(supplier)
@@ -672,11 +738,10 @@ class SupplierRepository:
         await self.db.refresh(supplier)
         return supplier
 
-    async def get_by_id(self, supplier_id: int) -> Supplier | None:
+    async def get_by_id(self, supplier_id: int, hospital_id: int | None = None) -> Supplier | None:
         result = await self.db.execute(
-            select(Supplier).where(
-                Supplier.id == supplier_id,
-                Supplier.is_deleted.is_(False)
+            self._base_query(hospital_id=hospital_id).where(
+                Supplier.id == supplier_id
             )
         )
         return result.scalar_one_or_none() 
@@ -691,37 +756,33 @@ class SupplierRepository:
         supplier.deleted_at = utc_now()
         await self.db.flush()    
 
-    async def get_by_phone(self, phone: str) -> Supplier | None:
+    async def get_by_phone(self, phone: str, hospital_id: int | None = None) -> Supplier | None:
         result = await self.db.execute(
-            select(Supplier).where(
-                Supplier.phone == phone,
-                Supplier.is_deleted.is_(False)
+            self._base_query(hospital_id=hospital_id).where(
+                Supplier.phone == phone
             )
         )
         return result.scalar_one_or_none()
 
-    async def get_by_email(self, email: str) -> Supplier | None:
+    async def get_by_email(self, email: str, hospital_id: int | None = None) -> Supplier | None:
         result = await self.db.execute(
-            select(Supplier).where(
-                Supplier.email == email,
-                Supplier.is_deleted.is_(False)
+            self._base_query(hospital_id=hospital_id).where(
+                Supplier.email == email
             )
         )
         return result.scalar_one_or_none()
 
-    async def get_by_gst(self, gst_number: str) -> Supplier | None:
+    async def get_by_gst(self, gst_number: str, hospital_id: int | None = None) -> Supplier | None:
         result = await self.db.execute(
-            select(Supplier).where(
-                Supplier.gst_number == gst_number,
-                Supplier.is_deleted.is_(False)
+            self._base_query(hospital_id=hospital_id).where(
+                Supplier.gst_number == gst_number
             )
         )
         return result.scalar_one_or_none()
 
-    async def get_all_active(self) -> list[Supplier]:
+    async def get_all_active(self, hospital_id: int | None = None) -> list[Supplier]:
         result = await self.db.execute(
-            select(Supplier)
-            .where(Supplier.is_deleted.is_(False))
+            self._base_query(hospital_id=hospital_id)
             .order_by(Supplier.created_at.desc(), Supplier.id.desc())
         )
         return list(result.scalars().all())
@@ -730,24 +791,32 @@ class PurchaseRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Purchase).options(selectinload(Purchase.items)).where(Purchase.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Purchase).options(selectinload(Purchase.items)).where(Purchase.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Purchase.hospital_id == hospital_id)
+        return query
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[Purchase]:
+    async def list_all(self, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[Purchase]:
         result = await self.db.execute(
-            self._base_query().order_by(Purchase.created_at.desc()).offset(skip).limit(limit)
+            self._base_query(hospital_id=hospital_id).order_by(Purchase.created_at.desc()).offset(skip).limit(limit)
         )
         return list(result.scalars().unique().all())
 
-    async def count_all(self) -> int:
-        return (await self.db.scalar(select(func.count()).select_from(Purchase).where(Purchase.is_deleted.is_(False)))) or 0
+    async def count_all(self, hospital_id: int | None = None) -> int:
+        query = select(func.count()).select_from(Purchase).where(Purchase.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Purchase.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0
 
-    async def get_summary_stats(self) -> dict:
-        base_where = Purchase.is_deleted.is_(False)
+    async def get_summary_stats(self, hospital_id: int | None = None) -> dict:
+        base_where = [Purchase.is_deleted.is_(False)]
+        if hospital_id is not None:
+            base_where.append(Purchase.hospital_id == hospital_id)
 
         total_orders = (
             await self.db.scalar(
-                select(func.count()).select_from(Purchase).where(base_where)
+                select(func.count()).select_from(Purchase).where(*base_where)
             )
         ) or 0
 
@@ -756,7 +825,7 @@ class PurchaseRepository:
                 select(func.count())
                 .select_from(Purchase)
                 .where(
-                    base_where,
+                    *base_where,
                     func.lower(Purchase.status).in_(["pending", "ordered"]),
                 )
             )
@@ -767,8 +836,8 @@ class PurchaseRepository:
                 select(func.count())
                 .select_from(Purchase)
                 .where(
-                    base_where,
-                    func.lower(Purchase.status).in_(["received", "completed"]),
+                    *base_where,
+                    func.lower(Purchase.status).in_(["received", "completed", "delivered"]),
                 )
             )
         ) or 0
@@ -776,8 +845,8 @@ class PurchaseRepository:
         total_spent = (
             await self.db.scalar(
                 select(func.coalesce(func.sum(Purchase.total_amount), 0.0)).where(
-                    base_where,
-                    func.lower(Purchase.status).in_(["received", "completed"]),
+                    *base_where,
+                    func.lower(Purchase.status).in_(["received", "completed", "delivered"]),
                 )
             )
         ) or 0.0
@@ -789,13 +858,12 @@ class PurchaseRepository:
             "total_spent": float(total_spent),
         }
 
-
-    async def get_by_id(self, purchase_id: int) -> Purchase | None:
-        result = await self.db.execute(self._base_query().where(Purchase.id == purchase_id))
+    async def get_by_id(self, purchase_id: int, hospital_id: int | None = None) -> Purchase | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Purchase.id == purchase_id))
         return result.scalar_one_or_none()
 
-    async def get_purchase_order_by_id(self, purchase_id: int) -> Purchase | None:
-        return await self.get_by_id(purchase_id)
+    async def get_purchase_order_by_id(self, purchase_id: int, hospital_id: int | None = None) -> Purchase | None:
+        return await self.get_by_id(purchase_id, hospital_id=hospital_id)
     
     async def create(self, purchase: Purchase, items: list[PurchaseItem]) -> Purchase:
         self.db.add(purchase)
@@ -832,40 +900,50 @@ class PharmacyDashboardRepository:
             query = query.where(column <= end_date)
         return query
 
-    async def get_total_medicines(self) -> int:
+    async def get_total_medicines(self, hospital_id: int | None = None) -> int:
         query = select(func.count(Medicine.id)).where(Medicine.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_low_stock_count(self) -> int:
+    async def get_low_stock_count(self, hospital_id: int | None = None) -> int:
         query = select(func.count(Medicine.id)).where(
             Medicine.is_deleted.is_(False),
             Medicine.stock_quantity <= Medicine.reorder_level,
         )
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_expired_alerts_count(self) -> int:
+    async def get_expired_alerts_count(self, hospital_id: int | None = None) -> int:
         threshold = date.today() + timedelta(days=30)
         query = select(func.count(Medicine.id)).where(
             Medicine.is_deleted.is_(False),
             Medicine.expiry_date.is_not(None),
             Medicine.expiry_date <= threshold,
         )
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_today_sales(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> float:
+    async def get_today_sales(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, hospital_id: int | None = None) -> float:
         query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
         if start_date or end_date:
             query = self._apply_date_filter(query, PharmacyInvoice.created_at, start_date, end_date)
         else:
             query = query.where(func.date(PharmacyInvoice.created_at) == date.today())
         return float((await self.db.scalar(query)) or 0.0)
 
-    async def get_monthly_sales(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> float:
+    async def get_monthly_sales(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, hospital_id: int | None = None) -> float:
         query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
         if start_date or end_date:
             query = self._apply_date_filter(query, PharmacyInvoice.created_at, start_date, end_date)
         else:
@@ -873,21 +951,28 @@ class PharmacyDashboardRepository:
             query = query.where(func.date(PharmacyInvoice.created_at) >= first_day)
         return float((await self.db.scalar(query)) or 0.0)
 
-    async def get_pending_purchases_count(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> int:
+    async def get_pending_purchases_count(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, hospital_id: int | None = None) -> int:
         query = select(func.count(Purchase.id)).where(
-            func.lower(Purchase.status) == "pending"
+            func.lower(Purchase.status) == "pending",
+            Purchase.is_deleted.is_(False),
         )
+        if hospital_id is not None:
+            query = query.where(Purchase.hospital_id == hospital_id)
         query = self._apply_date_filter(query, Purchase.ordered_at, start_date, end_date)
         return (await self.db.scalar(query)) or 0
 
-    async def get_total_suppliers_count(self) -> int:
+    async def get_total_suppliers_count(self, hospital_id: int | None = None) -> int:
         query = select(func.count(Supplier.id)).where(Supplier.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Supplier.hospital_id == hospital_id)
         return (await self.db.scalar(query)) or 0
 
-    async def get_prescriptions_count(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> int:
+    async def get_prescriptions_count(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, hospital_id: int | None = None) -> int:
         query = select(func.count(Prescription.id)).where(
             Prescription.is_deleted.is_(False)
         )
+        if hospital_id is not None:
+            query = query.where(Prescription.hospital_id == hospital_id)
         if start_date or end_date:
             query = self._apply_date_filter(query, Prescription.created_at, start_date, end_date)
         else:
@@ -900,16 +985,17 @@ class PharmacyDashboardRepository:
             )
         return (await self.db.scalar(query)) or 0
 
-    async def get_low_stock_items(self, limit: int = 10) -> list[dict]:
+    async def get_low_stock_items(self, limit: int = 10, hospital_id: int | None = None) -> list[dict]:
         query = (
             select(Medicine)
             .where(
                 Medicine.is_deleted.is_(False),
                 Medicine.stock_quantity <= Medicine.reorder_level,
             )
-            .order_by(Medicine.stock_quantity.asc())
-            .limit(limit)
         )
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
+        query = query.order_by(Medicine.stock_quantity.asc()).limit(limit)
         res = await self.db.execute(query)
         items = res.scalars().all()
         result = []
@@ -923,20 +1009,9 @@ class PharmacyDashboardRepository:
                 "unit": m.unit or "Unit",
                 "status_label": status_text,
             })
-        if not result:
-            result = [
-                {
-                    "id": 1,
-                    "name": "Paracetamol 650",
-                    "stock_quantity": 10,
-                    "reorder_level": 15,
-                    "unit": "Tablet",
-                    "status_label": "10 Left",
-                }
-            ]
         return result
 
-    async def get_today_sales_trend(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> list[dict]:
+    async def get_today_sales_trend(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, hospital_id: int | None = None) -> list[dict]:
         query = (
             select(
                 func.hour(PharmacyInvoice.created_at).label("hr"),
@@ -946,6 +1021,8 @@ class PharmacyDashboardRepository:
                 PharmacyInvoice.is_deleted.is_(False),
             )
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
         if start_date or end_date:
             query = self._apply_date_filter(query, PharmacyInvoice.created_at, start_date, end_date)
         else:
@@ -962,7 +1039,7 @@ class PharmacyDashboardRepository:
             trend.append({"label": f"{hr:02d}:00", "amount": amt})
         return trend
 
-    async def get_monthly_sales_trend(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> list[dict]:
+    async def get_monthly_sales_trend(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, hospital_id: int | None = None) -> list[dict]:
         weeks = [
             {"label": "Week 1", "amount": 35000.0},
             {"label": "Week 2", "amount": 42000.0},
@@ -976,6 +1053,7 @@ class PharmacyDashboardRepository:
         reference_date: date,
         start_dt: Optional[datetime] = None,
         end_dt: Optional[datetime] = None,
+        hospital_id: int | None = None,
     ) -> dict:
         thirty_days_later = reference_date + timedelta(days=30)
 
@@ -985,6 +1063,8 @@ class PharmacyDashboardRepository:
             func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
             func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
         ).where(Medicine.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Medicine.hospital_id == hospital_id)
 
         res = await self.db.execute(query)
         row = res.fetchone()
@@ -1058,8 +1138,8 @@ class PharmacyReturnRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return (
+    def _base_query(self, hospital_id: int | None = None):
+        query = (
             select(PharmacyReturn)
             .where(PharmacyReturn.is_deleted.is_(False))
             .options(
@@ -1067,6 +1147,9 @@ class PharmacyReturnRepository:
                 selectinload(PharmacyReturn.invoice),
             )
         )
+        if hospital_id is not None:
+            query = query.where(PharmacyReturn.hospital_id == hospital_id)
+        return query
 
     async def create(self, pharmacy_return: PharmacyReturn, items: list[PharmacyReturnItem]) -> PharmacyReturn:
         self.db.add(pharmacy_return)
@@ -1078,20 +1161,23 @@ class PharmacyReturnRepository:
         await self.db.refresh(pharmacy_return)
         return await self.get_by_id(pharmacy_return.id)  # type: ignore
 
-    async def get_by_id(self, return_id: int) -> PharmacyReturn | None:
-        stmt = self._base_query().where(PharmacyReturn.id == return_id)
+    async def get_by_id(self, return_id: int, hospital_id: int | None = None) -> PharmacyReturn | None:
+        stmt = self._base_query(hospital_id=hospital_id).where(PharmacyReturn.id == return_id)
         return (await self.db.execute(stmt)).scalar_one_or_none()
 
-    async def list_by_invoice(self, invoice_id: int) -> list[PharmacyReturn]:
-        stmt = self._base_query().where(PharmacyReturn.invoice_id == invoice_id).order_by(PharmacyReturn.id.desc())
+    async def list_by_invoice(self, invoice_id: int, hospital_id: int | None = None) -> list[PharmacyReturn]:
+        stmt = self._base_query(hospital_id=hospital_id).where(PharmacyReturn.invoice_id == invoice_id).order_by(PharmacyReturn.id.desc())
         return list((await self.db.execute(stmt)).scalars().all())
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> list[PharmacyReturn]:
-        stmt = self._base_query().order_by(PharmacyReturn.id.desc()).offset(skip).limit(limit)
+    async def list_all(self, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[PharmacyReturn]:
+        stmt = self._base_query(hospital_id=hospital_id).order_by(PharmacyReturn.id.desc()).offset(skip).limit(limit)
         return list((await self.db.execute(stmt)).scalars().all())
 
-    async def count_all(self) -> int:
+    async def count_all(self, hospital_id: int | None = None) -> int:
         stmt = select(func.count()).select_from(PharmacyReturn).where(PharmacyReturn.is_deleted.is_(False))
+        if hospital_id is not None:
+            stmt = stmt.where(PharmacyReturn.hospital_id == hospital_id)
         return (await self.db.scalar(stmt)) or 0
+
 
 

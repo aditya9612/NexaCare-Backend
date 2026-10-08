@@ -31,7 +31,7 @@ async def create_expense_category(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "create")),
 ):
-    category = await ExpenseService(db).create_category(data, current_user.id)
+    category = await ExpenseService(db).create_category(data, current_user.id, current_user=current_user)
     return APIResponse(message="Expense category created", data=category)
 
 
@@ -43,7 +43,7 @@ async def list_expense_categories(
     size: int = Query(20, ge=1, le=100),
     _: User = Depends(require_permission("expense", "read")),
 ):
-    result = await ExpenseService(db).list_categories(page=page, size=size)
+    result = await ExpenseService(db).list_categories(page=page, size=size, current_user=current_user)
     return APIResponse(message="Expense categories retrieved", data=result)
 
 
@@ -54,7 +54,7 @@ async def get_expense_category(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "read")),
 ):
-    category = await ExpenseService(db).get_category(category_id)
+    category = await ExpenseService(db).get_category(category_id, current_user=current_user)
     return APIResponse(message="Expense category retrieved", data=category)
 
 
@@ -66,7 +66,7 @@ async def update_expense_category(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "update")),
 ):
-    category = await ExpenseService(db).update_category(category_id, data, current_user.id)
+    category = await ExpenseService(db).update_category(category_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Expense category updated", data=category)
 
 
@@ -77,7 +77,7 @@ async def delete_expense_category(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "delete")),
 ):
-    await ExpenseService(db).delete_category(category_id, current_user.id)
+    await ExpenseService(db).delete_category(category_id, current_user.id, current_user=current_user)
     return APIResponse(message="Expense category deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -95,7 +95,7 @@ async def create_vendor_payment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "create")),
 ):
-    payment = await ExpenseService(db).create_payment(data, current_user.id)
+    payment = await ExpenseService(db).create_payment(data, current_user.id, current_user=current_user)
     return APIResponse(message="Vendor payment recorded", data=payment)
 
 
@@ -110,7 +110,7 @@ async def list_vendor_payments(
     _: User = Depends(require_permission("expense", "read")),
 ):
     result = await ExpenseService(db).list_payments(
-        page=page, size=size, vendor_id=vendor_id, expense_id=expense_id
+        page=page, size=size, vendor_id=vendor_id, expense_id=expense_id, current_user=current_user
     )
     return APIResponse(message="Vendor payments retrieved", data=result)
 
@@ -122,7 +122,7 @@ async def get_vendor_payment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "read")),
 ):
-    payment = await ExpenseService(db).get_payment(payment_id)
+    payment = await ExpenseService(db).get_payment(payment_id, current_user=current_user)
     return APIResponse(message="Vendor payment retrieved", data=payment)
 
 
@@ -134,7 +134,7 @@ async def update_vendor_payment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "update")),
 ):
-    payment = await ExpenseService(db).update_payment(payment_id, data, current_user.id)
+    payment = await ExpenseService(db).update_payment(payment_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Vendor payment updated", data=payment)
 
 
@@ -145,7 +145,7 @@ async def delete_vendor_payment(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "delete")),
 ):
-    await ExpenseService(db).delete_payment(payment_id, current_user.id)
+    await ExpenseService(db).delete_payment(payment_id, current_user.id, current_user=current_user)
     return APIResponse(message="Vendor payment deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -159,7 +159,7 @@ async def get_expenses_summary(
     end_date: date | None = Query(None),
     _: User = Depends(require_permission("expense", "read")),
 ):
-    summary = await ExpenseService(db).get_expense_summary(start_date, end_date)
+    summary = await ExpenseService(db).get_expense_summary(start_date, end_date, current_user=current_user)
     return APIResponse(message="Expenses summary retrieved", data=summary)
 
 
@@ -201,7 +201,7 @@ async def export_expenses(
     format: ExpenseExportFormat = Query(ExpenseExportFormat.EXCEL),
     _: User = Depends(require_permission("expense", "read")),
 ):
-    data, media_type = await ExpenseService(db).export_expenses(format.value)
+    data, media_type = await ExpenseService(db).export_expenses(format.value, current_user=current_user)
     
     if format == ExpenseExportFormat.EXCEL:
         return StreamingResponse(
@@ -226,7 +226,7 @@ async def create_expense(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "create")),
 ):
-    expense = await ExpenseService(db).create_expense(data, current_user.id)
+    expense = await ExpenseService(db).create_expense(data, current_user.id, current_user=current_user)
     return APIResponse(message="Expense recorded", data=expense)
 
 
@@ -269,7 +269,7 @@ async def get_expense(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "read")),
 ):
-    expense = await ExpenseService(db).get_expense(expense_id)
+    expense = await ExpenseService(db).get_expense(expense_id, current_user=current_user)
     return APIResponse(message="Expense retrieved", data=expense)
 
 
@@ -281,7 +281,7 @@ async def update_expense(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "update")),
 ):
-    expense = await ExpenseService(db).update_expense(expense_id, data, current_user.id)
+    expense = await ExpenseService(db).update_expense(expense_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Expense updated", data=expense)
 
 
@@ -292,5 +292,5 @@ async def delete_expense(
     current_user: CurrentUser,
     _: User = Depends(require_permission("expense", "delete")),
 ):
-    await ExpenseService(db).delete_expense(expense_id, current_user.id)
+    await ExpenseService(db).delete_expense(expense_id, current_user.id, current_user=current_user)
     return APIResponse(message="Expense deleted", data=MessageResponse(message="Soft deleted"))

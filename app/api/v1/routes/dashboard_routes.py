@@ -20,10 +20,11 @@ router = APIRouter()
 @router.get("/admin", response_model=APIResponse[AdminDashboardResponse])
 async def admin_dashboard(
     db: DbSession,
+    current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN)),
     __: User = Depends(require_permission("dashboard", "read")),
 ):
-    data = await DashboardService(db).admin_dashboard()
+    data = await DashboardService(db).admin_dashboard(current_user=current_user)
     return APIResponse(message="Admin dashboard", data=data)
 
 
@@ -52,6 +53,7 @@ async def patient_dashboard(
 @router.get("/reception", response_model=APIResponse[ReceptionDashboardResponse])
 async def reception_dashboard(
     db: DbSession,
+    current_user: CurrentUser,
     date: date | None = None,
     date_filter: str | None = Query(
         None,
@@ -68,8 +70,12 @@ async def reception_dashboard(
             date_filter=date_filter,
             start_date=start_date,
             end_date=end_date,
+            current_user=current_user,
         )
     else:
-        data = await DashboardService(db).reception_dashboard(date)
+        data = await DashboardService(db).reception_dashboard(
+            target_date=date,
+            current_user=current_user,
+        )
     return APIResponse(message="Receptionist dashboard stats retrieved successfully", data=data)
 

@@ -15,8 +15,10 @@ class AuditRepository:
         resource_id: str | None = None,
         details: str | None = None,
         ip_address: str | None = None,
+        hospital_id: int | None = None,
     ) -> AuditLog:
         log = AuditLog(
+            hospital_id=hospital_id,
             user_id=user_id,
             action=action,
             resource=resource,

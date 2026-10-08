@@ -24,7 +24,7 @@ async def download_transactions_bulk_template(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    stream = await TransactionService(db).generate_transactions_bulk_template()
+    stream = await TransactionService(db).generate_transactions_bulk_template(current_user=current_user)
     return StreamingResponse(
         stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -45,7 +45,7 @@ async def upload_transactions_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await TransactionService(db).import_transactions_from_excel(file, current_user.id)
+    result = await TransactionService(db).import_transactions_from_excel(file, current_user.id, current_user=current_user)
     return APIResponse(message="Transactions bulk upload processed", data=result)
 
 
@@ -69,7 +69,8 @@ async def export_transactions(
         status=status,
         start_date=start_date,
         end_date=end_date,
-        q=q
+        q=q,
+        current_user=current_user,
     )
     
     if format == TransactionExportFormat.EXCEL:
@@ -93,7 +94,7 @@ async def create_transaction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    transaction = await TransactionService(db).create_transaction(data, current_user.id)
+    transaction = await TransactionService(db).create_transaction(data, current_user.id, current_user=current_user)
     return APIResponse(message="Transaction recorded successfully", data=transaction)
 
 
@@ -124,6 +125,7 @@ async def list_transactions(
         start_date=start_date,
         end_date=end_date,
         q=q,
+        current_user=current_user,
     )
     return APIResponse(message="Transaction history retrieved successfully", data=result)
 
@@ -135,7 +137,7 @@ async def get_transaction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    transaction = await TransactionService(db).get_transaction(id)
+    transaction = await TransactionService(db).get_transaction(id, current_user=current_user)
     return APIResponse(message="Transaction retrieved successfully", data=transaction)
 
 
@@ -147,7 +149,7 @@ async def update_transaction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    transaction = await TransactionService(db).update_transaction(id, data, current_user.id)
+    transaction = await TransactionService(db).update_transaction(id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Transaction updated successfully", data=transaction)
 
 
@@ -158,5 +160,5 @@ async def delete_transaction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "delete")),
 ):
-    await TransactionService(db).delete_transaction(id, current_user.id)
+    await TransactionService(db).delete_transaction(id, current_user.id, current_user=current_user)
     return APIResponse(message="Transaction deleted successfully", data=MessageResponse(message="Deleted successfully"))

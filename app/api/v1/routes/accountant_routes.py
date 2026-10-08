@@ -18,9 +18,9 @@ async def get_accountant_dashboard(
     current_user: CurrentUser,
     _: User = Depends(require_permission("billing", "read")),
 ):
-    data = await AccountantService(db).get_dashboard()
+    data = await AccountantService(db).get_dashboard(current_user=current_user)
 
     return APIResponse(
         message="Accountant dashboard retrieved",
         data=data,
-    )
+    )

@@ -6,7 +6,7 @@ class InventoryExportFormat(str, Enum):
     EXCEL = "excel"
     PDF = "pdf"
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.inventory_schema import (
@@ -55,8 +55,8 @@ async def list_inventory_items(
     q: str | None = None,
     _: User = Depends(require_permission("inventory", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     service = InventoryService(db)
-    hospital_id = current_user.hospital_id
     if q:
         result = await service.search_items(q, page=page, size=size, hospital_id=hospital_id)
     else:
@@ -105,7 +105,8 @@ async def export_inventory_items(
     format: InventoryExportFormat = Query(InventoryExportFormat.EXCEL),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    data, media_type = await InventoryService(db).export_items(format.value)
+    hospital_id = resolve_tenant_id(current_user)
+    data, media_type = await InventoryService(db).export_items(format.value, hospital_id=hospital_id)
 
     if format == InventoryExportFormat.EXCEL:
         return StreamingResponse(
@@ -128,7 +129,8 @@ async def get_inventory_item(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    item = await InventoryService(db).get_item(item_id)
+    hospital_id = resolve_tenant_id(current_user)
+    item = await InventoryService(db).get_item(item_id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item retrieved", data=item)
 
 
@@ -140,7 +142,8 @@ async def update_inventory_item(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    item = await InventoryService(db).update_item(item_id, data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    item = await InventoryService(db).update_item(item_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item updated", data=item)
 
 
@@ -151,7 +154,8 @@ async def delete_inventory_item(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    await InventoryService(db).delete_item(item_id, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    await InventoryService(db).delete_item(item_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -177,8 +181,9 @@ async def list_stock_transactions(
     transaction_type: str | None = None,
     _: User = Depends(require_permission("inventory", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     result = await InventoryService(db).list_transactions(
-        page=page, size=size, item_id=item_id, transaction_type=transaction_type
+        page=page, size=size, item_id=item_id, transaction_type=transaction_type, hospital_id=hospital_id,
     )
     return APIResponse(message="Stock transactions retrieved", data=result)
 
@@ -190,7 +195,8 @@ async def get_stock_transaction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    transaction = await InventoryService(db).get_transaction(transaction_id)
+    hospital_id = resolve_tenant_id(current_user)
+    transaction = await InventoryService(db).get_transaction(transaction_id, hospital_id=hospital_id)
     return APIResponse(message="Stock transaction retrieved", data=transaction)
 
 
@@ -228,7 +234,8 @@ async def create_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    warehouse = await InventoryService(db).create_warehouse(data, current_user.hospital_id)
+    hospital_id = resolve_tenant_id(current_user)
+    warehouse = await InventoryService(db).create_warehouse(data, hospital_id)
     return APIResponse(message="Warehouse created", data=warehouse)
 
 
@@ -240,8 +247,9 @@ async def list_warehouses(
     size: int = 20,
     _: User = Depends(require_permission("inventory", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     try:
-        result = await InventoryService(db).list_warehouses(hospital_id=current_user.hospital_id, page=page, size=size)
+        result = await InventoryService(db).list_warehouses(hospital_id=hospital_id, page=page, size=size)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -256,7 +264,8 @@ async def get_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    warehouse = await InventoryService(db).get_warehouse(warehouse_id, current_user.hospital_id)
+    hospital_id = resolve_tenant_id(current_user)
+    warehouse = await InventoryService(db).get_warehouse(warehouse_id, hospital_id)
     return APIResponse(message="Warehouse retrieved", data=warehouse)
 
 
@@ -268,7 +277,8 @@ async def update_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, current_user.hospital_id)
+    hospital_id = resolve_tenant_id(current_user)
+    warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, hospital_id)
     return APIResponse(message="Warehouse updated", data=warehouse)
 
 
@@ -279,7 +289,8 @@ async def delete_warehouse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    await InventoryService(db).delete_warehouse(warehouse_id, current_user.hospital_id)
+    hospital_id = resolve_tenant_id(current_user)
+    await InventoryService(db).delete_warehouse(warehouse_id, hospital_id)
     return APIResponse(message="Warehouse deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -292,7 +303,8 @@ async def reorder_alerts(
     size: int = 50,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    alerts = await InventoryService(db).get_reorder_alerts(page=page, size=size)
+    hospital_id = resolve_tenant_id(current_user)
+    alerts = await InventoryService(db).get_reorder_alerts(hospital_id=hospital_id, page=page, size=size)
     return APIResponse(message="Reorder alerts", data=alerts)
 
 
@@ -303,7 +315,8 @@ async def consumption_report(
     period: str = "monthly",
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    report = await InventoryService(db).get_consumption_report(period=period)
+    hospital_id = resolve_tenant_id(current_user)
+    report = await InventoryService(db).get_consumption_report(period=period, hospital_id=hospital_id)
     return APIResponse(message="Consumption report", data=report)
 
 
@@ -313,5 +326,6 @@ async def get_inventory_dashboard(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    dashboard_data = await InventoryService(db).get_dashboard_summary(current_user.hospital_id)
+    hospital_id = resolve_tenant_id(current_user)
+    dashboard_data = await InventoryService(db).get_dashboard_summary(hospital_id)
     return APIResponse(message="Inventory dashboard stats retrieved", data=dashboard_data)

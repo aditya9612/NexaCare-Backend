@@ -2,7 +2,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.patient_schema import PatientResponse
@@ -17,6 +17,7 @@ from app.schemas.nurse_schema import (
     NurseHandoverNoteUpdate,
     NurseNotificationResponse,
     NurseResponse,
+    NurseDetailResponse,
     NurseShiftCreate,
     NurseShiftDetailsResponse,
     NurseShiftResponse,
@@ -60,7 +61,8 @@ async def create_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "create")),
 ):
-    nurse = await NurseService(db).create(data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    nurse = await NurseService(db).create(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse created", data=nurse)
 
 
@@ -76,6 +78,7 @@ async def list_nurses(
     sort_order: str = "desc",
     _: User = Depends(require_permission("nurses", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     result = await NurseService(db).list_nurses(
         page=page,
         size=size,
@@ -83,6 +86,7 @@ async def list_nurses(
         shift=shift,
         sort_by=sort_by,
         sort_order=sort_order,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Nurses retrieved", data=result)
 
@@ -96,7 +100,8 @@ async def search_nurses(
     size: int = 20,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).search(search_query, page=page, size=size)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await NurseService(db).search(search_query, page=page, size=size, hospital_id=hospital_id)
     return APIResponse(message="Search results", data=result)
 
 
@@ -117,7 +122,8 @@ async def list_medication_schedules(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    schedules = await NurseService(db).list_medication_schedules()
+    hospital_id = resolve_tenant_id(current_user)
+    schedules = await NurseService(db).list_medication_schedules(hospital_id=hospital_id)
     return APIResponse(message="Medication schedules retrieved successfully", data=schedules)
 
 
@@ -128,7 +134,8 @@ async def list_prescriptions(
     patient_id: int | None = None,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    prescriptions = await NurseService(db).list_prescriptions(patient_id)
+    hospital_id = resolve_tenant_id(current_user)
+    prescriptions = await NurseService(db).list_prescriptions(patient_id=patient_id, hospital_id=hospital_id)
     return APIResponse(message="Prescriptions retrieved successfully", data=prescriptions)
 
 
@@ -181,14 +188,15 @@ async def delete_medication_log(
     return APIResponse(message="Medication log deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
-@router.get("/{nurse_id}", response_model=APIResponse[NurseResponse])
+@router.get("/{nurse_id}", response_model=APIResponse[NurseDetailResponse])
 async def get_nurse(
     nurse_id: int,
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    nurse = await NurseService(db).get_by_id(nurse_id)
+    hospital_id = resolve_tenant_id(current_user)
+    nurse = await NurseService(db).get_by_id(nurse_id, hospital_id=hospital_id)
     return APIResponse(message="Nurse retrieved", data=nurse)
 
 
@@ -200,7 +208,8 @@ async def update_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "update")),
 ):
-    nurse = await NurseService(db).update(nurse_id, data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    nurse = await NurseService(db).update(nurse_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse updated", data=nurse)
 
 
@@ -211,7 +220,8 @@ async def delete_nurse(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "delete")),
 ):
-    await NurseService(db).delete(nurse_id, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    await NurseService(db).delete(nurse_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse deleted", data=MessageResponse(message="Deleted successfully"))
 
 
@@ -223,6 +233,7 @@ async def list_nurse_daily_tasks(
     nurse_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    date: date | None = Query(None, description="Filter daily tasks by date (YYYY-MM-DD). Defaults to today (IST)."),
     page: int = 1,
     size: int = 20,
     patient_id: int | None = None,
@@ -234,6 +245,7 @@ async def list_nurse_daily_tasks(
 ):
     result = await NurseService(db).list_daily_tasks(
         nurse_id=nurse_id,
+        task_date=date,
         page=page,
         size=size,
         patient_id=patient_id,
@@ -726,6 +738,25 @@ async def create_emergency_alert(
 ):
     result = await NurseCommunicationService(db).create_emergency_alert(data, current_user.id)
     return APIResponse(message="Emergency alert recorded successfully", data=result)
+
+
+@singular_router.get("/emergency-alerts", response_model=APIResponse[List[EmergencyAlertResponse]])
+async def list_nurse_emergency_alerts(
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).get_nurse_emergency_alerts(current_user.id)
+    return APIResponse(message="Emergency alerts retrieved successfully", data=result)
+
+
+@singular_router.get("/emergency-alerts/{alert_id}", response_model=APIResponse[EmergencyAlertResponse])
+async def get_nurse_emergency_alert(
+    alert_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).get_nurse_emergency_alert_by_id(alert_id, current_user.id)
+    return APIResponse(message="Emergency alert retrieved successfully", data=result)
 
 
 

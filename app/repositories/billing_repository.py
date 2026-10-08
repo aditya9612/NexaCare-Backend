@@ -89,9 +89,10 @@ class BillingRepository:
         limit: int = 20,
         status: str | None = None,
         bill_type: str | None = None,
+        hospital_id: int | None = None,
     ) -> list[Billing]:
         pattern = f"%{q.lower()}%"
-        query = self._base_query().where(
+        query = self._base_query(hospital_id=hospital_id).where(
             or_(
                 func.lower(Billing.bill_number).like(pattern),
                 func.lower(Billing.notes).like(pattern),
@@ -118,6 +119,7 @@ class BillingRepository:
         q: str,
         status: str | None = None,
         bill_type: str | None = None,
+        hospital_id: int | None = None,
     ) -> int:
         pattern = f"%{q.lower()}%"
         query = (
@@ -131,6 +133,8 @@ class BillingRepository:
                 ),
             )
         )
+        if hospital_id is not None:
+            query = query.where(Billing.hospital_id == hospital_id)
         if status:
             query = query.where(Billing.status == status)
         if bill_type:
@@ -198,15 +202,15 @@ class BillingRepository:
         await self.db.refresh(payment)
         return payment
 
-    async def get_pending_payments(self, skip: int = 0, limit: int = 20) -> list[Billing]:
-        query = self._base_query().where(Billing.balance_amount > 0, Billing.status != "cancelled")
+    async def get_pending_payments(self, skip: int = 0, limit: int = 20, hospital_id: int | None = None) -> list[Billing]:
+        query = self._base_query(hospital_id=hospital_id).where(Billing.balance_amount > 0, Billing.status != "cancelled")
         result = await self.db.execute(
             query.order_by(Billing.due_date.asc()).offset(skip).limit(limit)
         )
         return list(result.scalars().unique().all())
 
-    async def count_pending_payments(self) -> int:
-        result = await self.db.scalar(
+    async def count_pending_payments(self, hospital_id: int | None = None) -> int:
+        q = (
             select(func.count())
             .select_from(Billing)
             .where(
@@ -215,32 +219,45 @@ class BillingRepository:
                 Billing.status != "cancelled",
             )
         )
+        if hospital_id is not None:
+            q = q.where(Billing.hospital_id == hospital_id)
+        result = await self.db.scalar(q)
         return result or 0
 
-    async def get_revenue_summary(self) -> dict:
-        billed = await self.db.scalar(
-            select(func.coalesce(func.sum(Billing.total_amount), 0)).where(Billing.is_deleted.is_(False))
+    async def get_revenue_summary(self, hospital_id: int | None = None) -> dict:
+        b_q = select(func.coalesce(func.sum(Billing.total_amount), 0)).where(Billing.is_deleted.is_(False))
+        p_q = (
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Billing, Payment.billing_id == Billing.id)
+            .where(Payment.is_refund.is_(False), Payment.status == "completed")
         )
-        collected = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                Payment.is_refund.is_(False), Payment.status == "completed"
-            )
+        bal_q = select(func.coalesce(func.sum(Billing.balance_amount), 0)).where(
+            Billing.is_deleted.is_(False), Billing.balance_amount > 0
         )
-        pending = await self.db.scalar(
-            select(func.coalesce(func.sum(Billing.balance_amount), 0)).where(
-                Billing.is_deleted.is_(False), Billing.balance_amount > 0
-            )
-        )
-        overdue = await self.db.scalar(
+        overdue_q = (
             select(func.count())
             .select_from(Billing)
             .where(Billing.is_deleted.is_(False), Billing.status == "overdue")
         )
-        pending_count = await self.db.scalar(
+        pending_count_q = (
             select(func.count())
             .select_from(Billing)
             .where(Billing.is_deleted.is_(False), Billing.balance_amount > 0)
         )
+
+        if hospital_id is not None:
+            b_q = b_q.where(Billing.hospital_id == hospital_id)
+            p_q = p_q.where(Billing.hospital_id == hospital_id)
+            bal_q = bal_q.where(Billing.hospital_id == hospital_id)
+            overdue_q = overdue_q.where(Billing.hospital_id == hospital_id)
+            pending_count_q = pending_count_q.where(Billing.hospital_id == hospital_id)
+
+        billed = await self.db.scalar(b_q)
+        collected = await self.db.scalar(p_q)
+        pending = await self.db.scalar(bal_q)
+        overdue = await self.db.scalar(overdue_q)
+        pending_count = await self.db.scalar(pending_count_q)
+
         return {
             "total_revenue": float(collected or 0),
             "total_pending": float(pending or 0),
@@ -250,7 +267,7 @@ class BillingRepository:
             "pending_count": pending_count or 0,
         }
 
-    async def get_daily_collection(self, target_date: date, end_date: date | None = None) -> dict:
+    async def get_daily_collection(self, target_date: date, end_date: date | None = None, hospital_id: int | None = None) -> dict:
         start = datetime.combine(target_date, datetime.min.time())
         end = datetime.combine(end_date or target_date, datetime.max.time())
 
@@ -265,6 +282,9 @@ class BillingRepository:
             Billing.created_at >= start,
             Billing.created_at <= end,
         )
+        if hospital_id is not None:
+            billing_stats_stmt = billing_stats_stmt.where(Billing.hospital_id == hospital_id)
+
         b_res = await self.db.execute(billing_stats_stmt)
         b_row = b_res.first()
 
@@ -274,24 +294,29 @@ class BillingRepository:
         bills_count = int(b_row[3] if b_row else 0)
 
         # Payment stats for payments RECEIVED on target date
-        result = await self.db.execute(
+        pay_stmt = (
             select(Payment.payment_method, func.sum(Payment.amount))
+            .join(Billing, Payment.billing_id == Billing.id)
             .where(
                 Payment.is_refund.is_(False),
                 Payment.status == "completed",
                 Payment.payment_date >= start,
                 Payment.payment_date <= end,
             )
-            .group_by(Payment.payment_method)
         )
+        if hospital_id is not None:
+            pay_stmt = pay_stmt.where(Billing.hospital_id == hospital_id)
+        result = await self.db.execute(pay_stmt.group_by(Payment.payment_method))
+
         by_method = {
             str(row[0]): round(float(row[1]), 2)
             for row in result.all()
             if row[0] and str(row[0]).lower() != "pharmacy"
         }
-        
-        refunds_result = await self.db.scalar(
+
+        ref_stmt = (
             select(func.coalesce(func.sum(Payment.amount), 0.0))
+            .join(Billing, Payment.billing_id == Billing.id)
             .where(
                 Payment.is_refund.is_(True),
                 Payment.status == "completed",
@@ -299,6 +324,9 @@ class BillingRepository:
                 Payment.payment_date <= end,
             )
         )
+        if hospital_id is not None:
+            ref_stmt = ref_stmt.where(Billing.hospital_id == hospital_id)
+        refunds_result = await self.db.scalar(ref_stmt)
         refund_total = float(refunds_result or 0.0)
         if refund_total > 0:
             by_method["refund"] = round(refund_total, 2)
@@ -307,9 +335,10 @@ class BillingRepository:
         net_collected = max(0.0, gross_collected - refund_total)
         total = round(net_collected, 2)
 
-        count = await self.db.scalar(
+        cnt_stmt = (
             select(func.count())
             .select_from(Payment)
+            .join(Billing, Payment.billing_id == Billing.id)
             .where(
                 Payment.is_refund.is_(False),
                 Payment.status == "completed",
@@ -317,6 +346,10 @@ class BillingRepository:
                 Payment.payment_date <= end,
             )
         )
+        if hospital_id is not None:
+            cnt_stmt = cnt_stmt.where(Billing.hospital_id == hospital_id)
+        count = await self.db.scalar(cnt_stmt)
+
         return {
             "today_total_bill": today_total_bill,
             "today_paid_bill": today_paid_bill,
@@ -329,38 +362,55 @@ class BillingRepository:
         }
 
 
-    async def get_period_report(self, start: datetime, end: datetime) -> dict:
-        billed = await self.db.scalar(
-            select(func.coalesce(func.sum(Billing.total_amount), 0)).where(
-                Billing.is_deleted.is_(False),
-                Billing.created_at >= start,
-                Billing.created_at <= end,
-            )
+    async def get_period_report(self, start: datetime, end: datetime, hospital_id: int | None = None) -> dict:
+        b_q = select(func.coalesce(func.sum(Billing.total_amount), 0)).where(
+            Billing.is_deleted.is_(False),
+            Billing.created_at >= start,
+            Billing.created_at <= end,
         )
-        collected = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+        c_q = (
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Billing, Payment.billing_id == Billing.id)
+            .where(
                 Payment.is_refund.is_(False),
                 Payment.payment_date >= start,
                 Payment.payment_date <= end,
             )
         )
-        refunded = await self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+        r_q = (
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Billing, Payment.billing_id == Billing.id)
+            .where(
                 Payment.is_refund.is_(True),
                 Payment.payment_date >= start,
                 Payment.payment_date <= end,
             )
         )
-        bill_count = await self.db.scalar(
+        b_cnt_q = (
             select(func.count())
             .select_from(Billing)
             .where(Billing.is_deleted.is_(False), Billing.created_at >= start, Billing.created_at <= end)
         )
-        payment_count = await self.db.scalar(
+        p_cnt_q = (
             select(func.count())
             .select_from(Payment)
+            .join(Billing, Payment.billing_id == Billing.id)
             .where(Payment.payment_date >= start, Payment.payment_date <= end)
         )
+
+        if hospital_id is not None:
+            b_q = b_q.where(Billing.hospital_id == hospital_id)
+            c_q = c_q.where(Billing.hospital_id == hospital_id)
+            r_q = r_q.where(Billing.hospital_id == hospital_id)
+            b_cnt_q = b_cnt_q.where(Billing.hospital_id == hospital_id)
+            p_cnt_q = p_cnt_q.where(Billing.hospital_id == hospital_id)
+
+        billed = await self.db.scalar(b_q)
+        collected = await self.db.scalar(c_q)
+        refunded = await self.db.scalar(r_q)
+        bill_count = await self.db.scalar(b_cnt_q)
+        payment_count = await self.db.scalar(p_cnt_q)
+
         return {
             "total_billed": round(float(billed or 0), 2),
             "total_collected": round(float(collected or 0), 2),

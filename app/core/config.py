@@ -127,7 +127,7 @@ class Settings(BaseSettings):
 
     # Rate Limiting Configuration
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_DEFAULT_PER_MINUTE: int = 120
+    RATE_LIMIT_DEFAULT_PER_MINUTE: int = 10
     RATE_LIMIT_FAIL_OPEN: bool = True
     TRUSTED_PROXIES: List[str] = ["127.0.0.1", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600

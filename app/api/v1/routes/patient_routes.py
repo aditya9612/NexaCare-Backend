@@ -262,7 +262,7 @@ async def export_patients(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
             
-    data, media_type = await PatientService(db).export_patients(format.value, status)
+    data, media_type = await PatientService(db).export_patients(format.value, status, current_user=current_user)
     
     if format == PatientExportFormat.EXCEL:
         return StreamingResponse(

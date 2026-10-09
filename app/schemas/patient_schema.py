@@ -133,7 +133,7 @@ class PatientCreate(BaseSchema):
     diagnosis: str
     insurance_provider: str | None = None
     insurance_number: str | None = None
-    status: str = "active"
+    status: str | None = "active"
     preferred_language: str | None = None
 
     @field_validator("first_name")
@@ -189,10 +189,12 @@ class PatientCreate(BaseSchema):
 
     @field_validator("status")
     @classmethod
-    def val_status(cls, v: str) -> str:
+    def val_status(cls, v: str | None) -> str:
+        if v is None:
+            return "active"
         res = validate_status_field(v)
         if res is None:
-            raise ValueError("Status cannot be blank")
+            return "active"
         return res
 
     @field_validator("gender")

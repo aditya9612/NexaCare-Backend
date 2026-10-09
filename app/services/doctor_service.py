@@ -661,18 +661,20 @@ class DoctorService:
     async def generate_doctor_bulk_template(self):
         from io import BytesIO
         import openpyxl
-        
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Doctor Bulk Template"
-        
+
         headers = [
-            "First Name", "Last Name", "Specialization", "Qualification", "Experience", 
-            "Phone", "Email", "Password", "Department Name", "Consultation Fee", 
-            "License Number", "Availability Status", "Bio", "Gender", "Date of Birth"
+            "First Name *", "Last Name *", "Specialization *", "Qualification", "Experience *", 
+            "Phone *", "Email *", "Password *", "Department Name *", "Consultation Fee *", 
+            "License Number *", "Availability Status", "Bio", "Gender *", "Date of Birth"
         ]
         ws.append(headers)
-        
+
         sample_row = [
             "Ramesh",
             "Sharma",
@@ -691,7 +693,37 @@ class DoctorService:
             "1985-06-15"
         ]
         ws.append(sample_row)
-        
+
+        mandatory_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        mandatory_font = Font(name="Calibri", size=11, bold=True, color="9C0006")
+
+        optional_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+        optional_font = Font(name="Calibri", size=11, bold=True, color="1F497D")
+
+        thin_border = Border(
+            left=Side(style="thin", color="D9D9D9"),
+            right=Side(style="thin", color="D9D9D9"),
+            top=Side(style="thin", color="D9D9D9"),
+            bottom=Side(style="thin", color="D9D9D9"),
+        )
+
+        ws.row_dimensions[1].height = 28
+
+        for cell in ws[1]:
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+            if "*" in str(cell.value):
+                cell.fill = mandatory_fill
+                cell.font = mandatory_font
+            else:
+                cell.fill = optional_fill
+                cell.font = optional_font
+
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or "")) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -703,18 +735,19 @@ class DoctorService:
         from datetime import datetime, date
         from pydantic import ValidationError
         from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
-        
+
         wb = openpyxl.load_workbook(BytesIO(file_content))
         ws = wb.active
-        
+
         header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
         if not header_row:
             raise BadRequestException("The uploaded file is empty or has no headers.")
-            
-        headers = [str(h).strip().lower() for h in header_row if h is not None]
+
+        headers = [str(h).replace("*", "").strip().lower() for h in header_row if h is not None]
         required_headers = {
             "first name", "last name", "specialization", "experience", 
-            "phone", "email", "password", "license number"
+            "phone", "email", "password", "license number",
+            "department name", "consultation fee", "gender"
         }
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")

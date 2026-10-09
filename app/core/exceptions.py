@@ -24,3 +24,16 @@ class ForbiddenException(HTTPException):
 class ConflictException(HTTPException):
     def __init__(self, detail: str = "Conflict"):
         super().__init__(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+class RateLimitExceededException(HTTPException):
+    def __init__(
+        self,
+        detail: str = "Too many requests. Please try again later.",
+        headers: dict[str, str] | None = None,
+    ):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=detail,
+            headers=headers,
+        )

@@ -111,7 +111,12 @@ async def calendar_view(
     doctor_id: int | None = None,
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    appointments = await AppointmentService(db).get_calendar(start_date, end_date, doctor_id, current_user=current_user)
+    appointments = await AppointmentService(db).get_calendar(
+        start_date=start_date,
+        end_date=end_date,
+        doctor_id=doctor_id,
+        current_user=current_user,
+    )
     return APIResponse(message="Calendar data", data=appointments)
 
 

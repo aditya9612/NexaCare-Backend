@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, Query, Form, Request, 
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.patient_schema import (
@@ -668,8 +668,9 @@ async def list_patient_clinical_records(
     size: int = Query(20, ge=1, le=100),
     _: User = Depends(require_permission("patients", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     from app.services.clinical_record_service import ClinicalRecordService
     result = await ClinicalRecordService(db).list_records(
-        page=page, size=size, patient_id=patient_id, current_user=current_user
+        page=page, size=size, patient_id=patient_id, hospital_id=hospital_id, current_user=current_user
     )
     return APIResponse(message="Records fetched successfully", data=result)

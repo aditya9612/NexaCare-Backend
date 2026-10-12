@@ -15,7 +15,9 @@ from app.core.exceptions import BadRequestException
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.pharmacy_schema import (
     ExpiryAlert,
+    ExpiryAlertsResponse,
     LowStockAlert,
+    LowStockAlertsResponse,
     MedicineCreate,
     MedicineResponse,
     MedicineUpdate,
@@ -811,17 +813,17 @@ async def receive_purchase_order(
 
 
 # --- Alerts & Reports ---
-@router.get("/low-stock", response_model=APIResponse[list[LowStockAlert]])
+@router.get("/low-stock", response_model=LowStockAlertsResponse)
 async def low_stock_alerts(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    alerts = await PharmacyService(db).get_low_stock(current_user=current_user)
-    return APIResponse(message="Low stock alerts", data=alerts)
+    alerts, total_count = await PharmacyService(db).get_low_stock(current_user=current_user)
+    return LowStockAlertsResponse(message="Low stock alerts", data=alerts, total_count=total_count)
 
 
-@router.get("/expiry-alerts", response_model=APIResponse[list[ExpiryAlert]])
+@router.get("/expiry-alerts", response_model=ExpiryAlertsResponse)
 async def expiry_alerts(
     db: DbSession,
     current_user: CurrentUser,
@@ -837,8 +839,8 @@ async def expiry_alerts(
     ),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
-    alerts = await PharmacyService(db).get_expiry_alerts(days=days, current_user=current_user)
-    return APIResponse(message="Expiry alerts", data=alerts)
+    alerts, total_count = await PharmacyService(db).get_expiry_alerts(days=days, current_user=current_user)
+    return ExpiryAlertsResponse(message="Expiry alerts", data=alerts, total_count=total_count)
 
 
 @router.get("/sales-reports", response_model=APIResponse[SalesReport])

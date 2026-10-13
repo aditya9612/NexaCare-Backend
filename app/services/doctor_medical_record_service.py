@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 from fastapi import UploadFile
 
@@ -158,7 +159,13 @@ class DoctorMedicalRecordService:
             size,
         )
 
-    async def get_report_by_id(self, record_id: int, user_id: int | None = None, hospital_id: int | None = None) -> MedicalRecordResponse:
+    async def get_report_by_id(
+        self,
+        record_id: int,
+        user_id: int | None = None,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
+    ) -> MedicalRecordResponse:
         record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
@@ -167,6 +174,21 @@ class DoctorMedicalRecordService:
             logged_in_doctor_id = await self._get_doctor_id(user_id)
             if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
                 raise ForbiddenException("You can only view your own patients' medical records")
+
+        effective_user = current_user
+        if effective_user is None and user_id is not None:
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            from app.models.user_model import User
+            effective_user = await self.repo.db.scalar(
+                select(User).options(selectinload(User.role)).where(User.id == user_id)
+            )
+
+        if effective_user and getattr(effective_user, "role", None) and getattr(effective_user.role, "name", "").lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_patient_ids = await PatientService(self.repo.db)._resolve_allowed_patient_ids(effective_user)
+            if not allowed_patient_ids or record.patient_id not in allowed_patient_ids:
+                raise ForbiddenException("You can only access your own medical records")
 
         response_data = MedicalRecordResponse.model_validate(record)
         diagnosis_record = await self.repo.get_diagnosis(record.patient_id)
@@ -254,7 +276,13 @@ class DoctorMedicalRecordService:
         await self.repo.delete_record(record)
         await self.audit_repo.create("delete", "doctor_medical_records", user_id=user_id, resource_id=str(record.id))
 
-    async def get_report_file(self, record_id: int, user_id: int | None = None, hospital_id: int | None = None):
+    async def get_report_file(
+        self,
+        record_id: int,
+        user_id: int | None = None,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
+    ):
         record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
 
         if not record:
@@ -265,13 +293,56 @@ class DoctorMedicalRecordService:
             if logged_in_doctor_id is not None and record.doctor_id != logged_in_doctor_id:
                 raise ForbiddenException("You can only access your own patients' medical record files")
 
+        effective_user = current_user
+        if effective_user is None and user_id is not None:
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            from app.models.user_model import User
+            effective_user = await self.repo.db.scalar(
+                select(User).options(selectinload(User.role)).where(User.id == user_id)
+            )
+
+        if effective_user and getattr(effective_user, "role", None) and getattr(effective_user.role, "name", "").lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_patient_ids = await PatientService(self.repo.db)._resolve_allowed_patient_ids(effective_user)
+            if not allowed_patient_ids or record.patient_id not in allowed_patient_ids:
+                raise ForbiddenException("You can only access your own medical record files")
+
         path = Path(record.file_path)
         if not path.exists():
             raise NotFoundException("Report file not found")
 
         return record
 
-    async def get_diagnosis(self, patient_id: int) -> DiagnosisResponse:
+    async def get_diagnosis(
+        self,
+        patient_id: int,
+        current_user: Any | None = None,
+        user_id: int | None = None,
+    ) -> DiagnosisResponse:
+        effective_user = current_user
+        if effective_user is None and user_id is not None:
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            from app.models.user_model import User
+            effective_user = await self.repo.db.scalar(
+                select(User).options(selectinload(User.role)).where(User.id == user_id)
+            )
+
+        role_name = ""
+        if effective_user:
+            role = getattr(effective_user, "role", None)
+            if hasattr(role, "name"):
+                role_name = str(role.name).lower()
+            elif isinstance(role, str):
+                role_name = role.lower()
+
+        if role_name == "patient":
+            from app.services.patient_service import PatientService
+            allowed_patient_ids = await PatientService(self.repo.db)._resolve_allowed_patient_ids(effective_user)
+            if not allowed_patient_ids or patient_id not in allowed_patient_ids:
+                raise ForbiddenException("You can only access your own diagnosis")
+
         patient = await self.patient_repo.get_by_id(patient_id)
 
         if not patient:

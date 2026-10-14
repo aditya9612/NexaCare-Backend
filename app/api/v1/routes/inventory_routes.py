@@ -38,7 +38,8 @@ async def create_inventory_item(
     current_user: CurrentUser,
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    item = await InventoryService(db).create_item(data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    item = await InventoryService(db).create_item(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item created", data=item)
 
 
@@ -94,7 +95,8 @@ async def upload_items_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
 
-    result = await InventoryService(db).import_items_from_excel(file, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await InventoryService(db).import_items_from_excel(file, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory items bulk upload processed", data=result)
 
 

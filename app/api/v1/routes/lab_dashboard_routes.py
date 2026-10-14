@@ -15,6 +15,7 @@ from app.utils.lab_dashboard_pdf import generate_lab_dashboard_pdf
 router = APIRouter()
 
 ALLOWED_FILTERS = {"today", "7_days", "30_days", "month_to_date", "month", "3_month", "overall", "custom"}
+ALLOWED_SECTIONS = {"all", "summary", "critical_alerts", "pending_approvals", "recent_orders"}
 
 def _validate_filter_params(
     time_filter: str,
@@ -28,6 +29,14 @@ def _validate_filter_params(
     if time_filter == "custom":
         if not start_date or not end_date:
             raise BadRequestException("start_date and end_date are required when filter is 'custom'")
+
+def _validate_section_param(section: Optional[str]) -> str:
+    if not section:
+        return "all"
+    normalized_section = section.strip().lower()
+    if normalized_section not in ALLOWED_SECTIONS:
+        raise BadRequestException(f"Invalid section. Allowed values: {', '.join(sorted(ALLOWED_SECTIONS))}")
+    return normalized_section
 
 async def _get_technician_department_id(db: DbSession, current_user: User) -> Optional[int]:
     role_name = current_user.role.name.lower() if current_user and current_user.role else ""
@@ -90,9 +99,11 @@ async def download_lab_dashboard_pdf(
     time_filter: str = Query("overall", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    section: Optional[str] = Query("all"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     _validate_filter_params(time_filter, start_date, end_date)
+    validated_section = _validate_section_param(section)
     
     dept_id = await _get_technician_department_id(db, current_user)
     service = LabDashboardService(db)
@@ -113,10 +124,15 @@ async def download_lab_dashboard_pdf(
     pdf_bytes = await generate_lab_dashboard_pdf(
         data=dashboard_data,
         filter_applied=time_filter,
-        date_range=date_range_str
+        date_range=date_range_str,
+        section=validated_section,
     )
     
-    filename = f"lab_dashboard_{time_filter}.pdf"
+    filename = (
+        f"lab_dashboard_{time_filter}.pdf"
+        if validated_section == "all"
+        else f"lab_dashboard_{validated_section}_{time_filter}.pdf"
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

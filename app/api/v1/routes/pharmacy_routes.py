@@ -30,6 +30,7 @@ from app.schemas.pharmacy_schema import (
     PharmacyReturnResponse,
     PrescriptionCreate,
     PrescriptionDispenseRequest,
+    PrescriptionListResponse,
     PrescriptionResponse,
     PrescriptionStatusUpdate,
     PrescriptionUpdate,
@@ -295,7 +296,7 @@ async def create_prescription(
     return APIResponse(message="Prescription created", data=prescription)
 
 
-@router.get("/prescriptions", response_model=APIResponse[PaginatedResult[PrescriptionResponse]])
+@router.get("/prescriptions", response_model=APIResponse[PrescriptionListResponse])
 async def list_prescriptions(
     db: DbSession,
     current_user: CurrentUser,

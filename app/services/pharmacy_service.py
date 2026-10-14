@@ -62,6 +62,7 @@ from app.schemas.pharmacy_schema import (
     PrescriptionCreate,
     PrescriptionDispenseRequest,
     PrescriptionItemResponse,
+    PrescriptionListResponse,
     PrescriptionResponse,
     PrescriptionStatusUpdate,
     PrescriptionUpdate,
@@ -512,7 +513,17 @@ class PharmacyService:
     ):
         hospital_id = resolve_tenant_id(current_user)
         if assigned_patient_ids == []:
-            return build_paginated_result([], 0, page, size)
+            return PrescriptionListResponse(
+                items=[],
+                total=0,
+                page=page,
+                size=size,
+                pages=0,
+                total_prescriptions=0,
+                approved=0,
+                pending=0,
+                completed=0,
+            )
 
         skip = (page - 1) * size
         items = await self.prescription_repo.list_all(
@@ -539,12 +550,28 @@ class PharmacyService:
             end_date=end_date,
             hospital_id=hospital_id,
         )
+        stats = await self.prescription_repo.get_summary_stats(
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
+            hospital_id=hospital_id,
+        )
+        pages = math.ceil(total / size) if size else 0
 
-        return build_paginated_result(
-            [self._prescription_response(p) for p in items],
-            total,
-            page,
-            size
+        return PrescriptionListResponse(
+            items=[self._prescription_response(p) for p in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            total_prescriptions=stats.get("total_prescriptions", 0) if isinstance(stats, dict) else getattr(stats, "total_prescriptions", 0),
+            approved=stats.get("approved", 0) if isinstance(stats, dict) else getattr(stats, "approved", 0),
+            pending=stats.get("pending", 0) if isinstance(stats, dict) else getattr(stats, "pending", 0),
+            completed=stats.get("completed", 0) if isinstance(stats, dict) else getattr(stats, "completed", 0),
         )
 
     async def get_prescription(self, prescription_id: int, doctor_id: int | None = None, current_user: Any | None = None) -> PrescriptionResponse:

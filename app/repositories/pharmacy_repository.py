@@ -394,6 +394,57 @@ class PrescriptionRepository:
         )
         return (await self.db.scalar(query)) or 0
 
+    async def get_summary_stats(
+        self,
+        doctor_id: int | None = None,
+        patient_id: int | None = None,
+        appointment_id: int | None = None,
+        department_id: int | None = None,
+        assigned_patient_ids: Optional[list[int]] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        hospital_id: int | None = None,
+    ) -> dict:
+        base_query = (
+            select(
+                func.count(Prescription.id).label("total_prescriptions"),
+                func.count(case((func.lower(Prescription.status) == "pending", 1))).label("pending"),
+                func.count(case((func.lower(Prescription.status).in_(["approved", "sent_to_pharmacy"]), 1))).label("approved"),
+                func.count(case((func.lower(Prescription.status).in_(["completed", "dispensed"]), 1))).label("completed"),
+            )
+            .select_from(Prescription)
+            .where(Prescription.is_deleted.is_(False))
+        )
+        if hospital_id is not None:
+            base_query = base_query.where(Prescription.hospital_id == hospital_id)
+
+        query = self._apply_filters(
+            base_query,
+            status=None,
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            department_id=department_id,
+            assigned_patient_ids=assigned_patient_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        res = (await self.db.execute(query)).one()
+        if hasattr(res, "_mapping"):
+            m = res._mapping
+            return {
+                "total_prescriptions": m.get("total_prescriptions", 0) or 0,
+                "approved": m.get("approved", 0) or 0,
+                "pending": m.get("pending", 0) or 0,
+                "completed": m.get("completed", 0) or 0,
+            }
+        return {
+            "total_prescriptions": getattr(res, "total_prescriptions", 0) or 0,
+            "approved": getattr(res, "approved", 0) or 0,
+            "pending": getattr(res, "pending", 0) or 0,
+            "completed": getattr(res, "completed", 0) or 0,
+        }
+
     async def get_by_id(self, prescription_id: int, hospital_id: int | None = None) -> Prescription | None:
         result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Prescription.id == prescription_id))
         return result.scalar_one_or_none()

@@ -12,6 +12,7 @@ async def generate_lab_dashboard_pdf(
     data: LabDashboardResponse,
     filter_applied: str,
     date_range: str,
+    section: str = "all",
 ) -> bytes:
     template = env.get_template("lab_dashboard_template.html")
     
@@ -23,6 +24,7 @@ async def generate_lab_dashboard_pdf(
     context["filter_applied"] = filter_applied
     context["date_range"] = date_range
     context["generated_at"] = generated_at_str
+    context["section"] = section
     
     html = template.render(**context)
     pdf_bytes = await run_in_threadpool(html_to_pdf, html)

@@ -5,7 +5,7 @@ from typing import List, Optional
 from pydantic import EmailStr, Field, field_validator
 
 from app.core.constants import PharmacyPaymentStatus
-from app.schemas.common_schema import BaseSchema
+from app.schemas.common_schema import APIResponse, BaseSchema
 from app.utils.validators import validate_gst_number
 
 
@@ -593,6 +593,10 @@ class LowStockAlert(BaseSchema):
     reorder_level: int
 
 
+class LowStockAlertsResponse(APIResponse[list[LowStockAlert]]):
+    total_count: int = 0
+
+
 class ExpiryAlert(BaseSchema):
     medicine_id: int
     name: str
@@ -600,6 +604,10 @@ class ExpiryAlert(BaseSchema):
     expiry_date: date
     stock_quantity: int
     days_until_expiry: int
+
+
+class ExpiryAlertsResponse(APIResponse[list[ExpiryAlert]]):
+    total_count: int = 0
 
 
 class SalesReport(BaseSchema):

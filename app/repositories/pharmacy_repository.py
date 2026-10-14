@@ -142,31 +142,56 @@ class MedicineRepository:
             await self.db.refresh(medicine)
         return medicine
 
-    async def get_low_stock(self, skip: int = 0, limit: int = 50, hospital_id: int | None = None) -> list[Medicine]:
-        query = (
-            self._base_query(hospital_id=hospital_id)
-            .where(Medicine.stock_quantity <= Medicine.reorder_level, Medicine.is_active.is_(True))
-            .order_by(Medicine.updated_at.desc())
-        )
-        result = await self.db.execute(query.offset(skip).limit(limit))
-        return list(result.scalars().all())
+    async def get_low_stock(self, skip: int = 0, limit: int = 50, hospital_id: int | None = None) -> tuple[list[Medicine], int]:
+        base_filters = [
+            Medicine.is_deleted.is_(False),
+            Medicine.is_active.is_(True),
+            Medicine.stock_quantity <= Medicine.reorder_level,
+        ]
+        if hospital_id is not None:
+            base_filters.append(Medicine.hospital_id == hospital_id)
 
-    async def get_expiry_alerts(self, reference_date: date, days: int = 30, skip: int = 0, limit: int = 50, hospital_id: int | None = None) -> list[Medicine]:
+        count_query = select(func.count(Medicine.id)).where(*base_filters)
+        total_count = (await self.db.scalar(count_query)) or 0
+
+        query = (
+            select(Medicine)
+            .where(*base_filters)
+            .order_by(Medicine.updated_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all()), total_count
+
+    async def get_expiry_alerts(self, reference_date: date, days: int = 30, skip: int = 0, limit: int = 50, hospital_id: int | None = None) -> tuple[list[Medicine], int]:
         threshold = reference_date + timedelta(days=days)
-        query = self._base_query(hospital_id=hospital_id).where(
+        base_filters = [
+            Medicine.is_deleted.is_(False),
             Medicine.is_active.is_(True),
             Medicine.expiry_date.isnot(None),
             Medicine.expiry_date <= threshold,
             Medicine.stock_quantity > 0,
-        )
-        result = await self.db.execute(
-            query.order_by(
+        ]
+        if hospital_id is not None:
+            base_filters.append(Medicine.hospital_id == hospital_id)
+
+        count_query = select(func.count(Medicine.id)).where(*base_filters)
+        total_count = (await self.db.scalar(count_query)) or 0
+
+        query = (
+            select(Medicine)
+            .where(*base_filters)
+            .order_by(
                 Medicine.created_at.desc(),
                 Medicine.id.desc(),
                 Medicine.expiry_date.asc(),
-            ).offset(skip).limit(limit)
+            )
+            .offset(skip)
+            .limit(limit)
         )
-        return list(result.scalars().all())
+        result = await self.db.execute(query)
+        return list(result.scalars().all()), total_count
 
     async def get_dashboard_counts(self, reference_date: date, hospital_id: int | None = None) -> dict:
         total_med_query = select(func.count(Medicine.id)).where(

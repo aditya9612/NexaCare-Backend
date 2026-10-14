@@ -364,6 +364,15 @@ class DashboardService:
         except Exception:
             total_registered_patients = 0
 
+        # 1b. total_appointments (overall appointments across all dates in hospital)
+        try:
+            q = select(func.count(Appointment.id))
+            if hospital_id is not None:
+                q = q.where(Appointment.hospital_id == hospital_id)
+            total_appointments = await self.db.scalar(q) or 0
+        except Exception:
+            total_appointments = 0
+
         # 2. today_scheduled_appointments (scheduled appointments in date range)
         try:
             q = select(func.count(Appointment.id)).where(
@@ -537,7 +546,7 @@ class DashboardService:
             queue_skipped = 0
 
         return ReceptionDashboardResponse(
-            total_appointments=today_scheduled_appointments,
+            total_appointments=total_appointments,
             total_registered_patients=total_registered_patients,
             today_scheduled_appointments=today_scheduled_appointments,
             checked_in_patients=checked_in_patients,

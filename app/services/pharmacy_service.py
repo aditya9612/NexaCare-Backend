@@ -308,23 +308,24 @@ class PharmacyService:
         await self.medicine_repo.soft_delete(medicine)
         await self.audit_repo.create("delete", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
 
-    async def get_low_stock(self, current_user: Any | None = None) -> list[LowStockAlert]:
+    async def get_low_stock(self, current_user: Any | None = None) -> tuple[list[LowStockAlert], int]:
         hospital_id = resolve_tenant_id(current_user)
-        medicines = await self.medicine_repo.get_low_stock(hospital_id=hospital_id)
-        return [
+        medicines, total_count = await self.medicine_repo.get_low_stock(hospital_id=hospital_id)
+        alerts = [
             LowStockAlert(
                 medicine_id=m.id, name=m.name, sku=m.sku,
                 stock_quantity=m.stock_quantity, reorder_level=m.reorder_level,
             )
             for m in medicines
         ]
+        return alerts, total_count
 
-    async def get_expiry_alerts(self, days: int = 30, current_user: Any | None = None) -> list[ExpiryAlert]:
+    async def get_expiry_alerts(self, days: int = 30, current_user: Any | None = None) -> tuple[list[ExpiryAlert], int]:
         from app.utils.helpers import get_today_ist
         hospital_id = resolve_tenant_id(current_user)
         today = get_today_ist()
-        medicines = await self.medicine_repo.get_expiry_alerts(reference_date=today, days=days, hospital_id=hospital_id)
-        return [
+        medicines, total_count = await self.medicine_repo.get_expiry_alerts(reference_date=today, days=days, hospital_id=hospital_id)
+        alerts = [
             ExpiryAlert(
                 medicine_id=m.id, name=m.name, sku=m.sku,
                 expiry_date=m.expiry_date,
@@ -333,6 +334,7 @@ class PharmacyService:
             )
             for m in medicines
         ]
+        return alerts, total_count
 
     # --- Prescriptions ---
 
@@ -1881,9 +1883,9 @@ class PharmacyService:
         )
         purchase = await self.purchase_repo.create(purchase, purchase_items)
 
-        purchase = await self.purchase_repo.get_by_id(purchase.id)
+        purchase = await self.purchase_repo.get_by_id(purchase.id, hospital_id=hospital_id)
         if is_received_status:
-            purchase = await self._process_stock_receipt(purchase, user_id)
+            purchase = await self._process_stock_receipt(purchase, user_id, current_user=current_user)
 
         purchase = await self.purchase_repo.get_by_id(purchase.id, hospital_id=hospital_id)
         await self.audit_repo.create("create", "pharmacy_purchase", user_id=user_id, resource_id=str(purchase.id))
@@ -2055,59 +2057,50 @@ class PharmacyService:
             tx.deleted_at = utc_now()
             await self.db.flush()
 
-    async def _process_stock_receipt(self, purchase: Purchase, user_id: int) -> Purchase:
+    async def _process_stock_receipt(self, purchase: Purchase, user_id: int, current_user: Any | None = None) -> Purchase:
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         from app.models.inventory_model import Warehouse
-        from app.models.user_model import User
         from app.services.stock_movement_service import StockMovementService
         from app.utils.helpers import utc_now
 
         if purchase.received_at is not None:
             return purchase
 
-        user_record = await self.db.scalar(select(User).where(User.id == user_id))
-        hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
-        hospital_id = await self._resolve_hospital_id(current_user, getattr(current_user, "id", None))
+        hospital_id = purchase.hospital_id
+        if hospital_id is None:
+            hospital_id = await self._resolve_hospital_id(current_user, user_id)
 
-        # 1. Lock the purchase for concurrency safety
-        purchase = None
-        try:
-            lock_query = select(Purchase).options(selectinload(Purchase.items)).where(Purchase.id == purchase_order_id)
-            if hospital_id is not None:
-                lock_query = lock_query.where(Purchase.hospital_id == hospital_id)
-            res = await self.db.execute(lock_query.with_for_update())
-            purchase = res.scalars().first() if res else None
-        except Exception:
-            pass
-
-        if not purchase:
-            purchase = await self.purchase_repo.get_by_id(purchase_order_id, hospital_id=hospital_id)
-
-        if not purchase:
-            raise NotFoundException("Purchase not found")
+        # 1. Lock the purchase for concurrency safety if it has an ID
+        if purchase.id:
+            try:
+                lock_query = select(Purchase).options(selectinload(Purchase.items)).where(Purchase.id == purchase.id)
+                if hospital_id is not None:
+                    lock_query = lock_query.where(Purchase.hospital_id == hospital_id)
+                res = await self.db.execute(lock_query.with_for_update())
+                locked = res.scalars().first() if res else None
+                if locked:
+                    purchase = locked
+            except Exception:
+                pass
 
         if getattr(purchase, "is_deleted", False):
             raise NotFoundException("Purchase not found")
 
-        current_status = purchase.status.lower() if purchase.status else ""
-        if current_status == "received":
-            raise BadRequestException("Purchase Order already received")
+        # Double-check idempotency after acquiring row lock
+        if purchase.received_at is not None:
+            return purchase
 
-        allowed_statuses = {"ordered", "pending", "partially_received", "draft"}
-        if current_status not in allowed_statuses:
-            raise BadRequestException("Invalid Purchase Order status")
+        # Ensure items are loaded
+        if not purchase.items and purchase.id:
+            reloaded = await self.purchase_repo.get_by_id(purchase.id, hospital_id=hospital_id)
+            if reloaded and reloaded.items:
+                purchase.items = reloaded.items
 
         # Determine the warehouse. In this architecture, we use the PHARMACY warehouse
         warehouse_id = None
         try:
-            wh_res = await self.db.execute(
-                select(Warehouse.id).where(
-                    Warehouse.code == "PHARMACY",
-                    Warehouse.hospital_id == hospital_id,
-                    Warehouse.hospital_id.isnot(None),
-                )
-            )
-            wh_query = select(Warehouse.id).where(Warehouse.code == 'PHARMACY')
+            wh_query = select(Warehouse.id).where(Warehouse.code == "PHARMACY")
             if hospital_id is not None:
                 wh_query = wh_query.where(Warehouse.hospital_id == hospital_id)
             wh_res = await self.db.execute(wh_query)
@@ -2195,7 +2188,7 @@ class PharmacyService:
             raise BadRequestException("Invalid Purchase Order status")
 
         user_id = current_user.id if hasattr(current_user, "id") else int(current_user)
-        purchase = await self._process_stock_receipt(purchase, user_id)
+        purchase = await self._process_stock_receipt(purchase, user_id, current_user=current_user)
         return self._purchase_response(purchase)
 
     async def get_sales_report(self, period: str = "all", current_user=None) -> SalesReport:

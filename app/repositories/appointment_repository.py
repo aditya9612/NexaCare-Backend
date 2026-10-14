@@ -339,8 +339,18 @@ class AppointmentRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_upcoming(self, limit: int = 20, hospital_id: int | None = None) -> list[Appointment]:
-        today = date.today()
+    async def get_upcoming(
+        self,
+        limit: int = 20,
+        hospital_id: int | None = None,
+        patient_id: int | list[int] | set[int] | tuple[int, ...] | None = None,
+        doctor_id: int | None = None,
+    ) -> list[Appointment]:
+        if patient_id is not None and isinstance(patient_id, (list, tuple, set)) and len(patient_id) == 0:
+            return []
+
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
         query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
@@ -351,6 +361,13 @@ class AppointmentRepository:
         )
         if hospital_id is not None:
             query = query.where(Appointment.hospital_id == hospital_id)
+        if doctor_id is not None:
+            query = query.where(Appointment.doctor_id == doctor_id)
+        if patient_id is not None:
+            if isinstance(patient_id, (list, tuple, set)):
+                query = query.where(Appointment.patient_id.in_(list(patient_id)))
+            else:
+                query = query.where(Appointment.patient_id == patient_id)
         query = query.order_by(Appointment.appointment_date, Appointment.appointment_time).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())

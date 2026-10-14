@@ -98,7 +98,7 @@ def mock_redis():
 @pytest.fixture
 def enable_rate_limiting(monkeypatch):
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
-    monkeypatch.setattr(settings, "RATE_LIMIT_DEFAULT_PER_MINUTE", 120)
+    monkeypatch.setattr(settings, "RATE_LIMIT_DEFAULT_PER_MINUTE", 10)
     monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_OPEN", True)
     yield
 
@@ -130,20 +130,20 @@ def mock_service_dependencies(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_global_rate_limit_default_and_headers(enable_rate_limiting, mock_redis, client):
-    """Verify 120 allowed requests on normal API, 121st rejected with HTTP 429 and RFC headers."""
-    for i in range(120):
+    """Verify 10 allowed requests on normal API, 11th rejected with HTTP 429 and RFC headers."""
+    for i in range(10):
         resp = await client.get("/api/v1/auth/roles")
         assert resp.status_code == 200, f"Request {i+1} failed"
-        assert resp.headers["X-RateLimit-Limit"] == "120"
-        assert int(resp.headers["X-RateLimit-Remaining"]) == 120 - (i + 1)
+        assert resp.headers["X-RateLimit-Limit"] == "10"
+        assert int(resp.headers["X-RateLimit-Remaining"]) == 10 - (i + 1)
         assert "X-RateLimit-Reset" in resp.headers
 
-    resp_121 = await client.get("/api/v1/auth/roles")
-    assert resp_121.status_code == 429
-    assert "Too many requests" in resp_121.json()["detail"]
-    assert "Retry-After" in resp_121.headers
-    assert int(resp_121.headers["Retry-After"]) > 0
-    assert resp_121.headers["X-RateLimit-Remaining"] == "0"
+    resp_11 = await client.get("/api/v1/auth/roles")
+    assert resp_11.status_code == 429
+    assert "Too many requests" in resp_11.json()["detail"]
+    assert "Retry-After" in resp_11.headers
+    assert int(resp_11.headers["Retry-After"]) > 0
+    assert resp_11.headers["X-RateLimit-Remaining"] == "0"
 
 
 # ============================================================================
@@ -159,7 +159,7 @@ async def test_user_isolation(enable_rate_limiting, mock_redis, client):
     headers_a = {"Authorization": f"Bearer {token_user_a}"}
     headers_b = {"Authorization": f"Bearer {token_user_b}"}
 
-    for _ in range(120):
+    for _ in range(10):
         resp = await client.get("/api/v1/auth/roles", headers=headers_a)
         assert resp.status_code == 200
 
@@ -168,7 +168,7 @@ async def test_user_isolation(enable_rate_limiting, mock_redis, client):
 
     resp_b = await client.get("/api/v1/auth/roles", headers=headers_b)
     assert resp_b.status_code == 200
-    assert resp_b.headers["X-RateLimit-Remaining"] == "119"
+    assert resp_b.headers["X-RateLimit-Remaining"] == "9"
 
 
 # ============================================================================
@@ -181,7 +181,7 @@ async def test_ip_isolation(enable_rate_limiting, mock_redis, client):
     headers_ip1 = {"X-Forwarded-For": "203.0.113.1"}
     headers_ip2 = {"X-Forwarded-For": "203.0.113.2"}
 
-    for _ in range(120):
+    for _ in range(10):
         resp = await client.get("/api/v1/auth/roles", headers=headers_ip1)
         assert resp.status_code == 200
 
@@ -276,7 +276,7 @@ async def test_malformed_jwt_fallback_to_anonymous(enable_rate_limiting, mock_re
     headers = {"Authorization": "Bearer this-is-not-a-valid-jwt-token"}
     resp = await client.get("/api/v1/auth/roles", headers=headers)
     assert resp.status_code == 200
-    assert resp.headers["X-RateLimit-Limit"] == "120"
+    assert resp.headers["X-RateLimit-Limit"] == "10"
 
 
 # ============================================================================
@@ -353,7 +353,7 @@ async def test_fast_path_exemptions(enable_rate_limiting, mock_redis, client):
 @pytest.mark.asyncio
 async def test_window_reset(enable_rate_limiting, mock_redis, client):
     """Quota resets after the sliding window expires."""
-    for _ in range(120):
+    for _ in range(10):
         resp = await client.get("/api/v1/auth/roles")
         assert resp.status_code == 200
 
@@ -365,7 +365,7 @@ async def test_window_reset(enable_rate_limiting, mock_redis, client):
     with patch("time.time", return_value=t_future):
         resp_after_reset = await client.get("/api/v1/auth/roles")
         assert resp_after_reset.status_code == 200
-        assert int(resp_after_reset.headers["X-RateLimit-Remaining"]) == 119
+        assert int(resp_after_reset.headers["X-RateLimit-Remaining"]) == 9
 
 
 # ============================================================================

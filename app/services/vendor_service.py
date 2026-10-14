@@ -1,7 +1,9 @@
+from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
+from app.core.dependencies import resolve_tenant_id
 from app.models.vendor_model import Vendor
 from app.models.expense_model import Expense
 from app.models.inventory_model import InventoryItem
@@ -17,37 +19,51 @@ class VendorService:
         self.vendor_repo = VendorRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def create_vendor(self, data: VendorCreate, user_id: int) -> VendorResponse:
-        existing = await self.vendor_repo.get_by_name(data.name)
+    def _resolve_context(self, user_id: int | None, hospital_id: int | None, current_user: Any = None):
+        if current_user is not None:
+            if hospital_id is None:
+                hospital_id = resolve_tenant_id(current_user)
+            if user_id is None:
+                user_id = getattr(current_user, "id", None)
+        return user_id, hospital_id
+
+    async def create_vendor(self, data: VendorCreate, user_id: int | None = None, hospital_id: int | None = None, current_user: Any = None) -> VendorResponse:
+        user_id, hospital_id = self._resolve_context(user_id, hospital_id, current_user)
+        existing = await self.vendor_repo.get_by_name(data.name, hospital_id=hospital_id)
         if existing:
             raise ConflictException(f"Vendor with name '{data.name}' already exists")
 
-        vendor = Vendor(**data.model_dump())
+        vendor_data = data.model_dump()
+        vendor = Vendor(**vendor_data, hospital_id=hospital_id)
         vendor = await self.vendor_repo.create(vendor)
-        await self.audit_repo.create("create", "vendor", user_id=user_id, resource_id=str(vendor.id))
+        if user_id is not None:
+            await self.audit_repo.create("create", "vendor", user_id=user_id, resource_id=str(vendor.id), hospital_id=hospital_id)
         return VendorResponse.model_validate(vendor)
 
-    async def list_vendors(self, page: int = 1, size: int = 20, vendor_type: str | None = None):
+    async def list_vendors(self, page: int = 1, size: int = 20, vendor_type: str | None = None, hospital_id: int | None = None, current_user: Any = None):
+        _, hospital_id = self._resolve_context(None, hospital_id, current_user)
         skip = (page - 1) * size
-        vendors = await self.vendor_repo.list_all(skip=skip, limit=size, vendor_type=vendor_type)
-        total = await self.vendor_repo.count_all(vendor_type=vendor_type)
+        vendors = await self.vendor_repo.list_all(skip=skip, limit=size, vendor_type=vendor_type, hospital_id=hospital_id)
+        total = await self.vendor_repo.count_all(vendor_type=vendor_type, hospital_id=hospital_id)
         return build_paginated_result(
             [VendorResponse.model_validate(v) for v in vendors], total, page, size
         )
 
-    async def get_vendor(self, vendor_id: int) -> VendorResponse:
-        vendor = await self.vendor_repo.get_by_id(vendor_id)
+    async def get_vendor(self, vendor_id: int, hospital_id: int | None = None, current_user: Any = None) -> VendorResponse:
+        _, hospital_id = self._resolve_context(None, hospital_id, current_user)
+        vendor = await self.vendor_repo.get_by_id(vendor_id, hospital_id=hospital_id)
         if not vendor:
             raise NotFoundException(f"Vendor with ID {vendor_id} not found")
         return VendorResponse.model_validate(vendor)
 
-    async def update_vendor(self, vendor_id: int, data: VendorUpdate, user_id: int) -> VendorResponse:
-        vendor = await self.vendor_repo.get_by_id(vendor_id)
+    async def update_vendor(self, vendor_id: int, data: VendorUpdate, user_id: int | None = None, hospital_id: int | None = None, current_user: Any = None) -> VendorResponse:
+        user_id, hospital_id = self._resolve_context(user_id, hospital_id, current_user)
+        vendor = await self.vendor_repo.get_by_id(vendor_id, hospital_id=hospital_id)
         if not vendor:
             raise NotFoundException(f"Vendor with ID {vendor_id} not found")
 
         if data.name:
-            existing = await self.vendor_repo.get_by_name(data.name)
+            existing = await self.vendor_repo.get_by_name(data.name, hospital_id=hospital_id)
             if existing and existing.id != vendor_id:
                 raise ConflictException(f"Vendor with name '{data.name}' already exists")
 
@@ -55,11 +71,13 @@ class VendorService:
             setattr(vendor, key, value)
 
         vendor = await self.vendor_repo.update(vendor)
-        await self.audit_repo.create("update", "vendor", user_id=user_id, resource_id=str(vendor.id))
+        if user_id is not None:
+            await self.audit_repo.create("update", "vendor", user_id=user_id, resource_id=str(vendor.id), hospital_id=hospital_id)
         return VendorResponse.model_validate(vendor)
 
-    async def delete_vendor(self, vendor_id: int, user_id: int) -> None:
-        vendor = await self.vendor_repo.get_by_id(vendor_id)
+    async def delete_vendor(self, vendor_id: int, user_id: int | None = None, hospital_id: int | None = None, current_user: Any = None) -> None:
+        user_id, hospital_id = self._resolve_context(user_id, hospital_id, current_user)
+        vendor = await self.vendor_repo.get_by_id(vendor_id, hospital_id=hospital_id)
         if not vendor:
             raise NotFoundException(f"Vendor with ID {vendor_id} not found")
 
@@ -84,7 +102,7 @@ class VendorService:
             raise BadRequestException("Cannot delete vendor as it is linked to one or more inventory items")
 
         await self.vendor_repo.soft_delete(vendor)
-        await self.audit_repo.create("delete", "vendor", user_id=user_id, resource_id=str(vendor.id))
+        await self.audit_repo.create("delete", "vendor", user_id=user_id, resource_id=str(vendor.id), hospital_id=hospital_id)
 
     async def generate_vendor_bulk_template(self):
         from io import BytesIO
@@ -155,7 +173,7 @@ class VendorService:
         stream.seek(0)
         return stream
 
-    async def import_vendors_from_excel(self, file, user_id: int) -> dict:
+    async def import_vendors_from_excel(self, file, user_id: int, hospital_id: int | None = None) -> dict:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
@@ -223,7 +241,7 @@ class VendorService:
                     service_type=row_dict.get("service_type")
                 )
                 
-                await self.create_vendor(vendor_create, user_id)
+                await self.create_vendor(vendor_create, user_id, hospital_id=hospital_id)
                 created += 1
                 
             except ValidationError as e:
@@ -266,12 +284,12 @@ class VendorService:
             "errors": errors
         }
 
-    async def export_vendors(self, format_type: str):
+    async def export_vendors(self, format_type: str, hospital_id: int | None = None):
         from io import BytesIO
         from datetime import datetime, date
         
         # Retrieve all non-deleted vendors
-        vendors = await self.vendor_repo.get_all_active()
+        vendors = await self.vendor_repo.get_all_active(hospital_id=hospital_id)
         
         if format_type == "excel":
             import openpyxl

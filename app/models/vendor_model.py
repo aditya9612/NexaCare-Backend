@@ -1,8 +1,14 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import ForeignKey, String, Boolean, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.mixins import TimestampMixin, SoftDeleteMixin
+
+if TYPE_CHECKING:
+    from app.models.expense_model import Expense, VendorPayment
+    from app.models.inventory_model import InventoryItem
 
 
 class Vendor(Base, TimestampMixin, SoftDeleteMixin):

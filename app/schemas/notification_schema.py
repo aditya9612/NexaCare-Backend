@@ -7,6 +7,7 @@ from app.schemas.common_schema import BaseSchema
 class NotificationResponse(BaseSchema):
     id: int
     user_id: int
+    hospital_id: int | None = None
     title: str
     message: str
     notification_type: str = Field(..., description="Type of notification: CRITICAL_VALUE, PENDING_TEST")

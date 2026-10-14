@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from enum import Enum
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.vendor_schema import VendorCreate, VendorUpdate, VendorResponse
@@ -44,7 +44,8 @@ async def upload_vendors_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await VendorService(db).import_vendors_from_excel(file, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await VendorService(db).import_vendors_from_excel(file, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Vendors bulk upload processed", data=result)
 
 
@@ -55,7 +56,8 @@ async def export_vendors(
     format: VendorExportFormat = Query(VendorExportFormat.EXCEL),
     _: User = Depends(require_permission("vendor", "read")),
 ):
-    data, media_type = await VendorService(db).export_vendors(format.value)
+    hospital_id = resolve_tenant_id(current_user)
+    data, media_type = await VendorService(db).export_vendors(format.value, hospital_id=hospital_id)
     
     if format == VendorExportFormat.EXCEL:
         return StreamingResponse(
@@ -78,7 +80,8 @@ async def create_vendor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("vendor", "create")),
 ):
-    vendor = await VendorService(db).create_vendor(data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    vendor = await VendorService(db).create_vendor(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Vendor created", data=vendor)
 
 
@@ -91,7 +94,8 @@ async def list_vendors(
     vendor_type: str | None = Query(None, pattern="^(expense|expenses|inventory)$"),
     _: User = Depends(require_permission("vendor", "read")),
 ):
-    result = await VendorService(db).list_vendors(page=page, size=size, vendor_type=vendor_type)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await VendorService(db).list_vendors(page=page, size=size, vendor_type=vendor_type, hospital_id=hospital_id)
     return APIResponse(message="Vendors retrieved", data=result)
 
 
@@ -102,7 +106,8 @@ async def get_vendor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("vendor", "read")),
 ):
-    vendor = await VendorService(db).get_vendor(vendor_id)
+    hospital_id = resolve_tenant_id(current_user)
+    vendor = await VendorService(db).get_vendor(vendor_id, hospital_id=hospital_id)
     return APIResponse(message="Vendor retrieved", data=vendor)
 
 
@@ -114,7 +119,8 @@ async def update_vendor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("vendor", "update")),
 ):
-    vendor = await VendorService(db).update_vendor(vendor_id, data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    vendor = await VendorService(db).update_vendor(vendor_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Vendor updated", data=vendor)
 
 
@@ -125,5 +131,6 @@ async def delete_vendor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("vendor", "delete")),
 ):
-    await VendorService(db).delete_vendor(vendor_id, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    await VendorService(db).delete_vendor(vendor_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Vendor deleted", data=MessageResponse(message="Soft deleted"))

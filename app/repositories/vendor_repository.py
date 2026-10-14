@@ -8,11 +8,33 @@ class VendorRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self):
-        return select(Vendor).where(Vendor.is_deleted.is_(False))
+    def _base_query(self, hospital_id: int | None = None):
+        query = select(Vendor).where(Vendor.is_deleted.is_(False))
+        if hospital_id is not None:
+            from app.models.inventory_model import InventoryItem, Warehouse
+            from sqlalchemy import or_
+            query = (
+                query
+                .outerjoin(Vendor.items)
+                .outerjoin(InventoryItem.warehouse)
+                .where(
+                    or_(
+                        Vendor.hospital_id == hospital_id,
+                        Warehouse.hospital_id == hospital_id
+                    )
+                )
+                .distinct()
+            )
+        return query
 
-    async def list_all(self, skip: int = 0, limit: int = 20, vendor_type: str | None = None) -> list[Vendor]:
-        query = self._base_query()
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        vendor_type: str | None = None,
+        hospital_id: int | None = None
+    ) -> list[Vendor]:
+        query = self._base_query(hospital_id=hospital_id)
         if vendor_type is not None:
             query = query.where(Vendor.vendor_type == vendor_type)
         query = query.order_by(
@@ -25,12 +47,19 @@ class VendorRepository:
     async def count_all(self, vendor_type: str | None = None, hospital_id: int | None = None) -> int:
         if hospital_id is not None:
             from app.models.inventory_model import InventoryItem, Warehouse
+            from sqlalchemy import or_
             query = (
                 select(func.count(func.distinct(Vendor.id)))
                 .select_from(Vendor)
-                .join(Vendor.items)
-                .join(InventoryItem.warehouse)
-                .where(Vendor.is_deleted.is_(False), Warehouse.hospital_id == hospital_id)
+                .outerjoin(Vendor.items)
+                .outerjoin(InventoryItem.warehouse)
+                .where(
+                    Vendor.is_deleted.is_(False),
+                    or_(
+                        Vendor.hospital_id == hospital_id,
+                        Warehouse.hospital_id == hospital_id
+                    )
+                )
             )
             if vendor_type is not None:
                 query = query.where(Vendor.vendor_type == vendor_type)
@@ -40,13 +69,13 @@ class VendorRepository:
                 query = query.where(Vendor.vendor_type == vendor_type)
         return (await self.db.scalar(query)) or 0
 
-    async def get_by_id(self, vendor_id: int) -> Vendor | None:
-        result = await self.db.execute(self._base_query().where(Vendor.id == vendor_id))
+    async def get_by_id(self, vendor_id: int, hospital_id: int | None = None) -> Vendor | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Vendor.id == vendor_id))
         return result.scalar_one_or_none()
 
-    async def get_by_name(self, name: str) -> Vendor | None:
+    async def get_by_name(self, name: str, hospital_id: int | None = None) -> Vendor | None:
         result = await self.db.execute(
-            self._base_query().where(func.lower(Vendor.name) == name.lower().strip())
+            self._base_query(hospital_id=hospital_id).where(func.lower(Vendor.name) == name.lower().strip())
         )
         return result.scalar_one_or_none()
 
@@ -66,8 +95,8 @@ class VendorRepository:
         vendor.deleted_at = utc_now()
         await self.db.flush()
 
-    async def get_all_active(self, vendor_type: str | None = None) -> list[Vendor]:
-        query = self._base_query()
+    async def get_all_active(self, vendor_type: str | None = None, hospital_id: int | None = None) -> list[Vendor]:
+        query = self._base_query(hospital_id=hospital_id)
         if vendor_type is not None:
             query = query.where(Vendor.vendor_type == vendor_type)
         query = query.order_by(

@@ -40,8 +40,10 @@ class BedAllocationService:
         self.repo = BedAllocationRepository(db)
 
     # Floor Services
-    async def get_floor(self, floor_id: int) -> Floor:
-        floor = await self.repo.get_floor_by_id(floor_id)
+    async def get_floor(self, floor_id: int, current_user: Optional[Any] = None) -> Floor:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        floor = await self.repo.get_floor_by_id(floor_id, hospital_id=hospital_id)
         if not floor:
             raise NotFoundException("Floor not found")
         for room in floor.rooms:
@@ -160,13 +162,13 @@ class BedAllocationService:
                     )
                     await self.repo.create_bed(bed)
 
-        return await self.get_floor(floor.id)
+        return await self.get_floor(floor.id, current_user=current_user)
 
-    async def update_floor(self, floor_id: int, data: FloorUpdate) -> Floor:
-        floor = await self.get_floor(floor_id)
+    async def update_floor(self, floor_id: int, data: FloorUpdate, current_user: Optional[Any] = None) -> Floor:
+        floor = await self.get_floor(floor_id, current_user=current_user)
 
         if data.number is not None and data.number != floor.number:
-            existing = await self.repo.get_floor_by_number(data.number)
+            existing = await self.repo.get_floor_by_number(data.number, hospital_id=floor.hospital_id)
             if existing:
                 raise ConflictException(f"Floor number {data.number} already exists")
             floor.number = data.number
@@ -183,12 +185,13 @@ class BedAllocationService:
             type="crud",
             message=f"Updated floor {floor.name} (Number: {floor.number}).",
             floor_id=floor.id,
+            hospital_id=floor.hospital_id,
         )
         await self.repo.create_activity_log(log)
-        return await self.get_floor(floor.id)
+        return await self.get_floor(floor.id, current_user=current_user)
 
-    async def delete_floor(self, floor_id: int) -> None:
-        floor = await self.get_floor(floor_id)
+    async def delete_floor(self, floor_id: int, current_user: Optional[Any] = None) -> None:
+        floor = await self.get_floor(floor_id, current_user=current_user)
 
         for room in floor.rooms:
             for bed in room.beds:
@@ -199,14 +202,17 @@ class BedAllocationService:
             type="crud",
             message=f"Deleted floor {floor.name} (Number: {floor.number}).",
             floor_id=floor.id,
+            hospital_id=floor.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
         await self.repo.delete_floor(floor)
 
     # Room Services
-    async def get_room(self, room_id: int) -> Room:
-        room = await self.repo.get_room_by_id(room_id)
+    async def get_room(self, room_id: int, current_user: Optional[Any] = None) -> Room:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        room = await self.repo.get_room_by_id(room_id, hospital_id=hospital_id)
         if not room:
             raise NotFoundException("Room not found")
         for bed in room.beds:
@@ -218,10 +224,10 @@ class BedAllocationService:
                 bed.admission_date = None
         return room
 
-    async def create_room(self, floor_id: int, data: RoomCreate) -> Room:
-        floor = await self.get_floor(floor_id)
+    async def create_room(self, floor_id: int, data: RoomCreate, current_user: Optional[Any] = None) -> Room:
+        floor = await self.get_floor(floor_id, current_user=current_user)
 
-        existing = await self.repo.get_room_by_number(floor_id, data.number)
+        existing = await self.repo.get_room_by_number(floor_id, data.number, hospital_id=floor.hospital_id)
         if existing:
             raise ConflictException(f"Room number {data.number} already exists on floor {floor.name}")
 
@@ -255,13 +261,13 @@ class BedAllocationService:
         )
         await self.repo.create_activity_log(log)
 
-        return await self.get_room(room.id)
+        return await self.get_room(room.id, current_user=current_user)
 
-    async def update_room(self, room_id: int, data: RoomUpdate) -> Room:
-        room = await self.get_room(room_id)
+    async def update_room(self, room_id: int, data: RoomUpdate, current_user: Optional[Any] = None) -> Room:
+        room = await self.get_room(room_id, current_user=current_user)
 
         if data.number is not None and data.number != room.number:
-            existing = await self.repo.get_room_by_number(room.floor_id, data.number)
+            existing = await self.repo.get_room_by_number(room.floor_id, data.number, hospital_id=room.hospital_id)
             if existing:
                 raise ConflictException(f"Room number {data.number} already exists on this floor")
             room.number = data.number
@@ -283,13 +289,14 @@ class BedAllocationService:
             message=f"Updated room {room.name} under floor {room.floor.name if room.floor else ''}.",
             floor_id=room.floor_id,
             room_id=room.id,
+            hospital_id=room.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
-        return await self.get_room(room.id)
+        return await self.get_room(room.id, current_user=current_user)
 
-    async def delete_room(self, room_id: int) -> None:
-        room = await self.get_room(room_id)
+    async def delete_room(self, room_id: int, current_user: Optional[Any] = None) -> None:
+        room = await self.get_room(room_id, current_user=current_user)
 
         for bed in room.beds:
             if bed.status == "Occupied":
@@ -300,14 +307,17 @@ class BedAllocationService:
             message=f"Deleted room {room.name} under floor {room.floor.name if room.floor else ''}.",
             floor_id=room.floor_id,
             room_id=room.id,
+            hospital_id=room.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
         await self.repo.delete_room(room)
 
     # Bed Services
-    async def get_bed(self, bed_id: int) -> Bed:
-        bed = await self.repo.get_bed_by_id(bed_id)
+    async def get_bed(self, bed_id: int, current_user: Optional[Any] = None) -> Bed:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        bed = await self.repo.get_bed_by_id(bed_id, hospital_id=hospital_id)
         if not bed:
             raise NotFoundException("Bed not found")
         if bed.patient and getattr(bed.patient, "is_deleted", False):
@@ -344,13 +354,13 @@ class BedAllocationService:
                 bed.admission_date = None
         return beds
 
-    async def create_bed(self, room_id: int, data: BedCreate) -> Bed:
-        room = await self.get_room(room_id)
+    async def create_bed(self, room_id: int, data: BedCreate, current_user: Optional[Any] = None) -> Bed:
+        room = await self.get_room(room_id, current_user=current_user)
 
         if len(room.beds) >= room.capacity:
             room.capacity = len(room.beds) + 1
 
-        existing = await self.repo.get_bed_by_name(room_id, data.name)
+        existing = await self.repo.get_bed_by_name(room_id, data.name, hospital_id=room.hospital_id)
         if existing:
             raise ConflictException(f"Bed name '{data.name}' already exists in this room")
 
@@ -373,13 +383,13 @@ class BedAllocationService:
         )
         await self.repo.create_activity_log(log)
 
-        return await self.get_bed(bed.id)
+        return await self.get_bed(bed.id, current_user=current_user)
 
-    async def update_bed(self, bed_id: int, data: BedUpdate) -> Bed:
-        bed = await self.get_bed(bed_id)
+    async def update_bed(self, bed_id: int, data: BedUpdate, current_user: Optional[Any] = None) -> Bed:
+        bed = await self.get_bed(bed_id, current_user=current_user)
 
         if data.name is not None and data.name != bed.name:
-            existing = await self.repo.get_bed_by_name(bed.room_id, data.name)
+            existing = await self.repo.get_bed_by_name(bed.room_id, data.name, hospital_id=bed.hospital_id)
             if existing:
                 raise ConflictException(f"Bed name '{data.name}' already exists in this room")
             bed.name = data.name
@@ -404,13 +414,14 @@ class BedAllocationService:
             room_id=bed.room_id,
             bed_id=bed.id,
             patient_id=bed.patient_id,
+            hospital_id=bed.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
-        return await self.get_bed(bed.id)
+        return await self.get_bed(bed.id, current_user=current_user)
 
-    async def delete_bed(self, bed_id: int) -> None:
-        bed = await self.get_bed(bed_id)
+    async def delete_bed(self, bed_id: int, current_user: Optional[Any] = None) -> None:
+        bed = await self.get_bed(bed_id, current_user=current_user)
 
         if bed.status == "Occupied":
             raise BadRequestException("Cannot delete bed because it is currently occupied.")
@@ -421,27 +432,33 @@ class BedAllocationService:
             floor_id=bed.room.floor_id if bed.room else None,
             room_id=bed.room_id,
             bed_id=bed.id,
+            hospital_id=bed.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
         await self.repo.delete_bed(bed)
 
     # Patient Services
-    async def get_patient(self, patient_id: int) -> Patient:
-        patient = await self.repo.get_patient_by_id(patient_id)
+    async def get_patient(self, patient_id: int, current_user: Optional[Any] = None) -> Patient:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+        patient = await self.repo.get_patient_by_id(patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
         return patient
 
     # Bed Allocation Operations
-    async def allocate_bed(self, bed_id: int, data: BedAllocationRequest) -> Bed:
-        bed = await self.get_bed(bed_id)
+    async def allocate_bed(self, bed_id: int, data: BedAllocationRequest, current_user: Optional[Any] = None) -> Bed:
+        bed = await self.get_bed(bed_id, current_user=current_user)
         if bed.status != "Available":
             if bed.status == "Occupied":
                 raise BadRequestException("Bed is already occupied")
             raise BadRequestException(f"Bed {bed.name} is not available. Current status: {bed.status}.")
 
-        patient = await self.get_patient(data.patientId)
+        patient = await self.get_patient(data.patientId, current_user=current_user)
+
+        if bed.hospital_id is not None and patient.hospital_id is not None and bed.hospital_id != patient.hospital_id:
+            raise BadRequestException("Cannot allocate bed: Patient and Bed belong to different hospitals.")
 
         if patient.status == PatientStatus.INACTIVE:
             raise BadRequestException(
@@ -584,6 +601,7 @@ class BedAllocationService:
             room_id=bed.room_id,
             bed_id=bed.id,
             patient_id=patient.id,
+            hospital_id=bed.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
@@ -628,14 +646,14 @@ class BedAllocationService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch admission notification: %s", exc)
 
-        return await self.get_bed(bed.id)
+        return await self.get_bed(bed.id, current_user=current_user)
 
-    async def release_bed(self, bed_id: int, data: BedReleaseRequest) -> Bed:
-        bed = await self.get_bed(bed_id)
+    async def release_bed(self, bed_id: int, data: BedReleaseRequest, current_user: Optional[Any] = None) -> Bed:
+        bed = await self.get_bed(bed_id, current_user=current_user)
         if bed.status != "Occupied" or not bed.patient_id:
             raise BadRequestException(f"Bed {bed.name} is not currently occupied.")
 
-        patient = await self.get_patient(bed.patient_id)
+        patient = await self.get_patient(bed.patient_id, current_user=current_user)
 
         floor_name = bed.room.floor.name if bed.room and bed.room.floor else ''
         room_name = bed.room.name if bed.room else ''
@@ -678,6 +696,7 @@ class BedAllocationService:
             room_id=room_id,
             bed_id=bed.id,
             patient_id=patient_id,
+            hospital_id=bed.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
@@ -733,13 +752,13 @@ class BedAllocationService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch discharge notification: %s", exc)
 
-        return await self.get_bed(bed.id)
+        return await self.get_bed(bed.id, current_user=current_user)
 
-    async def transfer_bed(self, data: BedTransferRequest) -> Bed:
+    async def transfer_bed(self, data: BedTransferRequest, current_user: Optional[Any] = None) -> Bed:
         if data.sourceBedId == data.targetBedId:
             raise BadRequestException("Source and target beds cannot be the same.")
 
-        source_bed = await self.get_bed(data.sourceBedId)
+        source_bed = await self.get_bed(data.sourceBedId, current_user=current_user)
         if source_bed.status == "Maintenance":
             raise BadRequestException(f"Source bed '{source_bed.name}' is under maintenance.")
         elif source_bed.status == "Cleaning":
@@ -749,7 +768,10 @@ class BedAllocationService:
         elif source_bed.status != "Occupied" or not source_bed.patient_id:
             raise BadRequestException(f"Source bed '{source_bed.name}' is not occupied.")
 
-        target_bed = await self.get_bed(data.targetBedId)
+        target_bed = await self.get_bed(data.targetBedId, current_user=current_user)
+        if source_bed.hospital_id is not None and target_bed.hospital_id is not None and source_bed.hospital_id != target_bed.hospital_id:
+            raise BadRequestException("Cannot transfer bed across different hospitals.")
+
         if target_bed.status == "Occupied":
             raise BadRequestException(f"Target bed '{target_bed.name}' is already occupied.")
         elif target_bed.status == "Maintenance":
@@ -759,7 +781,7 @@ class BedAllocationService:
         elif target_bed.status in ("Inactive", "Blocked", "Unavailable", "Reserved") or target_bed.status != "Available":
             raise BadRequestException(f"Target bed '{target_bed.name}' is currently unavailable.")
 
-        patient = await self.get_patient(source_bed.patient_id)
+        patient = await self.get_patient(source_bed.patient_id, current_user=current_user)
 
         allocation_time = source_bed.allocation_time
         admission_date = source_bed.admission_date
@@ -798,10 +820,11 @@ class BedAllocationService:
             room_id=target_bed.room_id,
             bed_id=target_bed.id,
             patient_id=patient.id,
+            hospital_id=target_bed.hospital_id,
         )
         await self.repo.create_activity_log(log)
 
-        return await self.get_bed(target_bed.id)
+        return await self.get_bed(target_bed.id, current_user=current_user)
 
     # Activity Log Services
     async def list_activity_logs(self, limit: int = 50, current_user: Any | None = None) -> List[BedActivityLog]:
@@ -869,8 +892,8 @@ class BedAllocationService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def mark_cleaning_complete(self, bed_id: int, user_id: int, notes: str | None = None) -> Bed:
-        bed = await self.get_bed(bed_id)
+    async def mark_cleaning_complete(self, bed_id: int, user_id: int, notes: str | None = None, current_user: Optional[Any] = None) -> Bed:
+        bed = await self.get_bed(bed_id, current_user=current_user)
         if bed.status != BedStatus.CLEANING.value:
             raise BadRequestException(f"Bed is not in 'Cleaning' status (Current status: {bed.status})")
 

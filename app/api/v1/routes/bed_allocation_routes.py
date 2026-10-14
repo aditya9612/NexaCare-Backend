@@ -62,7 +62,7 @@ async def get_floor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
 ):
-    floor = await BedAllocationService(db).get_floor(floorId)
+    floor = await BedAllocationService(db).get_floor(floorId, current_user=current_user)
     return APIResponse(message="Floor retrieved successfully", data=floor)
 
 
@@ -85,7 +85,7 @@ async def update_floor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "update")),
 ):
-    floor = await BedAllocationService(db).update_floor(floorId, data)
+    floor = await BedAllocationService(db).update_floor(floorId, data, current_user=current_user)
     return APIResponse(message="Floor updated successfully", data=floor)
 
 
@@ -96,7 +96,7 @@ async def delete_floor(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "delete")),
 ):
-    await BedAllocationService(db).delete_floor(floorId)
+    await BedAllocationService(db).delete_floor(floorId, current_user=current_user)
     return APIResponse(message="Floor deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
@@ -109,7 +109,7 @@ async def create_room(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "create")),
 ):
-    room = await BedAllocationService(db).create_room(floorId, data)
+    room = await BedAllocationService(db).create_room(floorId, data, current_user=current_user)
     return APIResponse(message="Room created successfully", data=room)
 
 
@@ -121,7 +121,7 @@ async def update_room(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "update")),
 ):
-    room = await BedAllocationService(db).update_room(roomId, data)
+    room = await BedAllocationService(db).update_room(roomId, data, current_user=current_user)
     return APIResponse(message="Room updated successfully", data=room)
 
 
@@ -132,7 +132,7 @@ async def delete_room(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "delete")),
 ):
-    await BedAllocationService(db).delete_room(roomId)
+    await BedAllocationService(db).delete_room(roomId, current_user=current_user)
     return APIResponse(message="Room deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
@@ -164,7 +164,7 @@ async def get_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
 ):
-    bed = await BedAllocationService(db).get_bed(bedId)
+    bed = await BedAllocationService(db).get_bed(bedId, current_user=current_user)
     return APIResponse(message="Bed retrieved successfully", data=bed)
 
 
@@ -176,7 +176,7 @@ async def create_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "create")),
 ):
-    bed = await BedAllocationService(db).create_bed(roomId, data)
+    bed = await BedAllocationService(db).create_bed(roomId, data, current_user=current_user)
     return APIResponse(message="Bed created successfully", data=bed)
 
 
@@ -188,7 +188,7 @@ async def update_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "update")),
 ):
-    bed = await BedAllocationService(db).update_bed(bedId, data)
+    bed = await BedAllocationService(db).update_bed(bedId, data, current_user=current_user)
     return APIResponse(message="Bed updated successfully", data=bed)
 
 
@@ -199,7 +199,7 @@ async def delete_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "delete")),
 ):
-    await BedAllocationService(db).delete_bed(bedId)
+    await BedAllocationService(db).delete_bed(bedId, current_user=current_user)
     return APIResponse(message="Bed deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
@@ -212,7 +212,7 @@ async def allocate_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "assign")),
 ):
-    bed = await BedAllocationService(db).allocate_bed(bedId, data)
+    bed = await BedAllocationService(db).allocate_bed(bedId, data, current_user=current_user)
     return APIResponse(message="Bed allocated successfully", data=bed)
 
 
@@ -224,7 +224,7 @@ async def release_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "assign")),
 ):
-    bed = await BedAllocationService(db).release_bed(bedId, data)
+    bed = await BedAllocationService(db).release_bed(bedId, data, current_user=current_user)
     return APIResponse(message="Bed released successfully", data=bed)
 
 
@@ -235,7 +235,7 @@ async def transfer_bed(
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "assign")),
 ):
-    bed = await BedAllocationService(db).transfer_bed(data)
+    bed = await BedAllocationService(db).transfer_bed(data, current_user=current_user)
     return APIResponse(message="Patient transferred successfully", data=bed)
 
 
@@ -297,7 +297,7 @@ async def mark_cleaning_complete(
     """
     Housekeeping marks bed sanitization complete. Bed status transitions to 'Available'.
     """
-    bed = await BedAllocationService(db).mark_cleaning_complete(bedId, current_user.id, notes)
+    bed = await BedAllocationService(db).mark_cleaning_complete(bedId, current_user.id, notes, current_user=current_user)
     return APIResponse(message="Bed cleaning completed and bed is now Available", data=bed)
 
 

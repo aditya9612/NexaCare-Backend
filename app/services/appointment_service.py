@@ -452,6 +452,7 @@ class AppointmentService:
                 email=email,
                 phone=phone,
                 patient_code=patient_code,
+                hospital_id=appointment.hospital_id,
             )
         except Exception as exc:
             import logging

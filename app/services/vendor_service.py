@@ -40,11 +40,19 @@ class VendorService:
             await self.audit_repo.create("create", "vendor", user_id=user_id, resource_id=str(vendor.id), hospital_id=hospital_id)
         return VendorResponse.model_validate(vendor)
 
-    async def list_vendors(self, page: int = 1, size: int = 20, vendor_type: str | None = None, hospital_id: int | None = None, current_user: Any = None):
+    async def list_vendors(
+        self,
+        page: int = 1,
+        size: int = 20,
+        vendor_type: str | None = None,
+        search: str | None = None,
+        hospital_id: int | None = None,
+        current_user: Any = None
+    ):
         _, hospital_id = self._resolve_context(None, hospital_id, current_user)
         skip = (page - 1) * size
-        vendors = await self.vendor_repo.list_all(skip=skip, limit=size, vendor_type=vendor_type, hospital_id=hospital_id)
-        total = await self.vendor_repo.count_all(vendor_type=vendor_type, hospital_id=hospital_id)
+        vendors = await self.vendor_repo.list_all(skip=skip, limit=size, vendor_type=vendor_type, hospital_id=hospital_id, search=search)
+        total = await self.vendor_repo.count_all(vendor_type=vendor_type, hospital_id=hospital_id, search=search)
         return build_paginated_result(
             [VendorResponse.model_validate(v) for v in vendors], total, page, size
         )
@@ -104,9 +112,12 @@ class VendorService:
         await self.vendor_repo.soft_delete(vendor)
         await self.audit_repo.create("delete", "vendor", user_id=user_id, resource_id=str(vendor.id), hospital_id=hospital_id)
 
-    async def generate_vendor_bulk_template(self):
+    async def generate_vendor_bulk_template(self, hospital_id: int | None = None, current_user: Any = None):
         from io import BytesIO
         import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        
+        _, hospital_id = self._resolve_context(None, hospital_id, current_user)
         
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -121,7 +132,6 @@ class VendorService:
         ws.row_dimensions[1].height = 32
         
         # Header Style definition
-        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         header_font = Font(name="Calibri", size=12, bold=True, color="000000")
         header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
         header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -167,16 +177,43 @@ class VendorService:
         for col_idx, width in col_widths.items():
             col_letter = openpyxl.utils.get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = width
-        
+
+        # Reference instructions sheet
+        ws_ref = wb.create_sheet(title="Guidelines & Reference")
+        ws_ref.append(["Field Name", "Required", "Allowed Values / Format", "Description"])
+        ref_rows = [
+            ("name", "Yes", "Unique vendor name", "Must be unique within the hospital tenant"),
+            ("vendor_type", "Yes", "inventory OR expenses", "Type of vendor (inventory or expenses)"),
+            ("contact_person", "No", "Text (up to 100 chars)", "Name of primary representative"),
+            ("phone", "No", "10-15 digits", "Contact phone number"),
+            ("email", "No", "Valid email format", "Official business email"),
+            ("address", "No", "Text", "Full physical or billing address"),
+            ("gst_number", "No", "15-character GSTIN", "Government GST registration number"),
+            ("service_type", "No", "Text", "Category of goods or services provided"),
+        ]
+        for r in ref_rows:
+            ws_ref.append(list(r))
+        ws_ref.row_dimensions[1].height = 24
+        for col_idx in range(1, 5):
+            c = ws_ref.cell(row=1, column=col_idx)
+            c.font = Font(bold=True)
+            c.fill = PatternFill(start_color="F2F4F7", end_color="F2F4F7", fill_type="solid")
+        ws_ref.column_dimensions["A"].width = 20
+        ws_ref.column_dimensions["B"].width = 12
+        ws_ref.column_dimensions["C"].width = 30
+        ws_ref.column_dimensions["D"].width = 45
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
         return stream
 
-    async def import_vendors_from_excel(self, file, user_id: int, hospital_id: int | None = None) -> dict:
+    async def import_vendors_from_excel(self, file, user_id: int, hospital_id: int | None = None, current_user: Any = None) -> dict:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
+        
+        user_id, hospital_id = self._resolve_context(user_id, hospital_id, current_user)
         
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
@@ -186,7 +223,7 @@ class VendorService:
         if not header_row:
             raise BadRequestException("The uploaded file is empty or has no headers.")
             
-        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        headers = [str(h).replace("*", "").strip().lower() for h in header_row if h is not None]
         required_headers = {"name", "vendor_type"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
@@ -284,11 +321,44 @@ class VendorService:
             "errors": errors
         }
 
-    async def export_vendors(self, format_type: str, hospital_id: int | None = None):
+    async def export_vendors(
+        self,
+        format_type: str,
+        hospital_id: int | None = None,
+        current_user: Any = None
+    ):
         from io import BytesIO
         from datetime import datetime, date
+        import os
         
-        # Retrieve all non-deleted vendors
+        _, hospital_id = self._resolve_context(None, hospital_id, current_user)
+        
+        # Retrieve hospital metadata for branding
+        hospital_name = None
+        hospital_address = None
+        hospital_phone = None
+        hospital_email = None
+        hospital_logo = None
+
+        if hospital_id:
+            from app.repositories.hospital_repository import HospitalRepository
+            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
+            if hospital:
+                hospital_name = hospital.name
+                hospital_address = hospital.address
+                hospital_phone = hospital.phone
+                hospital_email = hospital.email
+                logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+                if logo_attr and os.path.exists(str(logo_attr)):
+                    hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
+
+        if not hospital_logo:
+            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.exists(candidate):
+                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
+                    break
+
+        # Retrieve all non-deleted vendors strictly scoped to hospital
         vendors = await self.vendor_repo.get_all_active(hospital_id=hospital_id)
         
         if format_type == "excel":
@@ -378,7 +448,6 @@ class VendorService:
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
-            import os
             
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
@@ -429,7 +498,12 @@ class VendorService:
                 
             html_content = template.render(
                 vendors=formatted_vendors,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=hospital_name,
+                hospital_address=hospital_address,
+                hospital_phone=hospital_phone,
+                hospital_email=hospital_email,
+                hospital_logo=hospital_logo,
             )
             
             pdf_data = html_to_pdf(html_content)

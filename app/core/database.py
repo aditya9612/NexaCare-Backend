@@ -119,6 +119,9 @@ async def init_db():
                 "ALTER TABLE lab_reports ADD COLUMN doctor_verified_at DATETIME NULL",
                 "ALTER TABLE lab_reports ADD COLUMN doctor_remarks TEXT NULL",
                 "ALTER TABLE transaction_history ADD COLUMN hospital_id INT NULL",
+                "ALTER TABLE room_tariffs ADD COLUMN hospital_id INT NULL",
+                "ALTER TABLE room_tariffs DROP INDEX ix_room_tariffs_room_type",
+                "ALTER TABLE room_tariffs ADD UNIQUE KEY uq_room_tariffs_hospital_room_type (hospital_id, room_type)",
             ]:
                 try:
                     await session.execute(text(col_stmt))

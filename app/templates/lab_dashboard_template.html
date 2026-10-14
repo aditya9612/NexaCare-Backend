@@ -143,7 +143,27 @@
 <body>
 
   <div class="header">
-    <h1>Lab Technician Dashboard</h1>
+    <table style="width: 100%; border-bottom: 2px solid #1e40af; padding-bottom: 12px; margin-bottom: 15px;">
+      <tr>
+        <td style="border: none; padding: 0; vertical-align: top;">
+          {% if hospital_name %}
+          <div style="font-size: 15pt; font-weight: bold; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{{ hospital_name }}</div>
+          {% if hospital_address %}<div style="font-size: 9pt; color: #4b5563; margin-top: 2px;">{{ hospital_address }}</div>{% endif %}
+          {% if hospital_phone or hospital_email %}<div style="font-size: 8.5pt; color: #6b7280; margin-top: 1px;">
+            {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
+            {% if hospital_phone and hospital_email %} | {% endif %}
+            {% if hospital_email %}Email: {{ hospital_email }}{% endif %}
+          </div>{% endif %}
+          {% endif %}
+          <h1 style="color: #111827; margin: 6px 0 0 0; font-size: 18pt;">Lab Technician Dashboard Report</h1>
+        </td>
+        {% if hospital_logo %}
+        <td style="border: none; padding: 0; text-align: right; vertical-align: top; width: 160px;">
+          <img src="{{ hospital_logo }}" style="max-height: 55px; max-width: 150px; object-fit: contain;" />
+        </td>
+        {% endif %}
+      </tr>
+    </table>
     <table class="meta-table">
       <tr>
         <td class="meta-label">Filter Applied:</td>

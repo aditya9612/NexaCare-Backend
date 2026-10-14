@@ -52,8 +52,8 @@ async def get_current_user(
             if iat_dt < user.last_logout_at:
                 raise UnauthorizedException("Token has been revoked by logout")
 
-    role_name = user.role.name if user.role else ""
-    if x_hospital_id is not None and role_name == UserRole.SUPER_ADMIN:
+    role_name = user.role.name.lower() if user.role and user.role.name else ""
+    if x_hospital_id is not None and role_name in ("super admin", "super_admin"):
         try:
             user.active_hospital_id = int(x_hospital_id)
         except (ValueError, TypeError):
@@ -109,8 +109,8 @@ async def get_tenant_hospital_id(
     - If user is Super Admin: can pass X-Hospital-Id header to scope to a tenant, or None for global view.
     - If user is Hospital Staff/Doctor/Admin: strictly restricted to their user.hospital_id.
     """
-    role_name = user.role.name if user.role else ""
-    if role_name == UserRole.SUPER_ADMIN:
+    role_name = user.role.name.lower() if user.role and user.role.name else ""
+    if role_name in ("super admin", "super_admin"):
         return x_hospital_id if x_hospital_id is not None else getattr(user, "active_hospital_id", user.hospital_id)
     return user.hospital_id
 
@@ -123,8 +123,8 @@ def resolve_tenant_id(user: User | None) -> int | None:
     """
     if not user:
         return None
-    role_name = user.role.name if user.role else ""
-    if role_name == UserRole.SUPER_ADMIN:
+    role_name = user.role.name.lower() if user.role and user.role.name else ""
+    if role_name in ("super admin", "super_admin"):
         return getattr(user, "active_hospital_id", None)
     return user.hospital_id
 

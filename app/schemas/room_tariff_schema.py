@@ -5,6 +5,7 @@ from app.schemas.common_schema import BaseSchema
 
 
 class RoomTariffCreate(BaseSchema):
+    hospital_id: int | None = None
     room_type: str = Field(..., description="e.g. ICU, Deluxe, Special, General Ward")
     daily_rate: float = Field(..., ge=0.0, description="Per day room charge in INR")
     nursing_charge_per_day: float = Field(default=0.0, ge=0.0, description="Per day nursing charge")
@@ -24,6 +25,7 @@ class RoomTariffUpdate(BaseSchema):
 
 class RoomTariffResponse(BaseSchema):
     id: int
+    hospital_id: int | None = None
     room_type: str
     daily_rate: float
     nursing_charge_per_day: float

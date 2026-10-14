@@ -381,7 +381,8 @@ class DischargeService:
             room_type = discharge.appointment.recommended_ward
             ward_name = discharge.appointment.recommended_ward
 
-        tariff = await self.room_tariff_service.get_by_room_type(room_type)
+        hosp_id = getattr(discharge, "hospital_id", None) or (discharge.appointment.hospital_id if discharge.appointment else None)
+        tariff = await self.room_tariff_service.get_by_room_type(room_type, hospital_id=hosp_id)
         gst_rate = min(max(data.gst_rate, 0.0), 28.0)
 
         # 3. Build Bill Items

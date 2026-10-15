@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import time
 import uuid
 from dataclasses import dataclass
@@ -67,7 +68,7 @@ for i = 1, key_count do
     local key = KEYS[i]
     local window = tonumber(ARGV[2 + (i - 1) * 2 + 1])
     redis.call('ZADD', key, now, member)
-    redis.call('EXPIRE', key, math.ceil(window))
+    redis.call('EXPIRE', key, math.ceil(window) + 1)
 end
 
 if min_remaining == 999999999 then
@@ -92,14 +93,17 @@ class RateLimitResult:
     remaining: int
     retry_after: int
     reset_epoch: int
+    unavailable: bool = False
 
 
 def hash_identifier(raw: Optional[str]) -> str:
-    """Safely hash an identifier (email, phone, device key) with SHA-256."""
+    """Safely hash an identifier (email, phone, device key) with keyed HMAC-SHA256."""
     if not raw:
         return "none"
     norm = raw.strip().lower()
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
+    secret = getattr(settings, "SECRET_KEY", "nexacare-rate-limit-secret")
+    key = secret.encode("utf-8") if isinstance(secret, str) else b"nexacare-rate-limit-secret"
+    return hmac.new(key, norm.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
 
 
 class RateLimitService:
@@ -107,11 +111,15 @@ class RateLimitService:
     async def check_rate_limits(
         buckets: List[RateLimitBucket],
         now: Optional[float] = None,
+        fail_open: Optional[bool] = None,
     ) -> RateLimitResult:
         """
         Check and record rate limit atomically across all specified buckets.
-        Fails open if Redis is unavailable or encountering connection errors.
+        Fails open if Redis is unavailable or encountering connection errors,
+        unless explicitly configured otherwise via fail_open or settings.
         """
+        effective_fail_open = settings.RATE_LIMIT_FAIL_OPEN if fail_open is None else fail_open
+
         if not settings.RATE_LIMIT_ENABLED or not buckets:
             current_ts = int(time.time())
             default_limit = buckets[0].limit if buckets else settings.RATE_LIMIT_DEFAULT_PER_MINUTE
@@ -121,6 +129,7 @@ class RateLimitService:
                 remaining=default_limit,
                 retry_after=0,
                 reset_epoch=current_ts + 60,
+                unavailable=False,
             )
 
         client = await get_redis()
@@ -128,7 +137,7 @@ class RateLimitService:
         primary_bucket = buckets[0]
 
         if not client:
-            if settings.RATE_LIMIT_FAIL_OPEN:
+            if effective_fail_open:
                 logger.warning("RateLimiter: Redis unavailable; failing open")
                 return RateLimitResult(
                     allowed=True,
@@ -136,20 +145,22 @@ class RateLimitService:
                     remaining=primary_bucket.limit,
                     retry_after=0,
                     reset_epoch=int(current_time + primary_bucket.window),
+                    unavailable=False,
                 )
             else:
-                logger.error("RateLimiter: Redis unavailable; fail-closed rejection")
+                logger.error("RateLimiter: Redis unavailable; fail-closed 503 rejection")
                 return RateLimitResult(
                     allowed=False,
                     limit=primary_bucket.limit,
                     remaining=0,
-                    retry_after=primary_bucket.window,
+                    retry_after=5,
                     reset_epoch=int(current_time + primary_bucket.window),
+                    unavailable=True,
                 )
 
         keys = [b.key for b in buckets]
-        # ARGV: now, unique_member, (window_1, limit_1), (window_2, limit_2), ...
-        unique_member = f"{current_time}:{uuid.uuid4().hex[:8]}"
+        # ARGV: now, unique_member (full 128-bit UUID to prevent collisions in high concurrency)
+        unique_member = f"{current_time}:{uuid.uuid4().hex}"
         argv = [str(current_time), unique_member]
         for b in buckets:
             argv.extend([str(b.window), str(b.limit)])
@@ -169,15 +180,24 @@ class RateLimitService:
                 remaining=remaining,
                 retry_after=retry_after,
                 reset_epoch=reset_epoch,
+                unavailable=False,
             )
         except Exception as exc:
-            logger.warning("RateLimiter: Redis operation error: %s; failing open", exc)
-            if settings.RATE_LIMIT_FAIL_OPEN:
+            logger.warning("RateLimiter: Redis operation error: %s", exc)
+            if effective_fail_open:
                 return RateLimitResult(
                     allowed=True,
                     limit=primary_bucket.limit,
                     remaining=primary_bucket.limit,
                     retry_after=0,
                     reset_epoch=int(current_time + primary_bucket.window),
+                    unavailable=False,
                 )
-            raise
+            return RateLimitResult(
+                allowed=False,
+                limit=primary_bucket.limit,
+                remaining=0,
+                retry_after=5,
+                reset_epoch=int(current_time + primary_bucket.window),
+                unavailable=True,
+            )

@@ -65,7 +65,14 @@ def _reset_redis_state_for_tests() -> None:
 async def get_redis() -> Optional[aioredis.Redis]:
     global _redis_client, _redis_unavailable_until
     if _redis_client is not None:
-        return _redis_client
+        try:
+            curr_loop = asyncio.get_running_loop()
+            pool_loop = getattr(_redis_client.connection_pool, "_loop", None)
+            if (pool_loop is None or pool_loop == curr_loop) and not curr_loop.is_closed():
+                return _redis_client
+        except Exception:
+            pass
+        _redis_client = None
 
     now = time.monotonic()
     if now < _redis_unavailable_until:
@@ -155,3 +162,33 @@ async def cache_delete_pattern(pattern: str) -> None:
         logger.warning("Redis delete_pattern failed: %s", exc)
         if _is_connection_error(exc):
             _mark_unavailable(str(exc))
+
+
+_INCR_EXPIRE_LUA = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+end
+return count
+"""
+
+
+async def cache_incr(key: str, ttl: int = 300) -> int:
+    """Atomically increment a counter and set TTL on first creation."""
+    client = await get_redis()
+    if not client:
+        return 1
+    try:
+        if hasattr(client, "eval"):
+            return int(await client.eval(_INCR_EXPIRE_LUA, 1, key, ttl))
+        else:
+            count = await client.incr(key)
+            if count == 1:
+                await client.expire(key, ttl)
+            return int(count)
+    except Exception as exc:
+        logger.warning("Redis incr failed: %s", exc)
+        if _is_connection_error(exc):
+            _mark_unavailable(str(exc))
+        return 1
+

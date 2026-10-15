@@ -75,11 +75,15 @@ class MockRedisClient:
         if any_exceeded == 1:
             return [0, max_retry_after, int(now + max_retry_after), 0]
 
-        # Step 3: Record in all keys
+        # Step 3: Record in all keys (Redis ZSET semantics: update score if member exists)
         for i in range(numkeys):
             key = keys[i]
             entries = self.buckets.get(key, [])
-            entries.append((now, member))
+            existing_idx = next((idx for idx, e in enumerate(entries) if e[1] == member), None)
+            if existing_idx is not None:
+                entries[existing_idx] = (now, member)
+            else:
+                entries.append((now, member))
             self.buckets[key] = entries
 
         if min_remaining == 999999999:
@@ -98,7 +102,11 @@ def mock_redis():
 @pytest.fixture
 def enable_rate_limiting(monkeypatch):
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_PER_SECOND", 10)
+    monkeypatch.setattr(settings, "RATE_LIMIT_AUTHENTICATED_PER_MINUTE", 10)
+    monkeypatch.setattr(settings, "RATE_LIMIT_ANONYMOUS_PER_MINUTE", 10)
     monkeypatch.setattr(settings, "RATE_LIMIT_DEFAULT_PER_MINUTE", 10)
+    monkeypatch.setattr(settings, "RATE_LIMIT_OTP_COOLDOWN_SECONDS", 0)
     monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_OPEN", True)
     yield
 
@@ -119,9 +127,17 @@ def mock_service_dependencies(monkeypatch):
     async def mock_send_otp(*args, **kwargs):
         return None
 
+    async def mock_verify_otp_code(*args, **kwargs):
+        return None
+
+    async def mock_reset_password(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(RBACRepository, "list_roles", mock_list_roles)
     monkeypatch.setattr(AuthService, "login", mock_login)
     monkeypatch.setattr(AuthService, "send_otp", mock_send_otp)
+    monkeypatch.setattr(AuthService, "verify_otp_code", mock_verify_otp_code)
+    monkeypatch.setattr(AuthService, "reset_password", mock_reset_password)
 
 
 # ============================================================================
@@ -193,55 +209,35 @@ async def test_ip_isolation(enable_rate_limiting, mock_redis, client):
 
 
 # ============================================================================
-# 4. LOGIN DUAL BUCKET (TARGET ACCOUNT + IP BURST)
+# 4. AUTH ENDPOINTS RATE LIMIT (LOGIN & OTP)
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_login_target_bucket(enable_rate_limiting, mock_redis, client):
-    """Login limits target account to 5 attempts per 60s."""
+async def test_login_unified_rate_limit(enable_rate_limiting, mock_redis, client):
+    """Login enforces the unified rate limit (10 in test fixture)."""
     login_payload = {"email": "patient@nexacare.com", "password": "wrongpassword123"}
 
-    for _ in range(5):
+    for _ in range(10):
         resp = await client.post("/api/v1/auth/login", json=login_payload)
         assert resp.status_code == 200
 
-    resp_6 = await client.post("/api/v1/auth/login", json=login_payload)
-    assert resp_6.status_code == 429
-    assert "Too many requests" in resp_6.json()["detail"]
+    resp_11 = await client.post("/api/v1/auth/login", json=login_payload)
+    assert resp_11.status_code == 429
+    assert "Too many requests" in resp_11.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_login_ip_burst_bucket(enable_rate_limiting, mock_redis, client):
-    """IP burst bucket limits an IP to 20 attempts even across different accounts."""
-    for i in range(20):
-        payload = {"email": f"victim{i}@nexacare.com", "password": "testpassword"}
-        resp = await client.post("/api/v1/auth/login", json=payload)
-        assert resp.status_code == 200
-
-    payload_21 = {"email": "victim21@nexacare.com", "password": "testpassword"}
-    resp_21 = await client.post("/api/v1/auth/login", json=payload_21)
-    assert resp_21.status_code == 429
-
-
-# ============================================================================
-# 5. OTP TARGET & IP BUCKET
-# ============================================================================
-
-@pytest.mark.asyncio
-async def test_otp_target_and_ip_buckets(enable_rate_limiting, mock_redis, client):
-    """Send OTP limits target phone to 3 / 10m, and IP to 10 / 1h."""
+async def test_otp_unified_rate_limit(enable_rate_limiting, mock_redis, client):
+    """Send OTP enforces the unified rate limit (10 in test fixture)."""
     otp_payload = {"phone": "9876543210"}
 
-    for _ in range(3):
+    for _ in range(10):
         resp = await client.post("/api/v1/auth/send-otp", json=otp_payload)
         assert resp.status_code == 200
 
-    resp_4 = await client.post("/api/v1/auth/send-otp", json=otp_payload)
-    assert resp_4.status_code == 429
+    resp_11 = await client.post("/api/v1/auth/send-otp", json=otp_payload)
+    assert resp_11.status_code == 429
 
-    different_phone_payload = {"phone": "9876543211"}
-    resp_diff = await client.post("/api/v1/auth/send-otp", json=different_phone_payload)
-    assert resp_diff.status_code == 200
 
 
 # ============================================================================
@@ -316,15 +312,25 @@ def test_trusted_proxy_ip_resolution():
 
 
 # ============================================================================
-# 9. REDIS FAILURE / FAIL-OPEN
+# 9. REDIS FAILURE / FAIL-OPEN & FAIL-CLOSED
 # ============================================================================
 
 @pytest.mark.asyncio
 async def test_redis_failure_fail_open(enable_rate_limiting, client):
-    """When Redis is unavailable, RateLimitMiddleware fails open without 500 error."""
+    """When Redis is unavailable, normal APIs fail open without 500 error."""
     with patch("app.services.rate_limit_service.get_redis", new=AsyncMock(return_value=None)):
         resp = await client.get("/api/v1/auth/roles")
         assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_redis_failure_fail_closed_503(enable_rate_limiting, client):
+    """When Redis is unavailable, protected auth endpoints fail closed with HTTP 503 (not 429 or 500)."""
+    with patch("app.services.rate_limit_service.get_redis", new=AsyncMock(return_value=None)):
+        resp = await client.post("/api/v1/auth/login", json={"email": "doc@nexacare.com", "password": "pass"})
+        assert resp.status_code == 503
+        assert "temporarily unavailable" in resp.json()["detail"].lower()
+        assert resp.headers.get("Retry-After") == "5"
 
 
 # ============================================================================
@@ -360,8 +366,8 @@ async def test_window_reset(enable_rate_limiting, mock_redis, client):
     resp_blocked = await client.get("/api/v1/auth/roles")
     assert resp_blocked.status_code == 429
 
-    # Advance time by 61 seconds
-    t_future = time.time() + 61.0
+    # Advance time past the 1-second window
+    t_future = time.time() + 2.0
     with patch("time.time", return_value=t_future):
         resp_after_reset = await client.get("/api/v1/auth/roles")
         assert resp_after_reset.status_code == 200
@@ -369,7 +375,7 @@ async def test_window_reset(enable_rate_limiting, mock_redis, client):
 
 
 # ============================================================================
-# 12. CONCURRENCY ATOMICITY IN LUA SCRIPT
+# 12. CONCURRENCY ATOMICITY & SAME-MILLISECOND COLLISION RESISTANCE
 # ============================================================================
 
 @pytest.mark.asyncio
@@ -390,3 +396,197 @@ async def test_lua_script_atomic_concurrency(enable_rate_limiting, mock_redis):
     assert len(denied) == 5
     for d in denied:
         assert d.retry_after > 0
+
+
+@pytest.mark.asyncio
+async def test_lua_concurrent_same_millisecond_collision_resistance(enable_rate_limiting, mock_redis):
+    """
+    Deterministic concurrency test: 15 concurrent requests share the exact same timestamp
+    down to the nanosecond. Collision-resistant 128-bit UUID member generation guarantees
+    no ZSET member overwrites occur and exactly 10 requests are allowed, 5 rejected.
+    """
+    bucket = RateLimitBucket(key="rl:test:same_ms:1", limit=10, window=60)
+    fixed_ts = 1700000000.0
+
+    async def attempt():
+        return await RateLimitService.check_rate_limits([bucket], now=fixed_ts)
+
+    tasks = [attempt() for _ in range(15)]
+    results = await asyncio.gather(*tasks)
+
+    allowed = [r for r in results if r.allowed]
+    denied = [r for r in results if not r.allowed]
+
+    # Must be strictly 10 allowed, 5 denied.
+    # If collision occurred in member generation, duplicate members would overwrite
+    # and allow MORE than 10 requests.
+    assert len(allowed) == 10
+    assert len(denied) == 5
+    # Verify mock redis recorded 10 distinct members in ZSET
+    assert len(mock_redis.buckets["rl:test:same_ms:1"]) == 10
+
+
+# ============================================================================
+# 13. AUTHENTICATED AND ANONYMOUS UNIFIED RATE LIMIT
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_authenticated_and_anonymous_unified_limits(mock_redis, client, monkeypatch):
+    """Verify both authenticated and anonymous requests enforce the unified rate limit."""
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_PER_SECOND", 50)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_OPEN", True)
+
+    # Anonymous request receives 50 limit header
+    resp_anon = await client.get("/api/v1/auth/roles", headers={"X-Forwarded-For": "203.0.113.80"})
+    assert resp_anon.status_code == 200
+    assert resp_anon.headers["X-RateLimit-Limit"] == "50"
+
+    # Authenticated request receives 50 limit header
+    token = create_access_token(subject=777)
+    resp_auth = await client.get("/api/v1/auth/roles", headers={"Authorization": f"Bearer {token}"})
+    assert resp_auth.status_code == 200
+    assert resp_auth.headers["X-RateLimit-Limit"] == "50"
+
+
+# ============================================================================
+# 14. PRODUCTION DEFAULT 50 REQ/SEC ACROSS ALL APIS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_production_default_50_per_sec(mock_redis, client, monkeypatch):
+    """Verify production default setting allows 50 requests/sec and blocks the 51st."""
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_PER_SECOND", 50)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_OPEN", True)
+
+    t_base = 1700000000.0
+    headers = {"X-Forwarded-For": "203.0.113.99"}
+    for i in range(50):
+        with patch("time.time", return_value=t_base + i * 0.01):
+            resp = await client.get("/api/v1/auth/roles", headers=headers)
+            assert resp.status_code == 200, f"Request {i+1} failed"
+            assert resp.headers["X-RateLimit-Limit"] == "50"
+            assert int(resp.headers["X-RateLimit-Remaining"]) == 50 - (i + 1)
+
+    with patch("time.time", return_value=t_base + 0.51):
+        resp_51 = await client.get("/api/v1/auth/roles", headers=headers)
+        assert resp_51.status_code == 429
+        assert resp_51.headers["X-RateLimit-Limit"] == "50"
+        assert resp_51.headers["X-RateLimit-Remaining"] == "0"
+        assert "Too many requests" in resp_51.json()["detail"]
+
+
+# ============================================================================
+# 15. UNIFIED RATE LIMIT ACROSS ALL APIS A TO Z
+# ============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,method,payload", [
+    ("/api/v1/auth/verify-otp", "POST", {"phone": "9876543210", "otp": "123456"}),
+    ("/api/v1/auth/reset-password", "POST", {"email": "user@hospital.com", "otp": "123456", "new_password": "Pass123!@#"}),
+    ("/api/v1/auth/refresh-token", "POST", {"refresh_token": "fake.refresh"}),
+    ("/api/v1/icu/telemetry", "POST", {"device_code": "DEV-01", "bed_id": 1, "heart_rate": 75.0, "spo2": 98.0, "temperature": 37.0, "blood_pressure_sys": 120.0, "blood_pressure_dia": 80.0, "respiratory_rate": 16.0}),
+    ("/api/v1/patients/export?format=excel", "GET", None),
+    ("/agent/v1/voice/incoming", "POST", None),
+    ("/api/v1/ai/chat", "POST", {"message": "hello", "session_id": "sess-1"}),
+])
+async def test_all_apis_unified_rate_limit_a_to_z(enable_rate_limiting, mock_redis, client, endpoint, method, payload):
+    """Verify that every API endpoint from A to Z enforces the unified rate limit."""
+    client_ip = f"198.51.100.{(abs(hash(endpoint)) % 200) + 1}"
+    headers = {"X-Forwarded-For": client_ip, "X-Device-API-Key": "dev_key_1"}
+
+    t_base = 1700000000.0
+    for i in range(10):
+        with patch("time.time", return_value=t_base + i * 0.05):
+            if method == "POST":
+                resp = await client.post(endpoint, json=payload, headers=headers)
+            else:
+                resp = await client.get(endpoint, headers=headers)
+            assert resp.status_code in (200, 201, 400, 401, 403, 404, 422), f"Req {i+1} on {endpoint} gave {resp.status_code}"
+            assert resp.headers.get("X-RateLimit-Limit") == "10"
+
+    # 11th request blocked by unified rate limit within same 1-second window (0.55s < 1.0s)
+    with patch("time.time", return_value=t_base + 0.55):
+        if method == "POST":
+            resp_11 = await client.post(endpoint, json=payload, headers=headers)
+        else:
+            resp_11 = await client.get(endpoint, headers=headers)
+        assert resp_11.status_code == 429
+        assert resp_11.headers.get("X-RateLimit-Limit") == "10"
+        assert resp_11.headers.get("X-RateLimit-Remaining") == "0"
+        assert "Retry-After" in resp_11.headers
+
+
+
+
+# ============================================================================
+# 21. 2FA ATOMIC FAILED-ATTEMPTS ONLY LIMITING
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_2fa_failed_attempts_rate_limit(monkeypatch):
+    """Verify 2FA rate limiting only increments on failed attempts and locks out at threshold."""
+    from app.services.auth_service import AuthService
+    from app.schemas.auth_schema import TOTPLoginRequest
+    from app.core.security import create_2fa_challenge_token
+    from app.core.exceptions import UnauthorizedException
+    from unittest.mock import AsyncMock
+
+    mock_db = AsyncMock()
+    service = AuthService(mock_db)
+
+    # In-memory redis mock for 2fa
+    cache_store = {}
+
+    async def mock_cache_get(k):
+        return cache_store.get(k)
+
+    async def mock_cache_set(k, v, ttl=300):
+        cache_store[k] = str(v)
+        return True
+
+    async def mock_cache_incr(k, ttl=300):
+        curr = int(cache_store.get(k, 0)) + 1
+        cache_store[k] = str(curr)
+        return curr
+
+    async def mock_cache_delete(k):
+        cache_store.pop(k, None)
+        return True
+
+    monkeypatch.setattr("app.utils.redis_service.cache_get", mock_cache_get)
+    monkeypatch.setattr("app.utils.redis_service.cache_set", mock_cache_set)
+    monkeypatch.setattr("app.utils.redis_service.cache_incr", mock_cache_incr)
+    monkeypatch.setattr("app.utils.redis_service.cache_delete", mock_cache_delete)
+    monkeypatch.setattr(settings, "RATE_LIMIT_2FA_TARGET_LIMIT", 5)
+
+    challenge_token, jti = create_2fa_challenge_token(123)
+    cache_store[f"2fa_jti:{jti}"] = "valid"
+
+    # Mock user and security settings
+    fake_user = MagicMock(id=123, is_active=True, is_deleted=False)
+    service.repo.get_by_id = AsyncMock(return_value=fake_user)
+    service._is_user_deleted = AsyncMock(return_value=False)
+
+    fake_sec = MagicMock(is_2fa_enabled=True, totp_secret_encrypted="enc", recovery_codes_hashed=[])
+    mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=fake_sec)))
+
+    # TOTP verify always fails for invalid code
+    from app.services.totp_service import TOTPService
+    monkeypatch.setattr(TOTPService, "decrypt_secret", lambda s: "SECRET")
+    monkeypatch.setattr(TOTPService, "verify_totp", lambda s, c: False)
+
+    req = TOTPLoginRequest(challenge_token=challenge_token, code="000000")
+
+    # 5 failed attempts
+    for i in range(5):
+        with pytest.raises(UnauthorizedException) as exc:
+            await service.verify_totp_login(req, ip_address="1.2.3.4")
+        assert "Invalid TOTP" in str(exc.value)
+
+    # 6th attempt is blocked by rate limiter
+    with pytest.raises(UnauthorizedException) as exc:
+        await service.verify_totp_login(req, ip_address="1.2.3.4")
+    assert "Too many failed 2FA attempts" in str(exc.value)
+

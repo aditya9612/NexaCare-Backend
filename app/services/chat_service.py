@@ -30,7 +30,7 @@ from app.schemas.chat_schema import (
 )
 from app.services.appointment_service import AppointmentService
 from app.utils.helpers import generate_chat_session_id, utc_now
-from app.utils.rate_limiter import chat_rate_limiter
+from app.utils.rate_limiter import chat_rate_limiter, check_chat_rate_limit
 from app.utils.redis_service import cache_get, cache_set
 
 
@@ -72,7 +72,7 @@ class ChatService:
         session = await self._get_active_session(data.session_id)
         language = data.language or session.language
 
-        chat_rate_limiter.check(f"chat:{session.session_id}")
+        await check_chat_rate_limit(session.session_id)
 
         user_msg = ChatMessage(
             session_id=session.id,

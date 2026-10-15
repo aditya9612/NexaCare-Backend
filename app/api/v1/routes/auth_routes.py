@@ -112,7 +112,8 @@ async def login(data: LoginRequest, db: DbSession, request: Request):
 
 @router.post("/login/2fa", response_model=APIResponse[TokenResponse])
 async def login_2fa(data: TOTPLoginRequest, db: DbSession, request: Request):
-    ip_address = request.client.host if request.client else None
+    from app.middleware.rate_limit_middleware import get_validated_client_ip
+    ip_address = get_validated_client_ip(request)
     user_agent = request.headers.get("user-agent")
     tokens = await AuthService(db).verify_totp_login(
         data, ip_address=ip_address, user_agent=user_agent

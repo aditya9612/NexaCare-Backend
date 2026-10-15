@@ -170,6 +170,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/ws/",
     )
 
+    AUTH_PROTECTED_PATHS = {
+        "/api/v1/auth/login",
+        "/auth/login",
+        "/api/v1/auth/send-otp",
+        "/auth/send-otp",
+        "/api/v1/auth/verify-otp",
+        "/auth/verify-otp",
+        "/api/v1/auth/forgot-password",
+        "/auth/forgot-password",
+        "/api/v1/auth/reset-password",
+        "/auth/reset-password",
+        "/api/v1/auth/refresh-token",
+        "/auth/refresh-token",
+        "/api/v1/auth/refresh",
+        "/auth/refresh",
+        "/api/v1/auth/login/2fa",
+        "/auth/login/2fa",
+        "/api/v1/auth/verify-2fa",
+        "/auth/verify-2fa",
+    }
+
     async def dispatch(self, request: Request, call_next) -> Response:
         # 1. Fast-path exemptions
         if not settings.RATE_LIMIT_ENABLED:
@@ -190,102 +211,49 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         user_id = extract_user_id_from_jwt(request)
         user_or_ip = f"usr:{user_id}" if user_id else f"ip:{client_ip}"
 
-        # 3. Policy routing & bucket building
-        buckets: List[RateLimitBucket] = []
-        body_data: Optional[dict] = None
-
+        # 3. Policy routing & bucket building: Unified 50 req/sec across all APIs (A to Z)
         method = request.method.upper()
+        is_auth_route = path in self.AUTH_PROTECTED_PATHS
 
-        # Route A: Login (/api/v1/auth/login)
-        if method == "POST" and (path == "/api/v1/auth/login" or path == "/auth/login"):
-            request, body_data = await _extract_json_body_safe(request)
-            target = None
-            if body_data:
-                target = body_data.get("email") or body_data.get("phone")
-                if target and "@" not in str(target):
-                    target = normalize_phone(str(target))
+        limit = getattr(settings, "RATE_LIMIT_PER_SECOND", 50)
+        window = 1  # 1 second sliding window
 
-            target_hash = hash_identifier(target) if target else "anonymous"
-            # Dual bucket: IP burst (20/min) + Target account (5/min)
-            buckets.append(RateLimitBucket(key=f"rl:auth:login:target:{target_hash}:60", limit=5, window=60))
-            buckets.append(RateLimitBucket(key=f"rl:auth:login:ip:{client_ip}:60", limit=20, window=60))
+        # Client identification: isolated per user if authenticated, per client IP if anonymous
+        bucket_key = f"rl:api:usr:{user_id}:{window}" if user_id else f"rl:api:ip:{client_ip}:{window}"
+        buckets: List[RateLimitBucket] = [
+            RateLimitBucket(
+                key=bucket_key,
+                limit=limit,
+                window=window,
+            )
+        ]
 
-        # Route B: Send OTP (/api/v1/auth/send-otp)
-        elif method == "POST" and (path == "/api/v1/auth/send-otp" or path == "/auth/send-otp"):
-            request, body_data = await _extract_json_body_safe(request)
-            target = None
-            if body_data:
-                target = body_data.get("phone") or body_data.get("email")
-                if target and "@" not in str(target):
-                    target = normalize_phone(str(target))
 
-            target_hash = hash_identifier(target) if target else "anonymous"
-            # Dual bucket: Target phone (3 / 10m) + IP burst (10 / 1h)
-            buckets.append(RateLimitBucket(key=f"rl:otp:send:target:{target_hash}:600", limit=3, window=600))
-            buckets.append(RateLimitBucket(key=f"rl:otp:send:ip:{client_ip}:3600", limit=10, window=3600))
-
-        # Route C: Verify OTP (/api/v1/auth/verify-otp)
-        elif method == "POST" and (path == "/api/v1/auth/verify-otp" or path == "/auth/verify-otp"):
-            request, body_data = await _extract_json_body_safe(request)
-            target = None
-            if body_data:
-                target = body_data.get("phone") or body_data.get("email")
-                if target and "@" not in str(target):
-                    target = normalize_phone(str(target))
-
-            target_hash = hash_identifier(target) if target else "anonymous"
-            # Target + IP combined bucket: 5 / 10m
-            buckets.append(RateLimitBucket(key=f"rl:otp:verify:{target_hash}:{client_ip}:600", limit=5, window=600))
-
-        # Route D: Password Reset (/api/v1/auth/reset-password)
-        elif method == "POST" and (path == "/api/v1/auth/reset-password" or path == "/auth/reset-password"):
-            request, body_data = await _extract_json_body_safe(request)
-            target = None
-            if body_data:
-                target = body_data.get("email") or body_data.get("phone")
-
-            target_hash = hash_identifier(target) if target else "anonymous"
-            buckets.append(RateLimitBucket(key=f"rl:auth:reset:{target_hash}:{client_ip}:600", limit=5, window=600))
-
-        # Route E: Token Refresh (/api/v1/auth/refresh-token)
-        elif method == "POST" and (path in ("/api/v1/auth/refresh-token", "/auth/refresh-token", "/api/v1/auth/refresh")):
-            buckets.append(RateLimitBucket(key=f"rl:auth:refresh:ip:{client_ip}:60", limit=30, window=60))
-
-        # Route F: ICU Telemetry Stream (/api/v1/icu/telemetry)
-        elif path.startswith("/api/v1/icu/telemetry") or path.startswith("/icu/telemetry"):
-            dev_key = request.headers.get("x-device-api-key") or request.headers.get("authorization") or client_ip
-            buckets.append(RateLimitBucket(key=f"rl:icu:dev:{hash_identifier(dev_key)}:60", limit=600, window=60))
-
-        # Route G: Export Endpoints (*/export)
-        elif fnmatch.fnmatch(path, "*/export") or path.endswith("/export"):
-            buckets.append(RateLimitBucket(key=f"rl:export:{user_or_ip}:60", limit=100, window=60))
-
-        # Route H: Download Endpoints (*/download)
-        elif fnmatch.fnmatch(path, "*/download") or path.endswith("/download"):
-            buckets.append(RateLimitBucket(key=f"rl:download:{user_or_ip}:60", limit=100, window=60))
-
-        # Route I: AI Chat (/api/v1/ai/chat/*)
-        elif path.startswith("/api/v1/ai/chat") or path.startswith("/ai/chat"):
-            buckets.append(RateLimitBucket(key=f"rl:ai:chat:{user_or_ip}:60", limit=30, window=60))
-
-        # Route J: Telephony Webhooks (/agent/v1/voice/*, */twiml/*)
-        elif path.startswith("/agent/v1/voice") or "twiml" in path or "exotel" in path:
-            provider = "exotel" if "exotel" in path else "twilio"
-            buckets.append(RateLimitBucket(key=f"rl:voice:webhook:{provider}:{client_ip}:60", limit=120, window=60))
-
-        # Route K: Global Default Policy (All normal APIs)
-        else:
-            default_limit = settings.RATE_LIMIT_DEFAULT_PER_MINUTE
-            if user_id:
-                buckets.append(RateLimitBucket(key=f"rl:api:usr:{user_id}:60", limit=default_limit, window=60))
-            else:
-                buckets.append(RateLimitBucket(key=f"rl:api:ip:{client_ip}:60", limit=default_limit, window=60))
 
         # 4. Execute atomic rate-limit check via RateLimitService
-        result: RateLimitResult = await RateLimitService.check_rate_limits(buckets)
+        result: RateLimitResult = await RateLimitService.check_rate_limits(
+            buckets,
+            fail_open=False if is_auth_route else None,
+        )
 
-        # 5. Handle rate limit rejection
+        # 5. Handle rate limit rejection or service unavailability
         if not result.allowed:
+            if getattr(result, "unavailable", False):
+                logger.error(
+                    "RateLimiter backend offline on protected route: path=%s method=%s",
+                    path,
+                    method,
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Authentication service temporarily unavailable. Please try again shortly."
+                    },
+                    headers={
+                        "Retry-After": "5",
+                    },
+                )
+
             logger.warning(
                 "Rate limit exceeded: path=%s method=%s client_ip=%s user=%s retry_after=%s",
                 path,

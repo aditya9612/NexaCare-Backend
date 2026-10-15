@@ -131,8 +131,27 @@ class InventoryRepository:
         item.deleted_at = utc_now()
         await self.db.flush()
 
+    def _export_query(self, hospital_id: int | None = None):
+        from app.models.department_model import Department
+
+        query = (
+            select(InventoryItem)
+            .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+            .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+            .where(InventoryItem.is_deleted.is_(False))
+        )
+        if hospital_id is not None:
+            query = query.where(
+                or_(
+                    InventoryItem.hospital_id == hospital_id,
+                    Warehouse.hospital_id == hospital_id,
+                    Department.hospital_id == hospital_id,
+                )
+            )
+        return query
+
     async def get_all_active(self, hospital_id: int | None = None) -> list[InventoryItem]:
-        query = self._base_query(hospital_id=hospital_id).options(
+        query = self._export_query(hospital_id=hospital_id).options(
             selectinload(InventoryItem.warehouse),
             selectinload(InventoryItem.vendor),
             selectinload(InventoryItem.department)

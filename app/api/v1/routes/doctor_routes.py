@@ -390,7 +390,9 @@ async def download_report(
     _: User = Depends(require_permission("doctors", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
-    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id, hospital_id=hospital_id)
+    record = await DoctorMedicalRecordService(db).get_report_file(
+        record_id, user_id=current_user.id, hospital_id=hospital_id, current_user=current_user
+    )
     return FileResponse(
         path=record.file_path,
         filename=record.file_name,
@@ -411,7 +413,9 @@ async def view_report(
     if record_id is None:
         return APIResponse(message="No report record_id provided", data=None)
     hospital_id = resolve_tenant_id(current_user)
-    record = await DoctorMedicalRecordService(db).get_report_file(record_id, user_id=current_user.id, hospital_id=hospital_id)
+    record = await DoctorMedicalRecordService(db).get_report_file(
+        record_id, user_id=current_user.id, hospital_id=hospital_id, current_user=current_user
+    )
     return FileResponse(
         path=record.file_path,
         filename=record.file_name,
@@ -431,7 +435,9 @@ async def get_medical_record(
     _: User = Depends(require_permission("doctors", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
-    record = await DoctorMedicalRecordService(db).get_report_by_id(record_id, user_id=current_user.id, hospital_id=hospital_id)
+    record = await DoctorMedicalRecordService(db).get_report_by_id(
+        record_id, user_id=current_user.id, hospital_id=hospital_id, current_user=current_user
+    )
     return APIResponse(message="Medical record retrieved", data=record)
 
 
@@ -506,7 +512,10 @@ async def get_diagnosis(
     current_user: CurrentUser,
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    diagnosis = await DoctorMedicalRecordService(db).get_diagnosis(patient_id)
+    diagnosis = await DoctorMedicalRecordService(db).get_diagnosis(
+        patient_id=patient_id,
+        current_user=current_user,
+    )
     return APIResponse(message="Diagnosis retrieved", data=diagnosis)
 
 

@@ -411,11 +411,29 @@ class NurseHandoverNoteRepository:
         return note
 
 
+def _normalize_blood_group(bg: str | None) -> str | None:
+    if bg is None:
+        return None
+    cleaned = bg.strip()
+    if not cleaned:
+        return None
+    # Handle unencoded '+' in query parameters (which ASGI/Starlette decodes to trailing space, e.g. 'O ' -> 'O+')
+    if bg.rstrip() != bg and cleaned.upper() in {"A", "B", "AB", "O"}:
+        return f"{cleaned.upper()}+"
+    return cleaned
+
+
 class NursePatientAssignmentRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _base_query(self, nurse_id: int, status: str | None = None):
+    def _base_query(
+        self,
+        nurse_id: int,
+        status: str | None = None,
+        gender: str | None = None,
+        blood_group: str | None = None,
+    ):
         query = (
             select(Patient)
             .join(
@@ -429,6 +447,11 @@ class NursePatientAssignmentRepository:
         )
         if status is not None:
             query = query.where(NursePatientAssignment.status == status)
+        if gender is not None and gender.strip():
+            query = query.where(func.lower(Patient.gender) == gender.strip().lower())
+        normalized_bg = _normalize_blood_group(blood_group)
+        if normalized_bg:
+            query = query.where(func.lower(Patient.blood_group) == normalized_bg.lower())
         return query
 
     async def list_patients_by_nurse(
@@ -437,10 +460,17 @@ class NursePatientAssignmentRepository:
         skip: int = 0,
         limit: int = 20,
         status: str | None = None,
+        gender: str | None = None,
+        blood_group: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ) -> list[Patient]:
-        query = self._base_query(nurse_id, status)
+        query = self._base_query(
+            nurse_id,
+            status=status,
+            gender=gender,
+            blood_group=blood_group,
+        )
         column = getattr(Patient, sort_by, Patient.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -450,6 +480,8 @@ class NursePatientAssignmentRepository:
         self,
         nurse_id: int,
         status: str | None = None,
+        gender: str | None = None,
+        blood_group: str | None = None,
     ) -> int:
         query = (
             select(func.count(Patient.id))
@@ -464,6 +496,11 @@ class NursePatientAssignmentRepository:
         )
         if status is not None:
             query = query.where(NursePatientAssignment.status == status)
+        if gender is not None and gender.strip():
+            query = query.where(func.lower(Patient.gender) == gender.strip().lower())
+        normalized_bg = _normalize_blood_group(blood_group)
+        if normalized_bg:
+            query = query.where(func.lower(Patient.blood_group) == normalized_bg.lower())
         return await self.db.scalar(query) or 0
 
     async def get_patient_by_id(self, patient_id: int) -> Patient | None:

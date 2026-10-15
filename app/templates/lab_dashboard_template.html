@@ -157,9 +157,16 @@
         <td colspan="3">{{ date_range }}</td>
       </tr>
       {% endif %}
+      {% if section and section != 'all' %}
+      <tr>
+        <td class="meta-label">Section:</td>
+        <td colspan="3">{{ section | replace('_', ' ') | title }}</td>
+      </tr>
+      {% endif %}
     </table>
   </div>
 
+  {% if section in ['all', 'summary'] %}
   <div class="section-title">Dashboard Summary</div>
   <div class="metrics-container">
     <table class="metrics-table">
@@ -213,7 +220,9 @@
       </tr>
     </table>
   </div>
+  {% endif %}
 
+  {% if section in ['all', 'critical_alerts'] %}
   <div class="section-title">Critical Alerts</div>
   {% if critical_alerts %}
   <table class="data-table">
@@ -243,7 +252,9 @@
   {% else %}
   <div class="no-data">No active critical alerts for the selected period.</div>
   {% endif %}
+  {% endif %}
 
+  {% if section in ['all', 'pending_approvals'] %}
   <div class="section-title">Pending Report Approvals</div>
   {% if pending_report_approvals %}
   <table class="data-table">
@@ -271,7 +282,9 @@
   {% else %}
   <div class="no-data">No reports pending pathologist approval.</div>
   {% endif %}
+  {% endif %}
 
+  {% if section in ['all', 'recent_orders'] %}
   <div class="section-title">Recent Test Orders</div>
   {% if recent_test_orders %}
   <table class="data-table">
@@ -314,6 +327,7 @@
   </table>
   {% else %}
   <div class="no-data">No recent test orders found.</div>
+  {% endif %}
   {% endif %}
 
 </body>

@@ -26,6 +26,7 @@ from app.schemas.bed_allocation_schema import (
 from app.services.bed_allocation_service import BedAllocationService
 
 router = APIRouter()
+export_router = APIRouter()
 
 
 # 1. Floor Routes
@@ -302,7 +303,7 @@ async def mark_cleaning_complete(
 
 
 # 8. Export Bed Allocation Data Routes
-@router.get("/export", response_model=APIResponse[List[BedExportResponse]])
+@export_router.get("/export", response_model=APIResponse[List[BedExportResponse]])
 async def export_bed_allocation(
     db: DbSession,
     current_user: CurrentUser,

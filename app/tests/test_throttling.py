@@ -45,7 +45,8 @@ async def test_redis_failure_fail_open_handling():
 
 
 @pytest.mark.asyncio
-async def test_throttling_middleware_heavy_route():
+async def test_throttling_middleware_heavy_route(monkeypatch):
+    monkeypatch.setattr(ThrottlingMiddleware, "HEAVY_MAX_CONCURRENCY", 3)
     app = FastAPI()
     app.add_middleware(ThrottlingMiddleware)
 

@@ -258,11 +258,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Route G: Export Endpoints (*/export)
         elif fnmatch.fnmatch(path, "*/export") or path.endswith("/export"):
-            buckets.append(RateLimitBucket(key=f"rl:export:{user_or_ip}:60", limit=10, window=60))
+            buckets.append(RateLimitBucket(key=f"rl:export:{user_or_ip}:60", limit=100, window=60))
 
         # Route H: Download Endpoints (*/download)
         elif fnmatch.fnmatch(path, "*/download") or path.endswith("/download"):
-            buckets.append(RateLimitBucket(key=f"rl:download:{user_or_ip}:60", limit=10, window=60))
+            buckets.append(RateLimitBucket(key=f"rl:download:{user_or_ip}:60", limit=100, window=60))
 
         # Route I: AI Chat (/api/v1/ai/chat/*)
         elif path.startswith("/api/v1/ai/chat") or path.startswith("/ai/chat"):

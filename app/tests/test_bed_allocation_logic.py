@@ -510,7 +510,7 @@ async def test_unavailable_bed_rejected():
 @pytest.mark.asyncio
 async def test_direct_api_endpoint_bed_allocation():
     """
-    Test POST /api/beds/{bedId}/allocate over HTTP:
+    Test POST /api/v1/bed-allocation/beds/{bedId}/allocate over HTTP:
     1. Follow-up appointment returns HTTP 400.
     2. Valid IPD admission appointment returns HTTP 200 with allocated bed.
     """
@@ -547,7 +547,7 @@ async def test_direct_api_endpoint_bed_allocation():
 
             # 1. Attempt allocating with Follow-up appointment -> Expect 400 Bad Request
             res = await client.post(
-                f"/api/beds/{bed.id}/allocate",
+                f"/api/v1/bed-allocation/beds/{bed.id}/allocate",
                 json={
                     "patientId": patient.id,
                     "appointmentId": followup_appt.id,
@@ -580,7 +580,7 @@ async def test_direct_api_endpoint_bed_allocation():
 
             # Attempt allocating with valid IPD appointment -> Expect 200 OK
             res_success = await client.post(
-                f"/api/beds/{bed.id}/allocate",
+                f"/api/v1/bed-allocation/beds/{bed.id}/allocate",
                 json={
                     "patientId": patient.id,
                     "appointmentId": ipd_appt.id,

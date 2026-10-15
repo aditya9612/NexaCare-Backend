@@ -1017,13 +1017,20 @@ class BedAllocationService:
         status: Optional[str] = None,
         room_id: Optional[int] = None,
         bed_type: Optional[str] = None,
+        current_user: Any | None = None,
     ) -> io.BytesIO:
         import io
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
 
-        items = await self.export_bed_data(floor_id=floor_id, status=status, room_id=room_id, bed_type=bed_type)
+        items = await self.export_bed_data(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+            current_user=current_user,
+        )
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Bed Allocation Data"

@@ -41,7 +41,7 @@ class ThrottlingMiddleware(BaseHTTPMiddleware):
     )
 
     # Concurrency configuration for heavy resource endpoints
-    HEAVY_MAX_CONCURRENCY: int = 3
+    HEAVY_MAX_CONCURRENCY: int = getattr(settings, "THROTTLING_MAX_CONCURRENCY", 100)
     HEAVY_SLOT_TTL_SECONDS: int = 30
     HEAVY_RETRY_AFTER_SECONDS: int = 2
 

@@ -162,10 +162,11 @@ async def require_voice_webhook_auth(
 
     # Rate-limit abusive webhook traffic per client IP
     from app.utils.rate_limiter import voice_webhook_rate_limiter
+    from app.middleware.rate_limit_middleware import get_validated_client_ip
 
-    client_host = request.client.host if request.client else "unknown"
+    client_ip = get_validated_client_ip(request)
     try:
-        voice_webhook_rate_limiter.check(f"voice-webhook:{provider}:{client_host}")
+        voice_webhook_rate_limiter.check(f"voice-webhook:{provider}:{client_ip}")
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

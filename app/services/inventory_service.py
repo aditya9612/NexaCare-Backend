@@ -71,7 +71,7 @@ class InventoryService:
             if not vendor:
                 raise NotFoundException(f"Vendor with ID {vendor_id} not found")
 
-    async def create_item(self, data: InventoryItemCreate, user_id: int) -> InventoryItemResponse:
+    async def create_item(self, data: InventoryItemCreate, user_id: int, hospital_id: int | None = None) -> InventoryItemResponse:
         await self._validate_department(data.department_id)
         await self._validate_warehouse(data.warehouse_id)
         await self._validate_vendor(data.vendor_id)
@@ -92,7 +92,17 @@ class InventoryService:
             if existing_barcode:
                 raise ConflictException("Inventory item with this barcode already exists")
 
-        item = InventoryItem(sku=sku, **data.model_dump(exclude={"sku"}))
+        item_hospital_id = hospital_id
+        if item_hospital_id is None and data.warehouse_id:
+            wh = await self.warehouse_repo.get_by_id(data.warehouse_id)
+            if wh and wh.hospital_id:
+                item_hospital_id = wh.hospital_id
+        if item_hospital_id is None and data.department_id:
+            dept = await self.dept_repo.get_by_id(data.department_id)
+            if dept and dept.hospital_id:
+                item_hospital_id = dept.hospital_id
+
+        item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **data.model_dump(exclude={"sku"}))
         item = await self.item_repo.create(item)
         await self._check_reorder_alert(item)
         await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
@@ -359,7 +369,7 @@ class InventoryService:
         stream.seek(0)
         return stream
 
-    async def import_items_from_excel(self, file, user_id: int) -> dict:
+    async def import_items_from_excel(self, file, user_id: int, hospital_id: int | None = None) -> dict:
         from pydantic import ValidationError
         import openpyxl
         from datetime import date, datetime
@@ -503,8 +513,18 @@ class InventoryService:
                         raise ConflictException("Inventory item with this barcode already exists")
                     batch_barcodes.add(barcode_key)
 
+                item_hospital_id = hospital_id
+                if item_hospital_id is None and validated_data.warehouse_id:
+                    wh = await self.warehouse_repo.get_by_id(validated_data.warehouse_id)
+                    if wh and wh.hospital_id:
+                        item_hospital_id = wh.hospital_id
+                if item_hospital_id is None and validated_data.department_id:
+                    dept = await self.dept_repo.get_by_id(validated_data.department_id)
+                    if dept and dept.hospital_id:
+                        item_hospital_id = dept.hospital_id
+
                 # Insert item
-                item = InventoryItem(sku=sku, **validated_data.model_dump(exclude={"sku"}))
+                item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **validated_data.model_dump(exclude={"sku"}))
                 item = await self.item_repo.create(item)
                 await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
                 created += 1

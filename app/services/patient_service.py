@@ -3,7 +3,12 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundException, ConflictException, BadRequestException
+from app.core.exceptions import (
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.models.patient_model import FamilyMember, Patient, PatientDocument
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
@@ -757,6 +762,18 @@ class PatientService:
             "failed": failed,
             "errors": errors
         }
+
+    async def export_patients(self, format_type: str, status: str | None = None, current_user = None):
+        role_name = ""
+        if current_user:
+            role = getattr(current_user, "role", None)
+            if hasattr(role, "name"):
+                role_name = str(role.name).lower()
+            elif isinstance(role, str):
+                role_name = role.lower()
+
+        if role_name == "patient":
+            raise ForbiddenException("Patients are not authorized to export patient records")
 
     async def export_patients(
         self,

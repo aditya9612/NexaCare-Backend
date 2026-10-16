@@ -383,6 +383,8 @@ async def list_nurse_patients(
     page: int = 1,
     size: int = 20,
     status: str | None = None,
+    gender: str | None = Query(None, description="Filter by gender (e.g. Male, Female, Other)"),
+    blood_group: str | None = Query(None, description="Filter by blood group (e.g. A+, O+, B-, etc.)"),
     sort_by: str = "created_at",
     sort_order: str = "desc",
     _: User = Depends(require_permission("nurses", "read")),
@@ -392,6 +394,8 @@ async def list_nurse_patients(
         page=page,
         size=size,
         status=status,
+        gender=gender,
+        blood_group=blood_group,
         sort_by=sort_by,
         sort_order=sort_order,
     )

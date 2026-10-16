@@ -85,8 +85,7 @@ class Settings(BaseSettings):
     # Optional browser session Cookie header if Studio synthesize requires login auth.
     SARVAM_STUDIO_COOKIE: str = ""
     SARVAM_TTS_MODEL: str = "bulbul:v3"
-    SARVAM_STT_MODEL: str = "saaras:v4"  # Exotel Voicebot speech-to-text (not saarika:v2)
-    SARVAM_TTS_CODEC: str = "mp3"  # mp3 | wav (Twilio <Play> supports both; wav safer for Exotel PCM)
+    SARVAM_TTS_CODEC: str = "mp3"  # mp3 | wav (Twilio <Play> supports both)
     SARVAM_TTS_SAMPLE_RATE: int = 16000  # telephony-friendly
     SARVAM_TTS_PACE: float = 1.0
     SARVAM_TTS_TIMEOUT_SECONDS: float = 30.0
@@ -125,11 +124,59 @@ class Settings(BaseSettings):
     MEDICATION_REMINDER_MINUTES: int = 15
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
 
-    # Rate Limiting Configuration
+    # Rate Limiting & Throttling Configuration (Unified 50 req/sec for all APIs)
     RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_PER_SECOND: int = 50
     RATE_LIMIT_DEFAULT_PER_MINUTE: int = 10
+    RATE_LIMIT_AUTHENTICATED_PER_MINUTE: int = 120
+    RATE_LIMIT_ANONYMOUS_PER_MINUTE: int = 60
     RATE_LIMIT_FAIL_OPEN: bool = True
+    THROTTLING_MAX_CONCURRENCY: int = 100
     TRUSTED_PROXIES: List[str] = ["127.0.0.1", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+    # Authentication Specific Rate Limits
+    RATE_LIMIT_LOGIN_TARGET_LIMIT: int = 5
+    RATE_LIMIT_LOGIN_TARGET_WINDOW: int = 60
+    RATE_LIMIT_LOGIN_IP_LIMIT: int = 20
+    RATE_LIMIT_LOGIN_IP_WINDOW: int = 60
+
+    RATE_LIMIT_OTP_SEND_TARGET_LIMIT: int = 3
+    RATE_LIMIT_OTP_SEND_TARGET_WINDOW: int = 600
+    RATE_LIMIT_OTP_SEND_IP_LIMIT: int = 10
+    RATE_LIMIT_OTP_SEND_IP_WINDOW: int = 3600
+    RATE_LIMIT_OTP_COOLDOWN_SECONDS: int = 60
+
+    RATE_LIMIT_OTP_VERIFY_TARGET_LIMIT: int = 5
+    RATE_LIMIT_OTP_VERIFY_TARGET_WINDOW: int = 600
+    RATE_LIMIT_OTP_VERIFY_IP_LIMIT: int = 20
+    RATE_LIMIT_OTP_VERIFY_IP_WINDOW: int = 3600
+
+    RATE_LIMIT_RESET_TARGET_LIMIT: int = 5
+    RATE_LIMIT_RESET_TARGET_WINDOW: int = 600
+    RATE_LIMIT_RESET_IP_LIMIT: int = 10
+    RATE_LIMIT_RESET_IP_WINDOW: int = 3600
+
+    RATE_LIMIT_REFRESH_SESSION_LIMIT: int = 10
+    RATE_LIMIT_REFRESH_SESSION_WINDOW: int = 60
+    RATE_LIMIT_REFRESH_IP_LIMIT: int = 30
+    RATE_LIMIT_REFRESH_IP_WINDOW: int = 60
+
+    # Telemetry Specific Limits
+    RATE_LIMIT_ICU_PER_SECOND: int = 10
+    RATE_LIMIT_ICU_PER_MINUTE: int = 600
+
+    # Export & Download Limits
+    RATE_LIMIT_EXPORT_PER_MINUTE: int = 10
+    RATE_LIMIT_DOWNLOAD_PER_MINUTE: int = 10
+
+    # AI Chat & Concurrency Limits
+    RATE_LIMIT_AI_CHAT_MAX_CONCURRENCY: int = 5
+    RATE_LIMIT_VOICE_WEBHOOK_PER_MINUTE: int = 120
+
+    # 2FA Verification Limits
+    RATE_LIMIT_2FA_TARGET_LIMIT: int = 5
+    RATE_LIMIT_2FA_IP_LIMIT: int = 20
+    RATE_LIMIT_2FA_WINDOW: int = 300
     VOICE_CONFIG_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_CACHE_TTL_SECONDS: int = 600
     VOICE_FAQ_QUERY_CACHE_TTL_SECONDS: int = 300

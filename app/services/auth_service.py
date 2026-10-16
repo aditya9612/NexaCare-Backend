@@ -632,7 +632,7 @@ class AuthService:
         user_agent: str | None = None,
     ) -> TokenResponse:
         from app.services.security_service import SecurityService
-        from app.utils.redis_service import cache_get, cache_delete, cache_set
+        from app.utils.redis_service import cache_get, cache_delete, cache_set, cache_incr
         from app.core.logger import logger
 
         try:
@@ -646,11 +646,18 @@ class AuthService:
         jti = payload.get("jti")
         user_id = int(payload.get("sub", 0))
 
-        # Rate Limiting
-        rate_limit_key = f"2fa_attempts:{user_id}:{ip_address}" if ip_address else f"2fa_attempts:{user_id}"
-        attempts = await cache_get(rate_limit_key)
-        if attempts and int(attempts) >= 5:
+        # Rate Limiting: Check failed attempt thresholds
+        target_limit_key = f"2fa_attempts:{user_id}"
+        ip_limit_key = f"2fa_attempts:ip:{ip_address}" if ip_address else None
+
+        attempts = await cache_get(target_limit_key)
+        if attempts and int(attempts) >= settings.RATE_LIMIT_2FA_TARGET_LIMIT:
             raise UnauthorizedException("Too many failed 2FA attempts. Try again later.")
+
+        if ip_limit_key:
+            ip_attempts = await cache_get(ip_limit_key)
+            if ip_attempts and int(ip_attempts) >= settings.RATE_LIMIT_2FA_IP_LIMIT:
+                raise UnauthorizedException("Too many failed 2FA attempts. Try again later.")
 
         # Replay prevention
         jti_status = await cache_get(f"2fa_jti:{jti}")
@@ -666,10 +673,6 @@ class AuthService:
 
         if not security_settings or not security_settings.is_2fa_enabled:
             raise BadRequestException("2FA is not enabled for this account")
-
-        # Increment attempt counter
-        current_attempts = int(attempts) + 1 if attempts else 1
-        await cache_set(rate_limit_key, str(current_attempts), ttl=300)
 
         # Verification Logic
         is_valid = False
@@ -697,6 +700,11 @@ class AuthService:
                 await self.db.commit()
 
         if not is_valid:
+            # Increment failed attempt counters atomically
+            await cache_incr(target_limit_key, ttl=settings.RATE_LIMIT_2FA_WINDOW)
+            if ip_limit_key:
+                await cache_incr(ip_limit_key, ttl=settings.RATE_LIMIT_2FA_WINDOW)
+
             try:
                 await SecurityService(self.db).record_login(
                     user_id=user.id,
@@ -709,9 +717,9 @@ class AuthService:
                 pass
             raise UnauthorizedException("Invalid TOTP or Recovery code")
 
-        # Success - consume JTI
+        # Success - consume JTI and clear failed attempt counter
         await cache_delete(f"2fa_jti:{jti}")
-        await cache_delete(rate_limit_key)
+        await cache_delete(target_limit_key)
 
         user.last_login = utc_now()
         await self.repo.update(user)

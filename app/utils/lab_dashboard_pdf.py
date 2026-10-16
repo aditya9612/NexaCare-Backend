@@ -16,6 +16,7 @@ async def generate_lab_dashboard_pdf(
     data: LabDashboardResponse,
     filter_applied: str,
     date_range: str,
+    section: str = "all",
     hospital_name: Optional[str] = None,
     hospital_address: Optional[str] = None,
     hospital_phone: Optional[str] = None,
@@ -44,6 +45,7 @@ async def generate_lab_dashboard_pdf(
     context["filter_applied"] = filter_applied
     context["date_range"] = date_range
     context["generated_at"] = generated_at_str
+    context["section"] = section
     context["hospital_name"] = hospital_name or "NexaCare Hospital"
     context["hospital_address"] = hospital_address
     context["hospital_phone"] = hospital_phone

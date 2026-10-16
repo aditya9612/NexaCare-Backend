@@ -320,6 +320,21 @@ class PrescriptionResponse(BaseSchema):
     created_at: datetime
 
 
+class PrescriptionListResponse(BaseSchema):
+    items: List[PrescriptionResponse] = []
+    total: int
+    page: int
+    size: int
+    pages: int
+    total_prescriptions: int = 0
+    approved: int = 0
+    pending: int = 0
+    completed: int = 0
+
+
+PrescriptionListWithCountsResponse = PrescriptionListResponse
+
+
 class PrescriptionDispenseRequest(BaseSchema):
     payment_mode: str = Field(..., min_length=1, description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
     payment_status: PharmacyPaymentStatus = Field(PharmacyPaymentStatus.PAID, description="Payment status of generated invoice")

@@ -683,6 +683,8 @@ class NurseService:
         page: int = 1,
         size: int = 20,
         status: str | None = None,
+        gender: str | None = None,
+        blood_group: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ):
@@ -693,12 +695,16 @@ class NurseService:
             skip=skip,
             limit=size,
             status=status,
+            gender=gender,
+            blood_group=blood_group,
             sort_by=sort_by,
             sort_order=sort_order,
         )
         total = await self.assignment_repo.count_patients_by_nurse(
             nurse_id=nurse_id,
             status=status,
+            gender=gender,
+            blood_group=blood_group,
         )
         return build_paginated_result(
             [PatientResponse.model_validate(p) for p in items],

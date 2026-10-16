@@ -25,8 +25,6 @@
       border-bottom: 2px solid #2563eb;
       padding-bottom: 12px;
       margin-bottom: 15px;
-      padding-bottom: 12px;
-      margin-bottom: 20px;
     }
 
     .brand-title {
@@ -46,19 +44,17 @@
 
     .invoice-title {
       font-size: 16pt;
-      font-size: 20pt;
       font-weight: bold;
       color: #1e293b;
       text-align: right;
       line-height: 1.2;
-      letter-spacing: 1px;
+      letter-spacing: 0.5px;
     }
 
     /* Info Section (Patient Details & Invoice Information) */
     .info-table {
       width: 100%;
       margin-bottom: 14px;
-      margin-bottom: 20px;
       border-collapse: separate;
       border-spacing: 12px 0;
       margin-left: -12px;
@@ -73,18 +69,7 @@
     .info-box {
       background-color: #f8fafc;
       border: 1px solid #e2e8f0;
-      padding: 8px 12px;
-      border-radius: 4px;
-      margin-right: 6px;
-    }
-
-    .info-box-right {
-      background-color: #f8fafc;
-      border: 1px solid #e2e8f0;
-      padding: 8px 12px;
-      border-radius: 4px;
-      margin-left: 6px;
-      padding: 12px 14px;
+      padding: 10px 12px;
       border-radius: 6px;
       box-sizing: border-box;
       min-height: 110px;
@@ -289,22 +274,19 @@
     <tr>
       <td style="border: none; padding: 0;">
         <div class="brand-title">NEXACARE AI 360</div>
-        <div class="brand-sub">NexaCare Hospital | Wing B, Floor 1 | Contact: info@nexacare360.com</div>
+        <div class="brand-sub">
+          {% if hospital_address %}{{ hospital_address }}{% else %}NexaCare Hospital | Wing B, Floor 1{% endif %}
+          {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
+          {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{
+          hospital_email }}{% elif not hospital_phone and not hospital_address %} | Contact: info@nexacare360.com{%
+          endif %}
+        </div>
       </td>
       <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
         <div class="invoice-title">{{ hospital_name or 'NexaCare Hospital' }}</div>
       </td>
     </tr>
   </table>
-  <div class="header-table">
-    <div class="brand-title">{{ hospital_name | default('NEXACARE HOSPITAL', true) }}</div>
-    <div class="brand-sub">
-      {% if hospital_address %}{{ hospital_address }}{% endif %}
-      {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
-      {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{ hospital_email
-      }}{% endif %}
-    </div>
-  </div>
 
   <!-- Info Section -->
   <table class="info-table">
@@ -314,21 +296,15 @@
           <div class="section-title">Patient Details</div>
           <table class="info-details-table">
             <tr>
-              <td style="width: 55px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Name:</td>
-              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ patient_name }}</td>
-              <td class="info-label">Name:</td>
+              <td class="info-label" style="width: 55px;">Name:</td>
               <td class="info-val" style="font-weight: bold;">{{ patient_name }}</td>
             </tr>
             <tr>
-              <td style="width: 55px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Phone:</td>
-              <td style="border: none; padding: 2px 0;">{{ patient_phone }}</td>
-              <td class="info-label">Phone:</td>
+              <td class="info-label" style="width: 55px;">Phone:</td>
               <td class="info-val">{{ patient_phone }}</td>
             </tr>
             <tr>
-              <td style="width: 55px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Email:</td>
-              <td style="border: none; padding: 2px 0;">{{ patient_email }}</td>
-              <td class="info-label">Email:</td>
+              <td class="info-label" style="width: 55px;">Email:</td>
               <td class="info-val">{{ patient_email }}</td>
             </tr>
           </table>
@@ -339,25 +315,15 @@
           <div class="section-title">Invoice Information</div>
           <table class="info-details-table">
             <tr>
-              <td style="width: 110px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Invoice
-                Number:</td>
-              <td style="border: none; padding: 2px 0; font-weight: bold;">{{ invoice_number }}</td>
-              <td class="info-label">Invoice Number:</td>
+              <td class="info-label" style="width: 110px;">Invoice Number:</td>
               <td class="info-val" style="font-weight: bold;">{{ invoice_number }}</td>
             </tr>
             <tr>
-              <td style="width: 110px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Date:</td>
-              <td style="border: none; padding: 2px 0;">{{ date }}</td>
-              <td class="info-label">Date:</td>
+              <td class="info-label" style="width: 110px;">Date:</td>
               <td class="info-val">{{ date }}</td>
             </tr>
             <tr>
-              <td style="width: 110px; border: none; padding: 2px 0; color: #64748b; white-space: nowrap;">Payment
-                Status:</td>
-              <td style="border: none; padding: 2px 0;">
-                <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{ status
-                  }}</span>
-              <td class="info-label">Payment Status:</td>
+              <td class="info-label" style="width: 110px;">Payment Status:</td>
               <td class="info-val">
                 <span class="status-text {{ 'status-paid' if status == 'Paid' else 'status-unpaid' }}">{{ status
                   }}</span>

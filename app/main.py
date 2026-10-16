@@ -14,6 +14,7 @@ from app.middleware.exception_middleware import ExceptionMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
 from app.middleware.rbac_middleware import RBACMiddleware
+from app.middleware.throttling_middleware import ThrottlingMiddleware
 from app.websocket.chat_socket import router as chat_ws_router
 from app.websocket.notification_socket import router as notification_ws_router
 from app.agent.router import router as agent_router
@@ -96,6 +97,7 @@ app.add_middleware(
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(ExceptionMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(ThrottlingMiddleware)
 app.add_middleware(RBACMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

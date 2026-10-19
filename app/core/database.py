@@ -136,6 +136,8 @@ async def init_db():
                 "UPDATE transaction_history th JOIN billings b ON th.source_id = b.id AND th.source_module = 'billing' SET th.hospital_id = b.hospital_id WHERE th.hospital_id IS NULL",
                 "UPDATE transaction_history th JOIN pharmacy_invoices pi ON th.source_id = pi.id AND th.source_module = 'pharmacy_billing' SET th.hospital_id = pi.hospital_id WHERE th.hospital_id IS NULL",
                 "UPDATE transaction_history th JOIN purchases pu ON th.source_id = pu.id AND th.source_module = 'pharmacy_purchases' SET th.hospital_id = pu.hospital_id WHERE th.hospital_id IS NULL",
+                "UPDATE inventory_items ii JOIN warehouses w ON ii.warehouse_id = w.id SET ii.hospital_id = w.hospital_id WHERE ii.hospital_id IS NULL AND w.hospital_id IS NOT NULL",
+                "UPDATE inventory_items ii JOIN departments d ON ii.department_id = d.department_id SET ii.hospital_id = d.hospital_id WHERE ii.hospital_id IS NULL AND d.hospital_id IS NOT NULL",
             ]:
                 try:
                     await session.execute(text(backfill_stmt))

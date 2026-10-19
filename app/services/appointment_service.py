@@ -3,7 +3,7 @@ from datetime import date, datetime, time
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus, BookingSource
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
@@ -408,9 +408,16 @@ class AppointmentService:
     async def get_by_id(self, appointment_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            hospital_id = None
         appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or appointment.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this appointment")
         return AppointmentResponse.model_validate(appointment)
 
     async def get_token(self, appointment_id: int, current_user = None) -> TokenResponse:
@@ -511,11 +518,46 @@ class AppointmentService:
     async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            hospital_id = None
         appointment = await self.repo.get_by_id(appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
 
+        # Patient access check
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or appointment.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to access or update this appointment")
+
         update_data = data.model_dump(exclude_unset=True)
+
+        status_str = str(appointment.appointment_status).strip() if appointment.appointment_status else ""
+        is_completed = (
+            status_str.lower() in ("completed", "checked-out")
+            or appointment.appointment_status == AppointmentStatus.COMPLETED
+        )
+        is_terminal = (
+            is_completed
+            or appointment.appointment_status in AppointmentStatus.TERMINAL
+            or status_str.lower() in ("cancelled", "no show", "no-show", "no_show", "admitted")
+        )
+
+        # Block rescheduling on completed or terminal appointments
+        if "appointment_date" in update_data or "appointment_time" in update_data:
+            if is_completed:
+                raise BadRequestException("Cannot reschedule a completed appointment")
+            if is_terminal:
+                raise BadRequestException("Cannot reschedule a terminal appointment")
+
+        # Block patient from modifying completed appointments
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            if is_completed:
+                raise BadRequestException("Cannot reschedule a completed appointment")
+            if is_terminal:
+                raise BadRequestException("Cannot update a terminal appointment")
+
         if "appointment_status" in update_data:
             new_status = update_data["appointment_status"]
             if new_status == AppointmentStatus.CONFIRMED:
@@ -523,7 +565,6 @@ class AppointmentService:
                 from sqlalchemy import select
                 from sqlalchemy.orm import selectinload
                 from app.core.constants import UserRole
-                from app.core.exceptions import ForbiddenException
                 
                 user_res = await self.db.execute(
                     select(User)
@@ -543,7 +584,7 @@ class AppointmentService:
                         
                 if appointment.appointment_status == "Checked-In":
                     raise BadRequestException("Cannot confirm an appointment that is already checked in")
-                elif appointment.appointment_status == AppointmentStatus.COMPLETED:
+                elif appointment.appointment_status == AppointmentStatus.COMPLETED or is_completed:
                     raise BadRequestException("Cannot confirm a completed appointment")
                 elif appointment.appointment_status == "Checked-Out":
                     raise BadRequestException("Cannot confirm a checked-out appointment")
@@ -554,10 +595,11 @@ class AppointmentService:
             elif new_status in (AppointmentStatus.COMPLETED, "Checked-Out"):
                 raise BadRequestException(f"Direct update to '{new_status}' status is not allowed. Please use the dedicated lifecycle endpoints.")
 
-
-        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+        if is_terminal:
             # allow purely notes update if status isn't changing to a non-terminal state
             if "appointment_status" in update_data and update_data["appointment_status"] != appointment.appointment_status:
+                if is_completed:
+                    raise BadRequestException("Cannot change status of a completed appointment")
                 raise BadRequestException("Cannot change status of a terminal appointment")
         # Prevent updating status directly to Completed without Check-In and Check-Out
         if update_data.get("appointment_status") == AppointmentStatus.COMPLETED:
@@ -604,10 +646,27 @@ class AppointmentService:
     async def reschedule(self, data: RescheduleRequest, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            hospital_id = None
         appointment = await self.repo.get_by_id(data.appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+
+        # Patient access check
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or appointment.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to reschedule this appointment")
+
+        status_str = str(appointment.appointment_status).strip() if appointment.appointment_status else ""
+        is_completed = (
+            status_str.lower() in ("completed", "checked-out")
+            or appointment.appointment_status == AppointmentStatus.COMPLETED
+        )
+        if is_completed:
+            raise BadRequestException("Cannot reschedule a completed appointment")
+        if appointment.appointment_status in AppointmentStatus.TERMINAL or status_str.lower() in ("cancelled", "no show", "no-show", "no_show", "admitted"):
             raise BadRequestException("Cannot reschedule a terminal appointment")
         new_date, new_time = self._validate_future_datetime(data.appointment_date, data.appointment_time)
         rules = await self.validation_service.validate(
@@ -649,10 +708,27 @@ class AppointmentService:
     async def cancel(self, data: CancelRequest, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            hospital_id = None
         appointment = await self.repo.get_by_id(data.appointment_id, hospital_id=hospital_id)
         if not appointment:
             raise NotFoundException("Appointment not found")
-        if appointment.appointment_status in AppointmentStatus.TERMINAL:
+
+        # Patient access check
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or appointment.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to cancel this appointment")
+
+        status_str = str(appointment.appointment_status).strip() if appointment.appointment_status else ""
+        is_completed = (
+            status_str.lower() in ("completed", "checked-out")
+            or appointment.appointment_status == AppointmentStatus.COMPLETED
+        )
+        if is_completed:
+            raise BadRequestException("Cannot cancel a completed appointment")
+        if appointment.appointment_status in AppointmentStatus.TERMINAL or status_str.lower() in ("cancelled", "no show", "no-show", "no_show", "admitted"):
             raise BadRequestException("Cannot cancel a terminal appointment")
         appointment.appointment_status = AppointmentStatus.CANCELLED
         appointment.queue_status = "CANCELLED"

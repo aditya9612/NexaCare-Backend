@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import UserRole
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.core.security import get_password_hash
 from app.models.doctor_model import Doctor, DoctorSchedule
 from app.models.user_model import User
@@ -281,6 +281,8 @@ class DoctorService:
 
         # Resolve hospital_id from user if not explicitly passed
         actor_user = await self.auth_repo.get_by_id(user_id) if user_id else None
+        if actor_user and actor_user.role and actor_user.role.name == UserRole.PATIENT:
+            raise ForbiddenException("Patients cannot create doctors")
         target_user = await self.auth_repo.get_by_id(data.user_id) if data.user_id else None
         hospital_id = (target_user.hospital_id if target_user and target_user.hospital_id else None) or (actor_user.hospital_id if actor_user else None)
         dump["hospital_id"] = hospital_id
@@ -300,6 +302,10 @@ class DoctorService:
         image_file: Optional[UploadFile] = None,
         hospital_id: Optional[int] = None,
     ) -> DoctorOnboardResponse:
+        role_name = actor.role.name if actor.role else None
+        if role_name == UserRole.PATIENT:
+            raise ForbiddenException("Patients cannot onboard doctors")
+
         from app.core.dependencies import resolve_tenant_id
         target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
 

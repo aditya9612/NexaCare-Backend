@@ -156,7 +156,6 @@ async def download_lab_dashboard_pdf(
         filter_applied=time_filter,
         date_range=date_range_str,
         section=validated_section,
-        date_range=date_range_str,
         hospital_name=hospital_name,
         hospital_address=hospital_address,
         hospital_phone=hospital_phone,

@@ -79,9 +79,13 @@ class RBACRepository:
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
 
-    async def get_user_permissions(self, role_id: int) -> list[str]:
+    async def get_user_permissions(self, role_id: int | None) -> list[str]:
+        if not role_id:
+            return []
         result = await self.db.execute(
             select(Permission.name)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == role_id)
         )
         return list(result.scalars().all())
 

@@ -125,7 +125,7 @@ def resolve_tenant_id(user: User | None) -> int | None:
         return None
     role_name = user.role.name.lower() if user.role and user.role.name else ""
     if role_name in ("super admin", "super_admin"):
-        return getattr(user, "active_hospital_id", None)
+        return getattr(user, "active_hospital_id", None) or getattr(user, "hospital_id", None)
     return user.hospital_id
 
 

@@ -449,6 +449,7 @@ class LabService:
         existing_order = await self.order_repo.get_active_order_by_patient_and_test(
             patient_id=data.patient_id,
             lab_test_id=data.lab_test_id,
+            hospital_id=hospital_id,
         )
         if existing_order:
             raise BadRequestException("Lab test order already exists for this patient.")
@@ -2043,63 +2044,184 @@ class LabService:
         }
 
 
-    async def generate_orders_bulk_template(self):
+    async def generate_orders_bulk_template(self, current_user = None):
         from io import BytesIO
         import openpyxl
-        
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        from sqlalchemy import select
+        from app.core.dependencies import resolve_tenant_id
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.lab_model import LabTest
+        from app.models.appointment_model import Appointment
+
+        hospital_id = resolve_tenant_id(current_user)
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Lab Orders Bulk Import"
-        
+
         headers = [
             "Patient Name", "Doctor Name", "Lab Test Name", "Appointment Number", "priority", "notes"
         ]
         ws.append(headers)
-        
+
+        # Apply Header Styling
+        ws.row_dimensions[1].height = 32
+        ws.freeze_panes = "A2"
+
+        header_font = Font(name="Calibri", size=12, bold=True, color="000000")
+        header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin_side = Side(style="thin", color="D3D3D3")
+        header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = header_border
+
+        # Fetch sample patient from this tenant
+        sample_patient = "John Doe [PAT001]"
+        p_stmt = select(Patient.first_name, Patient.last_name, Patient.patient_code).where(Patient.is_deleted == False)
+        if hospital_id is not None:
+            p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
+        p_res = (await self.db.execute(p_stmt.limit(1))).first()
+        if p_res:
+            sample_patient = f"{p_res[0]} {p_res[1]} [{p_res[2]}]"
+
+        # Fetch sample doctor from this tenant
+        sample_doctor = "Dr. Sarah Connor [DOC001]"
+        d_stmt = select(Doctor.first_name, Doctor.last_name, Doctor.doctor_code).where(Doctor.is_deleted == False)
+        if hospital_id is not None:
+            d_stmt = d_stmt.where(Doctor.hospital_id == hospital_id)
+        d_res = (await self.db.execute(d_stmt.limit(1))).first()
+        if d_res:
+            sample_doctor = f"Dr. {d_res[0]} {d_res[1]} [{d_res[2]}]"
+
+        # Fetch sample lab test from this tenant
+        sample_test = "Complete Blood Count [CBC]"
+        lt_stmt = select(LabTest.test_name, LabTest.test_code).where(LabTest.is_deleted == False, LabTest.is_active == True)
+        if hospital_id is not None:
+            lt_stmt = lt_stmt.where(LabTest.hospital_id == hospital_id)
+        lt_res = (await self.db.execute(lt_stmt.limit(1))).first()
+        if lt_res:
+            sample_test = f"{lt_res[0]} [{lt_res[1]}]"
+
+        # Fetch sample appointment from this tenant
+        sample_appt = ""
+        a_stmt = select(Appointment.appointment_number)
+        if hospital_id is not None:
+            a_stmt = a_stmt.where(Appointment.hospital_id == hospital_id)
+        a_res = (await self.db.execute(a_stmt.limit(1))).first()
+        if a_res:
+            sample_appt = a_res[0]
+
         # One valid sample row
         ws.append([
-            "John Doe",
-            "Dr. Sarah Connor",
-            "Complete Blood Count [CBC]",
-            "APT-202608210001",
+            sample_patient,
+            sample_doctor,
+            sample_test,
+            sample_appt,
             "normal",
             "Routine blood sugar test"
         ])
-        
+
+        column_widths = {
+            1: 30,  # Patient Name
+            2: 30,  # Doctor Name
+            3: 35,  # Lab Test Name
+            4: 25,  # Appointment Number
+            5: 15,  # priority
+            6: 30   # notes
+        }
+        for col_idx, width in column_widths.items():
+            col_letter = get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = width
+
+        # Worksheet 2: Available Lab Tests for reference
+        ref_tests_stmt = select(LabTest.test_name, LabTest.test_code, LabTest.category, LabTest.price).where(
+            LabTest.is_deleted == False,
+            LabTest.is_active == True
+        )
+        if hospital_id is not None:
+            ref_tests_stmt = ref_tests_stmt.where(LabTest.hospital_id == hospital_id)
+        ref_tests = (await self.db.execute(ref_tests_stmt.order_by(LabTest.test_name))).all()
+
+        if ref_tests:
+            ws_ref = wb.create_sheet(title="Reference - Available Tests")
+            ref_headers = ["Test Name", "Test Code", "Category", "Price", "Format for Upload"]
+            ws_ref.append(ref_headers)
+            ws_ref.row_dimensions[1].height = 28
+            for col_idx in range(1, len(ref_headers) + 1):
+                cell = ws_ref.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = header_border
+
+            for t in ref_tests:
+                ws_ref.append([
+                    t[0],
+                    t[1],
+                    t[2] or "",
+                    float(t[3]) if t[3] is not None else 0.0,
+                    f"{t[0]} [{t[1]}]"
+                ])
+            ref_col_widths = {1: 30, 2: 18, 3: 20, 4: 15, 5: 35}
+            for col_idx, width in ref_col_widths.items():
+                col_letter = get_column_letter(col_idx)
+                ws_ref.column_dimensions[col_letter].width = width
+
+        wb.active = 0
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
         return stream
 
-    async def import_orders_from_excel(self, file, user_id: int) -> dict:
+    async def import_orders_from_excel(self, file, user_id: int, current_user = None) -> dict:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
-        
+        from app.core.dependencies import resolve_tenant_id
+        from app.models.user_model import User
+
+        hospital_id = resolve_tenant_id(current_user)
+        actor_for_order = current_user
+        if hospital_id is None and user_id:
+            actor = await self.db.get(User, user_id)
+            if actor:
+                hospital_id = resolve_tenant_id(actor)
+                if actor_for_order is None:
+                    actor_for_order = actor
+
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
         ws = wb.active
-        
+
         header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
         if not header_row:
             raise BadRequestException("The uploaded file is empty or has no headers.")
-            
+
         headers = [str(h).strip().lower() for h in header_row if h is not None]
         required_headers = {"patient name", "lab test name"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
-            
+
         total_rows = 0
         created = 0
         failed = 0
         errors = []
-        
+
         seen_keys = set()
-        
+
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if all(cell is None for cell in row):
                 continue
-                
+
             total_rows += 1
             row_dict = {}
             for header, val in zip(headers, row):
@@ -2107,10 +2229,10 @@ class LabService:
                     row_dict[header] = None
                 else:
                     row_dict[header] = val
-                    
+
             try:
                 import re
-                
+
                 # Helper function to normalize Excel numeric IDs safely
                 def normalize_id(val, field_name):
                     if val is None:
@@ -2147,6 +2269,8 @@ class LabService:
                 patient_id = None
                 if patient_code:
                     p_stmt = select(Patient.id).where(Patient.patient_code == patient_code, Patient.is_deleted == False)
+                    if hospital_id is not None:
+                        p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
                     p_res = await self.db.execute(p_stmt)
                     patient_id = p_res.scalar_one_or_none()
                     if patient_id is None:
@@ -2156,6 +2280,8 @@ class LabService:
                         func.lower(func.concat(Patient.first_name, " ", Patient.last_name)) == p_name.lower(),
                         Patient.is_deleted == False
                     )
+                    if hospital_id is not None:
+                        p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
                     p_res = await self.db.execute(p_stmt)
                     p_ids = p_res.scalars().all()
                     if not p_ids:
@@ -2164,19 +2290,41 @@ class LabService:
                         raise BadRequestException(f"Multiple active patients found with name '{p_name}'. Please specify patient code.")
                     patient_id = p_ids[0]
 
-                lab_test_code = extract_code(row_dict.get("lab test name"), "Lab Test Name", "Test Name [test_code]", required=True)
+                raw_lt = row_dict.get("lab test name")
+                _, lab_test_code = parse_name_and_code(raw_lt, "Lab Test Name", required=True)
                 from app.models.lab_model import LabTest
-                lt_stmt = select(LabTest.id).where(LabTest.test_code == lab_test_code, LabTest.is_deleted == False)
-                lt_res = await self.db.execute(lt_stmt)
-                lab_test_id = lt_res.scalar_one_or_none()
-                if lab_test_id is None:
-                    raise BadRequestException(f"Lab Test with code {lab_test_code} not found")
+                lab_test_id = None
+                if lab_test_code:
+                    lt_stmt = select(LabTest.id).where(LabTest.test_code == lab_test_code, LabTest.is_deleted == False)
+                    if hospital_id is not None:
+                        lt_stmt = lt_stmt.where(LabTest.hospital_id == hospital_id)
+                    lt_res = await self.db.execute(lt_stmt)
+                    lab_test_id = lt_res.scalar_one_or_none()
+                    if lab_test_id is None:
+                        raise BadRequestException(f"Lab Test with code {lab_test_code} not found")
+                else:
+                    raw_lt_str = str(raw_lt).strip()
+                    lt_stmt = select(LabTest.id).where(
+                        (func.lower(LabTest.test_name) == raw_lt_str.lower()) | (func.lower(LabTest.test_code) == raw_lt_str.lower()),
+                        LabTest.is_deleted == False
+                    )
+                    if hospital_id is not None:
+                        lt_stmt = lt_stmt.where(LabTest.hospital_id == hospital_id)
+                    lt_res = await self.db.execute(lt_stmt)
+                    lt_ids = lt_res.scalars().all()
+                    if not lt_ids:
+                        raise BadRequestException(f"Lab Test with name '{raw_lt_str}' not found")
+                    if len(lt_ids) > 1:
+                        raise BadRequestException(f"Multiple lab tests found with name '{raw_lt_str}'. Please specify test code.")
+                    lab_test_id = lt_ids[0]
 
                 d_name, doctor_code = parse_name_and_code(row_dict.get("doctor name"), "Doctor Name", required=False)
                 doctor_id = None
                 if doctor_code:
                     from app.models.doctor_model import Doctor
                     d_stmt = select(Doctor.id).where(Doctor.doctor_code == doctor_code, Doctor.is_deleted == False)
+                    if hospital_id is not None:
+                        d_stmt = d_stmt.where(Doctor.hospital_id == hospital_id)
                     d_res = await self.db.execute(d_stmt)
                     doctor_id = d_res.scalar_one_or_none()
                     if doctor_id is None:
@@ -2193,6 +2341,8 @@ class LabService:
                         func.lower(func.concat(Doctor.first_name, " ", Doctor.last_name)) == clean_d_name.lower(),
                         Doctor.is_deleted == False
                     )
+                    if hospital_id is not None:
+                        d_stmt = d_stmt.where(Doctor.hospital_id == hospital_id)
                     d_res = await self.db.execute(d_stmt)
                     d_ids = d_res.scalars().all()
                     if not d_ids:
@@ -2207,16 +2357,18 @@ class LabService:
                     appt_num = str(appt_num_raw).strip()
                     from app.models.appointment_model import Appointment
                     a_stmt = select(Appointment.id).where(Appointment.appointment_number == appt_num)
+                    if hospital_id is not None:
+                        a_stmt = a_stmt.where(Appointment.hospital_id == hospital_id)
                     a_res = await self.db.execute(a_stmt)
                     appointment_id = a_res.scalar_one_or_none()
                     if appointment_id is None:
                         raise BadRequestException(f"Appointment with number {appt_num} not found")
-                
+
                 priority = "normal"
                 priority_raw = row_dict.get("priority")
                 if priority_raw is not None:
                     priority = str(priority_raw).strip()
-                    
+
                 notes = None
                 notes_raw = row_dict.get("notes")
                 if notes_raw is not None:
@@ -2237,10 +2389,10 @@ class LabService:
                     priority=priority,
                     notes=notes
                 )
-                
-                await self.create_order(order_create, user_id)
+
+                await self.create_order(order_create, user_id, current_user=actor_for_order)
                 created += 1
-                
+
             except ValidationError as e:
                 failed += 1
                 err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
@@ -2272,7 +2424,7 @@ class LabService:
                     "row": row_idx,
                     "error": str(e)
                 })
-                
+
         await self.db.flush()
         return {
             "total_rows": total_rows,
@@ -2292,7 +2444,10 @@ class LabService:
         from io import BytesIO
         from datetime import datetime, date
         from sqlalchemy import select
-        
+        from app.core.dependencies import resolve_tenant_id
+
+        hospital_id = resolve_tenant_id(current_user)
+
         patient_ids = patient_id
         resolved_doctor_id = doctor_id
         department_id = None
@@ -2303,9 +2458,10 @@ class LabService:
                 pass
             elif role_name == "patient":
                 from app.models.patient_model import Patient
-                result = await self.db.execute(
-                    select(Patient).where(Patient.user_id == current_user.id, Patient.is_deleted == False)
-                )
+                stmt = select(Patient).where(Patient.user_id == current_user.id, Patient.is_deleted == False)
+                if hospital_id is not None:
+                    stmt = stmt.where(Patient.hospital_id == hospital_id)
+                result = await self.db.execute(stmt)
                 patient = result.scalar_one_or_none()
                 if patient:
                     patient_ids = patient.id
@@ -2313,11 +2469,14 @@ class LabService:
                 pass
             elif role_name == "nurse":
                 from app.models.nurse_model import Nurse, NursePatientAssignment
-                res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+                nurse_stmt = select(Nurse).where(Nurse.user_id == current_user.id)
+                if hospital_id is not None:
+                    nurse_stmt = nurse_stmt.where(Nurse.hospital_id == hospital_id)
+                res = await self.db.execute(nurse_stmt)
                 nurse = res.scalar_one_or_none()
                 if not nurse:
                     return b"", "application/pdf"
-                
+
                 # Fetch active assigned patient IDs
                 assignment_res = await self.db.execute(
                     select(NursePatientAssignment.patient_id)
@@ -2329,7 +2488,7 @@ class LabService:
                 assigned_patient_ids = [row[0] for row in assignment_res.all()]
                 if not assigned_patient_ids:
                     return b"", "application/pdf"
-                
+
                 if patient_id is not None:
                     if patient_id not in assigned_patient_ids:
                         return b"", "application/pdf"
@@ -2337,17 +2496,20 @@ class LabService:
                 else:
                     patient_ids = assigned_patient_ids
 
-        # Fetch active test orders
+        # Fetch active test orders scoped by hospital_id
         orders = await self.order_repo.get_all_active(
             status=status,
             patient_id=patient_ids,
             doctor_id=resolved_doctor_id,
-            department_id=department_id
+            department_id=department_id,
+            hospital_id=hospital_id,
         )
 
         # Map patient details
         from app.models.patient_model import Patient
         p_stmt = select(Patient.id, Patient.first_name, Patient.last_name, Patient.patient_code).where(Patient.is_deleted == False)
+        if hospital_id is not None:
+            p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
         p_res = await self.db.execute(p_stmt)
         patient_data = p_res.all()
         patients_map = {row[0]: f"{row[1]} {row[2]}" for row in patient_data}
@@ -2356,6 +2518,8 @@ class LabService:
         # Map doctor details
         from app.models.doctor_model import Doctor
         d_stmt = select(Doctor.id, Doctor.first_name, Doctor.last_name, Doctor.doctor_code).where(Doctor.is_deleted == False)
+        if hospital_id is not None:
+            d_stmt = d_stmt.where(Doctor.hospital_id == hospital_id)
         d_res = await self.db.execute(d_stmt)
         doctor_data = d_res.all()
         doctors_map = {row[0]: f"Dr. {row[1]} {row[2]}" for row in doctor_data}
@@ -2364,6 +2528,8 @@ class LabService:
         # Map appointment numbers
         from app.models.appointment_model import Appointment
         a_stmt = select(Appointment.id, Appointment.appointment_number)
+        if hospital_id is not None:
+            a_stmt = a_stmt.where(Appointment.hospital_id == hospital_id)
         a_res = await self.db.execute(a_stmt)
         appointments_map = {row[0]: row[1] for row in a_res.all()}
 

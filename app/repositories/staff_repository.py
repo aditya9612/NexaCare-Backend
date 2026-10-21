@@ -26,19 +26,19 @@ class StaffRepository:
         await self.db.refresh(staff)
         return staff
 
-    async def get_by_id(self, staff_id: int) -> Staff | None:
-        result = await self.db.execute(self._base_query().where(Staff.id == staff_id))
+    async def get_by_id(self, staff_id: int, hospital_id: int | None = None) -> Staff | None:
+        result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(Staff.id == staff_id))
         return result.scalar_one_or_none()
 
-    async def get_by_email(self, email: str) -> Staff | None:
+    async def get_by_email(self, email: str, hospital_id: int | None = None) -> Staff | None:
         result = await self.db.execute(
-            self._base_query().where(func.lower(Staff.email) == email.lower())
+            self._base_query(hospital_id=hospital_id).where(func.lower(Staff.email) == email.lower())
         )
         return result.scalar_one_or_none()
 
-    async def get_by_staff_code(self, staff_code: str) -> Staff | None:
+    async def get_by_staff_code(self, staff_code: str, hospital_id: int | None = None) -> Staff | None:
         result = await self.db.execute(
-            self._base_query().where(func.lower(Staff.staff_code) == staff_code.lower())
+            self._base_query(hospital_id=hospital_id).where(func.lower(Staff.staff_code) == staff_code.lower())
         )
         return result.scalar_one_or_none()
 
@@ -127,17 +127,18 @@ class StaffRepository:
         result = await self.db.execute(query)
         return {row[0].strip().lower(): row[1] for row in result.all() if row[0]}
 
-    async def get_dashboard_stats(self) -> dict:
-        total = await self.db.scalar(
-            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
-        ) or 0
-        active = await self.db.scalar(
-            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 1)
-        ) or 0
-        inactive = await self.db.scalar(
-            select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 0)
-        ) or 0
-        role_counts = await self.get_role_counts()
+    async def get_dashboard_stats(self, hospital_id: int | None = None) -> dict:
+        total_q = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False))
+        active_q = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 1)
+        inactive_q = select(func.count()).select_from(Staff).where(Staff.is_deleted.is_(False), Staff.status == 0)
+        if hospital_id is not None:
+            total_q = total_q.where(Staff.hospital_id == hospital_id)
+            active_q = active_q.where(Staff.hospital_id == hospital_id)
+            inactive_q = inactive_q.where(Staff.hospital_id == hospital_id)
+        total = await self.db.scalar(total_q) or 0
+        active = await self.db.scalar(active_q) or 0
+        inactive = await self.db.scalar(inactive_q) or 0
+        role_counts = await self.get_role_counts(hospital_id=hospital_id)
         return {
             "total_staff": total,
             "active_staff": active,

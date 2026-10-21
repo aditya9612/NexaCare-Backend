@@ -225,7 +225,7 @@ class TestOrderRepository:
         return result.scalar_one_or_none()
 
     async def get_active_order_by_patient_and_test(
-        self, patient_id: int, lab_test_id: int
+        self, patient_id: int, lab_test_id: int, hospital_id: int | None = None
     ) -> TestOrder | None:
         active_statuses = [
             LabOrderStatus.ORDERED,
@@ -233,7 +233,7 @@ class TestOrderRepository:
             LabOrderStatus.IN_PROGRESS,
         ]
         query = (
-            self._base_query()
+            self._base_query(hospital_id=hospital_id)
             .where(
                 TestOrder.patient_id == patient_id,
                 TestOrder.lab_test_id == lab_test_id,
@@ -261,9 +261,14 @@ class TestOrderRepository:
         await self.db.flush()
 
     async def get_all_active(
-        self, status: str | None = None, patient_id: int | list[int] | None = None, doctor_id: int | None = None, department_id: int | None = None
+        self,
+        status: str | None = None,
+        patient_id: int | list[int] | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        hospital_id: int | None = None,
     ) -> list[TestOrder]:
-        query = self._base_query()
+        query = self._base_query(hospital_id=hospital_id)
         if status:
             query = query.where(TestOrder.status == status)
         if patient_id is not None:

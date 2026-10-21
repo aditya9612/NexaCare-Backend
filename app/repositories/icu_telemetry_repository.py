@@ -12,12 +12,16 @@ class IcuDeviceRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, device_id: int) -> Optional[IcuDevice]:
-        result = await self.db.execute(
+    async def get_by_id(self, device_id: int, hospital_id: Optional[int] = None) -> Optional[IcuDevice]:
+        query = (
             select(IcuDevice)
             .where(IcuDevice.id == device_id)
             .options(selectinload(IcuDevice.bed))
         )
+        if hospital_id is not None:
+            from app.models.bed_allocation_model import Bed
+            query = query.join(Bed, IcuDevice.bed_id == Bed.id).where(Bed.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_api_key_hash(self, api_key_hash: str) -> Optional[IcuDevice]:
@@ -34,12 +38,16 @@ class IcuDeviceRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_all(self) -> list[IcuDevice]:
-        result = await self.db.execute(
+    async def list_all(self, hospital_id: Optional[int] = None) -> list[IcuDevice]:
+        query = (
             select(IcuDevice)
             .options(selectinload(IcuDevice.bed))
             .order_by(IcuDevice.created_at.desc())
         )
+        if hospital_id is not None:
+            from app.models.bed_allocation_model import Bed
+            query = query.join(Bed, IcuDevice.bed_id == Bed.id).where(Bed.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def create(self, device: IcuDevice) -> IcuDevice:
@@ -222,8 +230,8 @@ class IcuTelemetryAlertRepository:
         await self.db.refresh(alert)
         return alert
 
-    async def get_by_id(self, alert_id: int) -> Optional[IcuTelemetryAlert]:
-        result = await self.db.execute(
+    async def get_by_id(self, alert_id: int, hospital_id: Optional[int] = None) -> Optional[IcuTelemetryAlert]:
+        query = (
             select(IcuTelemetryAlert)
             .where(IcuTelemetryAlert.id == alert_id)
             .options(
@@ -231,6 +239,10 @@ class IcuTelemetryAlertRepository:
                 selectinload(IcuTelemetryAlert.patient),
             )
         )
+        if hospital_id is not None:
+            from app.models.bed_allocation_model import Bed
+            query = query.join(Bed, IcuTelemetryAlert.bed_id == Bed.id).where(Bed.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_active_for_bed_and_vital(
@@ -245,8 +257,8 @@ class IcuTelemetryAlertRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_active(self, skip: int = 0, limit: int = 50) -> list[IcuTelemetryAlert]:
-        result = await self.db.execute(
+    async def list_active(self, skip: int = 0, limit: int = 50, hospital_id: Optional[int] = None) -> list[IcuTelemetryAlert]:
+        query = (
             select(IcuTelemetryAlert)
             .where(IcuTelemetryAlert.status == "active")
             .options(
@@ -254,9 +266,12 @@ class IcuTelemetryAlertRepository:
                 selectinload(IcuTelemetryAlert.patient),
             )
             .order_by(IcuTelemetryAlert.created_at.desc())
-            .offset(skip)
-            .limit(limit)
         )
+        if hospital_id is not None:
+            from app.models.bed_allocation_model import Bed
+            query = query.join(Bed, IcuTelemetryAlert.bed_id == Bed.id).where(Bed.hospital_id == hospital_id)
+        query = query.offset(skip).limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def count_active_for_beds(self, bed_ids: list[int]) -> dict[int, int]:
@@ -272,11 +287,9 @@ class IcuTelemetryAlertRepository:
         )
         return {bed_id: count for bed_id, count in result.all()}
 
-    async def count_active(self) -> int:
-        return (
-            await self.db.scalar(
-                select(func.count())
-                .select_from(IcuTelemetryAlert)
-                .where(IcuTelemetryAlert.status == "active")
-            )
-        ) or 0
+    async def count_active(self, hospital_id: Optional[int] = None) -> int:
+        query = select(func.count()).select_from(IcuTelemetryAlert).where(IcuTelemetryAlert.status == "active")
+        if hospital_id is not None:
+            from app.models.bed_allocation_model import Bed
+            query = query.join(Bed, IcuTelemetryAlert.bed_id == Bed.id).where(Bed.hospital_id == hospital_id)
+        return (await self.db.scalar(query)) or 0

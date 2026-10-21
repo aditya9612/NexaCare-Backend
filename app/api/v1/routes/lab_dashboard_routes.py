@@ -1,9 +1,9 @@
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from sqlalchemy import select
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.models.staff_model import Staff
 from app.core.exceptions import BadRequestException
@@ -41,13 +41,16 @@ def _validate_section_param(section: Optional[str]) -> str:
 async def _get_technician_department_id(db: DbSession, current_user: User) -> Optional[int]:
     role_name = current_user.role.name.lower() if current_user and current_user.role else ""
     if role_name in ["lab technician", "lab_technician"]:
-        staff_result = await db.execute(
-            select(Staff).where(Staff.email == current_user.email)
+        query = select(Staff).where(
+            Staff.email == current_user.email,
+            Staff.is_deleted.is_(False)
         )
-        staff = staff_result.scalar_one_or_none()
-        if not staff or not staff.department_id:
-            raise BadRequestException("Lab technician department is not assigned")
-        return staff.department_id
+        if current_user.hospital_id:
+            query = query.where(Staff.hospital_id == current_user.hospital_id)
+        staff_result = await db.execute(query)
+        staff = staff_result.scalars().first()
+        if staff and staff.department_id:
+            return staff.department_id
     return None
 
 @router.get("", response_model=APIResponse[LabDashboardResponse])
@@ -57,16 +60,19 @@ async def get_lab_dashboard(
     time_filter: str = Query("overall", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     _validate_filter_params(time_filter, start_date, end_date)
     
     dept_id = await _get_technician_department_id(db, current_user)
+    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
     dashboard_data = await LabDashboardService(db).get_dashboard_data(
         time_filter=time_filter,
         start_date=start_date,
         end_date=end_date,
-        department_id=dept_id
+        department_id=dept_id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Lab dashboard data retrieved", data=dashboard_data)
 
@@ -78,16 +84,19 @@ async def get_lab_analytics_dashboard(
     time_filter: str = Query("7_days", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     _validate_filter_params(time_filter, start_date, end_date)
 
     dept_id = await _get_technician_department_id(db, current_user)
+    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
     analytics_data = await LabDashboardService(db).get_analytics_data(
         time_filter=time_filter,
         start_date=start_date,
         end_date=end_date,
-        department_id=dept_id
+        department_id=dept_id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Lab analytics data retrieved", data=analytics_data)
 
@@ -100,18 +109,21 @@ async def download_lab_dashboard_pdf(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     section: Optional[str] = Query("all"),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     _validate_filter_params(time_filter, start_date, end_date)
     validated_section = _validate_section_param(section)
     
     dept_id = await _get_technician_department_id(db, current_user)
+    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
     service = LabDashboardService(db)
     dashboard_data = await service.get_dashboard_data(
         time_filter=time_filter,
         start_date=start_date,
         end_date=end_date,
-        department_id=dept_id
+        department_id=dept_id,
+        hospital_id=hospital_id,
     )
     
     # Calculate date range string for PDF header
@@ -120,12 +132,35 @@ async def download_lab_dashboard_pdf(
         date_range_str = f"{start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}"
     else:
         date_range_str = "All Time (Overall)"
-        
+
+    hospital_name = None
+    hospital_address = None
+    hospital_phone = None
+    hospital_email = None
+    hospital_logo = None
+    if hospital_id:
+        from app.repositories.hospital_repository import HospitalRepository
+        import os
+        hospital = await HospitalRepository(db).get_by_id(hospital_id)
+        if hospital:
+            hospital_name = hospital.name
+            hospital_address = hospital.address
+            hospital_phone = hospital.phone
+            hospital_email = hospital.email
+            logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+            if logo_attr and os.path.exists(str(logo_attr)):
+                hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
+
     pdf_bytes = await generate_lab_dashboard_pdf(
         data=dashboard_data,
         filter_applied=time_filter,
         date_range=date_range_str,
         section=validated_section,
+        hospital_name=hospital_name,
+        hospital_address=hospital_address,
+        hospital_phone=hospital_phone,
+        hospital_email=hospital_email,
+        hospital_logo=hospital_logo,
     )
     
     filename = (

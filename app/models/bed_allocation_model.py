@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Integer, String, Text, ForeignKey, DateTime
+from sqlalchemy import Integer, String, Text, ForeignKey, DateTime, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -9,12 +9,15 @@ from app.models.patient_model import Patient
 
 class Floor(Base, TimestampMixin):
     __tablename__ = "floors"
+    __table_args__ = (
+        UniqueConstraint("hospital_id", "number", name="uq_floors_hospital_id_number"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     hospital_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    number: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    number: Mapped[int] = mapped_column(Integer, index=True)
     name: Mapped[str] = mapped_column(String(100))
     type: Mapped[str] = mapped_column(String(50))  # General, ICU, Emergency, Deluxe
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

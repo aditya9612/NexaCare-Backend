@@ -221,6 +221,7 @@ class VendorUpdate(BaseModel):
 
 class VendorResponse(BaseSchema):
     id: int
+    hospital_id: Optional[int] = None
     name: str
     vendor_type: str
     contact_person: Optional[str] = None

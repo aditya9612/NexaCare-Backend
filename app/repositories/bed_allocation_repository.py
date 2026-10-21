@@ -12,15 +12,12 @@ class BedAllocationRepository:
         self.db = db
 
     # Floor Operations
-    async def get_floor_by_id(self, floor_id: int, load_nested: bool = True) -> Optional[Floor]:
+    async def get_floor_by_id(self, floor_id: int, hospital_id: Optional[int] = None, load_nested: bool = True) -> Optional[Floor]:
+        query = select(Floor).where(Floor.id == floor_id)
+        if hospital_id is not None:
+            query = query.where(Floor.hospital_id == hospital_id)
         if load_nested:
-            query = (
-                select(Floor)
-                .where(Floor.id == floor_id)
-                .options(selectinload(Floor.rooms).selectinload(Room.beds).selectinload(Bed.patient))
-            )
-        else:
-            query = select(Floor).where(Floor.id == floor_id)
+            query = query.options(selectinload(Floor.rooms).selectinload(Room.beds).selectinload(Bed.patient))
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -66,23 +63,22 @@ class BedAllocationRepository:
         await self.db.flush()
 
     # Room Operations
-    async def get_room_by_id(self, room_id: int, load_nested: bool = True) -> Optional[Room]:
+    async def get_room_by_id(self, room_id: int, hospital_id: Optional[int] = None, load_nested: bool = True) -> Optional[Room]:
+        query = select(Room).where(Room.id == room_id)
+        if hospital_id is not None:
+            query = query.where(Room.hospital_id == hospital_id)
         if load_nested:
-            query = (
-                select(Room)
-                .where(Room.id == room_id)
-                .options(
-                    selectinload(Room.beds).selectinload(Bed.patient),
-                    selectinload(Room.floor)
-                )
+            query = query.options(
+                selectinload(Room.beds).selectinload(Bed.patient),
+                selectinload(Room.floor)
             )
-        else:
-            query = select(Room).where(Room.id == room_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def get_room_by_number(self, floor_id: int, number: int) -> Optional[Room]:
+    async def get_room_by_number(self, floor_id: int, number: int, hospital_id: Optional[int] = None) -> Optional[Room]:
         query = select(Room).where(Room.floor_id == floor_id, Room.number == number)
+        if hospital_id is not None:
+            query = query.where(Room.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -97,23 +93,22 @@ class BedAllocationRepository:
         await self.db.flush()
 
     # Bed Operations
-    async def get_bed_by_id(self, bed_id: int, load_patient: bool = True) -> Optional[Bed]:
+    async def get_bed_by_id(self, bed_id: int, hospital_id: Optional[int] = None, load_patient: bool = True) -> Optional[Bed]:
+        query = select(Bed).where(Bed.id == bed_id)
+        if hospital_id is not None:
+            query = query.where(Bed.hospital_id == hospital_id)
         if load_patient:
-            query = (
-                select(Bed)
-                .where(Bed.id == bed_id)
-                .options(
-                    selectinload(Bed.patient),
-                    selectinload(Bed.room).selectinload(Room.floor)
-                )
+            query = query.options(
+                selectinload(Bed.patient),
+                selectinload(Bed.room).selectinload(Room.floor)
             )
-        else:
-            query = select(Bed).where(Bed.id == bed_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def get_bed_by_name(self, room_id: int, name: str) -> Optional[Bed]:
+    async def get_bed_by_name(self, room_id: int, name: str, hospital_id: Optional[int] = None) -> Optional[Bed]:
         query = select(Bed).where(Bed.room_id == room_id, Bed.name == name)
+        if hospital_id is not None:
+            query = query.where(Bed.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -147,13 +142,15 @@ class BedAllocationRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def list_icu_beds(self) -> List[Bed]:
+    async def list_icu_beds(self, hospital_id: Optional[int] = None) -> List[Bed]:
         query = (
             select(Bed)
             .where(func.lower(Bed.type) == "icu")
             .options(selectinload(Bed.patient), selectinload(Bed.room))
             .order_by(Bed.id.asc())
         )
+        if hospital_id is not None:
+            query = query.where(Bed.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -168,8 +165,10 @@ class BedAllocationRepository:
         await self.db.flush()
 
     # Patient Operations
-    async def get_patient_by_id(self, patient_id: int) -> Optional[Patient]:
+    async def get_patient_by_id(self, patient_id: int, hospital_id: Optional[int] = None) -> Optional[Patient]:
         query = select(Patient).where(Patient.id == patient_id, Patient.is_deleted.is_(False))
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 

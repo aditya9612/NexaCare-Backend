@@ -1,11 +1,11 @@
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import UserRole
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.core.security import get_password_hash
 from app.models.doctor_model import Doctor, DoctorSchedule
 from app.models.user_model import User
@@ -139,10 +139,10 @@ class DoctorService:
             raise ConflictException("The specified user_id does not exist") from exc
         raise ConflictException("Doctor could not be saved due to a database conflict") from exc
 
-    async def _validate_department(self, department_id: int | None) -> None:
-        """Raise 404 if department_id is given but doesn't exist."""
+    async def _validate_department(self, department_id: int | None, hospital_id: int | None = None) -> None:
+        """Raise 404 if department_id is given but doesn't exist for this tenant."""
         if department_id is not None:
-            dept = await self.dept_repo.get_by_id(department_id)
+            dept = await self.dept_repo.get_by_id(department_id, hospital_id=hospital_id)
             if not dept:
                 raise NotFoundException(f"Department with ID {department_id} not found")
 
@@ -281,6 +281,8 @@ class DoctorService:
 
         # Resolve hospital_id from user if not explicitly passed
         actor_user = await self.auth_repo.get_by_id(user_id) if user_id else None
+        if actor_user and actor_user.role and actor_user.role.name == UserRole.PATIENT:
+            raise ForbiddenException("Patients cannot create doctors")
         target_user = await self.auth_repo.get_by_id(data.user_id) if data.user_id else None
         hospital_id = (target_user.hospital_id if target_user and target_user.hospital_id else None) or (actor_user.hospital_id if actor_user else None)
         dump["hospital_id"] = hospital_id
@@ -298,7 +300,15 @@ class DoctorService:
         data: DoctorOnboardCreate,
         actor: User,
         image_file: Optional[UploadFile] = None,
+        hospital_id: Optional[int] = None,
     ) -> DoctorOnboardResponse:
+        role_name = actor.role.name if actor.role else None
+        if role_name == UserRole.PATIENT:
+            raise ForbiddenException("Patients cannot onboard doctors")
+
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+
         email_norm = data.email.strip().lower()
         if await self.auth_repo.get_by_email(email_norm):
             raise ConflictException("Email already registered")
@@ -309,7 +319,7 @@ class DoctorService:
         existing_license = await self.repo.get_by_license(data.license_number)
         if existing_license:
             raise ConflictException("A doctor with this license number already exists")
-        await self._validate_department(data.department_id)
+        await self._validate_department(data.department_id, hospital_id=target_hospital_id)
 
         role = await self.rbac_repo.get_role_by_name(UserRole.DOCTOR)
         if not role:
@@ -325,7 +335,6 @@ class DoctorService:
                 profile_image_path = data.profile_image
 
         full_name = f"{data.first_name} {data.last_name}".strip()
-        hospital_id = actor.hospital_id
 
         user = User(
             user_code=generate_user_code(),
@@ -334,7 +343,7 @@ class DoctorService:
             full_name=full_name,
             phone=data.phone,
             role_id=role.id,
-            hospital_id=hospital_id,
+            hospital_id=target_hospital_id,
             profile_image=profile_image_path,
             gender=data.gender.value if data.gender else None,
             date_of_birth=data.date_of_birth,
@@ -346,7 +355,7 @@ class DoctorService:
             doctor = Doctor(
                 doctor_code=generate_doctor_code(),
                 user_id=user.id,
-                hospital_id=hospital_id,
+                hospital_id=target_hospital_id,
                 first_name=data.first_name,
                 last_name=data.last_name,
                 specialization=data.specialization,
@@ -366,8 +375,8 @@ class DoctorService:
             self._raise_doctor_integrity_error(exc)
 
         user = await self.auth_repo.get_by_id(user.id)
-        await self.audit_repo.create("create", "users", user_id=actor.id, resource_id=str(user.id))
-        await self.audit_repo.create("create", "doctors", user_id=actor.id, resource_id=str(doctor.id))
+        await self.audit_repo.create("create", "users", user_id=actor.id, resource_id=str(user.id), hospital_id=target_hospital_id)
+        await self.audit_repo.create("create", "doctors", user_id=actor.id, resource_id=str(doctor.id), hospital_id=target_hospital_id)
 
         return DoctorOnboardResponse(
             doctor=DoctorResponse.model_validate(doctor),
@@ -658,11 +667,22 @@ class DoctorService:
         await self.audit_repo.create("update", "doctor_schedules", user_id=user_id, resource_id=str(doctor_id))
         return [DoctorScheduleResponse.model_validate(s) for s in created_slots]
 
-    async def generate_doctor_bulk_template(self):
+    async def generate_doctor_bulk_template(self, hospital_id: int | None = None, current_user: Any = None):
         from io import BytesIO
         import openpyxl
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.utils import get_column_letter
+        from app.core.dependencies import resolve_tenant_id
+
+        if hospital_id is None and current_user is not None:
+            hospital_id = resolve_tenant_id(current_user)
+
+        sample_dept_name = "Cardiology"
+        hospital_departments = []
+        if self.db is not None and hospital_id is not None:
+            hospital_departments = await self.dept_repo.list_all(hospital_id=hospital_id, limit=None)
+            if hospital_departments:
+                sample_dept_name = hospital_departments[0].department_name
 
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -684,7 +704,7 @@ class DoctorService:
             "9876502001",
             "ramesh.sharma.bulk@example.com",
             "Doctor@123",
-            "Cardiology",
+            sample_dept_name,
             800,
             "DOC-BULK-001",
             "available",
@@ -724,17 +744,35 @@ class DoctorService:
             col_letter = get_column_letter(col[0].column)
             ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
 
+        if hospital_departments:
+            ws_dept = wb.create_sheet(title="Available Departments")
+            ws_dept.append(["Department Code", "Department Name"])
+            ws_dept.row_dimensions[1].height = 24
+            for cell in ws_dept[1]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.font = Font(name="Calibri", size=11, bold=True)
+                cell.fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+            for dept in hospital_departments:
+                ws_dept.append([dept.department_code or "", dept.department_name])
+            for col in ws_dept.columns:
+                max_len = max(len(str(cell.value or "")) for cell in col)
+                col_letter = get_column_letter(col[0].column)
+                ws_dept.column_dimensions[col_letter].width = max(max_len + 4, 18)
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
         return stream
 
-    async def import_doctors_from_excel(self, file_content: bytes, actor: User) -> dict:
+    async def import_doctors_from_excel(self, file_content: bytes, actor: User, hospital_id: int | None = None) -> dict:
         from io import BytesIO
         import openpyxl
         from datetime import datetime, date
         from pydantic import ValidationError
         from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+        from app.core.dependencies import resolve_tenant_id
+
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
 
         wb = openpyxl.load_workbook(BytesIO(file_content))
         ws = wb.active
@@ -855,9 +893,9 @@ class DoctorService:
                 dept_name = row_dict.pop("department_name", None)
                 dept_id_val = None
                 if dept_name:
-                    dept = await self.dept_repo.get_by_name(dept_name)
+                    dept = await self.dept_repo.get_by_name(dept_name, hospital_id=target_hospital_id)
                     if not dept:
-                        raise BadRequestException(f"Department '{dept_name}' not found.")
+                        raise BadRequestException(f"Department '{dept_name}' not found for this hospital.")
                     dept_id_val = dept.department_id
                 row_dict["department_id"] = dept_id_val
                 
@@ -870,7 +908,7 @@ class DoctorService:
                 onboard_data = DoctorOnboardCreate(**row_dict)
                 
                 async with self.db.begin_nested():
-                    await self.onboard(onboard_data, actor)
+                    await self.onboard(onboard_data, actor, hospital_id=target_hospital_id)
                     
                 created += 1
                 
@@ -914,15 +952,28 @@ class DoctorService:
             "errors": errors
         }
 
-    async def export_doctors(self, format_type: str, department_id: int | None = None, availability_status: str | None = None):
+    async def export_doctors(
+        self,
+        format_type: str,
+        department_id: int | None = None,
+        availability_status: str | None = None,
+        hospital_id: int | None = None,
+        current_user: Any = None,
+    ):
         from io import BytesIO
         from datetime import datetime, date
         from sqlalchemy import select
         from app.models.user_model import User
         from app.models.department_model import Department
+        from app.core.dependencies import resolve_tenant_id
         
+        if hospital_id is None and current_user is not None:
+            hospital_id = resolve_tenant_id(current_user)
+
         from sqlalchemy.orm import joinedload
         query = select(Doctor, User).options(joinedload(Doctor.department)).outerjoin(User, Doctor.user_id == User.id).where(Doctor.is_deleted == False)
+        if hospital_id is not None:
+            query = query.where(Doctor.hospital_id == hospital_id)
         if department_id:
             query = query.where(Doctor.department_id == department_id)
         if availability_status:

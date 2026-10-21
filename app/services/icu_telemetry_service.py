@@ -1,3 +1,5 @@
+from typing import Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -40,8 +42,10 @@ class IcuTelemetryService:
         self.bed_repo = BedAllocationRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def create_device(self, data: IcuDeviceCreate, user_id: int) -> IcuDeviceCreatedResponse:
-        bed = await self.bed_repo.get_bed_by_id(data.bed_id, load_patient=False)
+    async def create_device(
+        self, data: IcuDeviceCreate, user_id: int, hospital_id: Optional[int] = None
+    ) -> IcuDeviceCreatedResponse:
+        bed = await self.bed_repo.get_bed_by_id(data.bed_id, hospital_id=hospital_id, load_patient=False)
         if not bed:
             raise NotFoundException("Bed not found")
 
@@ -81,14 +85,14 @@ class IcuTelemetryService:
             api_key=api_key,
         )
 
-    async def list_devices(self) -> list[IcuDeviceResponse]:
-        devices = await self.device_repo.list_all()
+    async def list_devices(self, hospital_id: Optional[int] = None) -> list[IcuDeviceResponse]:
+        devices = await self.device_repo.list_all(hospital_id=hospital_id)
         return [self._to_device_response(device) for device in devices]
 
     async def update_device(
-        self, device_id: int, data: IcuDeviceUpdate, user_id: int
+        self, device_id: int, data: IcuDeviceUpdate, user_id: int, hospital_id: Optional[int] = None
     ) -> IcuDeviceResponse:
-        device = await self.device_repo.get_by_id(device_id)
+        device = await self.device_repo.get_by_id(device_id, hospital_id=hospital_id)
         if not device:
             raise NotFoundException("Device not found")
 
@@ -97,7 +101,7 @@ class IcuTelemetryService:
             raise BadRequestException("No fields to update")
 
         if "bed_id" in updates:
-            bed = await self.bed_repo.get_bed_by_id(updates["bed_id"], load_patient=False)
+            bed = await self.bed_repo.get_bed_by_id(updates["bed_id"], hospital_id=hospital_id, load_patient=False)
             if not bed:
                 raise NotFoundException("Bed not found")
             if device.is_active:
@@ -125,9 +129,9 @@ class IcuTelemetryService:
         return self._to_device_response(device)
 
     async def set_device_status(
-        self, device_id: int, is_active: bool, user_id: int
+        self, device_id: int, is_active: bool, user_id: int, hospital_id: Optional[int] = None
     ) -> IcuDeviceResponse:
-        device = await self.device_repo.get_by_id(device_id)
+        device = await self.device_repo.get_by_id(device_id, hospital_id=hospital_id)
         if not device:
             raise NotFoundException("Device not found")
         if device.is_active == is_active:
@@ -202,8 +206,8 @@ class IcuTelemetryService:
             alert_ids=[alert.id for alert in alerts],
         )
 
-    async def get_latest_for_bed(self, bed_id: int) -> VitalReadingResponse:
-        bed = await self.bed_repo.get_bed_by_id(bed_id, load_patient=True)
+    async def get_latest_for_bed(self, bed_id: int, hospital_id: Optional[int] = None) -> VitalReadingResponse:
+        bed = await self.bed_repo.get_bed_by_id(bed_id, hospital_id=hospital_id, load_patient=True)
         if not bed:
             raise NotFoundException("Bed not found")
 
@@ -214,7 +218,11 @@ class IcuTelemetryService:
         alert_counts = await self.alert_repo.count_active_for_beds([bed_id])
         return self._to_vital_response(reading, alert_counts.get(bed_id, 0) > 0)
 
-    async def get_latest_for_patient(self, patient_id: int) -> VitalReadingResponse:
+    async def get_latest_for_patient(self, patient_id: int, hospital_id: Optional[int] = None) -> VitalReadingResponse:
+        patient = await self.bed_repo.get_patient_by_id(patient_id, hospital_id=hospital_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+
         reading = await self.reading_repo.get_latest_for_patient(patient_id)
         if not reading:
             raise NotFoundException("No telemetry readings found for this patient")
@@ -222,8 +230,8 @@ class IcuTelemetryService:
         alert_counts = await self.alert_repo.count_active_for_beds([reading.bed_id])
         return self._to_vital_response(reading, alert_counts.get(reading.bed_id, 0) > 0)
 
-    async def get_latest_for_icu_beds(self) -> list[VitalReadingResponse]:
-        beds = await self.bed_repo.list_icu_beds()
+    async def get_latest_for_icu_beds(self, hospital_id: Optional[int] = None) -> list[VitalReadingResponse]:
+        beds = await self.bed_repo.list_icu_beds(hospital_id=hospital_id)
         icu_bed_ids = [bed.id for bed in beds]
         if not icu_bed_ids:
             return []
@@ -243,8 +251,9 @@ class IcuTelemetryService:
         page: int = 1,
         size: int = 50,
         include_ecg: bool = False,
+        hospital_id: Optional[int] = None,
     ) -> PaginatedResult[VitalReadingResponse]:
-        bed = await self.bed_repo.get_bed_by_id(bed_id, load_patient=False)
+        bed = await self.bed_repo.get_bed_by_id(bed_id, hospital_id=hospital_id, load_patient=False)
         if not bed:
             raise NotFoundException("Bed not found")
 
@@ -273,7 +282,12 @@ class IcuTelemetryService:
         page: int = 1,
         size: int = 50,
         include_ecg: bool = False,
+        hospital_id: Optional[int] = None,
     ) -> PaginatedResult[VitalReadingResponse]:
+        patient = await self.bed_repo.get_patient_by_id(patient_id, hospital_id=hospital_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+
         resolved_from, resolved_to = self._resolve_history_window(from_time, to_time)
         skip = (page - 1) * size
         readings = await self.reading_repo.list_history(
@@ -291,13 +305,17 @@ class IcuTelemetryService:
         items = [self._to_vital_response(reading, include_ecg=include_ecg) for reading in readings]
         return build_paginated_result(items, total, page, size)
 
-    async def list_active_alerts(self, page: int = 1, size: int = 50) -> list[TelemetryAlertResponse]:
+    async def list_active_alerts(
+        self, page: int = 1, size: int = 50, hospital_id: Optional[int] = None
+    ) -> list[TelemetryAlertResponse]:
         skip = (page - 1) * size
-        alerts = await self.alert_repo.list_active(skip=skip, limit=size)
+        alerts = await self.alert_repo.list_active(skip=skip, limit=size, hospital_id=hospital_id)
         return [self._to_alert_response(alert) for alert in alerts]
 
-    async def acknowledge_alert(self, alert_id: int, user_id: int) -> TelemetryAlertResponse:
-        alert = await self.alert_repo.get_by_id(alert_id)
+    async def acknowledge_alert(
+        self, alert_id: int, user_id: int, hospital_id: Optional[int] = None
+    ) -> TelemetryAlertResponse:
+        alert = await self.alert_repo.get_by_id(alert_id, hospital_id=hospital_id)
         if not alert:
             raise NotFoundException("Alert not found")
         if alert.status != TelemetryAlertStatus.ACTIVE:

@@ -65,11 +65,10 @@ class ClinicalRecordService:
             resp.doctor_name = f"{record.doctor.first_name} {record.doctor.last_name}"
         return resp
 
-    async def create_record(self, data: ClinicalRecordCreate, user_id: int) -> ClinicalRecordResponse:
+    async def create_record(self, data: ClinicalRecordCreate, user_id: int, current_user: Any | None = None, **kwargs: Any) -> ClinicalRecordResponse:
         await self._validate_related_entities(data.patient_id, data.doctor_id, data.appointment_id)
         record = ClinicalRecord(**data.model_dump())
         record = await self.record_repo.create(record)
-        
 
         await self.audit_repo.create("create", "clinical_records", user_id=user_id, resource_id=str(record.id))
         resp = self._to_response_schema(record)
@@ -102,7 +101,7 @@ class ClinicalRecordService:
 
         return resp
 
-    async def get_record(self, record_id: int, hospital_id: int | None = None, current_user: Any | None = None) -> ClinicalRecordResponse:
+    async def get_record(self, record_id: int, hospital_id: int | None = None, current_user: Any | None = None, **kwargs: Any) -> ClinicalRecordResponse:
         if hospital_id is None and current_user is not None:
             from app.core.dependencies import resolve_tenant_id
             hospital_id = resolve_tenant_id(current_user)
@@ -120,6 +119,7 @@ class ClinicalRecordService:
         appointment_id: int | None = None,
         hospital_id: int | None = None,
         current_user: Any | None = None,
+        **kwargs: Any,
     ):
         if hospital_id is None and current_user is not None:
             from app.core.dependencies import resolve_tenant_id
@@ -137,7 +137,7 @@ class ClinicalRecordService:
             [self._to_response_schema(r) for r in items], total, page, size
         )
 
-    async def update_record(self, record_id: int, data: ClinicalRecordUpdate, user_id: int) -> ClinicalRecordResponse:
+    async def update_record(self, record_id: int, data: ClinicalRecordUpdate, user_id: int, current_user: Any | None = None, **kwargs: Any) -> ClinicalRecordResponse:
         record = await self.record_repo.get_by_id(record_id)
         if not record:
             raise NotFoundException(f"Clinical record with ID {record_id} not found")
@@ -182,7 +182,7 @@ class ClinicalRecordService:
 
         return resp
 
-    async def delete_record(self, record_id: int, user_id: int) -> None:
+    async def delete_record(self, record_id: int, user_id: int, current_user: Any | None = None, **kwargs: Any) -> None:
         record = await self.record_repo.get_by_id(record_id)
         if not record:
             raise NotFoundException(f"Clinical record with ID {record_id} not found")

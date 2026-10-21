@@ -12,6 +12,9 @@ class Notification(Base, TimestampMixin, SoftDeleteMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(255))
     message: Mapped[str] = mapped_column(Text)
     notification_type: Mapped[str] = mapped_column(String(50), index=True)
@@ -21,6 +24,7 @@ class Notification(Base, TimestampMixin, SoftDeleteMixin):
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     user = relationship("User", backref="notifications")
+    hospital = relationship("Hospital", foreign_keys=[hospital_id])
 
 class PushSubscription(Base, TimestampMixin):
     """Stores Web Push subscriptions for users."""

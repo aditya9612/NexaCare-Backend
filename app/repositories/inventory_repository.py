@@ -14,11 +14,20 @@ class InventoryRepository:
         self.db = db
 
     def _base_query(self, hospital_id: int | None = None):
-        query = select(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+        from app.models.department_model import Department
+        query = (
+            select(InventoryItem)
+            .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+            .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+            .where(InventoryItem.is_deleted.is_(False))
+        )
         if hospital_id is not None:
-            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                Warehouse.hospital_id == hospital_id,
-                Warehouse.is_deleted.is_(False),
+            query = query.where(
+                or_(
+                    InventoryItem.hospital_id == hospital_id,
+                    Warehouse.hospital_id == hospital_id,
+                    Department.hospital_id == hospital_id,
+                )
             )
         return query
 
@@ -41,11 +50,21 @@ class InventoryRepository:
         return list(result.scalars().all())
 
     async def count_all(self, category: str | None = None, warehouse_id: int | None = None, hospital_id: int | None = None) -> int:
-        base = select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False))
+        from app.models.department_model import Department
+        base = (
+            select(func.count(func.distinct(InventoryItem.id)))
+            .select_from(InventoryItem)
+            .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+            .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+            .where(InventoryItem.is_deleted.is_(False))
+        )
         if hospital_id is not None:
-            base = base.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                Warehouse.hospital_id == hospital_id,
-                Warehouse.is_deleted.is_(False),
+            base = base.where(
+                or_(
+                    InventoryItem.hospital_id == hospital_id,
+                    Warehouse.hospital_id == hospital_id,
+                    Department.hospital_id == hospital_id,
+                )
             )
         if category:
             base = base.where(InventoryItem.category == category)
@@ -62,28 +81,33 @@ class InventoryRepository:
                 func.lower(InventoryItem.barcode).like(pattern),
             )
         )
-        if hospital_id is not None:
-            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                Warehouse.hospital_id == hospital_id,
-                Warehouse.is_deleted.is_(False),
-            )
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
     async def count_search(self, q: str, hospital_id: int | None = None) -> int:
+        from app.models.department_model import Department
         pattern = f"%{q.lower()}%"
-        query = select(func.count()).select_from(InventoryItem).where(
-            InventoryItem.is_deleted.is_(False),
-            or_(
-                func.lower(InventoryItem.name).like(pattern),
-                func.lower(InventoryItem.sku).like(pattern),
-                func.lower(InventoryItem.barcode).like(pattern),
-            ),
+        query = (
+            select(func.count(func.distinct(InventoryItem.id)))
+            .select_from(InventoryItem)
+            .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+            .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+            .where(
+                InventoryItem.is_deleted.is_(False),
+                or_(
+                    func.lower(InventoryItem.name).like(pattern),
+                    func.lower(InventoryItem.sku).like(pattern),
+                    func.lower(InventoryItem.barcode).like(pattern),
+                ),
+            )
         )
         if hospital_id is not None:
-            query = query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                Warehouse.hospital_id == hospital_id,
-                Warehouse.is_deleted.is_(False),
+            query = query.where(
+                or_(
+                    InventoryItem.hospital_id == hospital_id,
+                    Warehouse.hospital_id == hospital_id,
+                    Department.hospital_id == hospital_id,
+                )
             )
         return (await self.db.scalar(query)) or 0
 
@@ -172,28 +196,38 @@ class InventoryRepository:
         return item
 
     async def get_stock_summary(self, hospital_id: int | None = None) -> dict:
+        from app.models.department_model import Department
+
         def apply_hospital_filter(query):
             if hospital_id is not None:
-                return query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                    Warehouse.hospital_id == hospital_id,
-                    Warehouse.is_deleted.is_(False),
+                return (
+                    query
+                    .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+                    .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+                    .where(
+                        or_(
+                            InventoryItem.hospital_id == hospital_id,
+                            Warehouse.hospital_id == hospital_id,
+                            Department.hospital_id == hospital_id,
+                        )
+                    )
                 )
             return query
 
         total_items = await self.db.scalar(
-            apply_hospital_filter(select(func.count()).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False)))
+            apply_hospital_filter(select(func.count(func.distinct(InventoryItem.id))).select_from(InventoryItem).where(InventoryItem.is_deleted.is_(False)))
         )
         total_qty = await self.db.scalar(
             apply_hospital_filter(select(func.coalesce(func.sum(InventoryItem.quantity), 0)).where(InventoryItem.is_deleted.is_(False)))
         )
         low_stock = await self.db.scalar(
-            apply_hospital_filter(select(func.count()).select_from(InventoryItem).where(
+            apply_hospital_filter(select(func.count(func.distinct(InventoryItem.id))).select_from(InventoryItem).where(
                 InventoryItem.is_deleted.is_(False),
                 InventoryItem.quantity <= InventoryItem.reorder_level,
             ))
         )
         expired = await self.db.scalar(
-            apply_hospital_filter(select(func.count()).select_from(InventoryItem).where(
+            apply_hospital_filter(select(func.count(func.distinct(InventoryItem.id))).select_from(InventoryItem).where(
                 InventoryItem.is_deleted.is_(False),
                 InventoryItem.expiry_date.isnot(None),
                 InventoryItem.expiry_date < date.today(),
@@ -213,6 +247,8 @@ class InventoryRepository:
         }
 
     async def get_inventory_summary(self, hospital_id: int | None = None) -> dict:
+        from app.models.department_model import Department
+
         stock_summary = await self.get_stock_summary(hospital_id=hospital_id)
 
         inward_query = (
@@ -242,13 +278,29 @@ class InventoryRepository:
         )
 
         if hospital_id is not None:
-            inward_query = inward_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                Warehouse.hospital_id == hospital_id,
-                Warehouse.is_deleted.is_(False),
+            inward_query = (
+                inward_query
+                .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+                .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+                .where(
+                    or_(
+                        InventoryItem.hospital_id == hospital_id,
+                        Warehouse.hospital_id == hospital_id,
+                        Department.hospital_id == hospital_id,
+                    )
+                )
             )
-            outward_query = outward_query.join(Warehouse, InventoryItem.warehouse_id == Warehouse.id).where(
-                Warehouse.hospital_id == hospital_id,
-                Warehouse.is_deleted.is_(False),
+            outward_query = (
+                outward_query
+                .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
+                .outerjoin(Department, InventoryItem.department_id == Department.department_id)
+                .where(
+                    or_(
+                        InventoryItem.hospital_id == hospital_id,
+                        Warehouse.hospital_id == hospital_id,
+                        Department.hospital_id == hospital_id,
+                    )
+                )
             )
 
         inward_restocks = (await self.db.scalar(inward_query)) or 0

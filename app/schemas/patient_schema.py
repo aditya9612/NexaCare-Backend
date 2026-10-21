@@ -135,6 +135,7 @@ class PatientCreate(BaseSchema):
     insurance_number: str | None = None
     status: str | None = "active"
     preferred_language: str | None = None
+    hospital_id: int | None = None
 
     @field_validator("first_name")
     @classmethod

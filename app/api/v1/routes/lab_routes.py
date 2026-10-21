@@ -1,8 +1,8 @@
 from enum import Enum
-from fastapi import APIRouter, Depends, File, Form, UploadFile, Query, Response, HTTPException
+from fastapi import APIRouter, Depends, File, Form, Header, UploadFile, Query, Response, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.lab_schema import (
@@ -150,7 +150,7 @@ async def download_orders_bulk_template(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    stream = await LabService(db).generate_orders_bulk_template()
+    stream = await LabService(db).generate_orders_bulk_template(current_user=current_user)
     return StreamingResponse(
         stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -171,7 +171,7 @@ async def upload_orders_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await LabService(db).import_orders_from_excel(file, current_user.id)
+    result = await LabService(db).import_orders_from_excel(file, current_user.id, current_user=current_user)
     return APIResponse(message="Lab test orders bulk upload processed", data=result)
 
 
@@ -690,14 +690,17 @@ async def lab_analytics_alias(
     time_filter: str = "7_days",
     start_date: str | None = None,
     end_date: str | None = None,
+    x_hospital_id: str | int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     from app.services.lab_dashboard_service import LabDashboardService
     from datetime import datetime
     s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
     e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+    parsed_x_hosp_id = int(x_hospital_id) if x_hospital_id and str(x_hospital_id).isdigit() else None
+    hospital_id = await get_tenant_hospital_id(current_user, parsed_x_hosp_id)
     data = await LabDashboardService(db).get_analytics_data(
-        time_filter=time_filter, start_date=s_date, end_date=e_date
+        time_filter=time_filter, start_date=s_date, end_date=e_date, hospital_id=hospital_id
     )
     return APIResponse(message="Lab analytics data retrieved", data=data)
 

@@ -1,9 +1,10 @@
 from datetime import date
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission
 from app.models.user_model import User
 from app.schemas.analytics_schema import (
     AppointmentAnalyticsResponse,
@@ -29,9 +30,13 @@ router = APIRouter()
 async def dashboard(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_dashboard()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_dashboard(hospital_id=hospital_id)
     return APIResponse(message="Dashboard summary retrieved", data=data)
 
 
@@ -41,9 +46,13 @@ async def revenue(
     current_user: CurrentUser,
     start_date: date | None = None,
     end_date: date | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_revenue_analytics(start_date, end_date)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_revenue_analytics(start_date, end_date, hospital_id=hospital_id)
     return APIResponse(message="Revenue analytics retrieved", data=data)
 
 
@@ -53,9 +62,13 @@ async def appointments(
     current_user: CurrentUser,
     start_date: date | None = None,
     end_date: date | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_appointment_analytics(start_date, end_date)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_appointment_analytics(start_date, end_date, hospital_id=hospital_id)
     return APIResponse(message="Appointment analytics retrieved", data=data)
 
 
@@ -63,9 +76,13 @@ async def appointments(
 async def doctors(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_doctor_analytics()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_doctor_analytics(hospital_id=hospital_id)
     return APIResponse(message="Doctor analytics retrieved", data=data)
 
 
@@ -73,9 +90,13 @@ async def doctors(
 async def patients(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_patient_analytics()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_patient_analytics(hospital_id=hospital_id)
     return APIResponse(message="Patient analytics retrieved", data=data)
 
 
@@ -83,9 +104,13 @@ async def patients(
 async def ai_chatbot(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_ai_chatbot_analytics()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_ai_chatbot_analytics(hospital_id=hospital_id)
     return APIResponse(message="AI chatbot analytics retrieved", data=data)
 
 
@@ -93,9 +118,13 @@ async def ai_chatbot(
 async def voice_reminder(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_voice_analytics()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_voice_analytics(hospital_id=hospital_id)
     return APIResponse(message="Voice reminder analytics retrieved", data=data)
 
 
@@ -103,9 +132,13 @@ async def voice_reminder(
 async def whatsapp(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    data = await AnalyticsService(db).get_whatsapp_analytics()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    data = await AnalyticsService(db).get_whatsapp_analytics(hospital_id=hospital_id)
     return APIResponse(message="WhatsApp analytics retrieved", data=data)
 
 
@@ -114,9 +147,13 @@ async def kpi_list(
     db: DbSession,
     current_user: CurrentUser,
     category: str | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    kpis = await AnalyticsService(db).list_kpis(category)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    kpis = await AnalyticsService(db).list_kpis(category, hospital_id=hospital_id)
     return APIResponse(message="KPIs retrieved", data=kpis)
 
 
@@ -127,9 +164,13 @@ async def reports(
     page: int = 1,
     size: int = 20,
     report_type: str | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
-    result = await AnalyticsService(db).list_reports(page, size, report_type)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await AnalyticsService(db).list_reports(page, size, report_type, hospital_id=hospital_id)
     return APIResponse(message="Reports retrieved", data=result)
 
 
@@ -140,6 +181,8 @@ async def export_pdf(
     current_user: CurrentUser,
     start_date: date | None = None,
     end_date: date | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "export")),
 ):
     from app.services.analytics_service import AnalyticsService
@@ -149,11 +192,16 @@ async def export_pdf(
     import json
     import os
 
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+
     filters = {}
     if start_date:
         filters["start_date"] = start_date.isoformat()
     if end_date:
         filters["end_date"] = end_date.isoformat()
+    if hospital_id:
+        filters["hospital_id"] = hospital_id
 
     data = ExportReportRequest(
         report_type=report_type,
@@ -171,7 +219,7 @@ async def export_pdf(
         requested_by=current_user.id,
     )
     export = await service.repo.create_export(export)
-    await service.process_export(export.id)
+    await service.process_export(export.id, hospital_id=hospital_id)
     await db.refresh(export)
 
     def resolve_disk_path(path_str: str | None) -> str | None:
@@ -202,6 +250,8 @@ async def export_excel(
     current_user: CurrentUser,
     start_date: date | None = None,
     end_date: date | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "export")),
 ):
     from app.services.analytics_service import AnalyticsService
@@ -211,11 +261,16 @@ async def export_excel(
     import json
     import os
 
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+
     filters = {}
     if start_date:
         filters["start_date"] = start_date.isoformat()
     if end_date:
         filters["end_date"] = end_date.isoformat()
+    if hospital_id:
+        filters["hospital_id"] = hospital_id
 
     data = ExportReportRequest(
         report_type=report_type,
@@ -233,7 +288,7 @@ async def export_excel(
         requested_by=current_user.id,
     )
     export = await service.repo.create_export(export)
-    await service.process_export(export.id)
+    await service.process_export(export.id, hospital_id=hospital_id)
     await db.refresh(export)
 
     def resolve_disk_path(path_str: str | None) -> str | None:
@@ -277,6 +332,8 @@ async def list_exports(
     size: int = 20,
     report_type: str | None = None,
     export_id: int | None = None,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
     from app.services.analytics_service import AnalyticsService
@@ -284,10 +341,13 @@ async def list_exports(
     from app.schemas.common_schema import APIResponse
     import os
 
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+
     # If export_id is provided, download that file
     if export_id is not None:
         service = AnalyticsService(db)
-        export = await service.repo.get_export(export_id)
+        export = await service.repo.get_export(export_id, hospital_id=hospital_id)
         if not export:
             raise NotFoundException("Export not found")
             
@@ -326,7 +386,7 @@ async def list_exports(
             filename=filename,
         )
 
-    result = await AnalyticsService(db).list_exports(page, size, report_type)
+    result = await AnalyticsService(db).list_exports(page, size, report_type, hospital_id=hospital_id)
     return APIResponse(message="Exports retrieved", data=result)
 
 
@@ -335,14 +395,19 @@ async def download_export(
     export_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("analytics", "read")),
 ):
     from app.services.analytics_service import AnalyticsService
     from app.core.exceptions import NotFoundException
     import os
 
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+
     service = AnalyticsService(db)
-    export = await service.repo.get_export(export_id)
+    export = await service.repo.get_export(export_id, hospital_id=hospital_id)
     if not export:
         raise NotFoundException("Export not found")
         

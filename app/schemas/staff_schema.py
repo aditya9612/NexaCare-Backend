@@ -56,6 +56,7 @@ def validate_staff_role_name(v: str | None) -> str | None:
 
 
 class StaffCreate(BaseSchema):
+    hospital_id: int | None = Field(None, description="Hospital ID (Super Admin override)")
     full_name: str = Field(..., min_length=1, max_length=200)
     email: EmailStr
     phone: str | None = Field(None, max_length=20)
@@ -188,6 +189,7 @@ class StaffStatusUpdate(BaseSchema):
 
 class StaffResponse(BaseSchema):
     id: int
+    hospital_id: int | None = None
     full_name: str
     email: str
     phone: str | None

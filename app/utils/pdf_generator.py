@@ -79,6 +79,15 @@ def html_to_pdf(html_content: str) -> bytes:
     t.join()
 
     if exc:
+        try:
+            import io
+            from xhtml2pdf import pisa
+            result = io.BytesIO()
+            pdf = pisa.pisaDocument(io.StringIO(html_content), result)
+            if not pdf.err:
+                return result.getvalue()
+        except Exception:
+            pass
         raise Exception("PDF generation failed") from exc
     
     return pdf_bytes

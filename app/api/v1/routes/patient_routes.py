@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, File, UploadFile, Query, Form, Request, 
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.constants import UserRole
+from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.patient_schema import (
@@ -218,9 +219,17 @@ class PatientExportFormat(str, Enum):
 async def download_bulk_template(
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("patients", "read")),
 ):
-    stream = await PatientService(db).generate_patient_bulk_template()
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    stream = await PatientService(db).generate_patient_bulk_template(hospital_id=target_hospital_id)
     from fastapi.responses import Response
     return Response(
         content=stream.getvalue(),
@@ -234,6 +243,7 @@ async def upload_patients_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("patients", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -241,8 +251,20 @@ async def upload_patients_bulk(
             status_code=400,
             detail="Unsupported file format. Only .xlsx files are supported."
         )
-        
-    result = await PatientService(db).import_patients_from_excel(file, current_user.id)
+
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    result = await PatientService(db).import_patients_from_excel(
+        file,
+        current_user.id,
+        current_user=current_user,
+        hospital_id=target_hospital_id,
+    )
     return APIResponse(message="Patients bulk upload processed", data=result)
 
 
@@ -252,6 +274,7 @@ async def export_patients(
     current_user: CurrentUser,
     format: PatientExportFormat = Query(PatientExportFormat.EXCEL),
     status: Optional[str] = Query(None),
+    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("patients", "read")),
 ):
     from fastapi.responses import StreamingResponse, Response
@@ -261,9 +284,21 @@ async def export_patients(
             status = validate_status_field(status)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-            
-    data, media_type = await PatientService(db).export_patients(format.value, status, current_user=current_user)
-    
+
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    data, media_type = await PatientService(db).export_patients(
+        format.value,
+        status,
+        current_user=current_user,
+        hospital_id=target_hospital_id,
+    )
+
     if format == PatientExportFormat.EXCEL:
         return StreamingResponse(
             data,
@@ -668,8 +703,9 @@ async def list_patient_clinical_records(
     size: int = Query(20, ge=1, le=100),
     _: User = Depends(require_permission("patients", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     from app.services.clinical_record_service import ClinicalRecordService
     result = await ClinicalRecordService(db).list_records(
-        page=page, size=size, patient_id=patient_id
+        page=page, size=size, patient_id=patient_id, hospital_id=hospital_id, current_user=current_user
     )
     return APIResponse(message="Records fetched successfully", data=result)

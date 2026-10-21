@@ -28,7 +28,7 @@ async def create_staff(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "create")),
 ):
-    staff = await StaffService(db).create_staff(data, current_user.id)
+    staff = await StaffService(db).create_staff(data, current_user.id, current_user=current_user)
     return APIResponse(message="Staff created successfully", data=staff)
 
 
@@ -59,7 +59,7 @@ async def get_dashboard_stats(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "read")),
 ):
-    stats = await StaffService(db).get_dashboard_stats()
+    stats = await StaffService(db).get_dashboard_stats(current_user=current_user)
     return APIResponse(message="Dashboard statistics retrieved", data=stats)
 
 
@@ -70,7 +70,7 @@ async def get_staff_by_department(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "read")),
 ):
-    staff_list = await StaffService(db).get_staff_by_department(department_id)
+    staff_list = await StaffService(db).get_staff_by_department(department_id, current_user=current_user)
     return APIResponse(message="Staff in department retrieved", data=staff_list)
 
 
@@ -81,7 +81,7 @@ async def get_staff_by_id(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "read")),
 ):
-    staff = await StaffService(db).get_staff_by_id(staff_id)
+    staff = await StaffService(db).get_staff_by_id(staff_id, current_user=current_user)
     return APIResponse(message="Staff retrieved successfully", data=staff)
 
 
@@ -93,7 +93,7 @@ async def update_staff(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    staff = await StaffService(db).update_staff(staff_id, data, current_user.id)
+    staff = await StaffService(db).update_staff(staff_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Staff updated successfully", data=staff)
 
 
@@ -105,7 +105,7 @@ async def update_staff_status(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    staff = await StaffService(db).update_staff_status(staff_id, data.status.value, current_user.id)
+    staff = await StaffService(db).update_staff_status(staff_id, data.status.value, current_user.id, current_user=current_user)
     return APIResponse(message="Staff status updated successfully", data=staff)
 
 
@@ -116,7 +116,7 @@ async def delete_staff(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "delete")),
 ):
-    await StaffService(db).delete_staff(staff_id, current_user.id)
+    await StaffService(db).delete_staff(staff_id, current_user.id, current_user=current_user)
     return APIResponse(message="Staff soft deleted successfully", data=MessageResponse(message="Soft deleted"))
 
 
@@ -127,7 +127,7 @@ async def get_staff_schedule(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "read")),
 ):
-    schedule = await StaffService(db).get_schedule(staff_id)
+    schedule = await StaffService(db).get_schedule(staff_id, current_user=current_user)
     return APIResponse(message="Schedule retrieved", data=schedule)
 
 
@@ -139,7 +139,7 @@ async def add_staff_schedule(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    schedule = await StaffService(db).add_schedule(staff_id, data, current_user.id)
+    schedule = await StaffService(db).add_schedule(staff_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Schedule added", data=schedule)
 
 
@@ -150,7 +150,7 @@ async def delete_all_staff_schedules(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "delete")),
 ):
-    await StaffService(db).delete_all_schedules(staff_id, current_user.id)
+    await StaffService(db).delete_all_schedules(staff_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="All schedule slots removed successfully",
         data=MessageResponse(message="All schedule slots removed"),
@@ -165,7 +165,7 @@ async def delete_staff_schedule_slot(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "delete")),
 ):
-    await StaffService(db).delete_schedule_slot(staff_id, slot_id, current_user.id)
+    await StaffService(db).delete_schedule_slot(staff_id, slot_id, current_user.id, current_user=current_user)
     return APIResponse(
         message="Schedule slot removed successfully",
         data=MessageResponse(message="Schedule slot removed"),
@@ -182,5 +182,5 @@ async def update_staff_schedule_slot(
     current_user: CurrentUser,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    schedule = await StaffService(db).update_schedule_slot(staff_id, slot_id, data, current_user.id)
+    schedule = await StaffService(db).update_schedule_slot(staff_id, slot_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Schedule slot updated successfully", data=schedule)

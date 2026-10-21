@@ -68,6 +68,8 @@ from app.models.hospital_voice_model import (
 from app.models.hospital_setting import HospitalSetting
 from app.models.appointment_setting import AppointmentSetting
 from app.models.user_preference import UserPreference
+from app.models.notification_setting import NotificationSetting
+from app.models.user_security_settings import UserSecuritySettings
 from app.models.billing_setting import BillingSetting
 from app.models.knowledge_embedding_model import KnowledgeEmbedding
 from app.models.discharge_model import Discharge

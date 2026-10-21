@@ -2,7 +2,8 @@ from typing import Any
 
 from fastapi import APIRouter, Query, status
 
-from app.core.dependencies import CurrentUser, DbSession
+from app.core.constants import UserRole
+from app.core.dependencies import CurrentUser, DbSession, resolve_tenant_id
 from app.schemas.common_schema import APIResponse
 from app.schemas.notification_schema import (
     NotificationResponse,
@@ -29,6 +30,11 @@ async def list_notifications(
     category: str | None = Query(None, description="Filter by category (e.g. critical, medication, doctors, vitals, updates, tasks, system, unread, completed)"),
 ) -> APIResponse[PaginatedResult[NotificationResponse]]:
     """Get logged-in user's notifications (newest first)."""
+    hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    is_super_admin = (role_name == UserRole.SUPER_ADMIN)
+    is_hospital_admin = (role_name == UserRole.HOSPITAL_ADMIN)
+
     result = await NotificationService(db).list_user_notifications(
         user_id=current_user.id,
         page=page,
@@ -36,6 +42,9 @@ async def list_notifications(
         is_read=is_read,
         notification_type=notification_type,
         category=category,
+        hospital_id=hospital_id,
+        is_super_admin=is_super_admin,
+        is_hospital_admin=is_hospital_admin,
     )
     return APIResponse(message="Notifications retrieved successfully", data=result)
 
@@ -46,7 +55,17 @@ async def get_category_counts(
     current_user: CurrentUser,
 ) -> APIResponse[CategoryCountsResponse]:
     """Get notification count for each category for the logged-in user."""
-    counts = await NotificationService(db).get_category_counts(current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    is_super_admin = (role_name == UserRole.SUPER_ADMIN)
+    is_hospital_admin = (role_name == UserRole.HOSPITAL_ADMIN)
+
+    counts = await NotificationService(db).get_category_counts(
+        user_id=current_user.id,
+        hospital_id=hospital_id,
+        is_super_admin=is_super_admin,
+        is_hospital_admin=is_hospital_admin,
+    )
     return APIResponse(message="Category counts retrieved successfully", data=CategoryCountsResponse(**counts))
 
 
@@ -56,7 +75,17 @@ async def get_unread_notification_count(
     current_user: CurrentUser,
 ) -> APIResponse[UnreadCountResponse]:
     """Get unread notification count for the logged-in user."""
-    unread_data = await NotificationService(db).get_unread_count(current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    is_super_admin = (role_name == UserRole.SUPER_ADMIN)
+    is_hospital_admin = (role_name == UserRole.HOSPITAL_ADMIN)
+
+    unread_data = await NotificationService(db).get_unread_count(
+        user_id=current_user.id,
+        hospital_id=hospital_id,
+        is_super_admin=is_super_admin,
+        is_hospital_admin=is_hospital_admin,
+    )
     return APIResponse(message="Unread notification count retrieved", data=unread_data)
 
 
@@ -77,7 +106,17 @@ async def mark_all_notifications_as_read(
     current_user: CurrentUser,
 ) -> APIResponse[dict[str, Any]]:
     """Mark all unread notifications as read for the logged-in user."""
-    result = await NotificationService(db).mark_all_as_read(current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    is_super_admin = (role_name == UserRole.SUPER_ADMIN)
+    is_hospital_admin = (role_name == UserRole.HOSPITAL_ADMIN)
+
+    result = await NotificationService(db).mark_all_as_read(
+        user_id=current_user.id,
+        hospital_id=hospital_id,
+        is_super_admin=is_super_admin,
+        is_hospital_admin=is_hospital_admin,
+    )
     return APIResponse(message="All notifications marked as read", data=result)
 
 

@@ -582,10 +582,22 @@ async def add_treatment_note(
 async def get_bulk_template(
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "read")),
 ):
     from fastapi.responses import StreamingResponse
-    stream = await DoctorService(db).generate_doctor_bulk_template()
+    from app.core.constants import UserRole
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    stream = await DoctorService(db).generate_doctor_bulk_template(
+        hospital_id=target_hospital_id,
+        current_user=current_user,
+    )
     return StreamingResponse(
         stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -598,13 +610,26 @@ async def upload_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "create")),
 ):
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only Excel (.xlsx) files are allowed.")
         
+    from app.core.constants import UserRole
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
     content = await file.read()
-    result = await DoctorService(db).import_doctors_from_excel(content, current_user)
+    result = await DoctorService(db).import_doctors_from_excel(
+        content,
+        current_user,
+        hospital_id=target_hospital_id,
+    )
     return APIResponse(message="Bulk upload processed", data=result)
 
 
@@ -615,15 +640,26 @@ async def export_doctors_data(
     format: str = Query(..., description="Export format: excel or pdf"),
     department_id: Optional[int] = Query(None),
     availability_status: Optional[str] = Query(None),
+    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "read")),
 ):
     if format not in ("excel", "pdf"):
         raise HTTPException(status_code=400, detail="Format must be 'excel' or 'pdf'")
         
+    from app.core.constants import UserRole
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
     content, media_type = await DoctorService(db).export_doctors(
         format_type=format,
         department_id=department_id,
-        availability_status=availability_status
+        availability_status=availability_status,
+        hospital_id=target_hospital_id,
+        current_user=current_user,
     )
     
     filename = f"doctors_export.{'xlsx' if format == 'excel' else 'pdf'}"

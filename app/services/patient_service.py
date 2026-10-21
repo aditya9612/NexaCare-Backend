@@ -259,9 +259,20 @@ class PatientService:
         return res
 
     async def create(
-        self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None, current_user = None
+        self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None, current_user = None, hospital_id: int | None = None
     ) -> PatientCreateResponse:
-        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        from app.core.constants import UserRole
+        role_name = current_user.role.name if (current_user and current_user.role) else ""
+        if role_name != UserRole.SUPER_ADMIN and current_user is not None:
+            resolved_hospital_id = self._resolve_tenant_hospital_id(current_user)
+        else:
+            resolved_hospital_id = hospital_id if hospital_id is not None else self._resolve_tenant_hospital_id(current_user)
+
+        if resolved_hospital_id is None and getattr(data, "hospital_id", None) is not None:
+            resolved_hospital_id = data.hospital_id
+
+        hospital_id = resolved_hospital_id
+
         if data.phone:
             existing_phone = await self.repo.get_by_phone(data.phone, hospital_id=hospital_id)
             if existing_phone:
@@ -291,7 +302,9 @@ class PatientService:
 
         patient_data_dict = data.model_dump()
         patient_data_dict["user_id"] = user_match_id
-        if current_user and hasattr(current_user, "hospital_id") and current_user.hospital_id:
+        if hospital_id is not None:
+            patient_data_dict["hospital_id"] = hospital_id
+        elif current_user and hasattr(current_user, "hospital_id") and current_user.hospital_id:
             patient_data_dict["hospital_id"] = current_user.hospital_id
         elif getattr(data, "hospital_id", None):
             patient_data_dict["hospital_id"] = data.hospital_id
@@ -526,7 +539,7 @@ class PatientService:
         await self.repo.delete_family_member(member)
         await self.audit_repo.create("delete", "family_members", user_id=user_id, resource_id=str(member_id))
 
-    async def generate_patient_bulk_template(self):
+    async def generate_patient_bulk_template(self, hospital_id: int | None = None):
         from io import BytesIO
         import openpyxl
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -587,10 +600,24 @@ class PatientService:
         stream.seek(0)
         return stream
 
-    async def import_patients_from_excel(self, file, user_id: int) -> dict:
+    async def import_patients_from_excel(
+        self,
+        file,
+        user_id: int,
+        current_user = None,
+        hospital_id: int | None = None,
+    ) -> dict:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
+        from app.core.constants import UserRole
+
+        role_name = current_user.role.name if (current_user and current_user.role) else ""
+        if role_name != UserRole.SUPER_ADMIN and current_user is not None:
+            hospital_id = self._resolve_tenant_hospital_id(current_user)
+        else:
+            if hospital_id is None and current_user is not None:
+                hospital_id = self._resolve_tenant_hospital_id(current_user)
 
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
@@ -657,6 +684,9 @@ class PatientService:
             if not row_dict.get("status"):
                 row_dict["status"] = "active"
                     
+            if hospital_id is not None:
+                row_dict["hospital_id"] = hospital_id
+
             try:
                 dob_raw = row_dict.get("dob")
                 if dob_raw:
@@ -690,7 +720,7 @@ class PatientService:
                 
                 patient_create = PatientCreate(**row_dict)
                 
-                await self.create(patient_create, user_id)
+                await self.create(patient_create, user_id, current_user=current_user, hospital_id=hospital_id)
                 created += 1
                 
             except ValidationError as e:
@@ -745,11 +775,25 @@ class PatientService:
         if role_name == "patient":
             raise ForbiddenException("Patients are not authorized to export patient records")
 
+    async def export_patients(
+        self,
+        format_type: str,
+        status: str | None = None,
+        current_user = None,
+        hospital_id: int | None = None,
+    ):
         from io import BytesIO
         from datetime import datetime, date
         import os
+        from app.core.constants import UserRole
 
-        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        role_name = current_user.role.name if (current_user and current_user.role) else ""
+        if role_name != UserRole.SUPER_ADMIN and current_user is not None:
+            hospital_id = self._resolve_tenant_hospital_id(current_user)
+        else:
+            if hospital_id is None and current_user is not None:
+                hospital_id = self._resolve_tenant_hospital_id(current_user)
+
         hospital_name = None
         hospital_address = None
         hospital_phone = None
@@ -809,10 +853,37 @@ class PatientService:
                 return phone_clean
             return "-"
 
-        if status:
-            patients = await self.repo.filter_patients(status=status, limit=10000, hospital_id=hospital_id)
+        nurse_id = None
+        if current_user and current_user.role and current_user.role.name.lower() == "nurse":
+            from app.models.nurse_model import Nurse
+            from sqlalchemy import select
+            res = await self.db.execute(select(Nurse.id).where(Nurse.user_id == current_user.id))
+            nurse_id = res.scalar_one_or_none()
+            if nurse_id is None:
+                patients = []
+            else:
+                if status:
+                    patients = await self.repo.filter_patients(status=status, limit=10000, nurse_id=nurse_id, hospital_id=hospital_id)
+                else:
+                    patients = await self.repo.list_all(limit=10000, nurse_id=nurse_id, hospital_id=hospital_id)
         else:
-            patients = await self.repo.list_all(limit=10000, hospital_id=hospital_id)
+            allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
+            if allowed_patient_ids is not None and len(allowed_patient_ids) == 0:
+                patients = []
+            else:
+                if status:
+                    patients = await self.repo.filter_patients(
+                        status=status,
+                        limit=10000,
+                        allowed_patient_ids=allowed_patient_ids,
+                        hospital_id=hospital_id,
+                    )
+                else:
+                    patients = await self.repo.list_all(
+                        limit=10000,
+                        allowed_patient_ids=allowed_patient_ids,
+                        hospital_id=hospital_id,
+                    )
 
         if format_type == "excel":
             import openpyxl

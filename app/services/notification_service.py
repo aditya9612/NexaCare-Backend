@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -56,6 +56,9 @@ class NotificationService:
         is_read: bool | None = None,
         notification_type: str | None = None,
         category: str | None = None,
+        hospital_id: int | None = None,
+        is_super_admin: bool = False,
+        is_hospital_admin: bool = False,
     ) -> dict[str, Any]:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
@@ -68,27 +71,55 @@ class NotificationService:
             is_read=is_read,
             notification_type=notification_type,
             category=category,
+            hospital_id=hospital_id,
+            is_super_admin=is_super_admin,
+            is_hospital_admin=is_hospital_admin,
         )
         total = await self.repo.count_user_notifications(
             user_id=user_id,
             is_read=is_read,
             notification_type=notification_type,
             category=category,
+            hospital_id=hospital_id,
+            is_super_admin=is_super_admin,
+            is_hospital_admin=is_hospital_admin,
         )
         responses = [NotificationResponse.model_validate(item) for item in items]
         return build_paginated_result(responses, total, page, limit)
 
-    async def get_unread_count(self, user_id: int) -> UnreadCountResponse:
+    async def get_unread_count(
+        self,
+        user_id: int,
+        hospital_id: int | None = None,
+        is_super_admin: bool = False,
+        is_hospital_admin: bool = False,
+    ) -> UnreadCountResponse:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
 
-        count = await self.repo.get_unread_count(user_id)
+        count = await self.repo.get_unread_count(
+            user_id=user_id,
+            hospital_id=hospital_id,
+            is_super_admin=is_super_admin,
+            is_hospital_admin=is_hospital_admin,
+        )
         return UnreadCountResponse(unread_count=count)
 
-    async def get_category_counts(self, user_id: int) -> dict[str, int]:
+    async def get_category_counts(
+        self,
+        user_id: int,
+        hospital_id: int | None = None,
+        is_super_admin: bool = False,
+        is_hospital_admin: bool = False,
+    ) -> dict[str, int]:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
-        return await self.repo.get_category_counts(user_id)
+        return await self.repo.get_category_counts(
+            user_id=user_id,
+            hospital_id=hospital_id,
+            is_super_admin=is_super_admin,
+            is_hospital_admin=is_hospital_admin,
+        )
 
     async def mark_as_read(self, notification_id: int, user_id: int) -> NotificationResponse:
         if not self.repo:
@@ -104,11 +135,22 @@ class NotificationService:
         updated = await self.repo.mark_as_read(notification_id, user_id)
         return NotificationResponse.model_validate(updated)
 
-    async def mark_all_as_read(self, user_id: int) -> dict[str, Any]:
+    async def mark_all_as_read(
+        self,
+        user_id: int,
+        hospital_id: int | None = None,
+        is_super_admin: bool = False,
+        is_hospital_admin: bool = False,
+    ) -> dict[str, Any]:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
 
-        count = await self.repo.mark_all_as_read(user_id)
+        count = await self.repo.mark_all_as_read(
+            user_id=user_id,
+            hospital_id=hospital_id,
+            is_super_admin=is_super_admin,
+            is_hospital_admin=is_hospital_admin,
+        )
         return {"message": "All notifications marked as read", "updated_count": count}
 
     # --- Centralized Multichannel Dispatch Engine ---
@@ -125,9 +167,18 @@ class NotificationService:
         email_subject: str | None = None,
         email_html: str | None = None,
         phone: str | None = None,
+        hospital_id: int | None = None,
     ) -> Notification | None:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
+
+        # Automatically resolve recipient's hospital_id if not explicitly provided
+        if hospital_id is None and self.db:
+            try:
+                user_res = await self.db.execute(select(User.hospital_id).where(User.id == user_id))
+                hospital_id = user_res.scalar_one_or_none()
+            except Exception:
+                pass
 
         # 1. Preference Check for Critical Emergency Alerts
         if notification_type == "PATIENT_EMERGENCY_ALERT":
@@ -156,6 +207,7 @@ class NotificationService:
 
         notification = Notification(
             user_id=user_id,
+            hospital_id=hospital_id,
             title=title,
             message=message,
             notification_type=notification_type,
@@ -242,6 +294,7 @@ class NotificationService:
         email: str | None = None,
         phone: str | None = None,
         patient_code: str | None = None,
+        hospital_id: int | None = None,
     ) -> Notification | None:
         title = "Appointment Confirmed"
         message = f"Your appointment {appointment_number} with Dr. {doctor_name} on {appointment_date} at {appointment_time} has been confirmed."
@@ -274,6 +327,7 @@ class NotificationService:
             email_subject=f"Appointment Confirmation #{appointment_number}",
             email_html=email_html,
             phone=phone,
+            hospital_id=hospital_id,
         )
 
     # --- Doctor Appointment Reminder Helper ---
@@ -645,7 +699,6 @@ class NotificationService:
                         title = "Medication Reminder"
                         message = f"Medication reminder: Please administer {presc.medicine_name} ({presc.dosage}) to patient {patient_name} scheduled for {slot} ({slot_time_str})."
 
-                        from sqlalchemy import func
                         dup_stmt = select(func.count(Notification.id)).where(
                             Notification.user_id == nurse_user.id,
                             Notification.notification_type == "MEDICATION_REMINDER",
@@ -685,7 +738,6 @@ class NotificationService:
 
         from app.models.nurse_model import NursePatientAssignment, Nurse
         from app.models.user_model import User
-        from sqlalchemy import select
 
         query = (
             select(User)
@@ -702,7 +754,6 @@ class NotificationService:
 
         notifications = []
         for nurse_user in nurses:
-            from sqlalchemy import func
             dup_stmt = select(func.count(Notification.id)).where(
                 Notification.user_id == nurse_user.id,
                 Notification.notification_type == "DOCTOR_INSTRUCTION",

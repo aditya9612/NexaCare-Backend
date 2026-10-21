@@ -33,15 +33,23 @@ class AnalyticsRepository:
         await self.db.refresh(report)
         return report
 
-    async def list_reports(self, skip: int = 0, limit: int = 20, report_type: str | None = None) -> list[AnalyticsReport]:
+    async def list_reports(
+        self, skip: int = 0, limit: int = 20, report_type: str | None = None, hospital_id: int | None = None
+    ) -> list[AnalyticsReport]:
         query = select(AnalyticsReport)
+        if hospital_id is not None:
+            from app.models.user_model import User
+            query = query.join(User, AnalyticsReport.generated_by == User.id).where(User.hospital_id == hospital_id)
         if report_type:
             query = query.where(AnalyticsReport.report_type == report_type)
         result = await self.db.execute(query.order_by(AnalyticsReport.created_at.desc()).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def count_reports(self, report_type: str | None = None) -> int:
+    async def count_reports(self, report_type: str | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(AnalyticsReport)
+        if hospital_id is not None:
+            from app.models.user_model import User
+            query = query.join(User, AnalyticsReport.generated_by == User.id).where(User.hospital_id == hospital_id)
         if report_type:
             query = query.where(AnalyticsReport.report_type == report_type)
         return await self.db.scalar(query) or 0
@@ -52,8 +60,12 @@ class AnalyticsRepository:
         await self.db.refresh(export)
         return export
 
-    async def get_export(self, export_id: int) -> ReportExport | None:
-        result = await self.db.execute(select(ReportExport).where(ReportExport.id == export_id))
+    async def get_export(self, export_id: int, hospital_id: int | None = None) -> ReportExport | None:
+        query = select(ReportExport).where(ReportExport.id == export_id)
+        if hospital_id is not None:
+            from app.models.user_model import User
+            query = query.join(User, ReportExport.requested_by == User.id).where(User.hospital_id == hospital_id)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def update_export(self, export: ReportExport) -> ReportExport:
@@ -62,9 +74,12 @@ class AnalyticsRepository:
         return export
 
     async def list_exports(
-        self, skip: int = 0, limit: int = 20, report_type: str | None = None
+        self, skip: int = 0, limit: int = 20, report_type: str | None = None, hospital_id: int | None = None
     ) -> list[ReportExport]:
         query = select(ReportExport)
+        if hospital_id is not None:
+            from app.models.user_model import User
+            query = query.join(User, ReportExport.requested_by == User.id).where(User.hospital_id == hospital_id)
         if report_type:
             query = query.where(ReportExport.report_type == report_type)
         result = await self.db.execute(
@@ -72,8 +87,11 @@ class AnalyticsRepository:
         )
         return list(result.scalars().all())
 
-    async def count_exports(self, report_type: str | None = None) -> int:
+    async def count_exports(self, report_type: str | None = None, hospital_id: int | None = None) -> int:
         query = select(func.count()).select_from(ReportExport)
+        if hospital_id is not None:
+            from app.models.user_model import User
+            query = query.join(User, ReportExport.requested_by == User.id).where(User.hospital_id == hospital_id)
         if report_type:
             query = query.where(ReportExport.report_type == report_type)
         return await self.db.scalar(query) or 0

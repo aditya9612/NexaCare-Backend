@@ -88,11 +88,12 @@ class LabDashboardService:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         department_id: Optional[int] = None,
+        hospital_id: Optional[int] = None,
     ) -> LabDashboardResponse:
         start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
 
         # Get status counts for test orders
-        order_counts = await self.repo.get_test_order_status_counts(start_dt, end_dt, department_id)
+        order_counts = await self.repo.get_test_order_status_counts(start_dt, end_dt, department_id, hospital_id=hospital_id)
         total_test_orders = sum(order_counts.values())
         pending_tests = order_counts.get(LabOrderStatus.ORDERED, 0)
         tests_in_progress = (
@@ -103,28 +104,28 @@ class LabDashboardService:
         completed_tests = order_counts.get(LabOrderStatus.COMPLETED, 0) + order_counts.get("approved", 0)
 
         # Get samples collected count
-        samples_collected = await self.repo.get_samples_collected_count(start_dt, end_dt, department_id)
+        samples_collected = await self.repo.get_samples_collected_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
 
         # Get report counts and verification metrics
-        report_counts = await self.repo.get_report_status_counts(start_dt, end_dt, department_id)
+        report_counts = await self.repo.get_report_status_counts(start_dt, end_dt, department_id, hospital_id=hospital_id)
         reports_pending_approval = (
             report_counts.get(LabReportStatus.PENDING_APPROVAL, 0)
             + report_counts.get(LabReportStatus.TECHNICIAN_VERIFIED, 0)
             + report_counts.get(LabReportStatus.DRAFT, 0)
         )
-        verification_counts = await self.repo.get_report_verification_counts(start_dt, end_dt, department_id)
+        verification_counts = await self.repo.get_report_verification_counts(start_dt, end_dt, department_id, hospital_id=hospital_id)
         technician_verified_reports = verification_counts.get("technician_verified", 0)
         doctor_approved_reports = verification_counts.get("doctor_approved", 0)
         approved_reports = doctor_approved_reports
 
         # Get critical and delivered counts
-        critical_reports = await self.repo.get_critical_reports_count(start_dt, end_dt, department_id)
-        reports_delivered = await self.repo.get_reports_delivered_count(start_dt, end_dt, department_id)
+        critical_reports = await self.repo.get_critical_reports_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        reports_delivered = await self.repo.get_reports_delivered_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
 
         # Fetch detailed lists
-        recent_orders_data = await self.repo.get_recent_test_orders(start_dt, end_dt, department_id=department_id)
-        critical_alerts_data = await self.repo.get_critical_alerts(start_dt, end_dt, department_id=department_id)
-        pending_approvals_data = await self.repo.get_pending_report_approvals(start_dt, end_dt, department_id=department_id)
+        recent_orders_data = await self.repo.get_recent_test_orders(start_dt, end_dt, department_id=department_id, hospital_id=hospital_id)
+        critical_alerts_data = await self.repo.get_critical_alerts(start_dt, end_dt, department_id=department_id, hospital_id=hospital_id)
+        pending_approvals_data = await self.repo.get_pending_report_approvals(start_dt, end_dt, department_id=department_id, hospital_id=hospital_id)
 
         # Convert to Pydantic responses
         recent_test_orders = [RecentTestOrder(**o) for o in recent_orders_data]
@@ -153,6 +154,7 @@ class LabDashboardService:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         department_id: Optional[int] = None,
+        hospital_id: Optional[int] = None,
     ) -> LabAnalyticsSummaryResponse:
         from datetime import datetime, time, timedelta
         import calendar
@@ -166,28 +168,28 @@ class LabDashboardService:
 
         start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
 
-        approved_count = await self.repo.get_approved_reports_count(start_dt, end_dt, department_id)
+        approved_count = await self.repo.get_approved_reports_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
 
         # Growth calculation vs previous period
-        growth_pct = 12.0
+        growth_pct = 0.0
         if start_dt and end_dt:
             period_seconds = (end_dt - start_dt).total_seconds()
             if period_seconds > 0:
                 prev_start_dt = start_dt - timedelta(seconds=period_seconds)
                 prev_end_dt = start_dt
-                prev_approved = await self.repo.get_approved_reports_count(prev_start_dt, prev_end_dt, department_id)
+                prev_approved = await self.repo.get_approved_reports_count(prev_start_dt, prev_end_dt, department_id, hospital_id=hospital_id)
                 if prev_approved > 0:
                     growth_pct = round(((approved_count - prev_approved) / prev_approved) * 100.0, 1)
 
         growth_str = f"{'+' if growth_pct >= 0 else ''}{growth_pct}% increase from last week" if time_filter in ("7_days", "today") else f"{'+' if growth_pct >= 0 else ''}{growth_pct}% from previous period"
 
-        avg_turnaround_hours = await self.repo.get_average_turnaround_hours(start_dt, end_dt, department_id)
-        abnormal_detect_rate = await self.repo.get_abnormal_detect_rate(start_dt, end_dt, department_id)
-        completion_rate = await self.repo.get_completion_rate(start_dt, end_dt, department_id)
+        avg_turnaround_hours = await self.repo.get_average_turnaround_hours(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        abnormal_detect_rate = await self.repo.get_abnormal_detect_rate(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        completion_rate = await self.repo.get_completion_rate(start_dt, end_dt, department_id, hospital_id=hospital_id)
 
-        volume_by_category_raw = await self.repo.get_volume_by_category(start_dt, end_dt, department_id)
-        turnaround_trend_raw = await self.repo.get_turnaround_time_trend(start_dt, end_dt, department_id)
-        category_perf_raw = await self.repo.get_category_performance_metrics(start_dt, end_dt, department_id)
+        volume_by_category_raw = await self.repo.get_volume_by_category(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        turnaround_trend_raw = await self.repo.get_turnaround_time_trend(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        category_perf_raw = await self.repo.get_category_performance_metrics(start_dt, end_dt, department_id, hospital_id=hospital_id)
 
         volume_by_category = [CategoryVolumeMetric(**item) for item in volume_by_category_raw]
         turnaround_time_trend = [TurnaroundTrendMetric(**item) for item in turnaround_trend_raw]
@@ -197,7 +199,7 @@ class LabDashboardService:
         today = date.today()
         today_start = datetime.combine(today, time.min)
         today_end = datetime.combine(today, time.max)
-        daily_summary_raw = await self.repo.get_daily_reports_summary(today_start, today_end, department_id)
+        daily_summary_raw = await self.repo.get_daily_reports_summary(today_start, today_end, department_id, hospital_id=hospital_id)
         daily_report_summary = DailyReportSummary(
             total_reports=daily_summary_raw["total"],
             approved_reports=daily_summary_raw["approved"],
@@ -208,7 +210,7 @@ class LabDashboardService:
         month_start = datetime.combine(date(today.year, today.month, 1), time.min)
         last_day = calendar.monthrange(today.year, today.month)[1]
         month_end = datetime.combine(date(today.year, today.month, last_day), time.max)
-        monthly_summary_raw = await self.repo.get_monthly_reports_summary(month_start, month_end, department_id)
+        monthly_summary_raw = await self.repo.get_monthly_reports_summary(month_start, month_end, department_id, hospital_id=hospital_id)
         monthly_report_summary = MonthlyReportSummary(
             total_reports=monthly_summary_raw["total"],
             approved_reports=monthly_summary_raw["approved"],
@@ -216,14 +218,14 @@ class LabDashboardService:
         )
 
         # 3. Calculate Revenue Report
-        revenue_raw = await self.repo.get_revenue_report(start_dt, end_dt, department_id)
+        revenue_raw = await self.repo.get_revenue_report(start_dt, end_dt, department_id, hospital_id=hospital_id)
         revenue_report = RevenueReport(
             total_revenue=revenue_raw["total_revenue"],
             period_revenue=revenue_raw["period_revenue"]
         )
 
         # 4. Fetch/aggregate Performance Tracking metrics
-        perf_metrics_raw = await self.repo.get_performance_tracking_metrics(start_dt, end_dt, department_id)
+        perf_metrics_raw = await self.repo.get_performance_tracking_metrics(start_dt, end_dt, department_id, hospital_id=hospital_id)
         perf_metrics = [PerformanceMetric(**m) for m in perf_metrics_raw]
         performance_tracking = PerformanceTracking(
             overall_efficiency=completion_rate,
@@ -231,7 +233,7 @@ class LabDashboardService:
         )
 
         return LabAnalyticsSummaryResponse(
-            total_approved_reports=approved_count if approved_count > 0 else 27,
+            total_approved_reports=approved_count,
             approved_reports_growth_percentage=growth_pct,
             approved_reports_subtext=growth_str,
             avg_turnaround_hours=avg_turnaround_hours,

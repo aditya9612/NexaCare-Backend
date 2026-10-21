@@ -1511,7 +1511,7 @@ class NurseService:
         return schedules
 
     async def get_dashboard_overview(
-        self, current_user: "User", nurse_id: int | None = None
+        self, current_user: "User", nurse_id: int | None = None, hospital_id: int | None = None
     ) -> "NurseDashboardResponse":
         from datetime import timezone, timedelta, time, datetime
         from sqlalchemy import select, func, or_, and_, cast, Date
@@ -1528,6 +1528,10 @@ class NurseService:
             NurseShiftResponse,
         )
 
+        if hospital_id is None:
+            from app.core.dependencies import resolve_tenant_id
+            hospital_id = resolve_tenant_id(current_user)
+
         # 1. Resolve nurse using nurse_id first, then current_user.id
         nurse = None
         if nurse_id is not None:
@@ -1543,21 +1547,26 @@ class NurseService:
             nurse = res.scalar_one_or_none()
 
         if not nurse:
+            # Fallback if nurse.hospital_id was unassigned or matches
+            res_any = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+            nurse_candidate = res_any.scalar_one_or_none()
+            if nurse_candidate and (nurse_candidate.hospital_id is None or nurse_candidate.hospital_id == hospital_id):
+                nurse = nurse_candidate
+
+        if not nurse:
             res = await self.db.execute(select(Nurse).where(Nurse.id == current_user.id))
             nurse = res.scalar_one_or_none()
 
-        # Fetch active & occupied beds (scoped to hospital if available)
-        occupied_beds_stmt = select(func.count(Bed.id)).where(func.lower(Bed.status) == "occupied")
-        available_beds_stmt = select(func.count(Bed.id)).where(func.lower(Bed.status) == "available")
-        if nurse and nurse.hospital_id is not None:
-            occupied_beds_stmt = occupied_beds_stmt.where(Bed.hospital_id == nurse.hospital_id)
-            available_beds_stmt = available_beds_stmt.where(Bed.hospital_id == nurse.hospital_id)
-        elif current_user.hospital_id is not None:
-            occupied_beds_stmt = occupied_beds_stmt.where(Bed.hospital_id == current_user.hospital_id)
-            available_beds_stmt = available_beds_stmt.where(Bed.hospital_id == current_user.hospital_id)
+        # Fetch active & occupied beds (scoped to tenant)
+        occupied_beds_query = select(func.count(Bed.id)).where(func.lower(Bed.status) == "occupied")
+        available_beds_query = select(func.count(Bed.id)).where(func.lower(Bed.status) == "available")
+        effective_hosp_id = hospital_id or (nurse.hospital_id if nurse else None)
+        if effective_hosp_id is not None:
+            occupied_beds_query = occupied_beds_query.where(Bed.hospital_id == effective_hosp_id)
+            available_beds_query = available_beds_query.where(Bed.hospital_id == effective_hosp_id)
 
-        occupied_beds = (await self.db.scalar(occupied_beds_stmt)) or 0
-        available_beds = (await self.db.scalar(available_beds_stmt)) or 0
+        occupied_beds = (await self.db.scalar(occupied_beds_query)) or 0
+        available_beds = (await self.db.scalar(available_beds_query)) or 0
 
         if not nurse:
             return NurseDashboardResponse(
@@ -1585,26 +1594,31 @@ class NurseService:
         target_user_ids = list({uid for uid in [nurse.user_id, current_user.id] if uid is not None})
 
         # 1. Assigned Patients (Active status)
+        assigned_patients = await self.assignment_repo.list_patients_by_nurse(nurse.id, status="Active")
+        assigned_pids = {p.id for p in assigned_patients if hospital_id is None or p.hospital_id == hospital_id}
+        assigned_patients_count = len(assigned_pids)
         assigned_patients = await self.assignment_repo.list_patients_by_nurse(nurse.id, status="Active", limit=500)
-        assigned_pids = {p.id for p in assigned_patients}
-        assigned_patients_count = await self.assignment_repo.count_patients_by_nurse(nurse.id, status="Active")
-        if assigned_patients_count == 0:
-            assigned_patients_count = len(assigned_pids)
+        assigned_pids = {p.id for p in assigned_patients if hospital_id is None or p.hospital_id == hospital_id}
+        assigned_patients_count = len(assigned_pids)
 
         # 2. Today's Patients (admitted today or assigned today)
-        today_patients_count = (await self.db.scalar(
-            select(func.count(NursePatientAssignment.id)).where(
-                NursePatientAssignment.nurse_id == nurse.id,
-                NursePatientAssignment.status == "Active",
-                NursePatientAssignment.created_at >= today_start,
-                NursePatientAssignment.created_at < tomorrow_start
-            )
-        )) or 0
+        today_patients_query = select(func.count(NursePatientAssignment.id)).join(
+            Patient, NursePatientAssignment.patient_id == Patient.id
+        ).where(
+            NursePatientAssignment.nurse_id == nurse.id,
+            NursePatientAssignment.status == "Active",
+            NursePatientAssignment.created_at >= today_start,
+            NursePatientAssignment.created_at < tomorrow_start,
+            Patient.is_deleted.is_(False),
+        )
+        if hospital_id is not None:
+            today_patients_query = today_patients_query.where(Patient.hospital_id == hospital_id)
+        today_patients_count = (await self.db.scalar(today_patients_query)) or 0
         if today_patients_count == 0:
             today_patients_count = assigned_patients_count
 
-        # 3. Pending & Upcoming Medications
-        schedules = await self.list_medication_schedules(hospital_id=nurse.hospital_id)
+        # 3. Pending & Upcoming Medications (strictly tenant-scoped)
+        schedules = await self.list_medication_schedules(hospital_id=effective_hosp_id)
         pending_meds_count = 0
         upcoming_medications_list = []
         for s in schedules:
@@ -1641,29 +1655,42 @@ class NurseService:
             Notification.is_read.is_(False),
             Notification.is_deleted.is_(False),
         )
-        critical_patients_count = (await self.db.scalar(
+        if hospital_id is not None:
+            critical_notif_condition = and_(
+                critical_notif_condition,
+                or_(Notification.hospital_id == hospital_id, Notification.hospital_id.is_(None)),
+            )
+
+        critical_patients_query = (
             select(func.count(func.distinct(NursePatientAssignment.patient_id)))
+            .join(Patient, NursePatientAssignment.patient_id == Patient.id)
             .outerjoin(Notification, critical_notif_condition)
             .where(
                 NursePatientAssignment.nurse_id == nurse.id,
                 NursePatientAssignment.status == "Active",
+                Patient.is_deleted.is_(False),
                 or_(
                     func.lower(NursePatientAssignment.patient_status) == "critical",
                     Notification.id.isnot(None),
                 )
             )
-        )) or 0
+        )
+        if hospital_id is not None:
+            critical_patients_query = critical_patients_query.where(Patient.hospital_id == hospital_id)
+        critical_patients_count = (await self.db.scalar(critical_patients_query)) or 0
 
         # 5. Doctor Instructions (Active notifications)
-        doc_instr_notif = (await self.db.scalar(
-            select(func.count(Notification.id))
-            .where(
-                Notification.user_id.in_(target_user_ids),
-                Notification.notification_type == "DOCTOR_INSTRUCTION",
-                Notification.is_read.is_(False),
-                Notification.is_deleted.is_(False)
+        doc_inst_query = select(func.count(Notification.id)).where(
+            Notification.user_id.in_(target_user_ids),
+            Notification.notification_type == "DOCTOR_INSTRUCTION",
+            Notification.is_read.is_(False),
+            Notification.is_deleted.is_(False)
+        )
+        if hospital_id is not None:
+            doc_inst_query = doc_inst_query.where(
+                or_(Notification.hospital_id == hospital_id, Notification.hospital_id.is_(None))
             )
-        )) or 0
+        doc_instr_notif = (await self.db.scalar(doc_inst_query)) or 0
         nurse_notif_instr = (await self.db.scalar(
             select(func.count(NurseNotification.id))
             .where(
@@ -1683,9 +1710,13 @@ class NurseService:
                 Notification.notification_type == "CRITICAL_ALERT",
                 Notification.is_deleted.is_(False)
             )
-            .order_by(Notification.created_at.desc())
-            .limit(10)
         )
+        if hospital_id is not None:
+            critical_alerts_query = critical_alerts_query.where(
+                Patient.hospital_id == hospital_id,
+                or_(Notification.hospital_id == hospital_id, Notification.hospital_id.is_(None))
+            )
+        critical_alerts_query = critical_alerts_query.order_by(Notification.created_at.desc()).limit(10)
         critical_alerts_res = await self.db.execute(critical_alerts_query)
         critical_alerts = [
             CriticalAlertResponse(
@@ -1705,6 +1736,10 @@ class NurseService:
             .order_by(AuditLog.created_at.desc())
             .limit(10)
         )
+        if hospital_id is not None:
+            activities_query = activities_query.where(
+                or_(AuditLog.hospital_id == hospital_id, AuditLog.hospital_id.is_(None))
+            )
         activities_res = await self.db.execute(activities_query)
         recent_activities = [
             RecentActivityResponse(
@@ -1723,6 +1758,9 @@ class NurseService:
             skip=0,
             limit=100
         )
+        if hospital_id is not None:
+            assigned_rows = [row for row in assigned_rows if row[0].hospital_id == hospital_id]
+
         assigned_patients_list = [
             NurseAssignedPatientStatusResponse(
                 patient_id=pat.id,

@@ -1,8 +1,9 @@
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Query
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission
 from app.core.exceptions import UnauthorizedException
 from app.core.security import hash_api_key
 from app.models.icu_telemetry_model import IcuDevice
@@ -60,9 +61,13 @@ async def ingest_telemetry(
 async def get_latest_vitals_for_icu_beds(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
-    result = await IcuTelemetryService(db).get_latest_for_icu_beds()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).get_latest_for_icu_beds(hospital_id=hospital_id)
     return APIResponse(message="Latest ICU bed vitals retrieved", data=result)
 
 
@@ -79,8 +84,12 @@ async def get_vitals_history_for_bed(
     page: int = 1,
     size: int = 50,
     include_ecg: bool = False,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     result = await IcuTelemetryService(db).get_history_for_bed(
         bed_id,
         from_time=from_time,
@@ -88,6 +97,7 @@ async def get_vitals_history_for_bed(
         page=page,
         size=size,
         include_ecg=include_ecg,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Vitals history retrieved", data=result)
 
@@ -105,8 +115,12 @@ async def get_vitals_history_for_patient(
     page: int = 1,
     size: int = 50,
     include_ecg: bool = False,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     result = await IcuTelemetryService(db).get_history_for_patient(
         patient_id,
         from_time=from_time,
@@ -114,6 +128,7 @@ async def get_vitals_history_for_patient(
         page=page,
         size=size,
         include_ecg=include_ecg,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Vitals history retrieved", data=result)
 
@@ -126,9 +141,13 @@ async def get_latest_vitals_for_bed(
     bed_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
-    result = await IcuTelemetryService(db).get_latest_for_bed(bed_id)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).get_latest_for_bed(bed_id, hospital_id=hospital_id)
     return APIResponse(message="Latest vitals retrieved", data=result)
 
 
@@ -140,9 +159,13 @@ async def get_latest_vitals_for_patient(
     patient_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
-    result = await IcuTelemetryService(db).get_latest_for_patient(patient_id)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).get_latest_for_patient(patient_id, hospital_id=hospital_id)
     return APIResponse(message="Latest vitals retrieved", data=result)
 
 
@@ -155,9 +178,13 @@ async def list_active_alerts(
     current_user: CurrentUser,
     page: int = 1,
     size: int = 50,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
-    result = await IcuTelemetryService(db).list_active_alerts(page=page, size=size)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).list_active_alerts(page=page, size=size, hospital_id=hospital_id)
     return APIResponse(message="Active alerts retrieved", data=result)
 
 
@@ -169,9 +196,13 @@ async def acknowledge_alert(
     alert_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "update")),
 ):
-    result = await IcuTelemetryService(db).acknowledge_alert(alert_id, current_user.id)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).acknowledge_alert(alert_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Alert acknowledged", data=result)
 
 
@@ -185,9 +216,13 @@ async def register_device(
     data: IcuDeviceCreate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "create")),
 ):
-    result = await IcuTelemetryService(db).create_device(data, current_user.id)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).create_device(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="ICU device registered", data=result)
 
 
@@ -200,9 +235,13 @@ async def update_device(
     data: IcuDeviceUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "update")),
 ):
-    result = await IcuTelemetryService(db).update_device(device_id, data, current_user.id)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).update_device(device_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="ICU device updated", data=result)
 
 
@@ -215,10 +254,14 @@ async def set_device_status(
     data: IcuDeviceStatusUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "update")),
 ):
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     result = await IcuTelemetryService(db).set_device_status(
-        device_id, data.is_active, current_user.id
+        device_id, data.is_active, current_user.id, hospital_id=hospital_id
     )
     message = "ICU device activated" if data.is_active else "ICU device deactivated"
     return APIResponse(message=message, data=result)
@@ -231,7 +274,11 @@ async def set_device_status(
 async def list_devices(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
     _: User = Depends(require_permission("icu_telemetry", "read")),
 ):
-    result = await IcuTelemetryService(db).list_devices()
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    result = await IcuTelemetryService(db).list_devices(hospital_id=hospital_id)
     return APIResponse(message="ICU devices retrieved", data=result)

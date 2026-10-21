@@ -84,42 +84,46 @@ def validate_supplier_address(v: str | None) -> str | None:
 
 class MedicineCreate(BaseSchema):
     name: str
-    generic_name: str | None = None
-    barcode: str | None = None
+    generic_name: str
+    barcode: str
     batch_number: str = Field(..., min_length=3, max_length=30, pattern=r"^[A-Za-z0-9\-_]+$")
     category: str
     unit: str
-    unit_price: float = Field(0.0, ge=0)
-    stock_quantity: int = Field(0, ge=0)
-    reorder_level: int = Field(10, ge=0)
-    expiry_date: date | None = None
+    unit_price: float = Field(..., ge=0)
+    stock_quantity: int = Field(..., ge=0)
+    reorder_level: int = Field(..., ge=0)
+    expiry_date: date
     manufacturer: str | None = None
     description: str | None = None
 
     @field_validator("barcode")
     @classmethod
-    def validate_barcode(cls, v: str | None) -> str | None:
+    def validate_barcode(cls, v: str) -> str:
         if v is not None:
-            if " " in v:
+            v_str = str(v).strip()
+            if not v_str:
+                raise ValueError("Barcode cannot be empty")
+            if " " in v_str:
                 raise ValueError("Barcode cannot contain spaces")
-            if not v.isdigit():
+            if not v_str.isdigit():
                 raise ValueError("Barcode must contain only numeric characters")
-            if len(v) != 13:
+            if len(v_str) != 13:
                 raise ValueError("Barcode must be exactly 13 digits")
-            if all(c == "0" for c in v):
+            if all(c == "0" for c in v_str):
                 raise ValueError("Barcode cannot be all zeros")
+            return v_str
         return v
 
     @field_validator("expiry_date")
     @classmethod
-    def validate_expiry_date(cls, v: date | None) -> date | None:
+    def validate_expiry_date(cls, v: date) -> date:
         if v is not None and v < date.today():
             raise ValueError("Expiry date cannot be in the past")
         return v
 
-    @field_validator("name", "generic_name", "category")
+    @field_validator("name", "generic_name", "category", "unit")
     @classmethod
-    def validate_non_blank_strings(cls, v: str | None) -> str | None:
+    def validate_non_blank_strings(cls, v: str) -> str:
         if v is not None:
             if v.strip() == "":
                 raise ValueError("cannot be empty or only spaces")

@@ -1,9 +1,14 @@
 from datetime import date, datetime
+from typing import TYPE_CHECKING
+
 from sqlalchemy import String, Float, Integer, Boolean, ForeignKey, DateTime, Date, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.mixins import TimestampMixin, SoftDeleteMixin
 from app.utils.helpers import utc_now
+
+if TYPE_CHECKING:
+    from app.models.vendor_model import Vendor
 
 
 class ExpenseCategory(Base, TimestampMixin, SoftDeleteMixin):

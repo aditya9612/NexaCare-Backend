@@ -341,7 +341,7 @@ async def confirm_and_reschedule(state: BookingCallState, db: AsyncSession) -> d
         )
     except BadRequestException as exc:
         detail = str(getattr(exc, "detail", "") or "")
-        key = "terminal" if "terminal" in detail.lower() else "failed"
+        key = "terminal" if ("terminal" in detail.lower() or "completed" in detail.lower()) else "failed"
         logger.error(
             "[%s] Reschedule rejected appointment_id=%s: %s",
             state.get("call_sid"),

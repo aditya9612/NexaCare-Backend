@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
@@ -11,30 +12,34 @@ class RoomTariffService:
         self.db = db
         self.repo = RoomTariffRepository(db)
 
-    async def list_tariffs(self, active_only: bool = False) -> list[RoomTariffResponse]:
-        tariffs = await self.repo.get_all(active_only=active_only)
-        if not tariffs and not active_only:
-            # Auto-seed standard default tariffs if empty
-            await self._seed_default_tariffs()
-            tariffs = await self.repo.get_all(active_only=active_only)
+    async def list_tariffs(self, active_only: bool = False, hospital_id: Optional[int] = None) -> list[RoomTariffResponse]:
+        tariffs = await self.repo.get_all(active_only=active_only, hospital_id=hospital_id)
+        if not tariffs and not active_only and hospital_id is not None:
+            # Auto-seed standard default tariffs for this hospital if empty
+            await self._seed_default_tariffs(hospital_id=hospital_id)
+            tariffs = await self.repo.get_all(active_only=active_only, hospital_id=hospital_id)
         return [RoomTariffResponse.model_validate(t) for t in tariffs]
 
-    async def get_by_id(self, tariff_id: int) -> RoomTariffResponse:
-        tariff = await self.repo.get_by_id(tariff_id)
+    async def get_by_id(self, tariff_id: int, hospital_id: Optional[int] = None) -> RoomTariffResponse:
+        tariff = await self.repo.get_by_id(tariff_id, hospital_id=hospital_id)
         if not tariff:
             raise NotFoundException(f"Room tariff with id {tariff_id} not found")
         return RoomTariffResponse.model_validate(tariff)
 
-    async def get_by_room_type(self, room_type: str) -> RoomTariff:
-        tariff = await self.repo.get_by_room_type(room_type)
+    async def get_by_room_type(self, room_type: str, hospital_id: Optional[int] = None) -> RoomTariff:
+        tariff = await self.repo.get_by_room_type(room_type, hospital_id=hospital_id)
+        if not tariff and hospital_id is not None:
+            # Fallback to global unassigned tariff if any
+            tariff = await self.repo.get_by_room_type(room_type, hospital_id=None)
         if not tariff:
             # Fallback based on generic room matching
-            all_tariffs = await self.repo.get_all(active_only=True)
+            all_tariffs = await self.repo.get_all(active_only=True, hospital_id=hospital_id)
             for t in all_tariffs:
                 if t.room_type.lower() in room_type.lower() or room_type.lower() in t.room_type.lower():
                     return t
             # Default general tariff fallback
             return RoomTariff(
+                hospital_id=hospital_id,
                 room_type=room_type,
                 daily_rate=1000.0,
                 nursing_charge_per_day=300.0,
@@ -43,12 +48,14 @@ class RoomTariffService:
             )
         return tariff
 
-    async def create(self, data: RoomTariffCreate) -> RoomTariffResponse:
-        existing = await self.repo.get_by_room_type(data.room_type)
+    async def create(self, data: RoomTariffCreate, hospital_id: Optional[int] = None) -> RoomTariffResponse:
+        target_hospital_id = hospital_id if hospital_id is not None else data.hospital_id
+        existing = await self.repo.get_by_room_type(data.room_type, hospital_id=target_hospital_id)
         if existing:
             raise ConflictException(f"Tariff for room type '{data.room_type}' already exists")
 
         tariff = RoomTariff(
+            hospital_id=target_hospital_id,
             room_type=data.room_type.strip(),
             daily_rate=data.daily_rate,
             nursing_charge_per_day=data.nursing_charge_per_day,
@@ -59,14 +66,14 @@ class RoomTariffService:
         tariff = await self.repo.create(tariff)
         return RoomTariffResponse.model_validate(tariff)
 
-    async def update(self, tariff_id: int, data: RoomTariffUpdate) -> RoomTariffResponse:
-        tariff = await self.repo.get_by_id(tariff_id)
+    async def update(self, tariff_id: int, data: RoomTariffUpdate, hospital_id: Optional[int] = None) -> RoomTariffResponse:
+        tariff = await self.repo.get_by_id(tariff_id, hospital_id=hospital_id)
         if not tariff:
             raise NotFoundException(f"Room tariff with id {tariff_id} not found")
 
         update_dict = data.model_dump(exclude_unset=True)
         if "room_type" in update_dict and update_dict["room_type"] != tariff.room_type:
-            existing = await self.repo.get_by_room_type(update_dict["room_type"])
+            existing = await self.repo.get_by_room_type(update_dict["room_type"], hospital_id=tariff.hospital_id)
             if existing and existing.id != tariff.id:
                 raise ConflictException(f"Tariff for room type '{update_dict['room_type']}' already exists")
             tariff.room_type = update_dict["room_type"].strip()
@@ -78,13 +85,13 @@ class RoomTariffService:
         tariff = await self.repo.update(tariff)
         return RoomTariffResponse.model_validate(tariff)
 
-    async def delete(self, tariff_id: int) -> None:
-        tariff = await self.repo.get_by_id(tariff_id)
+    async def delete(self, tariff_id: int, hospital_id: Optional[int] = None) -> None:
+        tariff = await self.repo.get_by_id(tariff_id, hospital_id=hospital_id)
         if not tariff:
             raise NotFoundException(f"Room tariff with id {tariff_id} not found")
         await self.repo.delete(tariff)
 
-    async def _seed_default_tariffs(self) -> None:
+    async def _seed_default_tariffs(self, hospital_id: Optional[int] = None) -> None:
         defaults = [
             ("ICU", 5000.0, 1000.0, 1000.0, "Intensive Care Unit with 24/7 cardiac monitoring"),
             ("Deluxe", 3500.0, 600.0, 600.0, "Private air-conditioned deluxe room with attendant bed"),
@@ -93,6 +100,7 @@ class RoomTariffService:
         ]
         for name, rate, nurse, doc, desc in defaults:
             t = RoomTariff(
+                hospital_id=hospital_id,
                 room_type=name,
                 daily_rate=rate,
                 nursing_charge_per_day=nurse,

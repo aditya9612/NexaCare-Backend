@@ -2,6 +2,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.constants import UserRole
 from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -111,9 +112,21 @@ async def get_nurse_dashboard(
     db: DbSession,
     current_user: CurrentUser,
     nurse_id: int | None = Query(None, description="Nurse ID to fetch dashboard for (optional, defaults to nurse associated with logged-in user)"),
+    hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).get_dashboard_overview(current_user, nurse_id=nurse_id)
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    result = await NurseService(db).get_dashboard_overview(
+        current_user,
+        nurse_id=nurse_id,
+        hospital_id=target_hospital_id,
+    )
     return APIResponse(message="Nurse dashboard summary retrieved", data=result)
 
 
@@ -123,9 +136,21 @@ async def get_nurse_dashboard_by_id(
     nurse_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).get_dashboard_overview(current_user, nurse_id=nurse_id)
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    result = await NurseService(db).get_dashboard_overview(
+        current_user,
+        nurse_id=nurse_id,
+        hospital_id=target_hospital_id,
+    )
     return APIResponse(message="Nurse dashboard summary retrieved", data=result)
 
 

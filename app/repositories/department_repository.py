@@ -12,16 +12,18 @@ class DepartmentRepository:
         
         return department
 
-    async def get_by_id(self, department_id: int) -> Department | None:
-        result = await self.db.execute(
-            select(Department).where(Department.department_id == department_id)
-        )
+    async def get_by_id(self, department_id: int, hospital_id: int | None = None) -> Department | None:
+        stmt = select(Department).where(Department.department_id == department_id)
+        if hospital_id is not None:
+            stmt = stmt.where(Department.hospital_id == hospital_id)
+        result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_name(self, name: str) -> Department | None:
-        result = await self.db.execute(
-            select(Department).where(Department.department_name == name)
-        )
+    async def get_by_name(self, name: str, hospital_id: int | None = None) -> Department | None:
+        stmt = select(Department).where(func.lower(Department.department_name) == name.strip().lower())
+        if hospital_id is not None:
+            stmt = stmt.where(Department.hospital_id == hospital_id)
+        result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_by_code(self, code: str) -> Department | None:

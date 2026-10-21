@@ -110,9 +110,22 @@ async def search_nurses(
 async def get_nurse_dashboard(
     db: DbSession,
     current_user: CurrentUser,
+    nurse_id: int | None = Query(None, description="Nurse ID to fetch dashboard for (optional, defaults to nurse associated with logged-in user)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).get_dashboard_overview(current_user)
+    result = await NurseService(db).get_dashboard_overview(current_user, nurse_id=nurse_id)
+    return APIResponse(message="Nurse dashboard summary retrieved", data=result)
+
+
+@router.get("/{nurse_id}/dashboard", response_model=APIResponse[NurseDashboardResponse])
+@singular_router.get("/{nurse_id}/dashboard", response_model=APIResponse[NurseDashboardResponse], include_in_schema=False)
+async def get_nurse_dashboard_by_id(
+    nurse_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    result = await NurseService(db).get_dashboard_overview(current_user, nurse_id=nurse_id)
     return APIResponse(message="Nurse dashboard summary retrieved", data=result)
 
 

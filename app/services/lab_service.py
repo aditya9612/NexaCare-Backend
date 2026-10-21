@@ -1097,16 +1097,34 @@ class LabService:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
 
-        result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
-        if not result:
-            raise NotFoundException("Test result not found")
+        result = None
+        order = None
 
-        order = await self.order_repo.get_by_id(result.test_order_id, hospital_id=hospital_id)
+        if data.test_result_id is not None and data.test_order_id is not None:
+            result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
+            if not result:
+                raise NotFoundException("Test result not found")
+            if result.test_order_id != data.test_order_id:
+                raise BadRequestException("test_result_id does not belong to the specified test_order_id")
+            order = await self.order_repo.get_by_id(data.test_order_id, hospital_id=hospital_id)
+        elif data.test_result_id is not None:
+            result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
+            if not result:
+                raise NotFoundException("Test result not found")
+            order = await self.order_repo.get_by_id(result.test_order_id, hospital_id=hospital_id)
+        elif data.test_order_id is not None:
+            order = await self.order_repo.get_by_id(data.test_order_id, hospital_id=hospital_id)
+            if order:
+                result = await self.result_repo.get_by_test_order(order.id, hospital_id=hospital_id)
+        else:
+            raise BadRequestException("Either test_order_id or test_result_id must be provided")
+
         if not order:
+            order_id_to_check = data.test_order_id or (result.test_order_id if result else None)
             from sqlalchemy import text
             raw_order = await self.db.execute(
                 text("SELECT id, order_number, is_deleted, deleted_at FROM test_orders WHERE id = :order_id"),
-                {"order_id": result.test_order_id}
+                {"order_id": order_id_to_check}
             )
             row = raw_order.fetchone()
             if row:
@@ -1115,14 +1133,37 @@ class LabService:
                 )
             else:
                 raise NotFoundException(
-                    f"Test order not found (No record exists in test_orders table with ID={result.test_order_id})"
+                    f"Test order not found (No record exists in test_orders table with ID={order_id_to_check})"
                 )
 
-        sample = await self.sample_repo.get_by_test_order(result.test_order_id, hospital_id=hospital_id)
+        if order.status == LabOrderStatus.CANCELLED:
+            raise BadRequestException("Cannot create lab report for a cancelled test order")
+
+        sample = await self.sample_repo.get_by_test_order(order.id, hospital_id=hospital_id)
 
         if not sample or sample.status != SampleStatus.COLLECTED:
             raise BadRequestException(
                 "Cannot create lab report before collecting sample"
+            )
+
+        if not result:
+            result = await self.result_repo.get_by_test_order(order.id, hospital_id=hospital_id)
+        if not result:
+            raise BadRequestException(
+                "Cannot create lab report before entering test results. Please enter test results first."
+            )
+
+        # Duplicate active report prevention
+        existing_report_res = await self.db.execute(
+            select(LabReport).where(
+                LabReport.test_order_id == order.id,
+                LabReport.status != LabReportStatus.REJECTED,
+            )
+        )
+        existing_report = existing_report_res.scalar_one_or_none()
+        if existing_report:
+            raise BadRequestException(
+                f"Lab report already exists for this test order (Report #{existing_report.report_number})"
             )
 
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
@@ -1141,11 +1182,11 @@ class LabService:
                     "You can create lab reports only for test orders of your department"
                 )        
                
-        remarks = getattr(data, "remarks", None) or data.summary or result.remark
-        summary = data.summary or result.remark
+        remarks = getattr(data, "remarks", None) or data.summary or (result.remark if result else None)
+        summary = data.summary or (result.remark if result else None)
 
         report = LabReport(
-            test_order_id=result.test_order_id,
+            test_order_id=order.id,
             report_number=generate_lab_report_number(),
             summary=summary,
             remarks=remarks,

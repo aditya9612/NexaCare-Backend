@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema
 
@@ -153,9 +153,16 @@ class TestResultResponse(BaseSchema):
 
 
 class LabReportCreate(BaseSchema):
-    test_result_id: int
+    test_order_id: int | None = None
+    test_result_id: int | None = None
     summary: str | None = None
     remarks: str | None = None
+
+    @model_validator(mode="after")
+    def validate_identifier_presence(self):
+        if self.test_order_id is None and self.test_result_id is None:
+            raise ValueError("Either test_order_id or test_result_id must be provided")
+        return self
 
 
 class LabReportTechnicianVerifyRequest(BaseSchema):

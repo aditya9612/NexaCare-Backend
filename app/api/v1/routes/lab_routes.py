@@ -66,26 +66,28 @@ async def list_lab_tests(
     from sqlalchemy import select
 
     service = LabService(db)
-    is_admin = await service._is_admin_user(current_user.id)
+    is_admin = await service._is_admin_user(current_user)
+
+    role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
     doctor_id = None
-    if not is_admin:
+    if not is_admin and role_name in ["doctor"]:
         doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
         doctor_id = doctor.id if doctor else None
 
     # Resolve department_id for Lab Technician
-    role_name = current_user.role.name.lower() if current_user and current_user.role else ""
     department_id = None
     if role_name in ["lab technician", "lab_technician"]:
         staff_result = await db.execute(
-            select(Staff).where(Staff.email == current_user.email)
+            select(Staff.department_id).where(
+                Staff.email == current_user.email,
+                Staff.is_deleted.is_(False)
+            ).limit(1)
         )
-        staff = staff_result.scalar_one_or_none()
-        if not staff or not staff.department_id:
+        department_id = staff_result.scalar_one_or_none()
+        if not department_id:
             raise BadRequestException("Lab technician department is not assigned")
-        department_id = staff.department_id
 
-    service = LabService(db)
     if q:
         result = await service.search_tests(
             q, page=page, size=size, doctor_id=doctor_id, department_id=department_id, current_user=current_user

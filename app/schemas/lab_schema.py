@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from pydantic import Field, field_validator
 
+from app.core.constants import SampleStatus
 from app.schemas.common_schema import BaseSchema
 
 
@@ -95,11 +96,47 @@ class SampleCreate(BaseSchema):
     volume: str | None = None
     notes: str | None = None
 
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str:
+        if v is not None:
+            clean = v.strip().lower()
+            allowed = {
+                SampleStatus.PENDING,
+                SampleStatus.COLLECTED,
+                SampleStatus.REJECTED,
+            }
+            if clean not in allowed:
+                raise ValueError(
+                    f"Invalid status: {v}. Must be one of: {', '.join(sorted(allowed))}"
+                )
+            return clean
+        return SampleStatus.COLLECTED
+
+
 class SampleUpdate(BaseSchema):
     sample_type: str | None = None
     collection_date: datetime | None = None
+    status: str | None = None
     volume: str | None = None
     notes: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str | None:
+        if v is not None:
+            clean = v.strip().lower()
+            allowed = {
+                SampleStatus.PENDING,
+                SampleStatus.COLLECTED,
+                SampleStatus.REJECTED,
+            }
+            if clean not in allowed:
+                raise ValueError(
+                    f"Invalid status: {v}. Must be one of: {', '.join(sorted(allowed))}"
+                )
+            return clean
+        return v
 
 class SampleResponse(BaseSchema):
     id: int

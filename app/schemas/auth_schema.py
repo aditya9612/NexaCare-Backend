@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Any
 from datetime import date, datetime
 from enum import Enum
 
@@ -11,6 +14,12 @@ from app.utils.common_validators import (
     validate_password,
     validate_not_future_date,
 )
+
+class LoginContext(str, Enum):
+    SUPER_ADMIN = "SUPER_ADMIN"
+    ORGANIZATION = "ORGANIZATION"
+    PATIENT = "PATIENT"
+
 
 class RegisterRoleName(str, Enum):
     """All roles — use exact name in Swagger, or aliases like admin / super admin."""
@@ -54,13 +63,27 @@ class GenderOption(str, Enum):
 class EmailOrPhoneRequest(BaseModel):
     email: EmailStr | None = None
     phone: str | None = Field(default=None, min_length=10, max_length=20)
+    identifier: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_identifier(cls, data: Any):
+        if isinstance(data, dict):
+            ident = data.get("identifier")
+            if ident and not data.get("email") and not data.get("phone"):
+                ident_str = str(ident).strip()
+                if "@" in ident_str:
+                    data["email"] = ident_str
+                elif ident_str.isdigit() or (ident_str.startswith("+") and ident_str[1:].isdigit()):
+                    data["phone"] = ident_str
+                else:
+                    data["email"] = ident_str
+        return data
 
     @model_validator(mode="after")
     def validate_identifier(self):
-        if not self.email and not self.phone:
-            raise ValueError("Either email or phone is required")
-        if self.email and self.phone:
-            raise ValueError("Provide either email or phone, not both")
+        if not self.email and not self.phone and not self.identifier:
+            raise ValueError("Either identifier, email, or phone is required")
         if self.phone:
             self.phone = validate_mobile(self.phone)
         return self
@@ -69,6 +92,7 @@ class EmailOrPhoneRequest(BaseModel):
 class LoginRequest(EmailOrPhoneRequest):
     password: str | None = None
     otp: str | None = None
+    login_type: LoginContext | str | None = None
 
     @model_validator(mode="after")
     def validate_login_credential(self):
@@ -180,6 +204,9 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    expires_in: int | None = None
+    role: str | None = None
+    user: UserProfileResponse | None = None
 
 
 class RefreshTokenRequest(BaseModel):
@@ -272,6 +299,8 @@ class UserProfileResponse(BaseSchema):
     phone: str | None
     role_id: int
     role_name: str | None = None
+    role: str | None = None
+    hospital_id: int | None = None
     profile_image: str | None
     gender: str | None
     date_of_birth: date | None
@@ -281,6 +310,15 @@ class UserProfileResponse(BaseSchema):
     last_login: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def extract_role_name(cls, value: Any) -> str | None:
+        if hasattr(value, "name"):
+            return value.name
+        if isinstance(value, str):
+            return value
+        return None
 
 class TOTPSetupResponse(BaseSchema):
     secret: str
@@ -302,3 +340,7 @@ class TOTPLoginRequest(BaseModel):
 class Disable2FARequest(BaseModel):
     password: str = Field(..., min_length=8)
     code: str = Field(..., min_length=6, max_length=6)
+
+
+TokenResponse.model_rebuild()
+

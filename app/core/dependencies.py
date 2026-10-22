@@ -48,8 +48,11 @@ async def get_current_user(
             iat = payload["exp"] - (settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
         if iat:
             from datetime import datetime, timezone
+            last_logout = user.last_logout_at
+            if last_logout.tzinfo is not None:
+                last_logout = last_logout.replace(tzinfo=None)
             iat_dt = datetime.fromtimestamp(iat, tz=timezone.utc).replace(tzinfo=None)
-            if iat_dt < user.last_logout_at:
+            if iat_dt < last_logout:
                 raise UnauthorizedException("Token has been revoked by logout")
 
     role_name = user.role.name.lower() if user.role and user.role.name else ""
@@ -73,11 +76,12 @@ async def get_current_active_user(user: Annotated[User, Depends(get_current_user
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
 
 
-def require_roles(*allowed_roles: str) -> Callable:
+def require_roles(*allowed_roles: str, allow_admin: bool = True) -> Callable:
     async def role_checker(user: CurrentUser) -> User:
         role_name = user.role.name if user.role else None
-        if role_name not in allowed_roles and role_name not in UserRole.ADMIN_ROLES:
-            raise ForbiddenException(f"Requires one of roles: {', '.join(allowed_roles)}")
+        if role_name not in allowed_roles:
+            if not allow_admin or role_name not in UserRole.ADMIN_ROLES:
+                raise ForbiddenException(f"Requires one of roles: {', '.join(allowed_roles)}")
         return user
 
     return role_checker
@@ -98,6 +102,7 @@ def require_permission(resource: str, action: str) -> Callable:
 
 
 AdminUser = Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN))]
+PatientUser = Annotated[User, Depends(require_roles(UserRole.PATIENT, allow_admin=False))]
 
 
 async def get_tenant_hospital_id(

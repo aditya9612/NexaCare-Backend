@@ -43,7 +43,7 @@ async def doctor_dashboard(
 async def patient_dashboard(
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_roles(UserRole.PATIENT)),
+    _: User = Depends(require_roles(UserRole.PATIENT, allow_admin=False)),
     __: User = Depends(require_permission("dashboard", "read")),
 ):
     data = await DashboardService(db).patient_dashboard(current_user)

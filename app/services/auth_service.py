@@ -6,7 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import UserRole
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException, UnauthorizedException
+from app.core.exceptions import (
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+    UnauthorizedException,
+)
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -26,6 +32,7 @@ from app.schemas.auth_schema import (
     ActivateAccountRequest,
     ChangePasswordRequest,
     ForgotPasswordRequest,
+    LoginContext,
     LoginRequest,
     OTPVerifyRequest,
     ProfileUpdateRequest,
@@ -354,6 +361,40 @@ class AuthService:
             if not user.is_active:
                 raise UnauthorizedException("Account not activated. Please verify OTP.")
 
+            # Login Context Validation
+            if getattr(data, "login_type", None):
+                actual_role = user.role.name if user.role else None
+                if not actual_role:
+                    raise ForbiddenException("Account has no role assigned")
+
+                context_val = (
+                    data.login_type.value
+                    if isinstance(data.login_type, LoginContext)
+                    else str(data.login_type).strip().upper()
+                )
+
+                if context_val == LoginContext.SUPER_ADMIN.value:
+                    if actual_role != UserRole.SUPER_ADMIN:
+                        raise ForbiddenException("Access denied: Super Admin portal only accepts Super Admin accounts")
+                elif context_val == LoginContext.ORGANIZATION.value:
+                    organization_roles = {
+                        UserRole.HOSPITAL_ADMIN,
+                        UserRole.DOCTOR,
+                        UserRole.NURSE,
+                        UserRole.RECEPTIONIST,
+                        UserRole.ACCOUNTANT,
+                        UserRole.PHARMACIST,
+                        UserRole.LAB_TECHNICIAN,
+                    }
+                    if actual_role not in organization_roles:
+                        raise ForbiddenException(f"Access denied: Organization portal does not permit {actual_role} accounts")
+                elif context_val == LoginContext.PATIENT.value:
+                    if actual_role != UserRole.PATIENT:
+                        raise ForbiddenException("Access denied: Patient portal only accepts Patient accounts")
+                else:
+                    raise BadRequestException(f"Invalid login_type: {data.login_type}")
+
+
             # 2FA intercept logic
             if settings.ENABLE_2FA_FEATURE:
                 result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
@@ -425,13 +466,31 @@ class AuthService:
             raise exc
 
     async def _issue_tokens(self, user: User) -> TokenResponse:
-        access = create_access_token(user.id)
+        role_name = user.role.name if user.role else None
+        extra_claims = {
+            "role": role_name,
+            "role_id": user.role_id,
+            "hospital_id": user.hospital_id,
+        }
+        access = create_access_token(user.id, extra_claims=extra_claims)
         refresh = create_refresh_token(user.id)
         expires_at = utc_now() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         await self.repo.save_refresh_token(
             RefreshToken(user_id=user.id, token=refresh, expires_at=expires_at)
         )
-        return TokenResponse(access_token=access, refresh_token=refresh)
+        user_profile = UserProfileResponse.model_validate(user)
+        user_profile.role_name = role_name
+        user_profile.role = role_name
+        user_profile.hospital_id = user.hospital_id
+        return TokenResponse(
+            access_token=access,
+            refresh_token=refresh,
+            token_type="bearer",
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            role=role_name,
+            user=user_profile,
+        )
+
 
     async def logout(self, refresh_token: str, user: User) -> None:
         try:
@@ -489,6 +548,7 @@ class AuthService:
         if not user.is_active:
             raise BadRequestException("Account not activated")
         user.hashed_password = get_password_hash(data.new_password)
+        user.last_logout_at = utc_now()
         await self.repo.update(user)
         await self.repo.revoke_all_user_tokens(user.id)
 
@@ -496,8 +556,10 @@ class AuthService:
         if not verify_password(data.current_password, user.hashed_password):
             raise BadRequestException("Current password is incorrect")
         user.hashed_password = get_password_hash(data.new_password)
+        user.last_logout_at = utc_now()
         await self.repo.update(user)
         await self.repo.revoke_all_user_tokens(user.id)
+
 
     async def verify_otp_code(self, data: OTPVerifyRequest) -> None:
         user = await self._get_user_by_identifier(data.email, data.phone)

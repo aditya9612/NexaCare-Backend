@@ -703,9 +703,12 @@ async def list_patient_clinical_records(
     size: int = Query(20, ge=1, le=100),
     _: User = Depends(require_permission("patients", "read")),
 ):
+    if current_user and current_user.role and current_user.role.name.lower() == "patient":
+        await PatientService(db).get_by_id(patient_id, current_user=current_user)
     hospital_id = resolve_tenant_id(current_user)
     from app.services.clinical_record_service import ClinicalRecordService
     result = await ClinicalRecordService(db).list_records(
         page=page, size=size, patient_id=patient_id, hospital_id=hospital_id, current_user=current_user
     )
     return APIResponse(message="Records fetched successfully", data=result)
+

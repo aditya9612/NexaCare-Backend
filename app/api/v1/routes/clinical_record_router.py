@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
+from app.core.constants import UserRole
+from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.clinical_record_schema import (
@@ -19,9 +20,9 @@ async def create_clinical_record(
     data: ClinicalRecordCreate,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("patients", "create")),
+    _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
 ):
-    record = await ClinicalRecordService(db).create_record(data, current_user.id)
+    record = await ClinicalRecordService(db).create_record(data, current_user.id, current_user=current_user)
     return APIResponse(message="Record created successfully", data=record)
 
 
@@ -39,7 +40,7 @@ async def list_clinical_records(
     hospital_id = resolve_tenant_id(current_user)
     result = await ClinicalRecordService(db).list_records(
         page=page, size=size, patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
-        hospital_id=hospital_id,
+        hospital_id=hospital_id, current_user=current_user,
     )
     return APIResponse(message="Records fetched successfully", data=result)
 
@@ -52,7 +53,7 @@ async def get_clinical_record(
     _: User = Depends(require_permission("patients", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
-    record = await ClinicalRecordService(db).get_record(record_id, hospital_id=hospital_id)
+    record = await ClinicalRecordService(db).get_record(record_id, hospital_id=hospital_id, current_user=current_user)
     return APIResponse(message="Record fetched successfully", data=record)
 
 
@@ -62,9 +63,9 @@ async def update_clinical_record(
     data: ClinicalRecordUpdate,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("patients", "update")),
+    _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
 ):
-    record = await ClinicalRecordService(db).update_record(record_id, data, current_user.id)
+    record = await ClinicalRecordService(db).update_record(record_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Record updated successfully", data=record)
 
 
@@ -73,7 +74,8 @@ async def delete_clinical_record(
     record_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    _: User = Depends(require_permission("patients", "delete")),
+    _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
 ):
-    await ClinicalRecordService(db).delete_record(record_id, current_user.id)
+    await ClinicalRecordService(db).delete_record(record_id, current_user.id, current_user=current_user)
     return APIResponse(message="Record deleted successfully", data=MessageResponse(message="Soft deleted"))
+

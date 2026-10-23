@@ -15,6 +15,7 @@ class LabTestCreate(BaseSchema):
     sample_type: str = "blood"
     turnaround_hours: int = Field(24, ge=1)
     normal_range: str | None = None
+    department_id: int | None = None
 
 
 class LabTestUpdate(BaseSchema):

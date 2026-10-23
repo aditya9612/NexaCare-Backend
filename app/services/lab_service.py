@@ -166,6 +166,8 @@ class LabService:
 
         dump = data.model_dump()
         dump["test_name"] = normalized_name
+        if dump.get("department_id"):
+            await self._validate_department(dump["department_id"])
         test = LabTest(test_code=generate_lab_test_code(), doctor_id=doctor_id, hospital_id=hospital_id, **dump)
         try:
             test = await self.test_repo.create(test)
@@ -181,20 +183,6 @@ class LabService:
         sort_order: str = "desc", category: str | None = None, doctor_id: int | None = None,
         department_id: int | None = None, current_user = None
     ):
-        if department_id is None and current_user:
-            role_name = current_user.role.name.lower() if current_user and current_user.role else ""
-            if role_name in ["lab technician", "lab_technician"]:
-                staff_res = await self.db.execute(
-                    select(Staff.department_id).where(
-                        Staff.email == current_user.email,
-                        Staff.is_deleted.is_(False)
-                    ).limit(1)
-                )
-                dept = staff_res.scalar_one_or_none()
-                if not dept:
-                    raise BadRequestException("Lab technician department is not assigned")
-                department_id = dept
-
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size
@@ -213,20 +201,6 @@ class LabService:
         self, q: str, page: int = 1, size: int = 20, doctor_id: int | None = None,
         department_id: int | None = None, current_user = None
     ):
-        if department_id is None and current_user:
-            role_name = current_user.role.name.lower() if current_user and current_user.role else ""
-            if role_name in ["lab technician", "lab_technician"]:
-                staff_res = await self.db.execute(
-                    select(Staff.department_id).where(
-                        Staff.email == current_user.email,
-                        Staff.is_deleted.is_(False)
-                    ).limit(1)
-                )
-                dept = staff_res.scalar_one_or_none()
-                if not dept:
-                    raise BadRequestException("Lab technician department is not assigned")
-                department_id = dept
-
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
         skip = (page - 1) * size

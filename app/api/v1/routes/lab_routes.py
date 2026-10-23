@@ -57,13 +57,11 @@ async def list_lab_tests(
     sort_by: str = "created_at",
     sort_order: str = "desc",
     category: str | None = None,
+    department_id: int | None = None,
     q: str | None = None,
     _: User = Depends(require_permission("lab", "read")),
 ):
     from app.repositories.doctor_repository import DoctorRepository
-    from app.models.staff_model import Staff
-    from app.core.exceptions import BadRequestException
-    from sqlalchemy import select
 
     service = LabService(db)
     is_admin = await service._is_admin_user(current_user)
@@ -74,19 +72,6 @@ async def list_lab_tests(
     if not is_admin and role_name in ["doctor"]:
         doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
         doctor_id = doctor.id if doctor else None
-
-    # Resolve department_id for Lab Technician
-    department_id = None
-    if role_name in ["lab technician", "lab_technician"]:
-        staff_result = await db.execute(
-            select(Staff.department_id).where(
-                Staff.email == current_user.email,
-                Staff.is_deleted.is_(False)
-            ).limit(1)
-        )
-        department_id = staff_result.scalar_one_or_none()
-        if not department_id:
-            raise BadRequestException("Lab technician department is not assigned")
 
     if q:
         result = await service.search_tests(

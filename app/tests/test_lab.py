@@ -221,3 +221,101 @@ async def test_get_completed_tests_success(client):
         assert data["data"]["total"] == 0
         mock_service.get_completed_tests.assert_called_once()
 
+
+@pytest.mark.asyncio
+async def test_list_lab_tests_as_lab_technician(client):
+    user = build_test_user("Lab Technician")
+    override_current_user(user)
+
+    mock_tests = [
+        {
+            "id": 1,
+            "test_code": "TST-001",
+            "test_name": "Blood Glucose",
+            "category": "Biochemistry",
+            "description": "desc",
+            "price": 150.0,
+            "sample_type": "blood",
+            "turnaround_hours": 24,
+            "normal_range": "70-110",
+            "is_active": True,
+            "department_id": None,
+            "doctor_id": None,
+            "created_at": "2026-10-23T10:00:00",
+            "updated_at": "2026-10-23T10:00:00",
+        },
+        {
+            "id": 2,
+            "test_code": "TST-002",
+            "test_name": "Complete Blood Count",
+            "category": "Hematology",
+            "description": "desc",
+            "price": 300.0,
+            "sample_type": "blood",
+            "turnaround_hours": 24,
+            "normal_range": "Normal",
+            "is_active": True,
+            "department_id": 4,
+            "doctor_id": None,
+            "created_at": "2026-10-23T10:00:00",
+            "updated_at": "2026-10-23T10:00:00",
+        }
+    ]
+    paginated_result = build_paginated_result(mock_tests, 2, 1, 20)
+    mock_service = AsyncMock()
+    mock_service.list_tests = AsyncMock(return_value=paginated_result)
+
+    with patch("app.repositories.rbac_repository.RBACRepository.get_user_permissions", return_value={"lab:read"}), \
+         patch("app.api.v1.routes.lab_routes.LabService", return_value=mock_service):
+        response = await client.get("/api/v1/lab/tests")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["total"] == 2
+        mock_service.list_tests.assert_called_once()
+        call_kwargs = mock_service.list_tests.call_args.kwargs
+        assert call_kwargs.get("department_id") is None
+
+
+@pytest.mark.asyncio
+async def test_create_lab_test_as_lab_technician(client):
+    user = build_test_user("Lab Technician")
+    override_current_user(user)
+
+    mock_test = {
+        "id": 3,
+        "test_code": "TST-003",
+        "test_name": "Serum Albumin",
+        "category": "Immunology",
+        "description": "desc",
+        "price": 250.0,
+        "sample_type": "blood",
+        "turnaround_hours": 24,
+        "normal_range": "3.5-5.0",
+        "is_active": True,
+        "department_id": None,
+        "doctor_id": None,
+        "created_at": "2026-10-23T10:00:00",
+        "updated_at": "2026-10-23T10:00:00",
+    }
+    mock_service = AsyncMock()
+    mock_service.create_test = AsyncMock(return_value=mock_test)
+
+    with patch("app.repositories.rbac_repository.RBACRepository.get_user_permissions", return_value={"lab:create"}), \
+         patch("app.api.v1.routes.lab_routes.LabService", return_value=mock_service):
+        response = await client.post(
+            "/api/v1/lab/tests",
+            json={
+                "test_name": "Serum Albumin",
+                "category": "Immunology",
+                "price": 250.0,
+                "sample_type": "blood",
+                "turnaround_hours": 24,
+            }
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["test_name"] == "Serum Albumin"
+        mock_service.create_test.assert_called_once()
+

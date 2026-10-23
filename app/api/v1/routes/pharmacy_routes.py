@@ -25,6 +25,7 @@ from app.schemas.pharmacy_schema import (
     PharmacyInvoiceUpdate,
     PharmacyInvoiceResponse,
     PharmacyDashboardResponse,
+    PharmacyAnalyticsTrendsResponse,
     PharmacyInventoryOverviewResponse,
     PharmacyReturnCreate,
     PharmacyReturnResponse,
@@ -158,6 +159,30 @@ async def get_pharmacy_dashboard(
     )
     return APIResponse(message="Pharmacy dashboard summary retrieved", data=dashboard_data)
 
+
+# --- Pharmacy Analytics Trends & Reports ---
+@router.get("/analytics-trends", response_model=APIResponse[PharmacyAnalyticsTrendsResponse])
+@router.get("/reports/analytics-trends", response_model=APIResponse[PharmacyAnalyticsTrendsResponse])
+async def get_pharmacy_analytics_trends(
+    db: DbSession,
+    current_user: CurrentUser,
+    year: Optional[int] = Query(None, description="Target year for monthly and yearly trends (defaults to current year)"),
+    days: int = Query(30, ge=1, le=365, description="Number of days for daily sales trend (default: 30)"),
+    start_date: Optional[date] = Query(None, description="Start date for daily sales trend (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for daily sales trend (YYYY-MM-DD)"),
+    _: User = Depends(require_permission("pharmacy", "read")),
+):
+    if start_date and end_date and start_date > end_date:
+        raise BadRequestException("start_date cannot be after end_date")
+
+    data = await PharmacyService(db).get_analytics_trends(
+        year=year,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+        current_user=current_user,
+    )
+    return APIResponse(message="Pharmacy analytics trends retrieved successfully", data=data)
 
 
 # --- Medicines ---

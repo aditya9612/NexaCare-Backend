@@ -959,10 +959,14 @@ class LabService:
     async def _generate_report_pdf(self, report: LabReport, order) -> str:
         from app.models.patient_model import Patient
         from app.models.doctor_model import Doctor
+        from app.models.hospital_model import Hospital
         from sqlalchemy import select
 
         patient = await self.db.get(Patient, order.patient_id)
         doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
+
+        effective_hosp_id = getattr(order, "hospital_id", None) or getattr(report, "hospital_id", None)
+        hospital = await self.db.get(Hospital, effective_hosp_id) if effective_hosp_id else None
 
         result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
         results = list(result_objs.scalars().all())
@@ -988,6 +992,7 @@ class LabService:
 
         report_data = {
             "order_number": order.order_number,
+            "report_number": report.report_number,
             "status": report.status,
             "generated_at": generated_at_str,
             "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
@@ -998,9 +1003,17 @@ class LabService:
             "doctor_code": doctor.doctor_code if doctor else "",
             "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
             "test_category": order.lab_test.category if order.lab_test else "Unknown",
+            "sample_type": order.lab_test.sample_type if order.lab_test else "Blood",
             "summary": report.summary or report.remarks or "",
             "columns": columns,
             "rows": rows,
+            "hospital_name": hospital.name if hospital else "NexaCare Healthcare",
+            "hospital_address": hospital.address if hospital else None,
+            "hospital_phone": hospital.phone if hospital else None,
+            "hospital_email": hospital.email if hospital else None,
+            "hospital_website": hospital.website if hospital else None,
+            "hospital_logo": hospital.logo_path if hospital else None,
+            "title": "Diagnostic Report",
         }
 
         path = await generate_lab_report_html(

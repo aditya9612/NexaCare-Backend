@@ -141,8 +141,36 @@ def format_cell_value(val: Any) -> str:
 
 async def generate_lab_report_html(report_number: str, data: dict) -> str:
     template = env.get_template("report_template.html")
-    report_type = data.get("title", "Lab Report").title()
+    report_type = data.get("title", "Diagnostic Report")
     
+    # Process hospital logo if local file path
+    logo_path = data.get("hospital_logo")
+    if logo_path and isinstance(logo_path, str) and not logo_path.startswith("data:"):
+        import os
+        import mimetypes
+        import base64
+        resolved_logo = None
+        candidates = [
+            logo_path,
+            os.path.join("app", logo_path),
+            os.path.abspath(logo_path),
+            os.path.abspath(os.path.join("app", logo_path)),
+        ]
+        for c in candidates:
+            if os.path.exists(c) and os.path.isfile(c):
+                resolved_logo = c
+                break
+        if resolved_logo:
+            mime_type, _ = mimetypes.guess_type(resolved_logo)
+            if not mime_type:
+                mime_type = "image/png"
+            try:
+                with open(resolved_logo, "rb") as f:
+                    b64_data = base64.b64encode(f.read()).decode("utf-8")
+                data["hospital_logo"] = f"data:{mime_type};base64,{b64_data}"
+            except Exception:
+                pass
+
     # Process rows/columns to handle lists of dicts (like model_dump from responses)
     rows = data.get("rows", [])
     columns = data.get("columns", [])
@@ -163,10 +191,13 @@ async def generate_lab_report_html(report_number: str, data: dict) -> str:
                 formatted_rows.append([format_cell_value(r)])
         data["rows"] = formatted_rows
 
-    html = template.render(report_type=report_type, report_number=report_number, **data)
+    render_context = dict(data)
+    render_context["report_number"] = report_number
+    render_context["report_type"] = report_type
+    html = template.render(**render_context)
 
     # Save folder based on report type
-    folder_name = "lab_reports" if report_type == "Lab Report" else "reports"
+    folder_name = "lab_reports"
     output_dir = _ensure_output_dir(folder_name)
 
     # Try to generate a real PDF, fall back to HTML if it fails

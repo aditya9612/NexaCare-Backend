@@ -28,7 +28,7 @@ class LabTestRepository:
         if doctor_id is not None:
             query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
-            query = query.where(LabTest.department_id == department_id)
+            query = query.where(or_(LabTest.department_id == department_id, LabTest.department_id.is_(None)))
         column = getattr(LabTest, sort_by, LabTest.created_at)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
@@ -43,7 +43,7 @@ class LabTestRepository:
         if doctor_id is not None:
             query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
-            query = query.where(LabTest.department_id == department_id)
+            query = query.where(or_(LabTest.department_id == department_id, LabTest.department_id.is_(None)))
         return (await self.db.scalar(query)) or 0
 
     async def search(self, q: str, skip: int = 0, limit: int = 20, doctor_id: int | None = None, department_id: int | None = None, hospital_id: int | None = None) -> list[LabTest]:
@@ -58,7 +58,7 @@ class LabTestRepository:
         if doctor_id is not None:
             query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
-            query = query.where(LabTest.department_id == department_id)
+            query = query.where(or_(LabTest.department_id == department_id, LabTest.department_id.is_(None)))
         result = await self.db.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all())
 
@@ -75,7 +75,7 @@ class LabTestRepository:
         if doctor_id is not None:
             query = query.where(or_(LabTest.doctor_id == doctor_id, LabTest.doctor_id.is_(None)))
         if department_id is not None:
-            query = query.where(LabTest.department_id == department_id)
+            query = query.where(or_(LabTest.department_id == department_id, LabTest.department_id.is_(None)))
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, test_id: int, hospital_id: int | None = None) -> LabTest | None:

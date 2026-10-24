@@ -428,6 +428,12 @@ class AppointmentService:
         if not appointment:
             raise NotFoundException("Appointment not found")
 
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or appointment.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this appointment token")
+
         if not appointment.token_number:
             raise BadRequestException("Token not generated for this appointment")
 

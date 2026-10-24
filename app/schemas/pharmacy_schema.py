@@ -732,3 +732,55 @@ class PharmacyDashboardResponse(BaseSchema):
     inventory_health_progress: InventoryHealthProgress = Field(default_factory=InventoryHealthProgress)
 
 
+class DailySalesTrendItem(BaseSchema):
+    date: str
+    day: str
+    total_sales: float
+    invoice_count: int
+
+
+class MonthlySalesTrendItem(BaseSchema):
+    month: str
+    month_number: int
+    total_sales: float
+    invoice_count: int
+
+
+class MedicineCategoryAnalysisItem(BaseSchema):
+    category: str
+    total_medicines: int
+    total_stock: int
+    sold_quantity: int
+    total_revenue: float
+    percentage: float
+
+
+class InventoryStatusDistribution(BaseSchema):
+    in_stock: int
+    low_stock: int
+    out_of_stock: int
+    expiring_soon: int
+    total_medicines: int
+    in_stock_percentage: float
+    low_stock_percentage: float
+    out_of_stock_percentage: float
+    expiring_soon_percentage: float
+
+
+class YearlyRevenueTrendItem(BaseSchema):
+    year: int
+    total_revenue: float
+    invoice_count: int
+    growth_rate_percentage: float | None = None
+
+
+class PharmacyAnalyticsTrendsResponse(BaseSchema):
+    year: int
+    daily_sales_trend: List[DailySalesTrendItem] = []
+    monthly_sales_trend: List[MonthlySalesTrendItem] = []
+    medicine_category_analysis: List[MedicineCategoryAnalysisItem] = []
+    inventory_status_distribution: InventoryStatusDistribution
+    yearly_revenue_trend: List[YearlyRevenueTrendItem] = []
+
+
+

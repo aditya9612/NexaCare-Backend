@@ -5,7 +5,8 @@ from datetime import datetime, date
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.core.dependencies import DbSession, CurrentUser, resolve_tenant_id
+from app.core.dependencies import DbSession, CurrentUser, AdminUser, require_permission, resolve_tenant_id
+from app.models.user_model import User
 from app.core.report_config import REPORT_CONTENT_TYPES
 from app.schemas.report_schema import (
     ExportPayload,
@@ -69,7 +70,7 @@ def export_response(payload: ExportPayload, format: ReportFormat, download: bool
 @router.get("/admin/daily-revenue", response_model=DailyRevenueResponse)
 async def get_admin_daily_revenue(
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: AdminUser,
     format: ReportFormat = Query(ReportFormat.JSON),
     download: bool = Query(False)
 ):
@@ -87,7 +88,7 @@ async def get_admin_daily_revenue(
 @router.get("/admin/patient-statistics", response_model=PatientStatisticsResponse)
 async def get_admin_patient_statistics(
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: AdminUser,
     format: ReportFormat = Query(ReportFormat.JSON),
     download: bool = Query(False)
 ):
@@ -99,7 +100,7 @@ async def get_admin_patient_statistics(
 @router.get("/admin/appointment-trends", response_model=AppointmentTrendsResponse)
 async def get_admin_appointment_trends(
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: AdminUser,
     format: ReportFormat = Query(ReportFormat.JSON),
     download: bool = Query(False)
 ):
@@ -111,13 +112,14 @@ async def get_admin_appointment_trends(
 @router.get("/admin/inventory-status", response_model=InventoryStatusResponse)
 async def get_admin_inventory_status(
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: AdminUser,
     format: ReportFormat = Query(ReportFormat.JSON),
     download: bool = Query(False)
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_inventory_status(hospital_id=hospital_id)
     return export_response(ReportService.build_export_payload("Inventory Status", data), format, download, "inventory-status", data)
+
 
 
 # ---------------------------------------------------------
@@ -166,7 +168,8 @@ async def get_accountant_financial_report(
     month_filter: str | None = Query(None, alias="month", description="YYYY-MM for monthly reports. Defaults to current month if omitted.", examples={"default": {"summary": "Example", "value": "2026-07"}}),
     year_filter: str | None = Query(None, alias="year", description="YYYY for yearly reports. Defaults to current year if omitted.", examples={"default": {"summary": "Example", "value": "2026"}}),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}}),
+    _: User = Depends(require_permission("billing", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     target_date, target_month, target_year = validate_period_filters(
@@ -213,7 +216,8 @@ async def get_accountant_revenue_vs_expense(
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}}),
+    _: User = Depends(require_permission("billing", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_accountant_revenue_vs_expense(start_date, end_date, hospital_id=hospital_id)
@@ -246,7 +250,8 @@ async def get_accountant_department_wise(
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json.", examples={"default": {"summary": "Example", "value": "json"}}), 
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}})
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.", examples={"default": {"summary": "Example", "value": False}}),
+    _: User = Depends(require_permission("billing", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_accountant_department_wise(start_date, end_date, hospital_id=hospital_id)
@@ -272,7 +277,8 @@ async def get_pharmacy_sales(
     start_date: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="End date (YYYY-MM-DD)"),
     format: ReportFormat = Query(ReportFormat.JSON), 
-    download: bool = Query(False)
+    download: bool = Query(False),
+    _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     if start_date and end_date:
@@ -306,7 +312,8 @@ async def get_pharmacy_inventory(
     db: DbSession,
     current_user: CurrentUser,
     format: ReportFormat = Query(ReportFormat.JSON),
-    download: bool = Query(False)
+    download: bool = Query(False),
+    _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_pharmacy_inventory(hospital_id=hospital_id)
@@ -318,7 +325,8 @@ async def get_pharmacy_expiry(
     db: DbSession,
     current_user: CurrentUser,
     format: ReportFormat = Query(ReportFormat.JSON),
-    download: bool = Query(False)
+    download: bool = Query(False),
+    _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_pharmacy_expiry(hospital_id=hospital_id)
@@ -346,7 +354,8 @@ async def get_pharmacy_profit_loss(
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json."),
-    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false.")
+    download: bool = Query(False, description="Set to true to force download as an attachment. Default is false."),
+    _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     if start_date and end_date:
@@ -407,7 +416,8 @@ async def get_lab_daily(
     current_user: CurrentUser,
     date_filter: date | None = Query(None, alias="date", description="YYYY-MM-DD"),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
-    download: bool = Query(False, description="Set to true to force download")
+    download: bool = Query(False, description="Set to true to force download"),
+    _: User = Depends(require_permission("lab", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_lab_daily(date_filter, hospital_id=hospital_id)
@@ -440,7 +450,8 @@ async def get_lab_monthly(
     month: str | None = Query(None, description="MM"),
     year: str | None = Query(None, description="YYYY"),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
-    download: bool = Query(False, description="Set to true to force download")
+    download: bool = Query(False, description="Set to true to force download"),
+    _: User = Depends(require_permission("lab", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_lab_monthly(month, year, hospital_id=hospital_id)
@@ -473,7 +484,8 @@ async def get_lab_performance(
     start_date: date | None = Query(None, description="YYYY-MM-DD"),
     end_date: date | None = Query(None, description="YYYY-MM-DD"),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
-    download: bool = Query(False, description="Set to true to force download")
+    download: bool = Query(False, description="Set to true to force download"),
+    _: User = Depends(require_permission("lab", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_lab_performance(start_date, end_date, hospital_id=hospital_id)
@@ -506,7 +518,8 @@ async def get_lab_revenue(
     start_date: date | None = Query(None, description="YYYY-MM-DD"),
     end_date: date | None = Query(None, description="YYYY-MM-DD"),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
-    download: bool = Query(False, description="Set to true to force download")
+    download: bool = Query(False, description="Set to true to force download"),
+    _: User = Depends(require_permission("lab", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_lab_revenue(start_date, end_date, hospital_id=hospital_id)
@@ -544,7 +557,8 @@ async def get_doctor_lab_reports(
     start_date: date | None = Query(None, description="YYYY-MM-DD"),
     end_date: date | None = Query(None, description="YYYY-MM-DD"),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format"),
-    download: bool = Query(False, description="Set to true to force download")
+    download: bool = Query(False, description="Set to true to force download"),
+    _: User = Depends(require_permission("doctors", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
     data = await ReportService(db).get_doctor_lab_reports(start_date, end_date, hospital_id=hospital_id)

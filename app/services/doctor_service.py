@@ -155,12 +155,16 @@ class DoctorService:
         availability_status: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ):
         from app.schemas.doctor_schema import DoctorPaginatedResult
         from app.core.dependencies import resolve_tenant_id
         import math
 
-        hospital_id = resolve_tenant_id(current_user)
+        if hospital_id is None and current_user is not None:
+            role_name = current_user.role.name.lower() if current_user.role and current_user.role.name else ""
+            if role_name not in ("super admin", "super_admin"):
+                hospital_id = resolve_tenant_id(current_user)
         counts = await self.repo.get_doctor_counts(hospital_id=hospital_id)
 
         if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
@@ -675,7 +679,9 @@ class DoctorService:
         from app.core.dependencies import resolve_tenant_id
 
         if hospital_id is None and current_user is not None:
-            hospital_id = resolve_tenant_id(current_user)
+            role_name = current_user.role.name.lower() if current_user.role and current_user.role.name else ""
+            if role_name not in ("super admin", "super_admin"):
+                hospital_id = resolve_tenant_id(current_user)
 
         sample_dept_name = "Cardiology"
         hospital_departments = []
@@ -772,7 +778,11 @@ class DoctorService:
         from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
         from app.core.dependencies import resolve_tenant_id
 
-        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        if hospital_id is None and actor is not None:
+            role_name = actor.role.name.lower() if actor.role and actor.role.name else ""
+            if role_name not in ("super admin", "super_admin"):
+                hospital_id = resolve_tenant_id(actor)
+        target_hospital_id = hospital_id
 
         wb = openpyxl.load_workbook(BytesIO(file_content))
         ws = wb.active
@@ -968,7 +978,9 @@ class DoctorService:
         from app.core.dependencies import resolve_tenant_id
         
         if hospital_id is None and current_user is not None:
-            hospital_id = resolve_tenant_id(current_user)
+            role_name = current_user.role.name.lower() if current_user.role and current_user.role.name else ""
+            if role_name not in ("super admin", "super_admin"):
+                hospital_id = resolve_tenant_id(current_user)
 
         from sqlalchemy.orm import joinedload
         query = select(Doctor, User).options(joinedload(Doctor.department)).outerjoin(User, Doctor.user_id == User.id).where(Doctor.is_deleted == False)

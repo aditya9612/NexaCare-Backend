@@ -1,11 +1,11 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Body, Request
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, Body, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
+from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
 from app.models.user_model import User
 from app.schemas.appointment_schema import AppointmentResponse, DoctorAppointmentListResponse
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -252,6 +252,8 @@ async def list_doctors(
     availability_status: str | None = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id", description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "read")),
 ):
     from app.models.staff_model import Staff
@@ -269,10 +271,14 @@ async def list_doctors(
             raise BadRequestException("Lab technician department is not assigned")
         department_id = staff.department_id
 
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+
     result = await DoctorService(db).list_doctors(
         current_user=current_user,
         page=page, size=size, department_id=department_id,
         availability_status=availability_status, sort_by=sort_by, sort_order=sort_order,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Doctors retrieved", data=result)
 
@@ -582,20 +588,15 @@ async def add_treatment_note(
 async def get_bulk_template(
     db: DbSession,
     current_user: CurrentUser,
-    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id", description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    from fastapi.responses import StreamingResponse
-    from app.core.constants import UserRole
-    tenant_hospital_id = resolve_tenant_id(current_user)
-    role_name = current_user.role.name if current_user.role else ""
-    if role_name != UserRole.SUPER_ADMIN:
-        target_hospital_id = tenant_hospital_id
-    else:
-        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
 
     stream = await DoctorService(db).generate_doctor_bulk_template(
-        hospital_id=target_hospital_id,
+        hospital_id=hospital_id,
         current_user=current_user,
     )
     return StreamingResponse(
@@ -610,25 +611,21 @@ async def upload_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
-    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id", description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "create")),
 ):
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only Excel (.xlsx) files are allowed.")
         
-    from app.core.constants import UserRole
-    tenant_hospital_id = resolve_tenant_id(current_user)
-    role_name = current_user.role.name if current_user.role else ""
-    if role_name != UserRole.SUPER_ADMIN:
-        target_hospital_id = tenant_hospital_id
-    else:
-        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
 
     content = await file.read()
     result = await DoctorService(db).import_doctors_from_excel(
         content,
         current_user,
-        hospital_id=target_hospital_id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Bulk upload processed", data=result)
 
@@ -637,39 +634,42 @@ async def upload_bulk(
 async def export_doctors_data(
     db: DbSession,
     current_user: CurrentUser,
-    format: str = Query(..., description="Export format: excel or pdf"),
+    format: str = Query("excel", description="Export format: excel or pdf"),
     department_id: Optional[int] = Query(None),
     availability_status: Optional[str] = Query(None),
-    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id", description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "read")),
 ):
-    if format not in ("excel", "pdf"):
+    format_clean = (format or "excel").lower().strip()
+    if format_clean not in ("excel", "pdf"):
         raise HTTPException(status_code=400, detail="Format must be 'excel' or 'pdf'")
         
-    from app.core.constants import UserRole
-    tenant_hospital_id = resolve_tenant_id(current_user)
-    role_name = current_user.role.name if current_user.role else ""
-    if role_name != UserRole.SUPER_ADMIN:
-        target_hospital_id = tenant_hospital_id
-    else:
-        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
 
     content, media_type = await DoctorService(db).export_doctors(
-        format_type=format,
+        format_type=format_clean,
         department_id=department_id,
         availability_status=availability_status,
-        hospital_id=target_hospital_id,
+        hospital_id=hospital_id,
         current_user=current_user,
     )
     
-    filename = f"doctors_export.{'xlsx' if format == 'excel' else 'pdf'}"
+    filename = f"doctors_export.{'xlsx' if format_clean == 'excel' else 'pdf'}"
     
-    from fastapi import Response
-    return Response(
-        content=content if format == "pdf" else content.getvalue(),
-        media_type=media_type,
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+    if format_clean == "excel":
+        return StreamingResponse(
+            content,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    else:
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
 
 
 @router.get("/{doctor_id}", response_model=APIResponse[DoctorResponse])

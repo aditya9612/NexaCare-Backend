@@ -1,7 +1,15 @@
 from fastapi import APIRouter, Depends, Header, Response, status
 from typing import Optional
 
-from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
+from app.core.constants import UserRole
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    get_tenant_hospital_id,
+    require_permission,
+    require_roles,
+    resolve_tenant_id,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse
 from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
@@ -26,7 +34,7 @@ async def initiate_discharge(
     db: DbSession,
     current_user: CurrentUser,
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    _: User = Depends(require_permission("appointments", "update")),
+    _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
 ):
     """
     Doctor initiates patient discharge and submits medical discharge summary.
@@ -46,7 +54,15 @@ async def list_active_discharges(
     db: DbSession,
     current_user: CurrentUser,
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    _: User = Depends(require_permission("appointments", "read")),
+    _: User = Depends(require_roles(
+        UserRole.DOCTOR,
+        UserRole.NURSE,
+        UserRole.ACCOUNTANT,
+        UserRole.PHARMACIST,
+        UserRole.LAB_TECHNICIAN,
+        UserRole.RECEPTIONIST,
+        *UserRole.ADMIN_ROLES,
+    )),
 ):
     """
     List all active discharge cases currently undergoing clearances.
@@ -97,7 +113,7 @@ async def get_discharge(
     Get discharge record and clearance statuses by discharge ID.
     """
     tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).get_by_id(discharge_id, hospital_id=tenant_hospital_id)
+    discharge = await DischargeService(db).get_by_id(discharge_id, hospital_id=tenant_hospital_id, current_user=current_user)
     return APIResponse(
         success=True,
         message="Discharge record retrieved successfully",
@@ -117,7 +133,7 @@ async def get_discharge_by_appointment(
     Get discharge details for an appointment.
     """
     tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).get_by_appointment(appointment_id, hospital_id=tenant_hospital_id)
+    discharge = await DischargeService(db).get_by_appointment(appointment_id, hospital_id=tenant_hospital_id, current_user=current_user)
     return APIResponse(
         success=True,
         message="Discharge record retrieved successfully",
@@ -137,7 +153,7 @@ async def get_clearance_status(
     Check real-time clearance status (Pharmacy, Billing, Payment, Doctor Approval).
     """
     tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    status_data = await DischargeService(db).get_clearance_status(discharge_id, hospital_id=tenant_hospital_id)
+    status_data = await DischargeService(db).get_clearance_status(discharge_id, hospital_id=tenant_hospital_id, current_user=current_user)
     return APIResponse(
         success=True,
         message="Clearance status retrieved successfully",
@@ -178,7 +194,7 @@ async def get_discharge_final_bill(
     Get detailed IPD Final Bill with all line items and component breakdowns by discharge ID.
     """
     tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    final_bill = await DischargeService(db).get_final_bill_by_discharge_id(discharge_id, hospital_id=tenant_hospital_id)
+    final_bill = await DischargeService(db).get_final_bill_by_discharge_id(discharge_id, hospital_id=tenant_hospital_id, current_user=current_user)
     return APIResponse(
         success=True,
         message="IPD Final Bill retrieved successfully",
@@ -255,7 +271,7 @@ async def approve_discharge(
     db: DbSession,
     current_user: CurrentUser,
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    _: User = Depends(require_permission("appointments", "update")),
+    _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
 ):
     """
     Doctor gives final approval after all 3 clearances are met.
@@ -282,7 +298,7 @@ async def get_gate_pass(
     Get official Security Gate Pass for discharged patient.
     """
     tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    gate_pass = await DischargeService(db).get_gate_pass(discharge_id, hospital_id=tenant_hospital_id)
+    gate_pass = await DischargeService(db).get_gate_pass(discharge_id, hospital_id=tenant_hospital_id, current_user=current_user)
     return APIResponse(
         success=True,
         message="Gate pass retrieved successfully",
@@ -302,7 +318,7 @@ async def download_gate_pass(
     Download official Security Gate Pass PDF for discharged patient.
     """
     tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    pdf_bytes = await DischargeService(db).download_gate_pass_pdf(discharge_id, hospital_id=tenant_hospital_id)
+    pdf_bytes = await DischargeService(db).download_gate_pass_pdf(discharge_id, hospital_id=tenant_hospital_id, current_user=current_user)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

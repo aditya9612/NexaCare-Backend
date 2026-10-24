@@ -75,6 +75,12 @@ from app.schemas.pharmacy_schema import (
     SupplierCreate,
     SupplierResponse,
     SupplierUpdate,
+    DailySalesTrendItem,
+    MonthlySalesTrendItem,
+    MedicineCategoryAnalysisItem,
+    InventoryStatusDistribution,
+    YearlyRevenueTrendItem,
+    PharmacyAnalyticsTrendsResponse,
 )
 from app.utils.helpers import (
     calculate_gst_amount,
@@ -2503,6 +2509,98 @@ class PharmacyService:
             monthly_sales_trend=monthly_sales_trend,
             inventory_status_mix=inventory_status_mix,
             inventory_health_progress=inventory_health_progress,
+        )
+
+    async def get_analytics_trends(
+        self,
+        year: Optional[int] = None,
+        days: int = 30,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        current_user: Any = None,
+    ) -> PharmacyAnalyticsTrendsResponse:
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        resolved_year = year or today.year
+        hospital_id = resolve_tenant_id(current_user)
+
+        # 1. Daily sales trend
+        if not start_date or not end_date:
+            resolved_end_date = today
+            resolved_start_date = today - timedelta(days=max(1, days) - 1)
+        else:
+            resolved_start_date = start_date
+            resolved_end_date = end_date
+
+        daily_trend_raw = await self.dashboard_repo.get_daily_sales_trend_range(
+            start_date=resolved_start_date,
+            end_date=resolved_end_date,
+            hospital_id=hospital_id,
+        )
+        daily_sales_trend = [DailySalesTrendItem(**item) for item in daily_trend_raw]
+
+        # 2. Monthly sales trend
+        monthly_trend_raw = await self.dashboard_repo.get_monthly_sales_trend_year(
+            year=resolved_year,
+            hospital_id=hospital_id,
+        )
+        monthly_sales_trend = [MonthlySalesTrendItem(**item) for item in monthly_trend_raw]
+
+        # 3. Medicine category analysis
+        category_analysis_raw = await self.dashboard_repo.get_medicine_category_analysis(
+            hospital_id=hospital_id,
+        )
+        medicine_category_analysis = [MedicineCategoryAnalysisItem(**item) for item in category_analysis_raw]
+
+        # 4. Inventory status distribution
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(
+            reference_date=today,
+            hospital_id=hospital_id,
+        )
+        in_stock = status_mix_raw.get("in_stock", 0)
+        low_stock = status_mix_raw.get("low_stock", 0)
+        out_of_stock = status_mix_raw.get("out_of_stock", 0)
+        expiring_soon = status_mix_raw.get("expiring_soon", 0)
+        total_medicines = in_stock + low_stock + out_of_stock + expiring_soon
+
+        if total_medicines > 0:
+            in_stock_pct = round((in_stock / total_medicines) * 100, 2)
+            low_stock_pct = round((low_stock / total_medicines) * 100, 2)
+            out_of_stock_pct = round((out_of_stock / total_medicines) * 100, 2)
+            expiring_soon_pct = round((expiring_soon / total_medicines) * 100, 2)
+        else:
+            in_stock_pct = 0.0
+            low_stock_pct = 0.0
+            out_of_stock_pct = 0.0
+            expiring_soon_pct = 0.0
+
+        inventory_status_distribution = InventoryStatusDistribution(
+            in_stock=in_stock,
+            low_stock=low_stock,
+            out_of_stock=out_of_stock,
+            expiring_soon=expiring_soon,
+            total_medicines=total_medicines,
+            in_stock_percentage=in_stock_pct,
+            low_stock_percentage=low_stock_pct,
+            out_of_stock_percentage=out_of_stock_pct,
+            expiring_soon_percentage=expiring_soon_pct,
+        )
+
+        # 5. Yearly revenue trend
+        yearly_trend_raw = await self.dashboard_repo.get_yearly_revenue_trend(
+            current_year=resolved_year,
+            years_back=5,
+            hospital_id=hospital_id,
+        )
+        yearly_revenue_trend = [YearlyRevenueTrendItem(**item) for item in yearly_trend_raw]
+
+        return PharmacyAnalyticsTrendsResponse(
+            year=resolved_year,
+            daily_sales_trend=daily_sales_trend,
+            monthly_sales_trend=monthly_sales_trend,
+            medicine_category_analysis=medicine_category_analysis,
+            inventory_status_distribution=inventory_status_distribution,
+            yearly_revenue_trend=yearly_revenue_trend,
         )
 
     async def get_inventory_overview(self, current_user=None) -> PharmacyInventoryOverviewResponse:

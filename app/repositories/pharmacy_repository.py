@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
-from sqlalchemy import func, or_, select, case, delete
+from sqlalchemy import func, or_, select, case, delete, cast, Date
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1153,6 +1153,221 @@ class PharmacyDashboardRepository:
             "low_stock": int(row.low_stock) if row.low_stock else 0,
             "out_of_stock": int(row.out_of_stock) if row.out_of_stock else 0,
         }
+
+    async def get_daily_sales_trend_range(
+        self,
+        start_date: date,
+        end_date: date,
+        hospital_id: int | None = None,
+    ) -> list[dict]:
+        start_dt = datetime.combine(start_date, time.min)
+        end_dt = datetime.combine(end_date, time.max)
+        query = (
+            select(
+                cast(PharmacyInvoice.created_at, Date).label("inv_date"),
+                func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0).label("total_sales"),
+                func.count(PharmacyInvoice.id).label("invoice_count"),
+            )
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                PharmacyInvoice.created_at >= start_dt,
+                PharmacyInvoice.created_at <= end_dt,
+            )
+        )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        query = (
+            query
+            .group_by(cast(PharmacyInvoice.created_at, Date))
+            .order_by(cast(PharmacyInvoice.created_at, Date).asc())
+        )
+        res = await self.db.execute(query)
+        data_map = {row.inv_date: (float(row.total_sales or 0.0), int(row.invoice_count or 0)) for row in res.all()}
+
+        trend = []
+        cur = start_date
+        while cur <= end_date:
+            sales, count = data_map.get(cur, (0.0, 0))
+            trend.append({
+                "date": cur.isoformat(),
+                "day": cur.strftime("%a"),
+                "total_sales": round(sales, 2),
+                "invoice_count": count,
+            })
+            cur += timedelta(days=1)
+        return trend
+
+    async def get_monthly_sales_trend_year(
+        self,
+        year: int,
+        hospital_id: int | None = None,
+    ) -> list[dict]:
+        query = (
+            select(
+                func.month(PharmacyInvoice.created_at).label("month_num"),
+                func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0).label("total_sales"),
+                func.count(PharmacyInvoice.id).label("invoice_count"),
+            )
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                func.year(PharmacyInvoice.created_at) == year,
+            )
+        )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        query = (
+            query
+            .group_by(func.month(PharmacyInvoice.created_at))
+            .order_by(func.month(PharmacyInvoice.created_at).asc())
+        )
+        res = await self.db.execute(query)
+        data_map = {int(row.month_num): (float(row.total_sales or 0.0), int(row.invoice_count or 0)) for row in res.all() if row.month_num is not None}
+
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        trend = []
+        for m in range(1, 13):
+            sales, count = data_map.get(m, (0.0, 0))
+            trend.append({
+                "month": month_names[m - 1],
+                "month_number": m,
+                "total_sales": round(sales, 2),
+                "invoice_count": count,
+            })
+        return trend
+
+    async def get_medicine_category_analysis(
+        self,
+        hospital_id: int | None = None,
+    ) -> list[dict]:
+        # Catalog metrics by category
+        cat_query = (
+            select(
+                func.coalesce(Medicine.category, "General").label("category"),
+                func.count(Medicine.id).label("total_medicines"),
+                func.coalesce(func.sum(Medicine.stock_quantity), 0).label("total_stock"),
+            )
+            .where(Medicine.is_deleted.is_(False))
+        )
+        if hospital_id is not None:
+            cat_query = cat_query.where(Medicine.hospital_id == hospital_id)
+        cat_query = cat_query.group_by(func.coalesce(Medicine.category, "General"))
+        cat_res = await self.db.execute(cat_query)
+
+        categories_data: dict[str, dict] = {}
+        for row in cat_res.all():
+            cat_name = str(row.category) if row.category else "General"
+            categories_data[cat_name] = {
+                "category": cat_name,
+                "total_medicines": int(row.total_medicines or 0),
+                "total_stock": int(row.total_stock or 0),
+                "sold_quantity": 0,
+                "total_revenue": 0.0,
+            }
+
+        # Sales metrics by category
+        sales_query = (
+            select(
+                func.coalesce(Medicine.category, "General").label("category"),
+                func.coalesce(func.sum(PharmacyInvoiceItem.quantity), 0).label("sold_quantity"),
+                func.coalesce(func.sum(PharmacyInvoiceItem.line_total), 0.0).label("total_revenue"),
+            )
+            .join(Medicine, PharmacyInvoiceItem.medicine_id == Medicine.id)
+            .join(PharmacyInvoice, PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id)
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                Medicine.is_deleted.is_(False),
+            )
+        )
+        if hospital_id is not None:
+            sales_query = sales_query.where(PharmacyInvoice.hospital_id == hospital_id)
+        sales_query = sales_query.group_by(func.coalesce(Medicine.category, "General"))
+        sales_res = await self.db.execute(sales_query)
+
+        for row in sales_res.all():
+            cat_name = str(row.category) if row.category else "General"
+            if cat_name not in categories_data:
+                categories_data[cat_name] = {
+                    "category": cat_name,
+                    "total_medicines": 0,
+                    "total_stock": 0,
+                    "sold_quantity": int(row.sold_quantity or 0),
+                    "total_revenue": float(row.total_revenue or 0.0),
+                }
+            else:
+                categories_data[cat_name]["sold_quantity"] = int(row.sold_quantity or 0)
+                categories_data[cat_name]["total_revenue"] = float(row.total_revenue or 0.0)
+
+        total_revenue_all = sum(item["total_revenue"] for item in categories_data.values())
+
+        result = []
+        for cat_info in categories_data.values():
+            rev = cat_info["total_revenue"]
+            pct = round((rev / total_revenue_all) * 100, 2) if total_revenue_all > 0 else 0.0
+            result.append({
+                "category": cat_info["category"],
+                "total_medicines": cat_info["total_medicines"],
+                "total_stock": cat_info["total_stock"],
+                "sold_quantity": cat_info["sold_quantity"],
+                "total_revenue": round(rev, 2),
+                "percentage": pct,
+            })
+
+        # Sort by total_revenue desc, then total_medicines desc
+        result.sort(key=lambda x: (x["total_revenue"], x["total_medicines"]), reverse=True)
+        return result
+
+    async def get_yearly_revenue_trend(
+        self,
+        current_year: int,
+        years_back: int = 5,
+        hospital_id: int | None = None,
+    ) -> list[dict]:
+        start_year = current_year - years_back + 1
+        query = (
+            select(
+                func.year(PharmacyInvoice.created_at).label("yr"),
+                func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0).label("total_revenue"),
+                func.count(PharmacyInvoice.id).label("invoice_count"),
+            )
+            .where(
+                PharmacyInvoice.is_deleted.is_(False),
+                PharmacyInvoice.status != "cancelled",
+                func.year(PharmacyInvoice.created_at) >= start_year,
+                func.year(PharmacyInvoice.created_at) <= current_year,
+            )
+        )
+        if hospital_id is not None:
+            query = query.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        query = (
+            query
+            .group_by(func.year(PharmacyInvoice.created_at))
+            .order_by(func.year(PharmacyInvoice.created_at).asc())
+        )
+        res = await self.db.execute(query)
+        data_map = {int(row.yr): (float(row.total_revenue or 0.0), int(row.invoice_count or 0)) for row in res.all() if row.yr is not None}
+
+        trend = []
+        prev_rev: float | None = None
+        for yr in range(start_year, current_year + 1):
+            rev, count = data_map.get(yr, (0.0, 0))
+            if prev_rev is not None and prev_rev > 0:
+                growth = round(((rev - prev_rev) / prev_rev) * 100, 2)
+            else:
+                growth = None
+            trend.append({
+                "year": yr,
+                "total_revenue": round(rev, 2),
+                "invoice_count": count,
+                "growth_rate_percentage": growth,
+            })
+            prev_rev = rev
+        return trend
 
 
 class MedicineBatchRepository:

@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LabOrderStatus
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.lab_model import TestOrder
 from app.models.nurse_model import Nurse, NurseAttendance, NurseHandoverNote, NurseShift, PatientVital
 from app.models.user_model import User
@@ -28,6 +28,8 @@ from app.schemas.nurse_schema import (
     NurseAttendanceCreate,
     NurseAttendanceResponse,
     NurseCreate,
+    NurseHandoverActionRequest,
+    NurseHandoverHistoryResponse,
     NurseHandoverNoteCreate,
     NurseHandoverNoteResponse,
     NurseHandoverNoteUpdate,
@@ -593,7 +595,7 @@ class NurseService:
         self, nurse_id: int, data: NurseHandoverNoteCreate, user_id: int
     ) -> NurseHandoverNoteResponse:
         from datetime import date
-        await self._get_nurse_or_raise(nurse_id)
+        nurse = await self._get_nurse_or_raise(nurse_id)
         await self._validate_shift(nurse_id, data.shift_id)
 
         # 1. Handover Date should not be a past date
@@ -607,12 +609,24 @@ class NurseService:
 
         note = NurseHandoverNote(
             nurse_id=nurse_id,
-            status="Active",
+            status="Pending",
             **data.model_dump()
         )
         note = await self.handover_repo.create(note)
+        import json
         await self.audit_repo.create(
-            "create", "nurses", user_id=user_id, resource_id=str(note.id)
+            action="HANDOVER_CREATED",
+            resource="nurse_handover_notes",
+            user_id=user_id,
+            resource_id=str(note.id),
+            hospital_id=nurse.hospital_id,
+            details=json.dumps({
+                "action": "CREATED",
+                "nurse_id": nurse_id,
+                "nurse_code": nurse.nurse_code,
+                "status_after": note.status,
+                "summary": note.summary,
+            }),
         )
         return NurseHandoverNoteResponse.model_validate(note)
 
@@ -676,6 +690,250 @@ class NurseService:
             "update", "nurses", user_id=user_id, resource_id=str(note.id)
         )
         return NurseHandoverNoteResponse.model_validate(note)
+
+    async def action_handover_note(
+        self,
+        nurse_id: int,
+        note_id: int,
+        data: NurseHandoverActionRequest,
+        current_user: User,
+        hospital_id: int | None = None,
+    ) -> NurseHandoverNoteResponse:
+        import json
+        from app.core.constants import UserRole
+
+        role_name = (current_user.role.name if current_user.role else "").lower()
+        is_admin = role_name in ("super admin", "super_admin", "admin", "hospital admin", "hospital_admin")
+
+        # 1. Identify acting nurse and verify identity (do not trust path nurse_id alone)
+        acting_nurse = await self.repo.get_by_user_id(current_user.id)
+        if not is_admin:
+            if not acting_nurse:
+                raise ForbiddenException("Authenticated user is not a registered nurse")
+            if acting_nurse.id != nurse_id:
+                raise ForbiddenException("Cannot perform action on behalf of another nurse")
+        else:
+            if acting_nurse is None:
+                acting_nurse = await self.repo.get_by_id(nurse_id, hospital_id=hospital_id)
+
+        # 2. Retrieve handover note
+        note = await self.handover_repo.get_by_id_scoped(note_id)
+        if not note:
+            raise NotFoundException("Handover note not found")
+
+        # 3. Tenant / hospital isolation check
+        creator_nurse = note.nurse
+        if hospital_id is not None:
+            if creator_nurse and creator_nurse.hospital_id != hospital_id:
+                raise NotFoundException("Handover note not found")
+            if acting_nurse and acting_nurse.hospital_id != hospital_id:
+                raise ForbiddenException("Cross-tenant nurse action is prohibited")
+
+        # 4. Outgoing creator cannot accept or reject their own handover note
+        if acting_nurse and acting_nurse.id == note.nurse_id:
+            raise BadRequestException("Creator cannot accept or reject their own handover note")
+
+        # 5. Validate status transitions & duplicate actions
+        if note.status == "Accepted":
+            raise BadRequestException("Handover note is already accepted")
+        elif note.status == "Rejected":
+            raise BadRequestException("Handover note is already rejected")
+        elif note.status not in ("Pending", "Active"):
+            raise BadRequestException(f"Cannot perform action on handover note with status '{note.status}'")
+
+        # 6. Rejection reason validation
+        action = data.action.upper()
+        if action == "REJECT":
+            if not data.rejection_reason or not data.rejection_reason.strip():
+                raise BadRequestException("Rejection reason is required when rejecting a handover")
+
+        status_before = note.status
+        new_status = "Accepted" if action == "ACCEPT" else "Rejected"
+        note.status = new_status
+
+        # 7. Atomically save status and audit log
+        note = await self.handover_repo.update(note)
+
+        audit_details = {
+            "action": action,
+            "acting_nurse_id": acting_nurse.id if acting_nurse else None,
+            "acting_nurse_code": acting_nurse.nurse_code if acting_nurse else None,
+            "acting_nurse_name": current_user.full_name,
+            "status_before": status_before,
+            "status_after": new_status,
+            "remarks": data.remarks,
+            "rejection_reason": data.rejection_reason if action == "REJECT" else None,
+        }
+
+        await self.audit_repo.create(
+            action=f"HANDOVER_{action}",
+            resource="nurse_handover_notes",
+            resource_id=str(note.id),
+            user_id=current_user.id,
+            hospital_id=hospital_id or (creator_nurse.hospital_id if creator_nurse else None),
+            details=json.dumps(audit_details),
+        )
+
+        return NurseHandoverNoteResponse.model_validate(note)
+
+    async def get_handover_history(
+        self,
+        nurse_id: int,
+        note_id: int,
+        current_user: User,
+        hospital_id: int | None = None,
+    ) -> NurseHandoverHistoryResponse:
+        import json
+        from app.core.constants import UserRole
+        from app.schemas.nurse_schema import (
+            NurseMiniProfile,
+            HandoverHistoryActionItem,
+            NurseHandoverHistoryResponse,
+        )
+
+        role_name = (current_user.role.name if current_user.role else "").lower()
+        is_admin = role_name in ("super admin", "super_admin", "admin", "hospital admin", "hospital_admin")
+
+        # 1. Validate requesting nurse / tenant scoping
+        requesting_nurse = await self.repo.get_by_user_id(current_user.id)
+        if not is_admin:
+            if not requesting_nurse:
+                raise ForbiddenException("Authenticated user is not authorized")
+            if requesting_nurse.id != nurse_id:
+                raise ForbiddenException("Cannot access handover history of another nurse")
+
+        # 2. Retrieve handover note with creator nurse & user
+        note = await self.handover_repo.get_by_id_scoped(note_id)
+        if not note:
+            raise NotFoundException("Handover note not found")
+
+        creator = note.nurse
+        if hospital_id is not None:
+            if creator and creator.hospital_id != hospital_id:
+                raise NotFoundException("Handover note not found")
+            if requesting_nurse and requesting_nurse.hospital_id != hospital_id:
+                raise ForbiddenException("Cross-tenant access is prohibited")
+
+        creator_profile = (
+            NurseMiniProfile(
+                id=creator.id,
+                nurse_code=creator.nurse_code,
+                full_name=creator.user.full_name if creator.user else None,
+                license_number=creator.license_number,
+                shift=creator.shift,
+            )
+            if creator
+            else NurseMiniProfile(id=note.nurse_id)
+        )
+
+        # 3. Retrieve audit logs
+        logs = await self.handover_repo.get_handover_audit_logs(note_id)
+
+        history_items: list[HandoverHistoryActionItem] = []
+        has_creation_log = False
+        incoming_nurse_profile: NurseMiniProfile | None = None
+        action_performed_by: NurseMiniProfile | None = None
+        acceptance_or_rejection_action: str | None = None
+        action_timestamp: datetime | None = None
+        rejection_reason: str | None = None
+
+        user_nurse_cache: dict[int, NurseMiniProfile | None] = {}
+
+        for log in logs:
+            action_name = log.action.upper()
+            if action_name.startswith("HANDOVER_"):
+                action_name = action_name.replace("HANDOVER_", "")
+
+            details_data = {}
+            if log.details:
+                try:
+                    details_data = json.loads(log.details)
+                except Exception:
+                    details_data = {"raw": log.details}
+
+            acting_profile = None
+            if log.user_id:
+                if log.user_id not in user_nurse_cache:
+                    n_rec = await self.repo.get_by_user_id(log.user_id)
+                    if n_rec:
+                        user_nurse_cache[log.user_id] = NurseMiniProfile(
+                            id=n_rec.id,
+                            nurse_code=n_rec.nurse_code,
+                            full_name=n_rec.user.full_name if n_rec.user else None,
+                            license_number=n_rec.license_number,
+                            shift=n_rec.shift,
+                        )
+                    else:
+                        user_nurse_cache[log.user_id] = None
+                acting_profile = user_nurse_cache.get(log.user_id)
+
+            if not acting_profile and details_data.get("acting_nurse_id"):
+                acting_profile = NurseMiniProfile(
+                    id=details_data["acting_nurse_id"],
+                    nurse_code=details_data.get("acting_nurse_code"),
+                    full_name=details_data.get("acting_nurse_name"),
+                )
+
+            normalized_action = "CREATED" if action_name in ("CREATE", "CREATED") else action_name
+            if normalized_action == "CREATED":
+                has_creation_log = True
+                if not acting_profile:
+                    acting_profile = creator_profile
+
+            if normalized_action in ("ACCEPT", "ACCEPTED", "REJECT", "REJECTED"):
+                acceptance_or_rejection_action = "ACCEPTED" if "ACCEPT" in normalized_action else "REJECTED"
+                action_performed_by = acting_profile
+                incoming_nurse_profile = acting_profile
+                action_timestamp = log.created_at
+                if details_data.get("rejection_reason"):
+                    rejection_reason = details_data["rejection_reason"]
+
+            history_items.append(
+                HandoverHistoryActionItem(
+                    action=normalized_action,
+                    performed_by=acting_profile,
+                    action_timestamp=log.created_at,
+                    status_before=details_data.get("status_before"),
+                    status_after=details_data.get("status_after")
+                    or ("Pending" if normalized_action == "CREATED" else note.status),
+                    remarks=details_data.get("remarks"),
+                    rejection_reason=details_data.get("rejection_reason"),
+                )
+            )
+
+        # 4. Synthesize CREATED event for legacy notes if missing
+        if not has_creation_log:
+            created_item = HandoverHistoryActionItem(
+                action="CREATED",
+                performed_by=creator_profile,
+                action_timestamp=note.created_at,
+                status_before=None,
+                status_after="Active" if note.status == "Active" else "Pending",
+                remarks="Initial handover note creation",
+                rejection_reason=None,
+            )
+            history_items.insert(0, created_item)
+
+        history_items.sort(key=lambda x: x.action_timestamp)
+
+        return NurseHandoverHistoryResponse(
+            handover_id=note.id,
+            handover_date=note.handover_date,
+            current_status=note.status,
+            creator=creator_profile,
+            incoming_nurse=incoming_nurse_profile,
+            summary=note.summary,
+            pending_tasks=note.pending_tasks,
+            patient_updates=note.patient_updates,
+            notes=note.notes,
+            created_at=note.created_at,
+            updated_at=note.updated_at,
+            acceptance_or_rejection_action=acceptance_or_rejection_action,
+            action_performed_by=action_performed_by,
+            action_timestamp=action_timestamp,
+            rejection_reason=rejection_reason,
+            history=history_items,
+        )
 
     async def list_assigned_patients(
         self,

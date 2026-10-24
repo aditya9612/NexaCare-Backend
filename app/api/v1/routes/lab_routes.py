@@ -585,56 +585,11 @@ async def download_lab_report(
         
     if need_generation:
         from app.repositories.lab_repository import TestOrderRepository
-        from app.models.patient_model import Patient
-        from app.models.doctor_model import Doctor
-        from app.models.lab_model import TestResult
-        from app.utils.pdf_generator import generate_lab_report_html
-        from app.utils.helpers import utc_now
-        from sqlalchemy import select
-        
         order = await TestOrderRepository(db).get_by_id(report.test_order_id, hospital_id=hospital_id)
         if not order:
             raise NotFoundException("Associated test order not found")
-            
-        patient = await db.get(Patient, order.patient_id)
-        doctor = await db.get(Doctor, order.doctor_id) if order.doctor_id else None
-        
-        result_objs = await db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
-        results = list(result_objs.scalars().all())
 
-        columns = ["Parameter", "Result Value", "Unit", "Normal Range", "Is Critical"]
-        rows = [
-            [
-                r.parameter_name,
-                r.result_value,
-                r.unit or "-",
-                r.normal_range or "-",
-                "Yes" if r.is_critical else "No"
-            ]
-            for r in results
-        ]
-
-        report_data = {
-            "order_number": order.order_number,
-            "status": report.status,
-            "generated_at": report.approved_at.strftime("%Y-%m-%d %H:%M:%S") if report.approved_at else utc_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
-            "patient_code": patient.patient_code if patient else "Unknown",
-            "patient_gender": patient.gender if patient else "Unknown",
-            "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
-            "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
-            "doctor_code": doctor.doctor_code if doctor else "",
-            "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
-            "test_category": order.lab_test.category if order.lab_test else "Unknown",
-            "summary": report.summary or "",
-            "columns": columns,
-            "rows": rows,
-        }
-
-        path = await generate_lab_report_html(
-            report.report_number,
-            report_data,
-        )
+        path = await LabService(db)._generate_report_pdf(report, order)
         report.report_path = path
         await LabReportRepository(db).update(report)
         disk_path = resolve_disk_path(report.report_path)

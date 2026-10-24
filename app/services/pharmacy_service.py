@@ -25,7 +25,7 @@ from app.models.pharmacy_model import (
 )
 from app.models.user_model import User
 from app.services.stock_movement_service import StockMovementService
-from app.utils.helpers import generate_code, utc_now
+from app.utils.helpers import generate_code, get_today_ist, utc_now
 from app.services.stock_movement_service import StockMovementService
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.patient_repository import PatientRepository
@@ -128,12 +128,13 @@ class PharmacyService:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> tuple[Optional[datetime], Optional[datetime]]:
-        now_dt = utc_now()
-        today_date = now_dt.date()
+        today_date = get_today_ist()
 
-        if start_date or end_date or time_filter == "custom":
+        if start_date or end_date or (time_filter or "").lower() == "custom":
             s_date = start_date or (end_date - timedelta(days=7) if end_date else today_date - timedelta(days=7))
             e_date = end_date or today_date
+            if s_date > e_date:
+                s_date, e_date = e_date, s_date
             start = datetime.combine(s_date, time.min)
             end = datetime.combine(e_date, time.max)
             return start, end
@@ -146,31 +147,31 @@ class PharmacyService:
         elif tf in ("7_days", "last_7_days", "week", "this_week"):
             start_date_val = today_date - timedelta(days=7)
             start = datetime.combine(start_date_val, time.min)
-            end = now_dt
+            end = datetime.combine(today_date, time.max)
             return start, end
         elif tf in ("30_days", "last_30_days"):
             start_date_val = today_date - timedelta(days=30)
             start = datetime.combine(start_date_val, time.min)
-            end = now_dt
+            end = datetime.combine(today_date, time.max)
             return start, end
         elif tf in ("month", "month_to_date", "this_month"):
             start = datetime.combine(today_date.replace(day=1), time.min)
-            end = now_dt
+            end = datetime.combine(today_date, time.max)
             return start, end
         elif tf in ("3_month", "3_months", "90_days"):
             start_date_val = today_date - timedelta(days=90)
             start = datetime.combine(start_date_val, time.min)
-            end = now_dt
+            end = datetime.combine(today_date, time.max)
             return start, end
         elif tf in ("6_month", "6_months", "180_days"):
             start_date_val = today_date - timedelta(days=180)
             start = datetime.combine(start_date_val, time.min)
-            end = now_dt
+            end = datetime.combine(today_date, time.max)
             return start, end
         elif tf in ("1_year", "year", "12_months", "365_days"):
             start_date_val = today_date - timedelta(days=365)
             start = datetime.combine(start_date_val, time.min)
-            end = now_dt
+            end = datetime.combine(today_date, time.max)
             return start, end
         elif tf in ("overall", "all", "all_time"):
             return None, None
@@ -2323,37 +2324,72 @@ class PharmacyService:
             expired_medicines_query = expired_medicines_query.where(Medicine.hospital_id == hospital_id)
         expired_medicines_alerts = (await self.db.scalar(expired_medicines_query)) or 0
 
-        # 4. Today Sales (Strictly today's sales from 00:00:00 to 23:59:59 IST)
-        today_start = datetime.combine(today_ist, time.min)
-        tomorrow_start = today_start + timedelta(days=1)
+        # Convert IST boundary to UTC boundary for MySQL created_at (which is stored in UTC)
+        start_utc = (start_dt - timedelta(hours=5, minutes=30)) if start_dt else None
+        end_utc = (end_dt - timedelta(hours=5, minutes=30)) if end_dt else None
 
+        # 4. Period Sales (Today Sales / Period Sales for selected filter)
         today_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
-            PharmacyInvoice.created_at >= today_start,
-            PharmacyInvoice.created_at < tomorrow_start,
         )
         if hospital_id is not None:
             today_sales_query = today_sales_query.where(PharmacyInvoice.hospital_id == hospital_id)
+        if start_utc:
+            today_sales_query = today_sales_query.where(PharmacyInvoice.created_at >= start_utc)
+        if end_utc:
+            today_sales_query = today_sales_query.where(PharmacyInvoice.created_at <= end_utc)
         today_sales = (await self.db.scalar(today_sales_query)) or 0.0
 
-        # 5. Monthly Sales (Invoice/billing amount for current month)
-        month_start = datetime.combine(today_ist.replace(day=1), time.min)
+        # Subtext for period sales
+        tf = (time_filter or "").lower()
+        if tf == "today":
+            today_sales_subtext = "Today's sales"
+        elif tf in ("7_days", "last_7_days", "week", "this_week"):
+            today_sales_subtext = "Last 7 days sales"
+        elif tf in ("30_days", "last_30_days"):
+            today_sales_subtext = "Last 30 days sales"
+        elif tf in ("month", "month_to_date", "this_month"):
+            today_sales_subtext = "Month to date sales"
+        elif tf in ("3_month", "3_months", "90_days"):
+            today_sales_subtext = "Last 3 months sales"
+        elif tf in ("6_month", "6_months", "180_days"):
+            today_sales_subtext = "Last 6 months sales"
+        elif tf in ("1_year", "year", "12_months", "365_days"):
+            today_sales_subtext = "Last 1 year sales"
+        elif tf in ("overall", "all", "all_time"):
+            today_sales_subtext = "Overall sales"
+        elif start_dt and end_dt:
+            today_sales_subtext = f"Sales ({start_dt.strftime('%d %b %Y')} - {end_dt.strftime('%d %b %Y')})"
+        else:
+            today_sales_subtext = "Paid invoices only"
+
+        # 5. Monthly Sales (Invoice/billing amount for month of selected period or current month)
+        target_month_date = end_dt.date() if end_dt else (start_dt.date() if start_dt else today_ist)
+        month_start = datetime.combine(target_month_date.replace(day=1), time.min)
         if month_start.month == 12:
             next_month_start = month_start.replace(year=month_start.year + 1, month=1)
         else:
             next_month_start = month_start.replace(month=month_start.month + 1)
 
+        month_start_utc = month_start - timedelta(hours=5, minutes=30)
+        next_month_start_utc = next_month_start - timedelta(hours=5, minutes=30)
+
         monthly_sales_query = select(func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0)).where(
             PharmacyInvoice.is_deleted.is_(False),
             PharmacyInvoice.status != "cancelled",
-            PharmacyInvoice.created_at >= month_start,
-            PharmacyInvoice.created_at < next_month_start
+            PharmacyInvoice.created_at >= month_start_utc,
+            PharmacyInvoice.created_at < next_month_start_utc,
         )
         if hospital_id is not None:
             monthly_sales_query = monthly_sales_query.where(PharmacyInvoice.hospital_id == hospital_id)
 
         monthly_sales = (await self.db.scalar(monthly_sales_query)) or 0.0
+
+        if target_month_date.month != today_ist.month or target_month_date.year != today_ist.year:
+            monthly_sales_subtext = f"{month_start.strftime('%B %Y')} revenue"
+        else:
+            monthly_sales_subtext = "Current month revenue"
 
         # 6. Pending Purchases (Count status: Pending, Ordered)
         pending_purchases_query = select(func.count(Purchase.id)).where(
@@ -2410,48 +2446,46 @@ class PharmacyService:
             for m in low_stock_res.scalars().all()
         ]
 
-        # 10. Today Sales Trend (Hourly sales for today)
-        today_start = datetime.combine(today_ist, time.min)
-        tomorrow_start = today_start + timedelta(days=1)
+        # 10. Today Sales Trend (Hourly sales for today in IST)
+        today_start_ist = datetime.combine(today_ist, time.min)
+        tomorrow_start_ist = today_start_ist + timedelta(days=1)
+        today_start_utc = today_start_ist - timedelta(hours=5, minutes=30)
+        tomorrow_start_utc = tomorrow_start_ist - timedelta(hours=5, minutes=30)
         today_trend_query = (
             select(
-                func.extract('hour', PharmacyInvoice.created_at).label("hr"),
-                func.sum(PharmacyInvoice.total_amount).label("amt")
+                PharmacyInvoice.created_at,
+                PharmacyInvoice.total_amount
             )
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
                 PharmacyInvoice.status != "cancelled",
-                PharmacyInvoice.created_at >= today_start,
-                PharmacyInvoice.created_at < tomorrow_start
+                PharmacyInvoice.created_at >= today_start_utc,
+                PharmacyInvoice.created_at < tomorrow_start_utc
             )
         )
         if hospital_id is not None:
             today_trend_query = today_trend_query.where(PharmacyInvoice.hospital_id == hospital_id)
-        today_trend_query = (
-            today_trend_query
-            .group_by(func.extract('hour', PharmacyInvoice.created_at))
-            .order_by(func.extract('hour', PharmacyInvoice.created_at).asc())
-        )
         today_trend_res = await self.db.execute(today_trend_query)
-        today_sales_trend = []
-        for row in today_trend_res.all():
-            hr_val = 0
-            if row.hr is not None:
-                try:
-                    hr_val = int(row.hr)
-                except (ValueError, TypeError):
-                    pass
-            today_sales_trend.append({
+        hourly_totals: dict[int, float] = {}
+        for inv_created, inv_amt in today_trend_res.all():
+            if inv_created:
+                ist_dt = inv_created + timedelta(hours=5, minutes=30)
+                hr_val = ist_dt.hour
+                hourly_totals[hr_val] = hourly_totals.get(hr_val, 0.0) + float(inv_amt or 0.0)
+        today_sales_trend = [
+            {
                 "hour": f"{hr_val:02d}",
-                "amount": float(row.amt or 0.0),
+                "amount": round(hourly_totals[hr_val], 2),
                 "label": f"{hr_val:02d}:00"
-            })
+            }
+            for hr_val in sorted(hourly_totals.keys())
+        ]
 
-        # 11. Monthly Sales Trend (Daily sales for selected period/current month)
+        # 11. Monthly Sales Trend (Daily sales for selected period/current month in IST)
         monthly_trend_query = (
             select(
-                cast(PharmacyInvoice.created_at, Date).label("dt"),
-                func.sum(PharmacyInvoice.total_amount).label("amt")
+                PharmacyInvoice.created_at,
+                PharmacyInvoice.total_amount
             )
             .where(
                 PharmacyInvoice.is_deleted.is_(False),
@@ -2460,29 +2494,29 @@ class PharmacyService:
         )
         if hospital_id is not None:
             monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.hospital_id == hospital_id)
-        if start_dt:
-            monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at >= start_dt)
-        if end_dt:
-            monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at <= end_dt)
+        if start_utc:
+            monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at >= start_utc)
+        if end_utc:
+            monthly_trend_query = monthly_trend_query.where(PharmacyInvoice.created_at <= end_utc)
 
-        monthly_trend_query = (
-            monthly_trend_query
-            .group_by(cast(PharmacyInvoice.created_at, Date))
-            .order_by(cast(PharmacyInvoice.created_at, Date).asc())
-        )
         monthly_trend_res = await self.db.execute(monthly_trend_query)
-        monthly_sales_trend = []
-        for row in monthly_trend_res.all():
-            dt_str = str(row.dt) if row.dt is not None else ""
-            monthly_sales_trend.append({
+        daily_totals: dict[str, float] = {}
+        for inv_created, inv_amt in monthly_trend_res.all():
+            if inv_created:
+                ist_date_str = (inv_created + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+                daily_totals[ist_date_str] = daily_totals.get(ist_date_str, 0.0) + float(inv_amt or 0.0)
+        monthly_sales_trend = [
+            {
                 "date": dt_str,
-                "amount": float(row.amt or 0.0),
+                "amount": round(daily_totals[dt_str], 2),
                 "label": dt_str
-            })
+            }
+            for dt_str in sorted(daily_totals.keys())
+        ]
 
         today_sales = round(float(today_sales or 0.0), 2)
         monthly_sales = round(float(monthly_sales or 0.0), 2)
-        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(reference_date=today_ist, start_dt=start_dt, end_dt=end_dt, hospital_id=hospital_id)
+        status_mix_raw = await self.dashboard_repo.get_inventory_status_mix(reference_date=today_ist, start_dt=start_utc, end_dt=end_utc, hospital_id=hospital_id)
         inventory_status_mix = InventoryStatusMix(**status_mix_raw)
 
         total_mix = (
@@ -2514,7 +2548,9 @@ class PharmacyService:
             low_stock_alerts=low_stock_alerts,
             expired_alerts=expired_alerts,
             today_sales=today_sales,
+            today_sales_subtext=today_sales_subtext,
             monthly_sales=monthly_sales,
+            monthly_sales_subtext=monthly_sales_subtext,
             pending_purchases=pending_purchases,
             total_suppliers=total_suppliers,
             prescriptions_count=prescriptions,

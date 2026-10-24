@@ -1131,16 +1131,19 @@ class PharmacyDashboardRepository:
         end_dt: Optional[datetime] = None,
         hospital_id: int | None = None,
     ) -> dict:
-        thirty_days_later = reference_date + timedelta(days=30)
+        eff_ref_date = end_dt.date() if end_dt else reference_date
+        thirty_days_later = eff_ref_date + timedelta(days=30)
 
         query = select(
-            func.sum(case(((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later) & (Medicine.stock_quantity > 0) & (Medicine.is_active == True), 1), else_=0)).label("expiring_soon"),
+            func.sum(case(((Medicine.expiry_date != None) & (Medicine.expiry_date >= eff_ref_date) & (Medicine.expiry_date <= thirty_days_later) & (Medicine.stock_quantity > 0) & (Medicine.is_active == True), 1), else_=0)).label("expiring_soon"),
             func.sum(case(((Medicine.stock_quantity <= 0) & (Medicine.is_active == True), 1), else_=0)).label("out_of_stock"),
-            func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
-            func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= reference_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
+            func.sum(case(((Medicine.stock_quantity > 0) & (Medicine.stock_quantity <= Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= eff_ref_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("low_stock"),
+            func.sum(case(((Medicine.stock_quantity > Medicine.reorder_level) & ~((Medicine.expiry_date != None) & (Medicine.expiry_date >= eff_ref_date) & (Medicine.expiry_date <= thirty_days_later)) & (Medicine.is_active == True), 1), else_=0)).label("in_stock")
         ).where(Medicine.is_deleted.is_(False))
         if hospital_id is not None:
             query = query.where(Medicine.hospital_id == hospital_id)
+        if end_dt is not None:
+            query = query.where(Medicine.created_at <= end_dt)
 
         res = await self.db.execute(query)
         row = res.fetchone()

@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AppointmentStatus, BedStatus
-from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.appointment_model import Appointment
 from app.models.bed_allocation_model import Bed, BedActivityLog
 from app.models.billing_model import Billing, BillItem, Payment
@@ -169,26 +169,42 @@ class DischargeService:
         discharge = await self.repo.create(discharge)
         return DischargeResponse.model_validate(discharge)
 
-    async def get_by_id(self, discharge_id: int, hospital_id: int | None = None) -> DischargeResponse:
+    async def get_by_id(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> DischargeResponse:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or discharge.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this discharge record")
         return DischargeResponse.model_validate(discharge)
 
-    async def get_by_appointment(self, appointment_id: int, hospital_id: int | None = None) -> DischargeResponse:
+    async def get_by_appointment(self, appointment_id: int, hospital_id: int | None = None, current_user = None) -> DischargeResponse:
         discharge = await self.repo.get_by_appointment_id(appointment_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"No discharge found for appointment {appointment_id}")
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or discharge.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this discharge record")
         return DischargeResponse.model_validate(discharge)
 
     async def list_active_discharges(self, hospital_id: int | None = None) -> list[DischargeResponse]:
         items = await self.repo.get_all_active(hospital_id=hospital_id)
         return [DischargeResponse.model_validate(d) for d in items]
 
-    async def get_clearance_status(self, discharge_id: int, hospital_id: int | None = None) -> DischargeClearanceStatus:
+    async def get_clearance_status(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> DischargeClearanceStatus:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
+
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or discharge.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this clearance status")
 
         ready = (
             discharge.pharmacy_cleared
@@ -923,10 +939,15 @@ class DischargeService:
         discharge = await self.repo.update(discharge)
         return DischargeResponse.model_validate(discharge)
 
-    async def get_final_bill_by_discharge_id(self, discharge_id: int, hospital_id: int | None = None) -> IPDFinalBillResponse:
+    async def get_final_bill_by_discharge_id(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> IPDFinalBillResponse:
         final_bill = await self.final_bill_repo.get_by_discharge_id_with_items(discharge_id, hospital_id=hospital_id)
         if not final_bill:
             raise NotFoundException(f"Final bill for discharge {discharge_id} not found")
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or final_bill.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this final bill")
         return IPDFinalBillResponse.model_validate(final_bill)
 
     async def list_final_bills(
@@ -1062,10 +1083,16 @@ class DischargeService:
 
         return DischargeResponse.model_validate(discharge)
 
-    async def get_gate_pass(self, discharge_id: int, hospital_id: int | None = None) -> DischargeGatePassResponse:
+    async def get_gate_pass(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> DischargeGatePassResponse:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
+
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or discharge.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to view this gate pass")
 
         if discharge.discharge_status != "DISCHARGED":
             raise BadRequestException("Gate pass is only available after final doctor approval and discharge completion.")
@@ -1099,7 +1126,7 @@ class DischargeService:
             issued_at=discharge.doctor_approved_at or utc_now(),
         )
 
-    async def download_gate_pass_pdf(self, discharge_id: int, hospital_id: int | None = None) -> bytes:
+    async def download_gate_pass_pdf(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> bytes:
         import io
         import os
         from reportlab.lib.pagesizes import letter
@@ -1122,6 +1149,12 @@ class DischargeService:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
         if not discharge:
             raise NotFoundException(f"Discharge with id {discharge_id} not found")
+
+        if current_user and current_user.role and current_user.role.name.lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or discharge.patient_id not in allowed_ids:
+                raise ForbiddenException("You do not have permission to download this gate pass")
 
         if discharge.discharge_status != "DISCHARGED":
             raise BadRequestException("Gate pass is only available after final doctor approval and discharge completion.")

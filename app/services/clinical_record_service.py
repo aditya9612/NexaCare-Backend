@@ -1,7 +1,7 @@
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException, BadRequestException, ConflictException
+from app.core.exceptions import NotFoundException, BadRequestException, ConflictException, ForbiddenException
 from app.core.constants import AppointmentStatus
 from app.models.clinical_record_model import ClinicalRecord
 from app.repositories.clinical_record_repository import ClinicalRecordRepository
@@ -108,6 +108,13 @@ class ClinicalRecordService:
         record = await self.record_repo.get_by_id(record_id, hospital_id=hospital_id)
         if not record:
             raise NotFoundException(f"Clinical record with ID {record_id} not found")
+
+        if current_user and getattr(current_user, "role", None) and getattr(current_user.role, "name", "").lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids or record.patient_id not in allowed_ids:
+                raise ForbiddenException("You can only access your own clinical records")
+
         return self._to_response_schema(record)
 
     async def list_records(
@@ -124,18 +131,33 @@ class ClinicalRecordService:
         if hospital_id is None and current_user is not None:
             from app.core.dependencies import resolve_tenant_id
             hospital_id = resolve_tenant_id(current_user)
+
+        effective_patient_id = patient_id
+        if current_user and getattr(current_user, "role", None) and getattr(current_user.role, "name", "").lower() == "patient":
+            from app.services.patient_service import PatientService
+            allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+            if not allowed_ids:
+                return build_paginated_result([], 0, page, size)
+            if patient_id is not None:
+                if patient_id not in allowed_ids:
+                    return build_paginated_result([], 0, page, size)
+                effective_patient_id = patient_id
+            else:
+                effective_patient_id = allowed_ids
+
         skip = (page - 1) * size
         items = await self.record_repo.list_all(
-            skip=skip, limit=size, patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
+            skip=skip, limit=size, patient_id=effective_patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
             hospital_id=hospital_id,
         )
         total = await self.record_repo.count_all(
-            patient_id=patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
+            patient_id=effective_patient_id, doctor_id=doctor_id, appointment_id=appointment_id,
             hospital_id=hospital_id,
         )
         return build_paginated_result(
             [self._to_response_schema(r) for r in items], total, page, size
         )
+
 
     async def update_record(self, record_id: int, data: ClinicalRecordUpdate, user_id: int, current_user: Any | None = None, **kwargs: Any) -> ClinicalRecordResponse:
         record = await self.record_repo.get_by_id(record_id)

@@ -90,13 +90,8 @@ from app.utils.helpers import (
     generate_purchase_number,
     utc_now,
 )
+from app.core.dependencies import resolve_tenant_id
 from app.utils.pagination import build_paginated_result
-
-
-def resolve_tenant_id(current_user: Any | None = None) -> int | None:
-    if current_user is None:
-        return None
-    return getattr(current_user, "hospital_id", None)
 
 
 class PharmacyService:
@@ -114,12 +109,14 @@ class PharmacyService:
         self.patient_repo = PatientRepository(db)
 
     async def _resolve_hospital_id(self, current_user: Any | None = None, user_id: int | None = None) -> int | None:
-        if current_user and getattr(current_user, "hospital_id", None):
-            return current_user.hospital_id
+        if current_user:
+            hid = resolve_tenant_id(current_user)
+            if hid is not None:
+                return hid
         if user_id:
             user = await self.db.scalar(select(User).where(User.id == user_id))
-            if user and user.hospital_id:
-                return user.hospital_id
+            if user:
+                return resolve_tenant_id(user)
         return None
 
     def get_date_range(
@@ -221,6 +218,7 @@ class PharmacyService:
             unit_cost=data.unit_price,
             reorder_level=data.reorder_level if data.reorder_level is not None else 10,
             expiry_date=data.expiry_date,
+            hospital_id=hospital_id,
         )
         self.db.add(inv_item)
         await self.db.flush()
@@ -247,6 +245,8 @@ class PharmacyService:
                 quantity=medicine.stock_quantity,
             )
             self.db.add(ws)
+            if inv_item.warehouse_id is None:
+                inv_item.warehouse_id = warehouse_id
             await self.db.flush()
 
         await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
@@ -295,7 +295,9 @@ class PharmacyService:
             from app.repositories.inventory_repository import InventoryRepository
             inv_repo = InventoryRepository(self.db)
             inv_item = await inv_repo.get_by_id(medicine.inventory_item_id)
-            if inv_item:
+            if inv_item and (inv_item.hospital_id is None or inv_item.hospital_id == medicine.hospital_id):
+                if inv_item.hospital_id is None and medicine.hospital_id is not None:
+                    inv_item.hospital_id = medicine.hospital_id
                 if "name" in update_data: inv_item.name = update_data["name"]
                 if "category" in update_data: inv_item.category = update_data["category"]
                 if "unit" in update_data: inv_item.unit = update_data["unit"]
@@ -314,6 +316,12 @@ class PharmacyService:
         if not medicine:
             raise NotFoundException("Medicine not found")
         await self.medicine_repo.soft_delete(medicine)
+        if medicine.inventory_item_id:
+            from app.models.inventory_model import InventoryItem
+            inv_item = await self.db.scalar(select(InventoryItem).where(InventoryItem.id == medicine.inventory_item_id))
+            if inv_item and (inv_item.hospital_id is None or inv_item.hospital_id == medicine.hospital_id):
+                inv_item.is_deleted = True
+                inv_item.deleted_at = utc_now()
         await self.audit_repo.create("delete", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
 
     async def get_low_stock(self, current_user: Any | None = None) -> tuple[list[LowStockAlert], int]:
@@ -2749,66 +2757,109 @@ class PharmacyService:
                     row_dict[header] = val
 
             try:
-                # Pre-processing/normalization for the schema:
-                # 1. Barcode: handle float numeric representations safely (e.g. 1234567890123.0 -> "1234567890123")
-                barcode_raw = row_dict.get("barcode")
-                if barcode_raw is not None:
-                    if isinstance(barcode_raw, float):
-                        # Convert float to int string without adding padding/zeros or removing digits
-                        barcode_raw = str(int(barcode_raw))
-                    else:
-                        barcode_raw = str(barcode_raw).strip()
-                    row_dict["barcode"] = barcode_raw
+                async with self.db.begin_nested():
+                    # Pre-processing/normalization for the schema:
+                    # 1. Barcode: handle float numeric representations safely (e.g. 1234567890123.0 -> "1234567890123")
+                    barcode_raw = row_dict.get("barcode")
+                    if barcode_raw is not None:
+                        if isinstance(barcode_raw, float):
+                            # Convert float to int string without adding padding/zeros or removing digits
+                            barcode_raw = str(int(barcode_raw))
+                        else:
+                            barcode_raw = str(barcode_raw).strip()
+                        row_dict["barcode"] = barcode_raw
 
-                # 2. Expiry date: handle datetime.datetime or datetime.date objects from Excel cells
-                expiry_raw = row_dict.get("expiry_date")
-                if expiry_raw is not None:
-                    if isinstance(expiry_raw, (datetime, date)):
-                        row_dict["expiry_date"] = expiry_raw.strftime("%Y-%m-%d")
-                    else:
-                        row_dict["expiry_date"] = str(expiry_raw).strip()
+                    # 2. Expiry date: handle datetime.datetime or datetime.date objects from Excel cells
+                    expiry_raw = row_dict.get("expiry_date")
+                    if expiry_raw is not None:
+                        if isinstance(expiry_raw, (datetime, date)):
+                            row_dict["expiry_date"] = expiry_raw.strftime("%Y-%m-%d")
+                        else:
+                            row_dict["expiry_date"] = str(expiry_raw).strip()
 
-                # 3. Numeric values: unit_price, stock_quantity, reorder_level
-                price_raw = row_dict.get("unit_price")
-                if price_raw is not None:
-                    try:
-                        row_dict["unit_price"] = float(price_raw)
-                    except ValueError:
-                        pass
+                    # 3. Numeric values: unit_price, stock_quantity, reorder_level
+                    price_raw = row_dict.get("unit_price")
+                    if price_raw is not None:
+                        try:
+                            row_dict["unit_price"] = float(price_raw)
+                        except ValueError:
+                            pass
 
-                qty_raw = row_dict.get("stock_quantity")
-                if qty_raw is not None:
-                    try:
-                        row_dict["stock_quantity"] = int(float(qty_raw))
-                    except ValueError:
-                        pass
+                    qty_raw = row_dict.get("stock_quantity")
+                    if qty_raw is not None:
+                        try:
+                            row_dict["stock_quantity"] = int(float(qty_raw))
+                        except ValueError:
+                            pass
 
-                reorder_raw = row_dict.get("reorder_level")
-                if reorder_raw is not None:
-                    try:
-                        row_dict["reorder_level"] = int(float(reorder_raw))
-                    except ValueError:
-                        pass
+                    reorder_raw = row_dict.get("reorder_level")
+                    if reorder_raw is not None:
+                        try:
+                            row_dict["reorder_level"] = int(float(reorder_raw))
+                        except ValueError:
+                            pass
 
-                # Validate using MedicineCreate schema
-                validated_data = MedicineCreate(**row_dict)
+                    # Validate using MedicineCreate schema
+                    validated_data = MedicineCreate(**row_dict)
 
-                # Check duplicate barcode in DB and current batch
-                if validated_data.barcode:
-                    if validated_data.barcode in batch_barcodes:
-                        raise ConflictException("Duplicate barcode in the uploaded file")
+                    # Check duplicate barcode in DB and current batch
+                    if validated_data.barcode:
+                        if validated_data.barcode in batch_barcodes:
+                            raise ConflictException("Duplicate barcode in the uploaded file")
 
-                    existing = await self.medicine_repo.get_by_barcode(validated_data.barcode, hospital_id=hospital_id)
-                    if existing:
-                        raise ConflictException("Medicine with this barcode already exists")
+                        existing = await self.medicine_repo.get_by_barcode(validated_data.barcode, hospital_id=hospital_id)
+                        if existing:
+                            raise ConflictException("Medicine with this barcode already exists")
 
-                    batch_barcodes.add(validated_data.barcode)
+                        batch_barcodes.add(validated_data.barcode)
 
-                # Create the medicine
-                medicine = Medicine(hospital_id=hospital_id, sku=generate_medicine_sku(), **validated_data.model_dump())
-                medicine = await self.medicine_repo.create(medicine)
-                await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
-                created += 1
+                    # Create the linked inventory item
+                    from app.models.inventory_model import InventoryItem, WarehouseStock, Warehouse
+                    sku = generate_medicine_sku()
+                    inv_item = InventoryItem(
+                        name=validated_data.name,
+                        sku=sku,
+                        barcode=validated_data.barcode,
+                        category=validated_data.category,
+                        quantity=validated_data.stock_quantity if validated_data.stock_quantity is not None else 0,
+                        unit=validated_data.unit,
+                        unit_cost=validated_data.unit_price or 0.0,
+                        reorder_level=validated_data.reorder_level if validated_data.reorder_level is not None else 10,
+                        expiry_date=validated_data.expiry_date,
+                        hospital_id=hospital_id,
+                    )
+                    self.db.add(inv_item)
+                    await self.db.flush()
+
+                    # Create the medicine
+                    medicine = Medicine(hospital_id=hospital_id, sku=sku, inventory_item_id=inv_item.id, **validated_data.model_dump())
+                    medicine = await self.medicine_repo.create(medicine)
+
+                    if hospital_id is not None and (medicine.stock_quantity or 0) > 0:
+                        wh_res = await self.db.execute(select(Warehouse.id).where(Warehouse.code == 'PHARMACY', Warehouse.hospital_id == hospital_id, Warehouse.hospital_id.isnot(None)))
+                        warehouse_id = wh_res.scalar()
+                        if not warehouse_id:
+                            wh = Warehouse(
+                                name="Pharmacy Warehouse",
+                                code="PHARMACY",
+                                hospital_id=hospital_id,
+                                is_active=True,
+                            )
+                            self.db.add(wh)
+                            await self.db.flush()
+                            warehouse_id = wh.id
+                        ws = WarehouseStock(
+                            warehouse_id=warehouse_id,
+                            inventory_item_id=inv_item.id,
+                            quantity=medicine.stock_quantity,
+                        )
+                        self.db.add(ws)
+                        if inv_item.warehouse_id is None:
+                            inv_item.warehouse_id = warehouse_id
+                        await self.db.flush()
+
+                    await self.audit_repo.create("create", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
+                    created += 1
 
             except ValidationError as e:
                 failed += 1

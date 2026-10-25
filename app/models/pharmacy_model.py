@@ -70,6 +70,7 @@ class Prescription(Base, TimestampMixin, SoftDeleteMixin):
     appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id"), nullable=True)
     prescription_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     dispensed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

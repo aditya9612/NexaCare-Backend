@@ -456,6 +456,7 @@ class PharmacyService:
             hospital_id=hospital_id,
             prescription_number=generate_prescription_number(),
             instructions=data.instructions,
+            start_date=data.start_date,
             status="pending",
         )
         prescription = await self.prescription_repo.create(prescription, prescription_items)
@@ -602,6 +603,8 @@ class PharmacyService:
                 raise NotFoundException("Patient not found")
             prescription.patient_id = data.patient_id
 
+        if data.start_date is not None:
+            prescription.start_date = data.start_date
         if data.instructions is not None:
             prescription.instructions = data.instructions
         if data.status is not None:

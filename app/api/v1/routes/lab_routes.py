@@ -580,7 +580,6 @@ async def download_lab_report(
         report.report_path = path
         await LabReportRepository(db).update(report)
         disk_path = resolve_disk_path(report.report_path)
-        
     if not disk_path or not os.path.exists(disk_path):
         raise NotFoundException("Report PDF file not found")
 

@@ -959,10 +959,14 @@ class LabService:
     async def _generate_report_pdf(self, report: LabReport, order) -> str:
         from app.models.patient_model import Patient
         from app.models.doctor_model import Doctor
+        from app.models.hospital_model import Hospital
         from sqlalchemy import select
 
         patient = await self.db.get(Patient, order.patient_id)
         doctor = await self.db.get(Doctor, order.doctor_id) if order.doctor_id else None
+
+        effective_hosp_id = getattr(order, "hospital_id", None) or getattr(report, "hospital_id", None)
+        hospital = await self.db.get(Hospital, effective_hosp_id) if effective_hosp_id else None
 
         result_objs = await self.db.execute(select(TestResult).where(TestResult.test_order_id == order.id))
         results = list(result_objs.scalars().all())
@@ -987,10 +991,12 @@ class LabService:
             generated_at_str = utc_now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Hospital branding (Multi-tenant isolated)
+        hospital = None
         hospital_name = None
         hospital_address = None
         hospital_phone = None
         hospital_email = None
+        hospital_website = None
         hospital_logo = None
 
         effective_hosp_id = getattr(order, "hospital_id", None) or (patient.hospital_id if patient else None)
@@ -1003,6 +1009,7 @@ class LabService:
                 hospital_address = hospital.address
                 hospital_phone = hospital.phone
                 hospital_email = hospital.email
+                hospital_website = getattr(hospital, 'website', None)
                 logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
                 if logo_attr:
                     raw_logo = str(logo_attr).replace("\\", "/").strip()
@@ -1045,12 +1052,15 @@ class LabService:
                 doc_display_name = f"Dr. {raw_doc_name}" if raw_doc_name else ""
 
         report_data = {
-            "hospital_name": hospital_name or "NexaCare Hospital",
+            "title": "Diagnostic Report",
+            "hospital_name": hospital_name or (hospital.name if hospital else "NexaCare Healthcare"),
             "hospital_address": hospital_address,
             "hospital_phone": hospital_phone,
             "hospital_email": hospital_email,
+            "hospital_website": hospital_website,
             "hospital_logo": pdf_logo_src,
             "order_number": order.order_number,
+            "report_number": report.report_number,
             "status": report.status,
             "generated_at": generated_at_str,
             "patient_name": f"{patient.first_name} {patient.last_name}" if patient else "Unknown",
@@ -1061,6 +1071,7 @@ class LabService:
             "doctor_code": doctor.doctor_code if doctor else "",
             "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
             "test_category": order.lab_test.category if order.lab_test else "Unknown",
+            "sample_type": order.lab_test.sample_type if order.lab_test else "Blood",
             "summary": report.summary or report.remarks or "",
             "columns": columns,
             "rows": rows,

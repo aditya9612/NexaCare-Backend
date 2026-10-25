@@ -1,5 +1,5 @@
 from enum import Enum
-from fastapi import APIRouter, Depends, Query, File, UploadFile, Response, HTTPException
+from fastapi import APIRouter, Depends, Query, File, UploadFile, Response, HTTPException, Header
 from fastapi.responses import StreamingResponse
 
 class InventoryExportFormat(str, Enum):
@@ -36,9 +36,10 @@ async def create_inventory_item(
     data: InventoryItemCreate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     item = await InventoryService(db).create_item(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item created", data=item)
 
@@ -54,9 +55,10 @@ async def list_inventory_items(
     category: str | None = None,
     warehouse_id: int | None = None,
     q: str | None = None,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     service = InventoryService(db)
     if q:
         result = await service.search_items(q, page=page, size=size, hospital_id=hospital_id)
@@ -87,6 +89,7 @@ async def upload_items_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -95,7 +98,7 @@ async def upload_items_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
 
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     result = await InventoryService(db).import_items_from_excel(file, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory items bulk upload processed", data=result)
 
@@ -105,9 +108,10 @@ async def export_inventory_items(
     db: DbSession,
     current_user: CurrentUser,
     format: InventoryExportFormat = Query(InventoryExportFormat.EXCEL),
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     data, media_type = await InventoryService(db).export_items(format.value, hospital_id=hospital_id)
 
     if format == InventoryExportFormat.EXCEL:
@@ -129,9 +133,10 @@ async def get_inventory_item(
     item_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     item = await InventoryService(db).get_item(item_id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item retrieved", data=item)
 
@@ -142,9 +147,10 @@ async def update_inventory_item(
     data: InventoryItemUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     item = await InventoryService(db).update_item(item_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item updated", data=item)
 
@@ -154,9 +160,10 @@ async def delete_inventory_item(
     item_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     await InventoryService(db).delete_item(item_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item deleted", data=MessageResponse(message="Soft deleted"))
 
@@ -181,9 +188,10 @@ async def list_stock_transactions(
     size: int = 20,
     item_id: int | None = None,
     transaction_type: str | None = None,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     result = await InventoryService(db).list_transactions(
         page=page, size=size, item_id=item_id, transaction_type=transaction_type, hospital_id=hospital_id,
     )
@@ -195,9 +203,10 @@ async def get_stock_transaction(
     transaction_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     transaction = await InventoryService(db).get_transaction(transaction_id, hospital_id=hospital_id)
     return APIResponse(message="Stock transaction retrieved", data=transaction)
 
@@ -234,9 +243,10 @@ async def create_warehouse(
     data: WarehouseCreate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     warehouse = await InventoryService(db).create_warehouse(data, hospital_id)
     return APIResponse(message="Warehouse created", data=warehouse)
 
@@ -247,15 +257,11 @@ async def list_warehouses(
     current_user: CurrentUser,
     page: int = 1,
     size: int = 20,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
-    try:
-        result = await InventoryService(db).list_warehouses(hospital_id=hospital_id, page=page, size=size)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+    result = await InventoryService(db).list_warehouses(hospital_id=hospital_id, page=page, size=size)
     return APIResponse(message="Warehouses retrieved", data=result)
 
 
@@ -264,9 +270,10 @@ async def get_warehouse(
     warehouse_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     warehouse = await InventoryService(db).get_warehouse(warehouse_id, hospital_id)
     return APIResponse(message="Warehouse retrieved", data=warehouse)
 
@@ -277,9 +284,10 @@ async def update_warehouse(
     data: WarehouseUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, hospital_id)
     return APIResponse(message="Warehouse updated", data=warehouse)
 
@@ -289,9 +297,10 @@ async def delete_warehouse(
     warehouse_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     await InventoryService(db).delete_warehouse(warehouse_id, hospital_id)
     return APIResponse(message="Warehouse deleted", data=MessageResponse(message="Soft deleted"))
 
@@ -303,9 +312,10 @@ async def reorder_alerts(
     current_user: CurrentUser,
     page: int = 1,
     size: int = 50,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     alerts = await InventoryService(db).get_reorder_alerts(hospital_id=hospital_id, page=page, size=size)
     return APIResponse(message="Reorder alerts", data=alerts)
 
@@ -315,9 +325,10 @@ async def consumption_report(
     db: DbSession,
     current_user: CurrentUser,
     period: str = "monthly",
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     report = await InventoryService(db).get_consumption_report(period=period, hospital_id=hospital_id)
     return APIResponse(message="Consumption report", data=report)
 
@@ -326,8 +337,9 @@ async def consumption_report(
 async def get_inventory_dashboard(
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "read")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     dashboard_data = await InventoryService(db).get_dashboard_summary(hospital_id)
     return APIResponse(message="Inventory dashboard stats retrieved", data=dashboard_data)

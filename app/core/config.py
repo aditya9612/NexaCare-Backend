@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     DATABASE_URL_SYNC: str = "mysql+pymysql://nexauser:nexa123@localhost/nexacare"
 
     
-    
+
+
 
    
 
@@ -124,14 +125,13 @@ class Settings(BaseSettings):
     MEDICATION_REMINDER_MINUTES: int = 15
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
 
-    # Rate Limiting & Throttling Configuration (Unified 50 req/sec for all APIs)
+    # Rate Limiting Configuration (Unified 50 req/sec for all APIs)
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_PER_SECOND: int = 50
     RATE_LIMIT_DEFAULT_PER_MINUTE: int = 10
     RATE_LIMIT_AUTHENTICATED_PER_MINUTE: int = 120
     RATE_LIMIT_ANONYMOUS_PER_MINUTE: int = 60
     RATE_LIMIT_FAIL_OPEN: bool = True
-    THROTTLING_MAX_CONCURRENCY: int = 100
     TRUSTED_PROXIES: List[str] = ["127.0.0.1", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
     # Authentication Specific Rate Limits

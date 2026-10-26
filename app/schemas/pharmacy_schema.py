@@ -266,6 +266,7 @@ class PrescriptionCreate(BaseSchema):
     patient_id: int
     doctor_id: int
     appointment_id: int
+    start_date: Optional[date] = Field(None, description="Date when medication starts")
     instructions: str | None = None
     items: List[PrescriptionItemCreate] = Field(..., min_length=1)
 
@@ -314,6 +315,7 @@ class PrescriptionResponse(BaseSchema):
     appointment_id: int | None
     prescription_number: str
     status: str
+    start_date: Optional[date] = None
     instructions: str | None
     items: List[PrescriptionItemResponse] = []
     dispensed_at: datetime | None
@@ -353,6 +355,7 @@ class PrescriptionDispenseRequest(BaseSchema):
 
 class PrescriptionUpdate(BaseSchema):
     patient_id: Optional[int] = None
+    start_date: Optional[date] = None
     instructions: Optional[str] = None
     status: Optional[str] = None
     items: Optional[List[PrescriptionItemCreate]] = None

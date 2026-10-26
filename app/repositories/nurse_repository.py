@@ -91,7 +91,9 @@ class NurseRepository:
         return result.scalar_one_or_none()
 
     async def get_by_user_id(self, user_id: int) -> Nurse | None:
-        result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
+        result = await self.db.execute(
+            select(Nurse).options(selectinload(Nurse.user)).where(Nurse.user_id == user_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_by_code(self, nurse_code: str) -> Nurse | None:
@@ -409,6 +411,31 @@ class NurseHandoverNoteRepository:
         await self.db.flush()
         await self.db.refresh(note)
         return note
+
+    async def get_by_id_scoped(self, note_id: int) -> NurseHandoverNote | None:
+        query = (
+            select(NurseHandoverNote)
+            .options(
+                selectinload(NurseHandoverNote.nurse).selectinload(Nurse.user),
+                selectinload(NurseHandoverNote.shift),
+            )
+            .where(NurseHandoverNote.id == note_id)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_handover_audit_logs(self, note_id: int):
+        from app.models.audit_log_model import AuditLog
+        query = (
+            select(AuditLog)
+            .where(
+                AuditLog.resource == "nurse_handover_notes",
+                AuditLog.resource_id == str(note_id),
+            )
+            .order_by(AuditLog.created_at.asc())
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
 
 
 def _normalize_blood_group(bg: str | None) -> str | None:

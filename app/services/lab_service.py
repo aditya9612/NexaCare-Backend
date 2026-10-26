@@ -990,7 +990,75 @@ class LabService:
         else:
             generated_at_str = utc_now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Hospital branding (Multi-tenant isolated)
+        hospital = None
+        hospital_name = None
+        hospital_address = None
+        hospital_phone = None
+        hospital_email = None
+        hospital_website = None
+        hospital_logo = None
+
+        effective_hosp_id = getattr(order, "hospital_id", None) or (patient.hospital_id if patient else None)
+        if effective_hosp_id:
+            from app.repositories.hospital_repository import HospitalRepository
+            import os
+            hospital = await HospitalRepository(self.db).get_by_id(effective_hosp_id)
+            if hospital:
+                hospital_name = hospital.name
+                hospital_address = hospital.address
+                hospital_phone = hospital.phone
+                hospital_email = hospital.email
+                hospital_website = getattr(hospital, 'website', None)
+                logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+                if logo_attr:
+                    raw_logo = str(logo_attr).replace("\\", "/").strip()
+                    candidates = [raw_logo]
+                    if raw_logo.startswith("/"):
+                        candidates.append(raw_logo.lstrip("/"))
+                    if raw_logo.startswith("uploads/"):
+                        candidates.append(f"app/{raw_logo}")
+                    for cand in candidates:
+                        if os.path.exists(cand):
+                            hospital_logo = os.path.abspath(cand).replace("\\", "/")
+                            break
+
+        if not hospital_logo:
+            import os
+            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.exists(candidate):
+                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
+                    break
+
+        pdf_logo_src = None
+        if hospital_logo and os.path.exists(hospital_logo):
+            import mimetypes, base64
+            mime_type, _ = mimetypes.guess_type(hospital_logo)
+            if not mime_type:
+                mime_type = "image/png"
+            try:
+                with open(hospital_logo, "rb") as f:
+                    b64_data = base64.b64encode(f.read()).decode("utf-8")
+                pdf_logo_src = f"data:{mime_type};base64,{b64_data}"
+            except Exception:
+                pdf_logo_src = None
+
+        doc_display_name = ""
+        if doctor:
+            raw_doc_name = f"{doctor.first_name or ''} {doctor.last_name or ''}".strip()
+            if raw_doc_name.lower().startswith("dr.") or raw_doc_name.lower().startswith("dr "):
+                doc_display_name = raw_doc_name
+            else:
+                doc_display_name = f"Dr. {raw_doc_name}" if raw_doc_name else ""
+
         report_data = {
+            "title": "Diagnostic Report",
+            "hospital_name": hospital_name or (hospital.name if hospital else "NexaCare Healthcare"),
+            "hospital_address": hospital_address,
+            "hospital_phone": hospital_phone,
+            "hospital_email": hospital_email,
+            "hospital_website": hospital_website,
+            "hospital_logo": pdf_logo_src,
             "order_number": order.order_number,
             "report_number": report.report_number,
             "status": report.status,
@@ -999,7 +1067,7 @@ class LabService:
             "patient_code": patient.patient_code if patient else "Unknown",
             "patient_gender": patient.gender if patient else "Unknown",
             "patient_dob": str(patient.dob) if patient and patient.dob else "Unknown",
-            "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else "",
+            "doctor_name": doc_display_name,
             "doctor_code": doctor.doctor_code if doctor else "",
             "test_name": order.lab_test.test_name if order.lab_test else "Unknown",
             "test_category": order.lab_test.category if order.lab_test else "Unknown",
@@ -1007,13 +1075,6 @@ class LabService:
             "summary": report.summary or report.remarks or "",
             "columns": columns,
             "rows": rows,
-            "hospital_name": hospital.name if hospital else "NexaCare Healthcare",
-            "hospital_address": hospital.address if hospital else None,
-            "hospital_phone": hospital.phone if hospital else None,
-            "hospital_email": hospital.email if hospital else None,
-            "hospital_website": hospital.website if hospital else None,
-            "hospital_logo": hospital.logo_path if hospital else None,
-            "title": "Diagnostic Report",
         }
 
         path = await generate_lab_report_html(
@@ -1026,16 +1087,34 @@ class LabService:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
 
-        result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
-        if not result:
-            raise NotFoundException("Test result not found")
+        result = None
+        order = None
 
-        order = await self.order_repo.get_by_id(result.test_order_id, hospital_id=hospital_id)
+        if data.test_result_id is not None and data.test_order_id is not None:
+            result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
+            if not result:
+                raise NotFoundException("Test result not found")
+            if result.test_order_id != data.test_order_id:
+                raise BadRequestException("test_result_id does not belong to the specified test_order_id")
+            order = await self.order_repo.get_by_id(data.test_order_id, hospital_id=hospital_id)
+        elif data.test_result_id is not None:
+            result = await self.result_repo.get_by_id(data.test_result_id, hospital_id=hospital_id)
+            if not result:
+                raise NotFoundException("Test result not found")
+            order = await self.order_repo.get_by_id(result.test_order_id, hospital_id=hospital_id)
+        elif data.test_order_id is not None:
+            order = await self.order_repo.get_by_id(data.test_order_id, hospital_id=hospital_id)
+            if order:
+                result = await self.result_repo.get_by_test_order(order.id, hospital_id=hospital_id)
+        else:
+            raise BadRequestException("Either test_order_id or test_result_id must be provided")
+
         if not order:
+            order_id_to_check = data.test_order_id or (result.test_order_id if result else None)
             from sqlalchemy import text
             raw_order = await self.db.execute(
                 text("SELECT id, order_number, is_deleted, deleted_at FROM test_orders WHERE id = :order_id"),
-                {"order_id": result.test_order_id}
+                {"order_id": order_id_to_check}
             )
             row = raw_order.fetchone()
             if row:
@@ -1044,14 +1123,37 @@ class LabService:
                 )
             else:
                 raise NotFoundException(
-                    f"Test order not found (No record exists in test_orders table with ID={result.test_order_id})"
+                    f"Test order not found (No record exists in test_orders table with ID={order_id_to_check})"
                 )
 
-        sample = await self.sample_repo.get_by_test_order(result.test_order_id, hospital_id=hospital_id)
+        if order.status == LabOrderStatus.CANCELLED:
+            raise BadRequestException("Cannot create lab report for a cancelled test order")
+
+        sample = await self.sample_repo.get_by_test_order(order.id, hospital_id=hospital_id)
 
         if not sample or sample.status != SampleStatus.COLLECTED:
             raise BadRequestException(
                 "Cannot create lab report before collecting sample"
+            )
+
+        if not result:
+            result = await self.result_repo.get_by_test_order(order.id, hospital_id=hospital_id)
+        if not result:
+            raise BadRequestException(
+                "Cannot create lab report before entering test results. Please enter test results first."
+            )
+
+        # Duplicate active report prevention
+        existing_report_res = await self.db.execute(
+            select(LabReport).where(
+                LabReport.test_order_id == order.id,
+                LabReport.status != LabReportStatus.REJECTED,
+            )
+        )
+        existing_report = existing_report_res.scalar_one_or_none()
+        if existing_report:
+            raise BadRequestException(
+                f"Lab report already exists for this test order (Report #{existing_report.report_number})"
             )
 
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
@@ -1070,11 +1172,11 @@ class LabService:
                     "You can create lab reports only for test orders of your department"
                 )        
                
-        remarks = getattr(data, "remarks", None) or data.summary or result.remark
-        summary = data.summary or result.remark
+        remarks = getattr(data, "remarks", None) or data.summary or (result.remark if result else None)
+        summary = data.summary or (result.remark if result else None)
 
         report = LabReport(
-            test_order_id=result.test_order_id,
+            test_order_id=order.id,
             report_number=generate_lab_report_number(),
             summary=summary,
             remarks=remarks,
@@ -1335,15 +1437,6 @@ class LabService:
                 order.status = LabOrderStatus.COMPLETED
                 order.completed_at = utc_now()
                 await self.order_repo.update(order)
-
-            try:
-                report.report_path = await self._generate_report_pdf(report, order)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Failed to regenerate report PDF during approve_report: {e}")
-                from app.models.patient_model import Patient
-                from app.models.doctor_model import Doctor
-                from sqlalchemy import select
 
             try:
                 report.report_path = await self._generate_report_pdf(report, order)

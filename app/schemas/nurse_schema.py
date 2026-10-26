@@ -261,6 +261,74 @@ class NurseHandoverNoteResponse(BaseSchema):
 NurseHandoverNoteListResponse = PaginatedResponse[NurseHandoverNoteResponse]
 
 
+class NurseMiniProfile(BaseSchema):
+    id: int
+    nurse_code: str | None = None
+    full_name: str | None = None
+    license_number: str | None = None
+    shift: str | None = None
+
+
+class NurseHandoverActionRequest(BaseSchema):
+    action: str = Field(
+        ..., description="Action to perform on the handover note: ACCEPT or REJECT"
+    )
+    remarks: str | None = Field(None, description="Optional remarks for the action")
+    rejection_reason: str | None = Field(
+        None, description="Mandatory reason if action is REJECT"
+    )
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        stripped = v.strip().upper() if isinstance(v, str) else ""
+        if stripped not in ("ACCEPT", "REJECT"):
+            raise ValueError("action must be either 'ACCEPT' or 'REJECT'")
+        return stripped
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def validate_rejection(cls, v: str | None, info) -> str | None:
+        action = info.data.get("action")
+        if action == "REJECT" and (not v or not v.strip()):
+            raise ValueError("rejection_reason is required when action is REJECT")
+        return v.strip() if v else None
+
+    @field_validator("remarks")
+    @classmethod
+    def validate_remarks(cls, v: str | None) -> str | None:
+        return v.strip() if v else None
+
+
+class HandoverHistoryActionItem(BaseSchema):
+    action: str
+    performed_by: NurseMiniProfile | None = None
+    action_timestamp: datetime
+    status_before: str | None = None
+    status_after: str | None = None
+    remarks: str | None = None
+    rejection_reason: str | None = None
+
+
+class NurseHandoverHistoryResponse(BaseSchema):
+    handover_id: int
+    handover_date: date
+    current_status: str
+    creator: NurseMiniProfile
+    incoming_nurse: NurseMiniProfile | None = None
+    summary: str
+    pending_tasks: str | None = None
+    patient_updates: str | None = None
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    acceptance_or_rejection_action: str | None = None
+    action_performed_by: NurseMiniProfile | None = None
+    action_timestamp: datetime | None = None
+    rejection_reason: str | None = None
+    history: list[HandoverHistoryActionItem] = []
+
+
 class NurseAssignedPatientStatusResponse(BaseSchema):
     patient_id: int
     patient_code: str

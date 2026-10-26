@@ -414,22 +414,7 @@ class PharmacyService:
         ):
             raise BadRequestException("Prescription can only be created for active, confirmed, or checked-in appointments.")
 
-        # 4. Verify duplicate prescription check:
-        is_ipd_admitted = (
-            appointment_type in ["IPD", "INPATIENT"]
-            or admission_status in ["admitted", "admit recommended", "admit_recommended"]
-        )
-        if not is_ipd_admitted:
-            existing_rx = await self.db.scalar(
-                select(Prescription).where(
-                    Prescription.appointment_id == data.appointment_id,
-                    Prescription.is_deleted.is_(False)
-                )
-            )
-            if existing_rx:
-                raise BadRequestException("A prescription already exists for this appointment")
-
-        # 5. Verify all medicines exist, check expiry, check available stock, and perform FEFO batch selection
+        # 4. Verify all medicines exist, check expiry, check available stock, and perform FEFO batch selection
         prescription_items: list[PrescriptionItem] = []
         for item_data in data.items:
             medicine = await self.medicine_repo.get_by_id_for_update(item_data.medicine_id, hospital_id=hospital_id)
@@ -480,6 +465,7 @@ class PharmacyService:
             hospital_id=hospital_id,
             prescription_number=generate_prescription_number(),
             instructions=data.instructions,
+            start_date=data.start_date,
             status="pending",
         )
         prescription = await self.prescription_repo.create(prescription, prescription_items)
@@ -626,6 +612,8 @@ class PharmacyService:
                 raise NotFoundException("Patient not found")
             prescription.patient_id = data.patient_id
 
+        if data.start_date is not None:
+            prescription.start_date = data.start_date
         if data.instructions is not None:
             prescription.instructions = data.instructions
         if data.status is not None:

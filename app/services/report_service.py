@@ -172,12 +172,16 @@ class ReportService:
         self,
         start_date: date | None = None,
         end_date: date | None = None,
-        hospital_id: int | None = None
+        hospital_id: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None
     ) -> PharmacySalesResponse:
         s_date = start_date
         e_date = end_date
         
-        stats = await self.repo.get_pharmacy_sales(s_date, e_date, hospital_id=hospital_id)
+        stats = await self.repo.get_pharmacy_sales(
+            s_date, e_date, hospital_id=hospital_id, limit=limit, offset=offset
+        )
         return PharmacySalesResponse(**stats)
 
     async def get_inventory_status(
@@ -231,7 +235,14 @@ class ReportService:
         )
 
     @staticmethod
-    def build_export_payload(title: str, data: BaseModel, filters: dict = None, main_table_title: str = 'Main Data') -> ExportPayload:
+    def build_export_payload(
+        title: str,
+        data: BaseModel,
+        filters: dict = None,
+        main_table_title: str = 'Main Data',
+        hospital_name: str | None = None,
+        hospital_logo: str | None = None,
+    ) -> ExportPayload:
         data_dict = data.model_dump()
         
         summary = {}
@@ -268,7 +279,9 @@ class ReportService:
             summary=summary,
             main_table_title=main_table_title,
             main_rows=main_rows,
-            additional_sections=additional_sections
+            additional_sections=additional_sections,
+            hospital_name=hospital_name,
+            hospital_logo=hospital_logo,
         )
 
     async def get_pharmacy_profit_loss(

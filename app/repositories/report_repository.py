@@ -237,7 +237,14 @@ class ReportRepository:
             "reorder_alerts": reorder_alerts
         }
 
-    async def get_pharmacy_sales(self, start_date: date | None, end_date: date | None, hospital_id: int | None = None) -> dict:
+    async def get_pharmacy_sales(
+        self,
+        start_date: date | None,
+        end_date: date | None,
+        hospital_id: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None
+    ) -> dict:
         filters = [
             PharmacyInvoice.status != "cancelled",
             PharmacyInvoice.is_deleted == False
@@ -245,10 +252,11 @@ class ReportRepository:
         if hospital_id is not None:
             filters.append(PharmacyInvoice.hospital_id == hospital_id)
         
-        if start_date and end_date:
+        if start_date:
             start_of_period = datetime.combine(start_date, datetime.min.time())
-            end_of_period = datetime.combine(end_date, datetime.max.time())
             filters.append(PharmacyInvoice.created_at >= start_of_period)
+        if end_date:
+            end_of_period = datetime.combine(end_date, datetime.max.time())
             filters.append(PharmacyInvoice.created_at <= end_of_period)
 
         sales_query = select(
@@ -263,10 +271,46 @@ class ReportRepository:
         total_invoices = int(row.total_invoices) if row and row.total_invoices else 0
         avg_invoice = round(total_sales / total_invoices, 2) if total_invoices > 0 else 0.0
 
+        records_query = (
+            select(
+                PharmacyInvoice,
+                Patient.first_name,
+                Patient.last_name,
+            )
+            .outerjoin(Patient, PharmacyInvoice.patient_id == Patient.id)
+            .where(*filters)
+            .order_by(PharmacyInvoice.created_at.desc(), PharmacyInvoice.id.desc())
+        )
+        if limit is not None:
+            records_query = records_query.limit(limit)
+        if offset is not None:
+            records_query = records_query.offset(offset)
+
+        records_res = await self.db.execute(records_query)
+        items = []
+        for inv, f_name, l_name in records_res.all():
+            patient_name = f"{f_name or ''} {l_name or ''}".strip() or None
+            items.append({
+                "id": inv.id,
+                "invoice_number": inv.invoice_number,
+                "invoice_date": inv.created_at or datetime.now(),
+                "patient_id": inv.patient_id,
+                "patient_name": patient_name,
+                "payment_mode": inv.payment_mode,
+                "subtotal": float(inv.subtotal or 0.0),
+                "discount_amount": float(inv.discount_amount or 0.0),
+                "tax_amount": float(inv.tax_amount or inv.gst_amount or 0.0),
+                "total_amount": float(inv.total_amount or 0.0),
+                "total_sales": float(inv.total_amount or 0.0),
+                "paid_amount": float(inv.paid_amount or 0.0),
+                "status": inv.status or "completed",
+            })
+
         return {
             "total_sales": total_sales,
             "total_invoices": total_invoices,
-            "average_invoice_value": avg_invoice
+            "average_invoice_value": avg_invoice,
+            "items": items
         }
 
     async def get_pharmacy_inventory(self, category: str | None = None, hospital_id: int | None = None) -> dict:

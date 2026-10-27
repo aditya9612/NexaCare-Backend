@@ -163,9 +163,11 @@ class ReportService:
     async def get_pharmacy_inventory(
         self,
         category: str | None = None,
-        hospital_id: int | None = None
+        hospital_id: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> PharmacyInventoryResponse:
-        stats = await self.repo.get_pharmacy_inventory(category, hospital_id=hospital_id)
+        stats = await self.repo.get_pharmacy_inventory(category, hospital_id=hospital_id, limit=limit, offset=offset)
         return PharmacyInventoryResponse(**stats)
 
     async def get_pharmacy_sales(

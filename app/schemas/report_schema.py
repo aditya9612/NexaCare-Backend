@@ -93,6 +93,20 @@ class PharmacySalesResponse(BaseModel):
                 data["items"] = data["records"]
         return data
 
+class PharmacyInventoryItemResponse(BaseModel):
+    id: int | None = None
+    name: str
+    generic_name: str | None = None
+    sku: str | None = None
+    batch_number: str | None = None
+    category: str | None = None
+    unit: str | None = None
+    unit_price: float = 0.0
+    stock_quantity: int = 0
+    reorder_level: int = 0
+    expiry_date: date | None = None
+    status: str | None = None
+
 class PharmacyInventoryResponse(BaseModel):
     total_medicines: int
     active_medicines: int
@@ -100,6 +114,19 @@ class PharmacyInventoryResponse(BaseModel):
     low_stock_medicines: int
     out_of_stock_medicines: int
     total_stock_quantity: int
+    items: list[PharmacyInventoryItemResponse] = Field(default_factory=list)
+
+    @property
+    def records(self) -> list[PharmacyInventoryItemResponse]:
+        return self.items
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_items(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "items" not in data and "records" in data:
+                data["items"] = data["records"]
+        return data
 
 class PharmacyExpiryResponse(BaseModel):
     total_medicines: int

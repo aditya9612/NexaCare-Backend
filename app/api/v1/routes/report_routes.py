@@ -331,13 +331,39 @@ async def get_pharmacy_sales(
 async def get_pharmacy_inventory(
     db: DbSession,
     current_user: CurrentUser,
+    category: str | None = Query(None, description="Optional category filter"),
+    limit: int | None = Query(None, ge=1, le=1000, description="Optional limit for records"),
+    offset: int | None = Query(None, ge=0, description="Optional offset for records"),
     format: ReportFormat = Query(ReportFormat.JSON),
+    export_format: ReportFormat | None = Query(None, description="Alternative alias for format (pdf, csv, json)"),
     download: bool = Query(False),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
-    data = await ReportService(db).get_pharmacy_inventory(hospital_id=hospital_id)
-    return export_response(ReportService.build_export_payload("Pharmacy Inventory", data), format, download, "pharmacy-inventory", data)
+    hospital_name = None
+    hospital_logo = None
+    if hospital_id:
+        from app.repositories.hospital_repository import HospitalRepository
+        hospital = await HospitalRepository(db).get_by_id(hospital_id)
+        if hospital:
+            hospital_name = hospital.name
+            logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+            hospital_logo = ReportExportService.resolve_hospital_logo(logo_attr)
+
+    data = await ReportService(db).get_pharmacy_inventory(
+        category=category,
+        hospital_id=hospital_id,
+        limit=limit,
+        offset=offset
+    )
+    active_format = export_format or format
+    payload = ReportService.build_export_payload(
+        "Pharmacy Inventory",
+        data,
+        hospital_name=hospital_name,
+        hospital_logo=hospital_logo
+    )
+    return export_response(payload, active_format, download, "pharmacy-inventory", data)
 
 
 @router.get("/pharmacy/expiry", response_model=PharmacyExpiryResponse)

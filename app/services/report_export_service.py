@@ -82,6 +82,22 @@ class ReportExportService:
         "hospital_id": "Hospital ID",
         "created_at": "Created At",
         "updated_at": "Updated At",
+        "name": "Medicine Name",
+        "generic_name": "Generic Name",
+        "sku": "SKU",
+        "batch_number": "Batch No.",
+        "category": "Category",
+        "unit": "Unit",
+        "unit_price": "Unit Price",
+        "stock_quantity": "Stock Qty",
+        "reorder_level": "Reorder Level",
+        "expiry_date": "Expiry Date",
+        "total_medicines": "Total Medicines",
+        "active_medicines": "Active Medicines",
+        "inactive_medicines": "Inactive Medicines",
+        "low_stock_medicines": "Low Stock",
+        "out_of_stock_medicines": "Out of Stock",
+        "total_stock_quantity": "Total Stock Qty",
     }
 
     CURRENCY_KEYS = {
@@ -89,7 +105,7 @@ class ReportExportService:
         "total_amount", "paid_amount", "total_sales", "average_invoice_value",
         "revenue", "billing_revenue", "pharmacy_revenue", "total_revenue",
         "total_billed_amount", "total_collected_amount", "total_expense_amount",
-        "net_cash_flow", "cost", "gross_profit"
+        "net_cash_flow", "cost", "gross_profit", "unit_price"
     }
 
     @classmethod
@@ -173,7 +189,7 @@ class ReportExportService:
                 max_len = max(max_len, len(val_str))
                 
             mult = 1.0
-            if h in ("patient_name", "description", "name"):
+            if h in ("patient_name", "description", "name", "generic_name"):
                 mult = 1.4
             elif h in ("invoice_number", "order_number"):
                 mult = 1.2
@@ -300,11 +316,55 @@ class ReportExportService:
         elements.append(Spacer(1, REPORT_THEME['section_spacing']))
 
     @staticmethod
+    def _render_inventory_summary_bar(elements, summary_metrics: dict, available_width: float, styles):
+        if not summary_metrics:
+            return
+        summary_metric_style = ParagraphStyle(
+            'InventoryTableSummaryMetric',
+            parent=styles['Normal'],
+            fontName=REPORT_THEME['font_name_bold'],
+            fontSize=8.5,
+            leading=11.5,
+            alignment=1,
+            textColor=REPORT_THEME['header_bg_color'],
+            spaceAfter=0
+        )
+        total_meds = summary_metrics.get("total_medicines", 0)
+        total_stock = summary_metrics.get("total_stock_quantity", 0)
+        low_stock = summary_metrics.get("low_stock_medicines", 0)
+        out_of_stock = summary_metrics.get("out_of_stock_medicines", 0)
+
+        summary_table_data = [
+            [
+                Paragraph(f"<b>Total Medicines:</b>  {total_meds}", summary_metric_style),
+                Paragraph(f"<b>Total Stock Qty:</b>  {total_stock}", summary_metric_style),
+                Paragraph(f"<b>Low Stock:</b>  {low_stock}", summary_metric_style),
+                Paragraph(f"<b>Out of Stock:</b>  {out_of_stock}", summary_metric_style),
+            ]
+        ]
+        summary_table = Table(summary_table_data, colWidths=[available_width / 4.0] * 4)
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F2F4F4")),
+            ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#BDC3C7")),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, REPORT_THEME['section_spacing']))
+
+    @staticmethod
     def _render_table(elements, title, rows, available_width, styles, summary_metrics: dict = None):
         is_pharmacy_sales = (title and "Pharmacy Sales" in title) or (
             bool(rows) and "invoice_number" in ReportExportService._extract_headers(rows)
         )
-        if not rows and not is_pharmacy_sales:
+        is_pharmacy_inventory = (title and "Pharmacy Inventory" in title) or (
+            bool(rows) and any(k in ReportExportService._extract_headers(rows) for k in ("stock_quantity", "reorder_level")) and not is_pharmacy_sales
+        )
+        if not rows and not is_pharmacy_sales and not is_pharmacy_inventory:
             return
 
         if is_pharmacy_sales:
@@ -326,6 +386,30 @@ class ReportExportService:
                     metrics["average_invoice_value"] = float(summary_metrics["average_invoice_value"])
 
             ReportExportService._render_summary_bar(elements, metrics, available_width, styles)
+
+        elif is_pharmacy_inventory:
+            total_meds = len(rows) if rows else 0
+            total_stock = sum(int(r.get("stock_quantity") or 0) for r in rows) if rows else 0
+            low_stock = sum(1 for r in rows if 0 < int(r.get("stock_quantity") or 0) <= int(r.get("reorder_level") or 0)) if rows else 0
+            out_of_stock = sum(1 for r in rows if int(r.get("stock_quantity") or 0) <= 0) if rows else 0
+
+            metrics = {
+                "total_medicines": total_meds,
+                "total_stock_quantity": total_stock,
+                "low_stock_medicines": low_stock,
+                "out_of_stock_medicines": out_of_stock,
+            }
+            if summary_metrics:
+                if summary_metrics.get("total_medicines") is not None:
+                    metrics["total_medicines"] = summary_metrics["total_medicines"]
+                if summary_metrics.get("total_stock_quantity") is not None:
+                    metrics["total_stock_quantity"] = summary_metrics["total_stock_quantity"]
+                if summary_metrics.get("low_stock_medicines") is not None:
+                    metrics["low_stock_medicines"] = summary_metrics["low_stock_medicines"]
+                if summary_metrics.get("out_of_stock_medicines") is not None:
+                    metrics["out_of_stock_medicines"] = summary_metrics["out_of_stock_medicines"]
+
+            ReportExportService._render_inventory_summary_bar(elements, metrics, available_width, styles)
 
         if title:
             bold_style = ParagraphStyle(
@@ -362,6 +446,36 @@ class ReportExportService:
                     headers[idx] = "total_amount"
 
                 excluded = {"id", "patient_id", "total_amount", "total_sales"} | set(headers)
+                extra = [k for k in raw_headers if k not in excluded]
+                if extra:
+                    headers.extend(extra)
+                    display_headers.extend([ReportExportService._get_header_display_name(k) for k in extra])
+                    alignments.extend(["LEFT"] * len(extra))
+        elif is_pharmacy_inventory:
+            preferred_cols = [
+                ("name", "Medicine Name", "LEFT"),
+                ("category", "Category", "LEFT"),
+                ("sku", "SKU", "CENTER"),
+                ("batch_number", "Batch No.", "CENTER"),
+                ("unit", "Unit", "CENTER"),
+                ("unit_price", "Unit Price", "RIGHT"),
+                ("stock_quantity", "Stock Qty", "RIGHT"),
+                ("reorder_level", "Reorder Level", "RIGHT"),
+                ("expiry_date", "Expiry Date", "CENTER"),
+                ("status", "Status", "CENTER"),
+            ]
+            headers = [k for k, _, _ in preferred_cols]
+            display_headers = [label for _, label, _ in preferred_cols]
+            alignments = [align for _, _, align in preferred_cols]
+
+            if rows:
+                raw_headers = ReportExportService._extract_headers(rows)
+                if "generic_name" in raw_headers and any(r.get("generic_name") for r in rows):
+                    headers.insert(1, "generic_name")
+                    display_headers.insert(1, "Generic Name")
+                    alignments.insert(1, "LEFT")
+
+                excluded = {"id", "generic_name"} | set(headers)
                 extra = [k for k in raw_headers if k not in excluded]
                 if extra:
                     headers.extend(extra)
@@ -413,6 +527,7 @@ class ReportExportService:
                     cell_row.append(Paragraph(val_str, b_style))
                 data.append(cell_row)
         else:
+            empty_msg = "<i>No pharmacy inventory records found.</i>" if is_pharmacy_inventory else "<i>No pharmacy sales records found for the selected period.</i>"
             empty_style = ParagraphStyle(
                 'EmptySalesRow',
                 parent=styles['Normal'],
@@ -422,12 +537,12 @@ class ReportExportService:
                 alignment=1,
                 spaceAfter=0
             )
-            empty_row = [Paragraph("<i>No pharmacy sales records found for the selected period.</i>", empty_style)] + [
+            empty_row = [Paragraph(empty_msg, empty_style)] + [
                 Paragraph("", empty_style) for _ in range(len(headers) - 1)
             ]
             data.append(empty_row)
 
-        # If this is a pharmacy sales table, append a summary Total row at the end
+        # If this is a pharmacy sales or inventory table, append a summary Total row at the end
         has_summary_row = False
         summary_metrics = None
         if is_pharmacy_sales:
@@ -475,6 +590,32 @@ class ReportExportService:
                 )
                 footer_row.append(Paragraph(val_str, f_style))
             data.append(footer_row)
+        elif is_pharmacy_inventory:
+            has_summary_row = True
+            total_meds = len(rows) if rows else 0
+            total_stock = sum(int(r.get("stock_quantity") or 0) for r in rows) if rows else 0
+
+            footer_row = []
+            for h, align in zip(headers, alignments):
+                align_code = 2 if align == 'RIGHT' else (1 if align == 'CENTER' else 0)
+                if h == headers[0]:
+                    val_str = f"<b>Total ({total_meds} Medicines)</b>"
+                elif h == "stock_quantity":
+                    val_str = f"<b>{total_stock}</b>"
+                else:
+                    val_str = ""
+
+                f_style = ParagraphStyle(
+                    f'TF_Inv_{align}',
+                    parent=styles['Normal'],
+                    fontName=REPORT_THEME['font_name_bold'],
+                    fontSize=body_font_size,
+                    leading=body_font_size + 2.0,
+                    alignment=align_code,
+                    spaceAfter=0
+                )
+                footer_row.append(Paragraph(val_str, f_style))
+            data.append(footer_row)
             
         table = Table(data, repeatRows=1, colWidths=col_widths)
         padding = REPORT_THEME.get('cell_padding', 4)
@@ -490,7 +631,7 @@ class ReportExportService:
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, REPORT_THEME['alt_row_bg_color']]),
             ('GRID', (0, 0), (-1, -1), REPORT_THEME.get('grid_width', 0.5), REPORT_THEME.get('grid_color', colors.HexColor("#BDC3C7"))),
         ]
-        if not rows and is_pharmacy_sales:
+        if not rows and (is_pharmacy_sales or is_pharmacy_inventory):
             ts.append(('SPAN', (0, 1), (-1, 1)))
 
         if has_summary_row:
@@ -608,22 +749,28 @@ class ReportExportService:
         elements.append(Spacer(1, REPORT_THEME['section_spacing']))
         
         # Tables and Summary
-        is_pharm_report = bool(
+        is_pharm_sales = bool(
             (payload.title and "Pharmacy Sales" in payload.title) or 
             (payload.main_table_title and "Pharmacy Sales" in payload.main_table_title) or
             (payload.main_rows and "invoice_number" in ReportExportService._extract_headers(payload.main_rows))
         )
+        is_pharm_inv = bool(
+            (payload.title and "Pharmacy Inventory" in payload.title) or 
+            (payload.main_table_title and "Pharmacy Inventory" in payload.main_table_title) or
+            (payload.main_rows and any(k in ReportExportService._extract_headers(payload.main_rows) for k in ("stock_quantity", "reorder_level")) and not is_pharm_sales)
+        )
+        is_custom_pharm_report = is_pharm_sales or is_pharm_inv
 
         # Filters and Summary
         ReportExportService._render_summary(elements, "Applied Filters", payload.filters, styles)
-        if not is_pharm_report:
+        if not is_custom_pharm_report:
             ReportExportService._render_summary(elements, "Summary", payload.summary, styles)
 
-        if payload.main_rows or is_pharm_report:
-            table_title = payload.title if is_pharm_report else payload.main_table_title
+        if payload.main_rows or is_custom_pharm_report:
+            table_title = payload.title if is_custom_pharm_report else payload.main_table_title
             ReportExportService._render_table(
                 elements, table_title, payload.main_rows or [], available_width, styles,
-                summary_metrics=payload.summary if is_pharm_report else None
+                summary_metrics=payload.summary if is_custom_pharm_report else None
             )
             
         for section in payload.additional_sections:

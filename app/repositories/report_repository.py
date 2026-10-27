@@ -313,7 +313,13 @@ class ReportRepository:
             "items": items
         }
 
-    async def get_pharmacy_inventory(self, category: str | None = None, hospital_id: int | None = None) -> dict:
+    async def get_pharmacy_inventory(
+        self,
+        category: str | None = None,
+        hospital_id: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None
+    ) -> dict:
         filters = [Medicine.is_deleted == False]
         if hospital_id is not None:
             filters.append(Medicine.hospital_id == hospital_id)
@@ -343,13 +349,48 @@ class ReportRepository:
         out_of_stock_medicines = int(row.out_of_stock) if row and row.out_of_stock else 0
         total_stock_quantity = int(row.total_stock) if row and row.total_stock else 0
 
+        records_query = select(Medicine).where(*filters).order_by(Medicine.name.asc(), Medicine.id.asc())
+        if limit is not None:
+            records_query = records_query.limit(limit)
+        if offset is not None:
+            records_query = records_query.offset(offset)
+
+        records_res = await self.db.execute(records_query)
+        medicines = records_res.scalars().all()
+        items = []
+        for med in medicines:
+            if not med.is_active:
+                status = "Inactive"
+            elif (med.stock_quantity or 0) <= 0:
+                status = "Out of Stock"
+            elif (med.stock_quantity or 0) <= (med.reorder_level or 0):
+                status = "Low Stock"
+            else:
+                status = "Active"
+
+            items.append({
+                "id": med.id,
+                "name": med.name,
+                "generic_name": med.generic_name,
+                "sku": med.sku,
+                "batch_number": med.batch_number,
+                "category": med.category,
+                "unit": med.unit,
+                "unit_price": float(med.unit_price or 0.0),
+                "stock_quantity": int(med.stock_quantity or 0),
+                "reorder_level": int(med.reorder_level or 0),
+                "expiry_date": med.expiry_date,
+                "status": status,
+            })
+
         return {
             "total_medicines": total_medicines,
             "active_medicines": active_medicines,
             "inactive_medicines": inactive_medicines,
             "low_stock_medicines": low_stock_medicines,
             "out_of_stock_medicines": out_of_stock_medicines,
-            "total_stock_quantity": total_stock_quantity
+            "total_stock_quantity": total_stock_quantity,
+            "items": items,
         }
 
     async def get_pharmacy_expiry(self, category: str | None = None, hospital_id: int | None = None) -> dict:

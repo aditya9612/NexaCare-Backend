@@ -1431,6 +1431,7 @@ class LabService:
             if data.doctor_remarks:
                 report.doctor_remarks = data.doctor_remarks
                 report.summary = data.doctor_remarks
+                report.remarks = data.doctor_remarks
 
             order = await self.order_repo.get_by_id(report.test_order_id, hospital_id=hospital_id)
             if order:
@@ -1487,6 +1488,7 @@ class LabService:
         else:
             report.status = LabReportStatus.REJECTED
             report.doctor_remarks = data.doctor_remarks
+            report.remarks = data.doctor_remarks
 
         report = await self.report_repo.update(report)
         await self.audit_repo.create(
@@ -1521,7 +1523,7 @@ class LabService:
     async def approve_report(self, report_id: int, data: LabReportApprove, current_user) -> LabReportResponse:
         return await self.verify_by_doctor(
             report_id=report_id,
-            data=LabReportDoctorVerifyRequest(doctor_remarks=data.remark, approved=data.approved),
+            data=LabReportDoctorVerifyRequest(doctor_remarks=data.remarks, approved=data.approved),
             current_user=current_user,
         )
 

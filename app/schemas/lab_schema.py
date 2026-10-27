@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import Field, field_validator, model_validator
 
@@ -214,8 +214,15 @@ class LabReportDoctorVerifyRequest(BaseSchema):
 
 class LabReportApprove(BaseSchema):
     approved: bool = True
-    remark: str | None = None
     remarks: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_remarks(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "remarks" not in data and "remark" in data:
+                data["remarks"] = data.get("remark")
+        return data
 
 
 class RejectLabReportRequest(BaseSchema):

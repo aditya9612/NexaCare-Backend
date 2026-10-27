@@ -370,13 +370,32 @@ async def get_pharmacy_inventory(
 async def get_pharmacy_expiry(
     db: DbSession,
     current_user: CurrentUser,
+    category: str | None = Query(None, description="Optional category filter"),
     format: ReportFormat = Query(ReportFormat.JSON),
+    export_format: ReportFormat | None = Query(None, description="Alternative alias for format (pdf, csv, json)"),
     download: bool = Query(False),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
-    data = await ReportService(db).get_pharmacy_expiry(hospital_id=hospital_id)
-    return export_response(ReportService.build_export_payload("Pharmacy Expiry", data), format, download, "pharmacy-expiry", data)
+    hospital_name = None
+    hospital_logo = None
+    if hospital_id:
+        from app.repositories.hospital_repository import HospitalRepository
+        hospital = await HospitalRepository(db).get_by_id(hospital_id)
+        if hospital:
+            hospital_name = hospital.name
+            logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+            hospital_logo = ReportExportService.resolve_hospital_logo(logo_attr)
+
+    data = await ReportService(db).get_pharmacy_expiry(category=category, hospital_id=hospital_id)
+    active_format = export_format or format
+    payload = ReportService.build_export_payload(
+        "Pharmacy Expiry",
+        data,
+        hospital_name=hospital_name,
+        hospital_logo=hospital_logo
+    )
+    return export_response(payload, active_format, download, "pharmacy-expiry", data)
 
 
 @router.get(

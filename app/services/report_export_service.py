@@ -4,7 +4,7 @@ import io
 import csv
 import unicodedata
 from typing import Any
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -98,6 +98,10 @@ class ReportExportService:
         "low_stock_medicines": "Low Stock",
         "out_of_stock_medicines": "Out of Stock",
         "total_stock_quantity": "Total Stock Qty",
+        "expired_medicines": "Expired",
+        "expiring_30_days": "Expiring (30 Days)",
+        "expiring_60_days": "Expiring (60 Days)",
+        "expiring_90_days": "Expiring (90 Days)",
     }
 
     CURRENCY_KEYS = {
@@ -357,14 +361,92 @@ class ReportExportService:
         elements.append(Spacer(1, REPORT_THEME['section_spacing']))
 
     @staticmethod
+    def calculate_expiry_status(exp_date: Any, current_date: date | None = None) -> str:
+        if exp_date is None:
+            return "-"
+        if isinstance(exp_date, datetime):
+            exp_date = exp_date.date()
+        elif isinstance(exp_date, str):
+            try:
+                exp_date = date.fromisoformat(exp_date.split("T")[0])
+            except Exception:
+                return str(exp_date)
+
+        today = current_date or date.today()
+        diff_days = (exp_date - today).days
+
+        if diff_days < 0:
+            return "Expired"
+        if diff_days == 1:
+            return "Expiring in 1 Day"
+        return f"Expiring in {diff_days} Days"
+
+    @staticmethod
+    def _render_expiry_summary_bar(elements, summary_metrics: dict, available_width: float, styles):
+        if not summary_metrics:
+            return
+        summary_metric_style = ParagraphStyle(
+            'ExpiryTableSummaryMetric',
+            parent=styles['Normal'],
+            fontName=REPORT_THEME['font_name_bold'],
+            fontSize=8.5,
+            leading=11.5,
+            alignment=1,
+            textColor=REPORT_THEME['header_bg_color'],
+            spaceAfter=0
+        )
+        total_meds = summary_metrics.get("total_medicines")
+        if total_meds is None:
+            total_meds = summary_metrics.get("total", 0)
+
+        exp30 = summary_metrics.get("expiring_within_30_days")
+        if exp30 is None:
+            exp30 = summary_metrics.get("expiring_30_days")
+        if exp30 is None:
+            exp30 = total_meds
+
+        summary_table_data = [
+            [
+                Paragraph(f"<b>Total Medicines:</b>  {total_meds}", summary_metric_style),
+                Paragraph(f"<b>Expiring Within 30 Days:</b>  {exp30}", summary_metric_style),
+            ]
+        ]
+        summary_table = Table(summary_table_data, colWidths=[available_width / 2.0, available_width / 2.0])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F2F4F4")),
+            ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#BDC3C7")),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, REPORT_THEME['section_spacing']))
+
+    @staticmethod
     def _render_table(elements, title, rows, available_width, styles, summary_metrics: dict = None):
-        is_pharmacy_sales = (title and "Pharmacy Sales" in title) or (
-            bool(rows) and "invoice_number" in ReportExportService._extract_headers(rows)
+        is_pharmacy_sales = bool(
+            (title and "Pharmacy Sales" in title) or (
+                rows and "invoice_number" in ReportExportService._extract_headers(rows)
+            )
         )
-        is_pharmacy_inventory = (title and "Pharmacy Inventory" in title) or (
-            bool(rows) and any(k in ReportExportService._extract_headers(rows) for k in ("stock_quantity", "reorder_level")) and not is_pharmacy_sales
+        is_pharmacy_expiry = bool(
+            not is_pharmacy_sales and (
+                (title and "Pharmacy Expiry" in title) or (
+                    rows and "expiry_date" in ReportExportService._extract_headers(rows) and "reorder_level" not in ReportExportService._extract_headers(rows)
+                )
+            )
         )
-        if not rows and not is_pharmacy_sales and not is_pharmacy_inventory:
+        is_pharmacy_inventory = bool(
+            not is_pharmacy_sales and not is_pharmacy_expiry and (
+                (title and "Pharmacy Inventory" in title) or (
+                    rows and any(k in ReportExportService._extract_headers(rows) for k in ("reorder_level", "inventory_value", "stock_quantity"))
+                )
+            )
+        )
+        if not rows and not is_pharmacy_sales and not is_pharmacy_inventory and not is_pharmacy_expiry:
             return
 
         if is_pharmacy_sales:
@@ -410,6 +492,31 @@ class ReportExportService:
                     metrics["out_of_stock_medicines"] = summary_metrics["out_of_stock_medicines"]
 
             ReportExportService._render_inventory_summary_bar(elements, metrics, available_width, styles)
+
+        elif is_pharmacy_expiry:
+            table_record_count = len(rows) if rows else 0
+
+            if rows:
+                total_meds = table_record_count
+                exp30 = table_record_count
+                for row in rows:
+                    if not row.get("status") and row.get("expiry_date"):
+                        row["status"] = ReportExportService.calculate_expiry_status(row.get("expiry_date"))
+            else:
+                total_meds = summary_metrics.get("total_medicines", 0) if summary_metrics else 0
+                exp30 = (
+                    summary_metrics.get("expiring_within_30_days")
+                    if summary_metrics and summary_metrics.get("expiring_within_30_days") is not None
+                    else (summary_metrics.get("expiring_30_days", 0) if summary_metrics else 0)
+                )
+
+            metrics = {
+                "total_medicines": total_meds,
+                "expiring_within_30_days": exp30,
+                "expiring_30_days": exp30,
+            }
+
+            ReportExportService._render_expiry_summary_bar(elements, metrics, available_width, styles)
 
         if title:
             bold_style = ParagraphStyle(
@@ -481,6 +588,38 @@ class ReportExportService:
                     headers.extend(extra)
                     display_headers.extend([ReportExportService._get_header_display_name(k) for k in extra])
                     alignments.extend(["LEFT"] * len(extra))
+        elif is_pharmacy_expiry:
+            preferred_cols = [
+                ("name", "Medicine Name", "LEFT"),
+                ("category", "Category", "LEFT"),
+                ("batch_number", "Batch No.", "CENTER"),
+                ("unit", "Unit", "CENTER"),
+                ("stock_quantity", "Stock Qty", "RIGHT"),
+                ("expiry_date", "Expiry Date", "CENTER"),
+                ("status", "Expiry Status", "CENTER"),
+            ]
+            headers = [k for k, _, _ in preferred_cols]
+            display_headers = [label for _, label, _ in preferred_cols]
+            alignments = [align for _, _, align in preferred_cols]
+
+            if rows:
+                raw_headers = ReportExportService._extract_headers(rows)
+                if "generic_name" in raw_headers and any(r.get("generic_name") for r in rows):
+                    headers.insert(1, "generic_name")
+                    display_headers.insert(1, "Generic Name")
+                    alignments.insert(1, "LEFT")
+                if "sku" in raw_headers and any(r.get("sku") for r in rows):
+                    b_idx = headers.index("batch_number") if "batch_number" in headers else len(headers)
+                    headers.insert(b_idx, "sku")
+                    display_headers.insert(b_idx, "SKU")
+                    alignments.insert(b_idx, "CENTER")
+
+                excluded = {"id", "generic_name", "sku"} | set(headers)
+                extra = [k for k in raw_headers if k not in excluded]
+                if extra:
+                    headers.extend(extra)
+                    display_headers.extend([ReportExportService._get_header_display_name(k) for k in extra])
+                    alignments.extend(["LEFT"] * len(extra))
         else:
             headers = ReportExportService._extract_headers(rows)
             display_headers = [ReportExportService._get_header_display_name(k) for k in headers]
@@ -527,7 +666,12 @@ class ReportExportService:
                     cell_row.append(Paragraph(val_str, b_style))
                 data.append(cell_row)
         else:
-            empty_msg = "<i>No pharmacy inventory records found.</i>" if is_pharmacy_inventory else "<i>No pharmacy sales records found for the selected period.</i>"
+            if is_pharmacy_expiry:
+                empty_msg = "<i>No pharmacy expiry records found.</i>"
+            elif is_pharmacy_inventory:
+                empty_msg = "<i>No pharmacy inventory records found.</i>"
+            else:
+                empty_msg = "<i>No pharmacy sales records found for the selected period.</i>"
             empty_style = ParagraphStyle(
                 'EmptySalesRow',
                 parent=styles['Normal'],
@@ -542,7 +686,7 @@ class ReportExportService:
             ]
             data.append(empty_row)
 
-        # If this is a pharmacy sales or inventory table, append a summary Total row at the end
+        # If this is a pharmacy sales, inventory, or expiry table, append a summary Total row at the end
         has_summary_row = False
         summary_metrics = None
         if is_pharmacy_sales:
@@ -616,6 +760,32 @@ class ReportExportService:
                 )
                 footer_row.append(Paragraph(val_str, f_style))
             data.append(footer_row)
+        elif is_pharmacy_expiry:
+            has_summary_row = True
+            total_meds = len(rows) if rows else 0
+            total_stock = sum(int(r.get("stock_quantity") or 0) for r in rows) if rows else 0
+
+            footer_row = []
+            for h, align in zip(headers, alignments):
+                align_code = 2 if align == 'RIGHT' else (1 if align == 'CENTER' else 0)
+                if h == headers[0]:
+                    val_str = f"<b>Total ({total_meds} Medicines)</b>"
+                elif h == "stock_quantity":
+                    val_str = f"<b>{total_stock}</b>"
+                else:
+                    val_str = ""
+
+                f_style = ParagraphStyle(
+                    f'TF_Exp_{align}',
+                    parent=styles['Normal'],
+                    fontName=REPORT_THEME['font_name_bold'],
+                    fontSize=body_font_size,
+                    leading=body_font_size + 2.0,
+                    alignment=align_code,
+                    spaceAfter=0
+                )
+                footer_row.append(Paragraph(val_str, f_style))
+            data.append(footer_row)
             
         table = Table(data, repeatRows=1, colWidths=col_widths)
         padding = REPORT_THEME.get('cell_padding', 4)
@@ -631,7 +801,7 @@ class ReportExportService:
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, REPORT_THEME['alt_row_bg_color']]),
             ('GRID', (0, 0), (-1, -1), REPORT_THEME.get('grid_width', 0.5), REPORT_THEME.get('grid_color', colors.HexColor("#BDC3C7"))),
         ]
-        if not rows and (is_pharmacy_sales or is_pharmacy_inventory):
+        if not rows and (is_pharmacy_sales or is_pharmacy_inventory or is_pharmacy_expiry):
             ts.append(('SPAN', (0, 1), (-1, 1)))
 
         if has_summary_row:
@@ -754,12 +924,21 @@ class ReportExportService:
             (payload.main_table_title and "Pharmacy Sales" in payload.main_table_title) or
             (payload.main_rows and "invoice_number" in ReportExportService._extract_headers(payload.main_rows))
         )
-        is_pharm_inv = bool(
-            (payload.title and "Pharmacy Inventory" in payload.title) or 
-            (payload.main_table_title and "Pharmacy Inventory" in payload.main_table_title) or
-            (payload.main_rows and any(k in ReportExportService._extract_headers(payload.main_rows) for k in ("stock_quantity", "reorder_level")) and not is_pharm_sales)
+        is_pharm_exp = bool(
+            not is_pharm_sales and (
+                (payload.title and "Pharmacy Expiry" in payload.title) or 
+                (payload.main_table_title and "Pharmacy Expiry" in payload.main_table_title) or
+                (payload.summary and any(k in payload.summary for k in ("expired_medicines", "expiring_30_days", "expiring_60_days", "expiring_90_days")))
+            )
         )
-        is_custom_pharm_report = is_pharm_sales or is_pharm_inv
+        is_pharm_inv = bool(
+            not is_pharm_sales and not is_pharm_exp and (
+                (payload.title and "Pharmacy Inventory" in payload.title) or 
+                (payload.main_table_title and "Pharmacy Inventory" in payload.main_table_title) or
+                (payload.main_rows and any(k in ReportExportService._extract_headers(payload.main_rows) for k in ("stock_quantity", "reorder_level")))
+            )
+        )
+        is_custom_pharm_report = is_pharm_sales or is_pharm_inv or is_pharm_exp
 
         # Filters and Summary
         ReportExportService._render_summary(elements, "Applied Filters", payload.filters, styles)

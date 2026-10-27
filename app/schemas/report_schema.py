@@ -128,12 +128,37 @@ class PharmacyInventoryResponse(BaseModel):
                 data["items"] = data["records"]
         return data
 
+class PharmacyExpiryItemResponse(BaseModel):
+    id: int | None = None
+    name: str
+    generic_name: str | None = None
+    sku: str | None = None
+    batch_number: str | None = None
+    category: str | None = None
+    unit: str | None = None
+    stock_quantity: int = 0
+    expiry_date: date
+    status: str
+
 class PharmacyExpiryResponse(BaseModel):
     total_medicines: int
     expired_medicines: int
     expiring_30_days: int
     expiring_60_days: int
     expiring_90_days: int
+    items: list[PharmacyExpiryItemResponse] = Field(default_factory=list)
+
+    @property
+    def records(self) -> list[PharmacyExpiryItemResponse]:
+        return self.items
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_items(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "items" not in data and "records" in data:
+                data["items"] = data["records"]
+        return data
 
 class LabTestSummaryResponse(BaseModel):
     total_tests: int

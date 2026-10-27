@@ -1,4 +1,5 @@
 import os
+import math
 import aiofiles
 from uuid import uuid4
 from fastapi import UploadFile
@@ -37,6 +38,8 @@ from app.schemas.lab_schema import (
     TestOrderCreate,
     TestOrderUpdate,
     TestOrderResponse,
+    TestOrderListResponse,
+    TestOrderStatusCounts,
     TestResultCreate,
     TestResultResponse,
 )
@@ -440,7 +443,7 @@ class LabService:
                 res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
                 nurse = res.scalar_one_or_none()
                 if not nurse:
-                    return build_paginated_result([], 0, page, size)
+                    return TestOrderListResponse(items=[], total=0, page=page, size=size, pages=0, status_counts=TestOrderStatusCounts())
                 
                 # Fetch active assigned patient IDs
                 assignment_res = await self.db.execute(
@@ -452,11 +455,11 @@ class LabService:
                 )
                 assigned_patient_ids = [row[0] for row in assignment_res.all()]
                 if not assigned_patient_ids:
-                    return build_paginated_result([], 0, page, size)
+                    return TestOrderListResponse(items=[], total=0, page=page, size=size, pages=0, status_counts=TestOrderStatusCounts())
                 
                 if patient_id is not None:
                     if patient_id not in assigned_patient_ids:
-                        return build_paginated_result([], 0, page, size)
+                        return TestOrderListResponse(items=[], total=0, page=page, size=size, pages=0, status_counts=TestOrderStatusCounts())
                 else:
                     patient_id = assigned_patient_ids
 
@@ -483,7 +486,23 @@ class LabService:
             search=search,
             hospital_id=hospital_id,
         )
-        return build_paginated_result([self._order_response(o) for o in items], total, page, size)
+        status_counts_dict = await self.order_repo.get_status_counts(
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            priority=priority,
+            search=search,
+            hospital_id=hospital_id,
+        )
+        pages = math.ceil(total / size) if size else 0
+        return TestOrderListResponse(
+            items=[self._order_response(o) for o in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            status_counts=TestOrderStatusCounts(**status_counts_dict),
+        )
 
     async def get_order(self, order_id: int, current_user = None) -> TestOrderResponse:
         from app.core.dependencies import resolve_tenant_id

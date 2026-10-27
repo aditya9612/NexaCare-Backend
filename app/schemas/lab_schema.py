@@ -5,6 +5,7 @@ from pydantic import Field, field_validator, model_validator
 
 from app.core.constants import SampleStatus
 from app.schemas.common_schema import BaseSchema
+from app.utils.pagination import PaginatedResult
 
 
 class LabTestCreate(BaseSchema):
@@ -87,6 +88,17 @@ class TestOrderResponse(BaseSchema):
     test_code: str | None = None
     department_name: str | None = None
     created_by_name: str | None = None
+
+
+class TestOrderStatusCounts(BaseSchema):
+    pending: int = 0
+    in_progress: int = 0
+    completed: int = 0
+    approved: int = 0
+
+
+class TestOrderListResponse(PaginatedResult[TestOrderResponse]):
+    status_counts: TestOrderStatusCounts = Field(default_factory=TestOrderStatusCounts)
 
 
 class SampleCreate(BaseSchema):

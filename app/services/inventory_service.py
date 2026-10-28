@@ -104,6 +104,14 @@ class InventoryService:
 
         item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **data.model_dump(exclude={"sku"}))
         item = await self.item_repo.create(item)
+        if item.warehouse_id:
+            ws = WarehouseStock(
+                warehouse_id=item.warehouse_id,
+                inventory_item_id=item.id,
+                quantity=item.quantity or 0,
+            )
+            self.db.add(ws)
+            await self.db.flush()
         await self._check_reorder_alert(item)
         await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
         return InventoryItemResponse.model_validate(item)
@@ -197,20 +205,75 @@ class InventoryService:
         if not item:
             raise NotFoundException("Inventory item not found")
 
-        tx_type = data.transaction_type or data.type or "INWARD"
+        tx_type_raw = data.transaction_type or data.type or "INWARD"
+        tx_type = str(tx_type_raw).strip().lower()
         warehouse_id = data.warehouse_id or item.warehouse_id
         if not warehouse_id:
-            raise BadRequestException("Warehouse ID is required for stock transaction")
-
-        # Use StockMovementService for all physical mutations
-        direction = "IN"
-        if tx_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION, StockTransactionType.TRANSFER):
-            direction = "OUT"
+            # Check if any warehouse has stock for this item
+            available_wh = await self.db.scalar(
+                select(WarehouseStock.warehouse_id)
+                .where(WarehouseStock.inventory_item_id == item.id, WarehouseStock.quantity > 0)
+                .order_by(WarehouseStock.quantity.desc())
+                .limit(1)
+            )
+            warehouse_id = available_wh or item.warehouse_id
+            if not warehouse_id:
+                raise BadRequestException("Warehouse ID is required for stock transaction")
 
         quantity = data.quantity
         if tx_type == StockTransactionType.ADJUSTMENT:
             # We must reject direct API usage of adjustment here, it's safer to only allow explicit references
             raise BadRequestException("Direct adjustment transactions are not supported. Use physical IN/OUT.")
+
+        # Handle complete TRANSFER between warehouses if target_warehouse_id is provided
+        if tx_type == StockTransactionType.TRANSFER and data.target_warehouse_id:
+            if data.target_warehouse_id == warehouse_id:
+                raise BadRequestException("Source and target warehouse cannot be the same for transfer")
+
+            target_wh = await self.warehouse_repo.get_by_id(data.target_warehouse_id)
+            if not target_wh:
+                raise NotFoundException("Target warehouse not found")
+
+            source_wh = await self.warehouse_repo.get_by_id(warehouse_id)
+            source_wh_name = source_wh.name if source_wh else f"Warehouse #{warehouse_id}"
+
+            # 1. OUT from source warehouse
+            source_tx = await StockMovementService.create_movement(
+                db=self.db,
+                item_id=data.item_id,
+                warehouse_id=warehouse_id,
+                transaction_type=StockTransactionType.TRANSFER,
+                direction="OUT",
+                quantity=abs(quantity),
+                batch_id=getattr(data, "batch_id", None),
+                unit_cost=data.unit_cost,
+                reference_type=data.reference_type or "Transfer",
+                reference_id=data.reference_id,
+                notes=f"Transfer OUT to {target_wh.name}. {data.notes or ''}".strip(),
+                performed_by=user_id,
+            )
+
+            # 2. IN to target warehouse
+            target_tx = await StockMovementService.create_movement(
+                db=self.db,
+                item_id=data.item_id,
+                warehouse_id=data.target_warehouse_id,
+                transaction_type=StockTransactionType.TRANSFER,
+                direction="IN",
+                quantity=abs(quantity),
+                batch_id=getattr(data, "batch_id", None),
+                unit_cost=data.unit_cost,
+                reference_type="Transfer",
+                reference_id=source_tx.id,
+                notes=f"Transfer IN from {source_wh_name}. {data.notes or ''}".strip(),
+                performed_by=user_id,
+            )
+            return self._to_transaction_response(source_tx)
+
+        # Standard physical mutations (INWARD, OUTWARD, CONSUMPTION, RETURN, or single-sided TRANSFER)
+        direction = "IN"
+        if tx_type in (StockTransactionType.OUTWARD, StockTransactionType.CONSUMPTION, StockTransactionType.TRANSFER):
+            direction = "OUT"
 
         transaction = await StockMovementService.create_movement(
             db=self.db,
@@ -224,7 +287,7 @@ class InventoryService:
             reference_type=data.reference_type,
             reference_id=data.reference_id,
             notes=data.notes,
-            performed_by=user_id
+            performed_by=user_id,
         )
         return self._to_transaction_response(transaction)
 

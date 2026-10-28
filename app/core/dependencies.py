@@ -78,9 +78,12 @@ CurrentUser = Annotated[User, Depends(get_current_active_user)]
 
 def require_roles(*allowed_roles: str, allow_admin: bool = True) -> Callable:
     async def role_checker(user: CurrentUser) -> User:
-        role_name = user.role.name if user.role else None
-        if role_name not in allowed_roles:
-            if not allow_admin or role_name not in UserRole.ADMIN_ROLES:
+        role_name = user.role.name if user.role and user.role.name else ""
+        role_name_norm = role_name.lower().replace("_", " ").strip()
+        allowed_roles_norm = [r.lower().replace("_", " ").strip() for r in allowed_roles]
+
+        if role_name not in allowed_roles and role_name_norm not in allowed_roles_norm:
+            if not allow_admin or (role_name not in UserRole.ADMIN_ROLES and role_name_norm not in ("super admin", "hospital admin")):
                 raise ForbiddenException(f"Requires one of roles: {', '.join(allowed_roles)}")
         return user
 
@@ -89,13 +92,16 @@ def require_roles(*allowed_roles: str, allow_admin: bool = True) -> Callable:
 
 def require_permission(resource: str, action: str) -> Callable:
     async def permission_checker(db: DbSession, user: CurrentUser) -> User:
+        role_name = user.role.name if user.role and user.role.name else ""
+        role_name_norm = role_name.lower().replace("_", " ").strip()
+        if role_name in UserRole.ADMIN_ROLES or role_name_norm in ("super admin", "hospital admin"):
+            return user
+
         rbac_repo = RBACRepository(db)
         permissions = await rbac_repo.get_user_permissions(user.role_id)
         required = f"{resource}:{action}"
         if required not in permissions:
-            role_name = user.role.name if user.role else ""
-            if role_name not in UserRole.ADMIN_ROLES:
-                raise ForbiddenException(f"Missing permission: {required}")
+            raise ForbiddenException(f"Missing permission: {required}")
         return user
 
     return permission_checker
@@ -116,7 +122,7 @@ async def get_tenant_hospital_id(
     """
     role_name = user.role.name.lower() if user.role and user.role.name else ""
     if role_name in ("super admin", "super_admin"):
-        return x_hospital_id if x_hospital_id is not None else getattr(user, "active_hospital_id", user.hospital_id)
+        return x_hospital_id if x_hospital_id is not None else getattr(user, "active_hospital_id", None)
     return user.hospital_id
 
 
@@ -130,7 +136,7 @@ def resolve_tenant_id(user: User | None) -> int | None:
         return None
     role_name = user.role.name.lower() if user.role and user.role.name else ""
     if role_name in ("super admin", "super_admin"):
-        return getattr(user, "active_hospital_id", None) or getattr(user, "hospital_id", None)
+        return getattr(user, "active_hospital_id", None)
     return user.hospital_id
 
 

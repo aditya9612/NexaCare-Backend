@@ -15,14 +15,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.run_until_complete(engine.dispose())
-    loop.close()
-    asyncio.set_event_loop(None)
+
 
 
 @pytest.fixture

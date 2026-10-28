@@ -65,6 +65,12 @@ class RBACMiddleware(BaseHTTPMiddleware):
             user = await AuthRepository(db).get_by_id(user_id)
             if not user:
                 return JSONResponse(status_code=401, content={"detail": "User not found"})
+
+            role_name = user.role.name if user.role and user.role.name else ""
+            role_name_norm = role_name.lower().replace("_", " ").strip()
+            if role_name_norm in ("super admin", "hospital admin") or role_name in ("Super Admin", "Hospital Admin"):
+                return await call_next(request)
+
             permissions = await RBACRepository(db).get_user_permissions(user.role_id)
             if required_permission not in permissions:
                 _trace.info(

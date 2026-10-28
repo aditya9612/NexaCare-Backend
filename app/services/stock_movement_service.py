@@ -1,6 +1,6 @@
 from datetime import datetime
 import uuid
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 from app.models.inventory_model import InventoryItem, WarehouseStock, ItemBatch, StockTransaction
@@ -44,6 +44,34 @@ class StockMovementService:
         ).with_for_update()
         result = await db.execute(ws_query)
         warehouse_stock = result.scalars().first()
+
+        # Check if item has unallocated stock from initial creation or legacy records
+        item_row = await db.get(InventoryItem, item_id)
+        if item_row and item_row.quantity > 0:
+            existing_ws_sum = await db.scalar(
+                select(func.coalesce(func.sum(WarehouseStock.quantity), 0)).where(
+                    WarehouseStock.inventory_item_id == item_id
+                )
+            )
+            unallocated = max(0, item_row.quantity - (existing_ws_sum or 0))
+            if unallocated > 0 and (item_row.warehouse_id == warehouse_id or existing_ws_sum == 0):
+                if not warehouse_stock:
+                    from sqlalchemy.exc import IntegrityError
+                    try:
+                        async with db.begin_nested():
+                            warehouse_stock = WarehouseStock(
+                                warehouse_id=warehouse_id,
+                                inventory_item_id=item_id,
+                                quantity=unallocated
+                            )
+                            db.add(warehouse_stock)
+                            await db.flush()
+                    except IntegrityError:
+                        result = await db.execute(ws_query)
+                        warehouse_stock = result.scalars().first()
+                else:
+                    warehouse_stock.quantity += unallocated
+                    await db.flush()
 
         if reference_type and reference_id:
             dup_query = select(StockTransaction.id).where(

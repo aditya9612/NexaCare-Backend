@@ -70,7 +70,11 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-east-1"
     AWS_STORAGE_BUCKET_NAME: str = ""  
 
-    
+    # Razorpay Payment Gateway Configuration
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    RAZORPAY_WEBHOOK_SECRET: str = ""
+
     TESSERACT_CMD: str = r""   
 
 

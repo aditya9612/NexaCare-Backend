@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema, PaginatedResponse
 from app.schemas.department_schema import DepartmentResponse
@@ -193,13 +193,36 @@ class NurseAttendanceResponse(BaseSchema):
 NurseAttendanceListResponse = PaginatedResponse[NurseAttendanceResponse]
 
 
+class PatientHandoverItemCreate(BaseSchema):
+    patient_id: int = Field(..., description="Patient ID", gt=0)
+    incoming_nurse_id: int = Field(..., description="Incoming Nurse ID to assign the patient to", gt=0)
+    patient_update: str = Field(..., description="Clinical update for the patient", min_length=1)
+    pending_tasks: list[str] = Field(default_factory=list, description="Pending tasks for incoming nurse")
+
+    @field_validator("patient_update")
+    @classmethod
+    def validate_patient_update(cls, v: str) -> str:
+        stripped = v.strip()
+        if len(stripped) < 1:
+            raise ValueError("cannot be empty or only spaces")
+        return stripped
+
+
+class PatientHandoverItemResponse(BaseSchema):
+    patient_id: int = Field(..., description="Patient ID")
+    incoming_nurse_id: int = Field(..., description="Incoming Nurse ID")
+    patient_update: str = Field(..., description="Clinical update for the patient")
+    pending_tasks: list[str] = Field(default_factory=list, description="Pending tasks for incoming nurse")
+
+
 class NurseHandoverNoteCreate(BaseSchema):
-    shift_id: int | None = Field(None, description="Optional linked shift ID", gt=0)
+    shift_id: int = Field(..., description="Linked shift ID", gt=0)
     handover_date: date = Field(..., description="Date of the handover")
     summary: str = Field(..., description="Summary of the shift handover", min_length=1)
-    pending_tasks: str | None = Field(None, description="Tasks pending for the incoming nurse")
-    patient_updates: str | None = Field(None, description="Patient status updates")
     notes: str | None = Field(None, description="Additional notes")
+    patient_handovers: list[PatientHandoverItemCreate] = Field(
+        default_factory=list, description="List of patient-specific handovers"
+    )
 
     @field_validator("summary")
     @classmethod
@@ -209,7 +232,7 @@ class NurseHandoverNoteCreate(BaseSchema):
             raise ValueError("cannot be empty or only spaces")
         return stripped
 
-    @field_validator("pending_tasks", "patient_updates", "notes")
+    @field_validator("notes")
     @classmethod
     def validate_optional_strings(cls, v: str | None) -> str | None:
         if v is not None:
@@ -221,10 +244,9 @@ class NurseHandoverNoteUpdate(BaseSchema):
     shift_id: int | None = Field(None, gt=0)
     handover_date: date | None = None
     summary: str | None = Field(None, min_length=1)
-    pending_tasks: str | None = None
-    patient_updates: str | None = None
     status: str | None = Field(None, min_length=1, max_length=50)
     notes: str | None = None
+    patient_handovers: list[PatientHandoverItemCreate] | None = None
 
     @field_validator("summary", "status")
     @classmethod
@@ -236,7 +258,7 @@ class NurseHandoverNoteUpdate(BaseSchema):
             return stripped
         return v
 
-    @field_validator("pending_tasks", "patient_updates", "notes")
+    @field_validator("notes")
     @classmethod
     def validate_optional_strings(cls, v: str | None) -> str | None:
         if v is not None:
@@ -245,17 +267,38 @@ class NurseHandoverNoteUpdate(BaseSchema):
 
 
 class NurseHandoverNoteResponse(BaseSchema):
-    id: int
-    nurse_id: int
-    shift_id: int | None
+    handover_id: int
+    outgoing_nurse_id: int
+    shift_id: int | None = None
     handover_date: date
     summary: str
-    pending_tasks: str | None
-    patient_updates: str | None
-    status: str
-    notes: str | None
+    notes: str | None = None
+    acceptance_status: str = "Pending"
+    patient_handovers: list[PatientHandoverItemResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_handover_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "handover_id" not in data and "id" in data:
+                data["handover_id"] = data["id"]
+            if "outgoing_nurse_id" not in data:
+                if "nurse_id" in data:
+                    data["outgoing_nurse_id"] = data["nurse_id"]
+            if "acceptance_status" not in data:
+                if "status" in data:
+                    data["acceptance_status"] = data["status"]
+            if not data.get("patient_handovers") and data.get("patient_updates"):
+                try:
+                    import json
+                    parsed = json.loads(data["patient_updates"])
+                    if isinstance(parsed, list):
+                        data["patient_handovers"] = parsed
+                except Exception:
+                    pass
+        return data
 
 
 NurseHandoverNoteListResponse = PaginatedResponse[NurseHandoverNoteResponse]
@@ -582,6 +625,9 @@ class RecentActivityResponse(BaseSchema):
 
 
 class NurseDashboardResponse(BaseSchema):
+    nurse_id: int | None = None
+    nurse_code: str | None = None
+    nurse_name: str | None = None
     assigned_patients: int
     today_patients: int
     pending_medications: int

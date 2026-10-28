@@ -594,8 +594,16 @@ class NurseService:
     async def create_handover_note(
         self, nurse_id: int, data: NurseHandoverNoteCreate, user_id: int
     ) -> NurseHandoverNoteResponse:
+        import json
         from datetime import date
+        from sqlalchemy import select
+        from app.models.patient_model import Patient
+
         nurse = await self._get_nurse_or_raise(nurse_id)
+        calling_nurse = await self.repo.get_by_user_id(user_id)
+        if calling_nurse and calling_nurse.id != nurse_id:
+            raise ForbiddenException("Cannot create handover note on behalf of another nurse")
+
         await self._validate_shift(nurse_id, data.shift_id)
 
         # 1. Handover Date should not be a past date
@@ -607,13 +615,40 @@ class NurseService:
         if not attendance or attendance.check_out_time is None:
             raise BadRequestException("Handover note can only be created after check-out")
 
+        # 3. Validate patient handovers if provided
+        if data.patient_handovers:
+            for item in data.patient_handovers:
+                if item.incoming_nurse_id == nurse_id:
+                    raise BadRequestException("Incoming nurse cannot be the same as outgoing nurse")
+
+                incoming_nurse = await self.repo.get_by_id(item.incoming_nurse_id)
+                if not incoming_nurse:
+                    raise NotFoundException(f"Incoming nurse with ID {item.incoming_nurse_id} not found")
+                if nurse.hospital_id is not None and incoming_nurse.hospital_id != nurse.hospital_id:
+                    raise ForbiddenException("Cross-tenant incoming nurse assignment is prohibited")
+
+                stmt = select(Patient).where(
+                    Patient.id == item.patient_id,
+                    Patient.is_deleted.is_(False),
+                )
+                res = await self.db.execute(stmt)
+                patient = res.scalar_one_or_none()
+                if not patient:
+                    raise NotFoundException(f"Patient with ID {item.patient_id} not found")
+                if nurse.hospital_id is not None and patient.hospital_id != nurse.hospital_id:
+                    raise ForbiddenException(f"Patient with ID {item.patient_id} belongs to a different hospital")
+
+        dump_data = data.model_dump(exclude={"patient_handovers"})
+        if data.patient_handovers:
+            dump_data["patient_updates"] = json.dumps([item.model_dump() for item in data.patient_handovers])
+
         note = NurseHandoverNote(
             nurse_id=nurse_id,
             status="Pending",
-            **data.model_dump()
+            **dump_data
         )
         note = await self.handover_repo.create(note)
-        import json
+
         await self.audit_repo.create(
             action="HANDOVER_CREATED",
             resource="nurse_handover_notes",
@@ -626,6 +661,7 @@ class NurseService:
                 "nurse_code": nurse.nurse_code,
                 "status_after": note.status,
                 "summary": note.summary,
+                "patient_count": len(data.patient_handovers) if data.patient_handovers else 0,
             }),
         )
         return NurseHandoverNoteResponse.model_validate(note)
@@ -676,6 +712,7 @@ class NurseService:
         data: NurseHandoverNoteUpdate,
         user_id: int,
     ) -> NurseHandoverNoteResponse:
+        import json
         await self._get_nurse_or_raise(nurse_id)
         note = await self.handover_repo.get_by_id(note_id, nurse_id)
         if not note:
@@ -683,6 +720,12 @@ class NurseService:
         update_data = data.model_dump(exclude_unset=True)
         if "shift_id" in update_data:
             await self._validate_shift(nurse_id, update_data["shift_id"])
+        if "patient_handovers" in update_data:
+            handovers = update_data.pop("patient_handovers")
+            if handovers is not None:
+                update_data["patient_updates"] = json.dumps(
+                    [item.model_dump() if hasattr(item, "model_dump") else item for item in handovers]
+                )
         for key, value in update_data.items():
             setattr(note, key, value)
         note = await self.handover_repo.update(note)
@@ -1773,11 +1816,14 @@ class NurseService:
     ) -> "NurseDashboardResponse":
         from datetime import timezone, timedelta, time, datetime
         from sqlalchemy import select, func, or_, and_, cast, Date
+        from sqlalchemy.orm import selectinload
         from app.models.nurse_model import Nurse, NursePatientAssignment, NurseNotification
         from app.models.notification_model import Notification
         from app.models.bed_allocation_model import Bed
         from app.models.patient_model import Patient
         from app.models.audit_log_model import AuditLog
+        from app.core.constants import UserRole
+        from app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException
         from app.schemas.nurse_schema import (
             UpcomingMedicationResponse,
             CriticalAlertResponse,
@@ -1790,30 +1836,45 @@ class NurseService:
             from app.core.dependencies import resolve_tenant_id
             hospital_id = resolve_tenant_id(current_user)
 
-        # 1. Resolve nurse using nurse_id first, then current_user.id
+        role_name = current_user.role.name if (current_user and current_user.role) else ""
+        is_nurse = role_name.strip().lower() == "nurse"
+
+        # 1. Resolve nurse
         nurse = None
-        if nurse_id is not None:
-            res = await self.db.execute(select(Nurse).where(Nurse.id == nurse_id))
+        if is_nurse:
+            # If the authenticated user is a Nurse, automatically resolve their own Nurse profile
+            res = await self.db.execute(
+                select(Nurse).options(selectinload(Nurse.user)).where(Nurse.user_id == current_user.id)
+            )
             nurse = res.scalar_one_or_none()
             if not nurse:
-                # If not found by Nurse.id, check if nurse_id was passed as Nurse.user_id
-                res = await self.db.execute(select(Nurse).where(Nurse.user_id == nurse_id))
+                res = await self.db.execute(
+                    select(Nurse).options(selectinload(Nurse.user)).where(Nurse.id == current_user.id)
+                )
                 nurse = res.scalar_one_or_none()
+            if not nurse:
+                raise NotFoundException("Nurse not found")
+        else:
+            # If the authenticated user is a non-Nurse user and nurse_id is missing, raise BadRequestException
+            if nurse_id is None:
+                raise BadRequestException("Nurse ID is required for non-nurse users to view dashboard")
 
-        if not nurse:
-            res = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
+            res = await self.db.execute(
+                select(Nurse).options(selectinload(Nurse.user)).where(Nurse.id == nurse_id)
+            )
             nurse = res.scalar_one_or_none()
+            if not nurse:
+                res = await self.db.execute(
+                    select(Nurse).options(selectinload(Nurse.user)).where(Nurse.user_id == nurse_id)
+                )
+                nurse = res.scalar_one_or_none()
+            if not nurse:
+                raise NotFoundException("Nurse not found")
 
-        if not nurse:
-            # Fallback if nurse.hospital_id was unassigned or matches
-            res_any = await self.db.execute(select(Nurse).where(Nurse.user_id == current_user.id))
-            nurse_candidate = res_any.scalar_one_or_none()
-            if nurse_candidate and (nurse_candidate.hospital_id is None or nurse_candidate.hospital_id == hospital_id):
-                nurse = nurse_candidate
-
-        if not nurse:
-            res = await self.db.execute(select(Nurse).where(Nurse.id == current_user.id))
-            nurse = res.scalar_one_or_none()
+        # 2. Preserve existing hospital/tenant isolation
+        if role_name != UserRole.SUPER_ADMIN and hospital_id is not None:
+            if nurse.hospital_id is not None and nurse.hospital_id != hospital_id:
+                raise ForbiddenException("Cross-tenant access is prohibited")
 
         # Fetch active & occupied beds (scoped to tenant)
         occupied_beds_query = select(func.count(Bed.id)).where(func.lower(Bed.status) == "occupied")
@@ -1826,35 +1887,16 @@ class NurseService:
         occupied_beds = (await self.db.scalar(occupied_beds_query)) or 0
         available_beds = (await self.db.scalar(available_beds_query)) or 0
 
-        if not nurse:
-            return NurseDashboardResponse(
-                assigned_patients=0,
-                today_patients=0,
-                pending_medications=0,
-                critical_patients=0,
-                doctor_instructions=0,
-                occupied_beds=occupied_beds,
-                available_beds=available_beds,
-                upcoming_medications=[],
-                critical_alerts=[],
-                recent_activities=[],
-                assigned_patients_list=[],
-                shift_details=[],
-                alerts=[]
-            )
-
         # Timezones
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         now_ist = datetime.now(ist_tz)
         today_start = datetime.combine(now_ist.date(), time.min)
         tomorrow_start = today_start + timedelta(days=1)
 
-        target_user_ids = list({uid for uid in [nurse.user_id, current_user.id] if uid is not None})
+        # Use only target nurse's user_id, do not mix requesting admin's user ID
+        target_user_ids = [nurse.user_id] if (nurse and nurse.user_id is not None) else []
 
         # 1. Assigned Patients (Active status)
-        assigned_patients = await self.assignment_repo.list_patients_by_nurse(nurse.id, status="Active")
-        assigned_pids = {p.id for p in assigned_patients if hospital_id is None or p.hospital_id == hospital_id}
-        assigned_patients_count = len(assigned_pids)
         assigned_patients = await self.assignment_repo.list_patients_by_nurse(nurse.id, status="Active", limit=500)
         assigned_pids = {p.id for p in assigned_patients if hospital_id is None or p.hospital_id == hospital_id}
         assigned_patients_count = len(assigned_pids)
@@ -2049,7 +2091,11 @@ class NurseService:
         # 10. Alerts (alias of critical_alerts)
         alerts = critical_alerts
 
+        nurse_name = nurse.user.full_name if (nurse and nurse.user) else None
         return NurseDashboardResponse(
+            nurse_id=nurse.id,
+            nurse_code=nurse.nurse_code,
+            nurse_name=nurse_name,
             assigned_patients=assigned_patients_count,
             today_patients=today_patients_count,
             pending_medications=pending_meds_count,

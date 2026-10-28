@@ -113,7 +113,7 @@ async def search_nurses(
 async def get_nurse_dashboard(
     db: DbSession,
     current_user: CurrentUser,
-    nurse_id: int | None = Query(None, description="Nurse ID to fetch dashboard for (optional, defaults to nurse associated with logged-in user)"),
+    nurse_id: int | None = Query(None, description="Nurse ID to fetch dashboard for (required for non-nurse users, defaults to nurse associated with logged-in user)"),
     hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):

@@ -1336,15 +1336,15 @@ class AppointmentService:
         cr_res = await self.db.execute(cr_stmt)
         clinical_record = cr_res.scalar_one_or_none()
 
-        # Fetch prescription with items and medicines
+        # Fetch prescriptions with items and medicines
         pr_stmt = select(Prescription).where(
             Prescription.appointment_id == appointment_id,
             Prescription.is_deleted == False
-        ).options(
+        ).order_by(Prescription.id.asc()).options(
             selectinload(Prescription.items).selectinload(PrescriptionItem.medicine)
         )
         pr_res = await self.db.execute(pr_stmt)
-        prescription = pr_res.scalar_one_or_none()
+        prescriptions = pr_res.scalars().all()
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -1480,8 +1480,9 @@ class AppointmentService:
         ]))
         elements.append(findings_table)
 
-        # Prescription (Rx) if exists
-        if prescription:
+        # Prescriptions (Rx) if exists
+        all_rx_items = [item for p in prescriptions for item in (p.items or [])]
+        if all_rx_items:
             elements.append(Spacer(1, 15))
             elements.append(Paragraph("Rx (Prescribed Medicines)", section_heading))
 
@@ -1493,7 +1494,7 @@ class AppointmentService:
                 Paragraph("<b>Instructions</b>", rx_header_style)
             ]]
 
-            for item in prescription.items:
+            for item in all_rx_items:
                 med_name = item.medicine.name if item.medicine else "N/A"
                 rx_data.append([
                     Paragraph(med_name, value_style),

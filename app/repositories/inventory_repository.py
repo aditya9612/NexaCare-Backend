@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +13,23 @@ class InventoryRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    def _tenant_filter(self, hospital_id: int):
+        from app.models.department_model import Department
+        return and_(
+            or_(
+                InventoryItem.hospital_id == hospital_id,
+                and_(
+                    InventoryItem.hospital_id.is_(None),
+                    or_(
+                        Warehouse.hospital_id == hospital_id,
+                        Department.hospital_id == hospital_id,
+                    ),
+                ),
+            ),
+            or_(Warehouse.hospital_id.is_(None), Warehouse.hospital_id == hospital_id),
+            or_(Department.hospital_id.is_(None), Department.hospital_id == hospital_id),
+        )
+
     def _base_query(self, hospital_id: int | None = None):
         from app.models.department_model import Department
         query = (
@@ -22,13 +39,7 @@ class InventoryRepository:
             .where(InventoryItem.is_deleted.is_(False))
         )
         if hospital_id is not None:
-            query = query.where(
-                or_(
-                    InventoryItem.hospital_id == hospital_id,
-                    Warehouse.hospital_id == hospital_id,
-                    Department.hospital_id == hospital_id,
-                )
-            )
+            query = query.where(self._tenant_filter(hospital_id))
         return query
 
     async def list_all(
@@ -59,13 +70,7 @@ class InventoryRepository:
             .where(InventoryItem.is_deleted.is_(False))
         )
         if hospital_id is not None:
-            base = base.where(
-                or_(
-                    InventoryItem.hospital_id == hospital_id,
-                    Warehouse.hospital_id == hospital_id,
-                    Department.hospital_id == hospital_id,
-                )
-            )
+            base = base.where(self._tenant_filter(hospital_id))
         if category:
             base = base.where(InventoryItem.category == category)
         if warehouse_id:
@@ -102,13 +107,7 @@ class InventoryRepository:
             )
         )
         if hospital_id is not None:
-            query = query.where(
-                or_(
-                    InventoryItem.hospital_id == hospital_id,
-                    Warehouse.hospital_id == hospital_id,
-                    Department.hospital_id == hospital_id,
-                )
-            )
+            query = query.where(self._tenant_filter(hospital_id))
         return (await self.db.scalar(query)) or 0
 
     async def get_by_id(self, item_id: int, hospital_id: int | None = None) -> InventoryItem | None:
@@ -165,13 +164,7 @@ class InventoryRepository:
             .where(InventoryItem.is_deleted.is_(False))
         )
         if hospital_id is not None:
-            query = query.where(
-                or_(
-                    InventoryItem.hospital_id == hospital_id,
-                    Warehouse.hospital_id == hospital_id,
-                    Department.hospital_id == hospital_id,
-                )
-            )
+            query = query.where(self._tenant_filter(hospital_id))
         return query
 
     async def get_all_active(self, hospital_id: int | None = None) -> list[InventoryItem]:
@@ -204,13 +197,7 @@ class InventoryRepository:
                     query
                     .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
                     .outerjoin(Department, InventoryItem.department_id == Department.department_id)
-                    .where(
-                        or_(
-                            InventoryItem.hospital_id == hospital_id,
-                            Warehouse.hospital_id == hospital_id,
-                            Department.hospital_id == hospital_id,
-                        )
-                    )
+                    .where(self._tenant_filter(hospital_id))
                 )
             return query
 
@@ -282,25 +269,13 @@ class InventoryRepository:
                 inward_query
                 .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
                 .outerjoin(Department, InventoryItem.department_id == Department.department_id)
-                .where(
-                    or_(
-                        InventoryItem.hospital_id == hospital_id,
-                        Warehouse.hospital_id == hospital_id,
-                        Department.hospital_id == hospital_id,
-                    )
-                )
+                .where(self._tenant_filter(hospital_id))
             )
             outward_query = (
                 outward_query
                 .outerjoin(Warehouse, InventoryItem.warehouse_id == Warehouse.id)
                 .outerjoin(Department, InventoryItem.department_id == Department.department_id)
-                .where(
-                    or_(
-                        InventoryItem.hospital_id == hospital_id,
-                        Warehouse.hospital_id == hospital_id,
-                        Department.hospital_id == hospital_id,
-                    )
-                )
+                .where(self._tenant_filter(hospital_id))
             )
 
         inward_restocks = (await self.db.scalar(inward_query)) or 0

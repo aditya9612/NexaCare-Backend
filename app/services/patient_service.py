@@ -763,18 +763,6 @@ class PatientService:
             "errors": errors
         }
 
-    async def export_patients(self, format_type: str, status: str | None = None, current_user = None):
-        role_name = ""
-        if current_user:
-            role = getattr(current_user, "role", None)
-            if hasattr(role, "name"):
-                role_name = str(role.name).lower()
-            elif isinstance(role, str):
-                role_name = role.lower()
-
-        if role_name == "patient":
-            raise ForbiddenException("Patients are not authorized to export patient records")
-
     async def export_patients(
         self,
         format_type: str,
@@ -787,8 +775,19 @@ class PatientService:
         import os
         from app.core.constants import UserRole
 
-        role_name = current_user.role.name if (current_user and current_user.role) else ""
-        if role_name != UserRole.SUPER_ADMIN and current_user is not None:
+        role_name = ""
+        if current_user:
+            role = getattr(current_user, "role", None)
+            if hasattr(role, "name"):
+                role_name = str(role.name).lower()
+            elif isinstance(role, str):
+                role_name = role.lower()
+
+        if role_name == "patient":
+            raise ForbiddenException("Patients are not authorized to export patient records")
+
+        raw_role_name = current_user.role.name if (current_user and current_user.role and hasattr(current_user.role, "name")) else role_name
+        if raw_role_name != UserRole.SUPER_ADMIN and current_user is not None:
             hospital_id = self._resolve_tenant_hospital_id(current_user)
         else:
             if hospital_id is None and current_user is not None:

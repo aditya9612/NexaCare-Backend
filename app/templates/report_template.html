@@ -2,77 +2,455 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ report_type }} Report</title>
+  <title>{{ title or "Lab Diagnostic Report" }} - {{ report_number }}</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 8px; }
-    .section { margin-bottom: 20px; }
-    .section-title { font-weight: bold; color: #1e40af; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; }
-    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-    th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
-    th { background: #f3f4f6; }
+    @page {
+      size: A4;
+      margin: 12mm 15mm 15mm 15mm;
+      @bottom-right {
+        content: counter(page);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      font-size: 9.5pt;
+      line-height: 1.45;
+      color: #1e293b;
+      background: #ffffff;
+    }
+
+    /* Header & Letterhead */
+    .header-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 2.5px solid #1e40af;
+    }
+
+    .hospital-logo {
+      max-height: 55px;
+      max-width: 150px;
+      object-fit: contain;
+      vertical-align: middle;
+      margin-bottom: 4px;
+    }
+
+    .hospital-name {
+      font-size: 16pt;
+      font-weight: 800;
+      color: #1e3a8a;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      margin: 0;
+      line-height: 1.2;
+    }
+
+    .hospital-sub {
+      font-size: 8pt;
+      color: #64748b;
+      margin-top: 3px;
+      line-height: 1.35;
+    }
+
+    .report-meta-box {
+      text-align: right;
+      vertical-align: top;
+    }
+
+    .report-title-badge {
+      display: inline-block;
+      font-size: 13pt;
+      font-weight: 700;
+      color: #1e40af;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .meta-line {
+      font-size: 8.5pt;
+      color: #334155;
+      margin: 2px 0;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 7.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-approved, .status-final, .status-completed {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #86efac;
+    }
+
+    .status-draft, .status-pending {
+      background: #fef3c7;
+      color: #b45309;
+      border: 1px solid #fde68a;
+    }
+
+    /* 2-Column Info Grid */
+    .info-container {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+
+    .info-cell {
+      width: 50%;
+      padding: 10px 14px;
+      vertical-align: top;
+    }
+
+    .info-cell:first-child {
+      border-right: 1px solid #e2e8f0;
+    }
+
+    .info-card-title {
+      font-size: 8.5pt;
+      font-weight: 700;
+      color: #1e40af;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+      padding-bottom: 3px;
+      border-bottom: 1px dashed #cbd5e1;
+    }
+
+    .info-row {
+      margin: 3px 0;
+      font-size: 8.5pt;
+      display: table;
+      width: 100%;
+    }
+
+    .info-label {
+      display: table-cell;
+      width: 38%;
+      color: #64748b;
+      font-weight: 600;
+    }
+
+    .info-value {
+      display: table-cell;
+      width: 62%;
+      color: #0f172a;
+      font-weight: 500;
+    }
+
+    /* Section Styling */
+    .section-header {
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      margin: 12px 0 6px 0;
+      padding-bottom: 4px;
+      border-bottom: 1.5px solid #cbd5e1;
+    }
+
+    /* Results Table */
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+      margin-bottom: 14px;
+    }
+
+    .results-table th {
+      background: #f1f5f9;
+      color: #1e293b;
+      font-size: 8.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      padding: 7px 10px;
+      border-top: 1px solid #cbd5e1;
+      border-bottom: 1.5px solid #94a3b8;
+      text-align: left;
+    }
+
+    .results-table td {
+      padding: 7px 10px;
+      font-size: 8.5pt;
+      border-bottom: 1px solid #e2e8f0;
+      color: #334155;
+    }
+
+    .results-table tr:nth-child(even) td {
+      background: #fafbfc;
+    }
+
+    .results-table td.param-name {
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .results-table td.result-val {
+      font-weight: 700;
+      color: #1e40af;
+    }
+
+    .badge-critical {
+      color: #dc2626;
+      font-weight: 700;
+      background: #fee2e2;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 7.5pt;
+      display: inline-block;
+    }
+
+    .badge-normal {
+      color: #16a34a;
+      font-weight: 600;
+    }
+
+    /* Remarks & Summary Box */
+    .remarks-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-left: 3.5px solid #3b82f6;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 16px;
+    }
+
+    .remarks-title {
+      font-size: 8.5pt;
+      font-weight: 700;
+      color: #1e40af;
+      margin-bottom: 3px;
+    }
+
+    .remarks-content {
+      font-size: 8.5pt;
+      color: #334155;
+      margin: 0;
+    }
+
+    /* Footer & Signatures */
+    .footer-section {
+      margin-top: 30px;
+      page-break-inside: avoid;
+    }
+
+    .signature-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 15px;
+    }
+
+    .signature-cell {
+      width: 50%;
+      text-align: center;
+      vertical-align: bottom;
+      padding: 0 30px;
+    }
+
+    .sig-line {
+      border-top: 1px solid #94a3b8;
+      margin-bottom: 4px;
+    }
+
+    .sig-role {
+      font-size: 8.5pt;
+      font-weight: 700;
+      color: #0f172a;
+      margin: 0;
+    }
+
+    .sig-title {
+      font-size: 7.5pt;
+      color: #64748b;
+      margin: 0;
+    }
+
+    .disclaimer-box {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 8px;
+      text-align: center;
+      font-size: 7pt;
+      color: #64748b;
+      line-height: 1.4;
+    }
+
+    .end-report-tag {
+      text-align: center;
+      font-size: 7.5pt;
+      font-weight: 600;
+      color: #94a3b8;
+      letter-spacing: 1px;
+      margin: 8px 0 4px 0;
+      text-transform: uppercase;
+    }
   </style>
 </head>
 <body>
-  <h1>{{ report_type }} Report</h1>
-  
-  <div class="section">
-    <div class="section-title">Report Details</div>
-    <p><strong>Report Number:</strong> {{ report_number }}</p>
-    <p><strong>Order Number:</strong> {{ order_number }}</p>
-    <p><strong>Status:</strong> {{ status }}</p>
-    <p><strong>Generated At:</strong> {{ generated_at }}</p>
-  </div>
 
-  <div class="section">
-    <div class="section-title">Patient Details</div>
-    <p><strong>Name:</strong> {{ patient_name }} (Code: {{ patient_code }})</p>
-    <p><strong>Gender:</strong> {{ patient_gender }} | <strong>DOB:</strong> {{ patient_dob }}</p>
-  </div>
+  <!-- Header / Letterhead -->
+  <table class="header-table">
+    <tr>
+      <td style="vertical-align: top; width: 62%;">
+        {% if hospital_logo %}
+        <div>
+          <img src="{{ hospital_logo }}" class="hospital-logo" alt="Hospital Logo">
+        </div>
+        {% endif %}
+        <div class="hospital-name">{{ hospital_name or "NexaCare Healthcare" }}</div>
+        <div class="hospital-sub">
+          {% if hospital_address %}{{ hospital_address }}<br>{% endif %}
+          {% if hospital_phone %}<span>Phone: {{ hospital_phone }}</span>{% endif %}
+          {% if hospital_phone and hospital_email %} | {% endif %}
+          {% if hospital_email %}<span>Email: {{ hospital_email }}</span>{% endif %}
+          {% if hospital_website %}<br><span>Web: {{ hospital_website }}</span>{% endif %}
+        </div>
+      </td>
+      <td class="report-meta-box">
+        <div class="report-title-badge">Diagnostic Report</div>
+        <div class="meta-line"><strong>Report No:</strong> {{ report_number }}</div>
+        <div class="meta-line"><strong>Order No:</strong> {{ order_number }}</div>
+        <div class="meta-line"><strong>Date:</strong> {{ generated_at }}</div>
+        <div class="meta-line" style="margin-top: 4px;">
+          <span class="status-badge status-{{ (status or 'draft') | lower }}">{{ (status or 'draft') | upper }}</span>
+        </div>
+      </td>
+    </tr>
+  </table>
 
-  {% if doctor_name %}
-  <div class="section">
-    <div class="section-title">Prescribed By</div>
-    <p><strong>Doctor:</strong> {{ doctor_name }} (Code: {{ doctor_code }})</p>
-  </div>
+  <!-- Patient & Order Details Grid -->
+  <table class="info-container">
+    <tr>
+      <td class="info-cell">
+        <div class="info-card-title">Patient Details</div>
+        <div class="info-row">
+          <span class="info-label">Patient Name:</span>
+          <span class="info-value"><strong>{{ patient_name }}</strong></span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Patient Code:</span>
+          <span class="info-value">{{ patient_code }}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Age / DOB:</span>
+          <span class="info-value">{{ patient_dob }}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Gender:</span>
+          <span class="info-value">{{ patient_gender }}</span>
+        </div>
+      </td>
+      <td class="info-cell">
+        <div class="info-card-title">Order & Referral Info</div>
+        <div class="info-row">
+          <span class="info-label">Referring Doctor:</span>
+          <span class="info-value">
+            {% if doctor_name %}{{ doctor_name }}{% if doctor_code %} ({{ doctor_code }}){% endif %}{% else %}Self / OPD Referral{% endif %}
+          </span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Investigation:</span>
+          <span class="info-value"><strong>{{ test_name }}</strong></span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Department:</span>
+          <span class="info-value">{{ test_category or "Clinical Pathology" }}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Sample Type:</span>
+          <span class="info-value">{{ sample_type or "Blood" }}</span>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Test Results Section -->
+  <div class="section-header">Laboratory Investigation Results</div>
+
+  {% if rows %}
+  <table class="results-table">
+    <thead>
+      <tr>
+        <th style="width: 32%;">Test Parameter</th>
+        <th style="width: 20%;">Observed Value</th>
+        <th style="width: 14%;">Unit</th>
+        <th style="width: 22%;">Biological Reference Range</th>
+        <th style="width: 12%; text-align: center;">Critical</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="param-name">{{ row[0] }}</td>
+        <td class="result-val">{{ row[1] }}</td>
+        <td>{{ row[2] }}</td>
+        <td>{{ row[3] }}</td>
+        <td style="text-align: center;">
+          {% if row[4] == "Yes" %}
+          <span class="badge-critical">CRITICAL</span>
+          {% else %}
+          <span class="badge-normal">Normal</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="font-size: 8.5pt; color: #64748b; font-style: italic; padding: 10px 0;">No parameters or test findings recorded for this investigation.</p>
   {% endif %}
 
-  <div class="section">
-    <div class="section-title">Test Details</div>
-    <p><strong>Test Name:</strong> {{ test_name }} (Category: {{ test_category }})</p>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Test Results</div>
-    {% if rows %}
-    <table>
-      <thead>
-        <tr>
-          {% for col in columns %}
-          <th>{{ col }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          {% for cell in row %}
-          <td>{{ cell }}</td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p>No results available.</p>
-    {% endif %}
-  </div>
-
+  <!-- Remarks / Interpretation -->
   {% if summary %}
-  <div class="section">
-    <div class="section-title">Summary / Remarks</div>
-    <p>{{ summary }}</p>
+  <div class="remarks-box">
+    <div class="remarks-title">Clinical Interpretation / Notes:</div>
+    <p class="remarks-content">{{ summary }}</p>
   </div>
   {% endif %}
+
+  <div class="end-report-tag">*** End of Diagnostic Report ***</div>
+
+  <!-- Signatures & Disclaimer Footer -->
+  <div class="footer-section">
+    <table class="signature-table">
+      <tr>
+        <td class="signature-cell">
+          <div class="sig-line"></div>
+          <p class="sig-role">Medical Laboratory Technologist</p>
+          <p class="sig-title">Prepared & Verified</p>
+        </td>
+        <td class="signature-cell">
+          <div class="sig-line"></div>
+          <p class="sig-role">Consultant Pathologist</p>
+          <p class="sig-title">Authorized Signatory / MD (Path)</p>
+        </td>
+      </tr>
+    </table>
+
+    <div class="disclaimer-box">
+      <strong>Confidential Medical Document:</strong> This laboratory report is electronically signed and authenticated for diagnostic assistance.
+      Test results relate only to the specimen tested and should be clinically correlated by the consulting physician.<br>
+      Report ID: {{ report_number }} | Generated on: {{ generated_at }} | {{ hospital_name or "NexaCare Healthcare" }}
+    </div>
+  </div>
+
 </body>
 </html>

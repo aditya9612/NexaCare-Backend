@@ -1,6 +1,6 @@
-from typing import Optional
-from datetime import date
-from pydantic import BaseModel
+from typing import Optional, Any
+from datetime import date, datetime
+from pydantic import BaseModel, Field, model_validator
 
 class ReportPlaceholderResponse(BaseModel):
     message: str = "Not implemented yet"
@@ -46,10 +46,66 @@ class InventoryStatusResponse(BaseModel):
     expired_items: int
     reorder_alerts: int
 
+class PharmacySalesItemResponse(BaseModel):
+    id: int
+    invoice_number: str
+    invoice_date: datetime
+    patient_id: int | None = None
+    patient_name: str | None = None
+    payment_mode: str | None = None
+    subtotal: float = 0.0
+    discount_amount: float = 0.0
+    tax_amount: float = 0.0
+    total_amount: float = 0.0
+    total_sales: float = 0.0
+    paid_amount: float = 0.0
+    status: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_total_sales(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "total_sales" not in data or data.get("total_sales") is None:
+                data["total_sales"] = data.get("total_amount", 0.0)
+            elif "total_amount" not in data or data.get("total_amount") is None:
+                data["total_amount"] = data.get("total_sales", 0.0)
+        return data
+
+    @property
+    def invoice_id(self) -> int:
+        return self.id
+
 class PharmacySalesResponse(BaseModel):
     total_sales: float
     total_invoices: int
     average_invoice_value: float
+    items: list[PharmacySalesItemResponse] = Field(default_factory=list)
+
+    @property
+    def records(self) -> list[PharmacySalesItemResponse]:
+        return self.items
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_items(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "items" not in data and "records" in data:
+                data["items"] = data["records"]
+        return data
+
+class PharmacyInventoryItemResponse(BaseModel):
+    id: int | None = None
+    name: str
+    generic_name: str | None = None
+    sku: str | None = None
+    batch_number: str | None = None
+    category: str | None = None
+    unit: str | None = None
+    unit_price: float = 0.0
+    stock_quantity: int = 0
+    reorder_level: int = 0
+    expiry_date: date | None = None
+    status: str | None = None
 
 class PharmacyInventoryResponse(BaseModel):
     total_medicines: int
@@ -58,6 +114,31 @@ class PharmacyInventoryResponse(BaseModel):
     low_stock_medicines: int
     out_of_stock_medicines: int
     total_stock_quantity: int
+    items: list[PharmacyInventoryItemResponse] = Field(default_factory=list)
+
+    @property
+    def records(self) -> list[PharmacyInventoryItemResponse]:
+        return self.items
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_items(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "items" not in data and "records" in data:
+                data["items"] = data["records"]
+        return data
+
+class PharmacyExpiryItemResponse(BaseModel):
+    id: int | None = None
+    name: str
+    generic_name: str | None = None
+    sku: str | None = None
+    batch_number: str | None = None
+    category: str | None = None
+    unit: str | None = None
+    stock_quantity: int = 0
+    expiry_date: date
+    status: str
 
 class PharmacyExpiryResponse(BaseModel):
     total_medicines: int
@@ -65,6 +146,19 @@ class PharmacyExpiryResponse(BaseModel):
     expiring_30_days: int
     expiring_60_days: int
     expiring_90_days: int
+    items: list[PharmacyExpiryItemResponse] = Field(default_factory=list)
+
+    @property
+    def records(self) -> list[PharmacyExpiryItemResponse]:
+        return self.items
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_items(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "items" not in data and "records" in data:
+                data["items"] = data["records"]
+        return data
 
 class LabTestSummaryResponse(BaseModel):
     total_tests: int
@@ -154,6 +248,8 @@ class ExportPayload(BaseModel):
     main_table_title: str = Field(default='Main Data')
     main_rows: list[dict[str, Any]] = Field(default_factory=list)
     additional_sections: list[CollectionSection] = Field(default_factory=list)
+    hospital_name: str | None = None
+    hospital_logo: str | None = None
 
 class PharmacyProfitLossResponse(BaseModel):
     total_sales: float = Field(..., description="Total sales from pharmacy invoices")

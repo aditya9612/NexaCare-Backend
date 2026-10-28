@@ -13,6 +13,8 @@ from app.schemas.nurse_schema import (
     NurseAttendanceCreate,
     NurseAttendanceResponse,
     NurseCreate,
+    NurseHandoverActionRequest,
+    NurseHandoverHistoryResponse,
     NurseHandoverNoteCreate,
     NurseHandoverNoteResponse,
     NurseHandoverNoteUpdate,
@@ -111,6 +113,7 @@ async def search_nurses(
 async def get_nurse_dashboard(
     db: DbSession,
     current_user: CurrentUser,
+    nurse_id: int | None = Query(None, description="Nurse ID to fetch dashboard for (optional, defaults to nurse associated with logged-in user)"),
     hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
@@ -123,6 +126,31 @@ async def get_nurse_dashboard(
 
     result = await NurseService(db).get_dashboard_overview(
         current_user,
+        nurse_id=nurse_id,
+        hospital_id=target_hospital_id,
+    )
+    return APIResponse(message="Nurse dashboard summary retrieved", data=result)
+
+
+@router.get("/{nurse_id}/dashboard", response_model=APIResponse[NurseDashboardResponse])
+@singular_router.get("/{nurse_id}/dashboard", response_model=APIResponse[NurseDashboardResponse], include_in_schema=False)
+async def get_nurse_dashboard_by_id(
+    nurse_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    result = await NurseService(db).get_dashboard_overview(
+        current_user,
+        nurse_id=nurse_id,
         hospital_id=target_hospital_id,
     )
     return APIResponse(message="Nurse dashboard summary retrieved", data=result)
@@ -694,6 +722,51 @@ async def update_nurse_handover_note(
         nurse_id, note_id, data, current_user.id
     )
     return APIResponse(message="Nurse handover note updated", data=note)
+
+
+@router.post(
+    "/{nurse_id}/handover-notes/{note_id}/action",
+    response_model=APIResponse[NurseHandoverNoteResponse],
+)
+async def action_nurse_handover_note(
+    nurse_id: int,
+    note_id: int,
+    data: NurseHandoverActionRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    hospital_id = resolve_tenant_id(current_user)
+    note = await NurseService(db).action_handover_note(
+        nurse_id=nurse_id,
+        note_id=note_id,
+        data=data,
+        current_user=current_user,
+        hospital_id=hospital_id,
+    )
+    action_verb = "accepted" if data.action == "ACCEPT" else "rejected"
+    return APIResponse(message=f"Nurse handover note {action_verb} successfully", data=note)
+
+
+@router.get(
+    "/{nurse_id}/handover-notes/{note_id}/history",
+    response_model=APIResponse[NurseHandoverHistoryResponse],
+)
+async def get_nurse_handover_history(
+    nurse_id: int,
+    note_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    hospital_id = resolve_tenant_id(current_user)
+    history = await NurseService(db).get_handover_history(
+        nurse_id=nurse_id,
+        note_id=note_id,
+        current_user=current_user,
+        hospital_id=hospital_id,
+    )
+    return APIResponse(message="Nurse handover history retrieved", data=history)
 
 
 @router.get(

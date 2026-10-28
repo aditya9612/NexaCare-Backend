@@ -348,6 +348,29 @@ async def export_bed_allocation(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=bed_allocation_export.xlsx"},
         )
+    elif fmt_lower == "json":
+        items = await service.export_bed_data(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+            current_user=current_user,
+        )
+        import json
+        from fastapi.encoders import jsonable_encoder
+        json_content = json.dumps(
+            {
+                "success": True,
+                "message": "Bed allocation export data retrieved successfully",
+                "data": jsonable_encoder(items),
+            },
+            indent=2,
+        )
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=bed_allocation_export.json"},
+        )
     else:
         items = await service.export_bed_data(
             floor_id=floor_id,

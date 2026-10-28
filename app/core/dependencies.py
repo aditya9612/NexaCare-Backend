@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import UserRole
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException, UnauthorizedException
+from app.core.exceptions import BadRequestException, ForbiddenException, UnauthorizedException
 from app.core.security import decode_token
 from app.models.user_model import User
 from app.repositories.auth_repository import AuthRepository
@@ -120,24 +120,35 @@ async def get_tenant_hospital_id(
     - If user is Super Admin: can pass X-Hospital-Id header to scope to a tenant, or None for global view.
     - If user is Hospital Staff/Doctor/Admin: strictly restricted to their user.hospital_id.
     """
-    role_name = user.role.name.lower() if user.role and user.role.name else ""
-    if role_name in ("super admin", "super_admin"):
-        return x_hospital_id if x_hospital_id is not None else getattr(user, "active_hospital_id", None)
-    return user.hospital_id
+    return resolve_tenant_id(user, x_hospital_id)
 
 
-def resolve_tenant_id(user: User | None) -> int | None:
+def resolve_tenant_id(user: User | None, x_hospital_id: int | None = None) -> int | None:
     """
     Convenience function to extract tenant hospital_id from a User instance.
-    Returns active_hospital_id if explicitly set on Super Admin, or user.hospital_id for tenant users.
-    Returns None for Super Admin without active_hospital_id override.
+    Returns active_hospital_id or x_hospital_id override for Super Admin, or user.hospital_id for tenant users.
+    Returns None for Super Admin without active_hospital_id/x_hospital_id override.
+    Validates x_hospital_id and prevents regular users from specifying a different tenant.
     """
     if not user:
         return None
-    role_name = user.role.name.lower() if user.role and user.role.name else ""
+
+    if x_hospital_id is not None and x_hospital_id <= 0:
+        raise BadRequestException("Invalid hospital ID provided in X-Hospital-Id header")
+
+    role = getattr(user, "role", None)
+    role_name = role.name.lower() if role and getattr(role, "name", None) else ""
     if role_name in ("super admin", "super_admin"):
-        return getattr(user, "active_hospital_id", None)
-    return user.hospital_id
+        if x_hospital_id is not None:
+            return x_hospital_id
+        return getattr(user, "active_hospital_id", None) or getattr(user, "hospital_id", None)
+
+    # For non-super-admin users:
+    user_hospital_id = getattr(user, "hospital_id", None)
+    if x_hospital_id is not None and (user_hospital_id is None or x_hospital_id != user_hospital_id):
+        raise ForbiddenException("Access denied: Cannot access or specify another hospital's tenant context")
+
+    return user_hospital_id
 
 
 TenantHospitalId = Annotated[int | None, Depends(get_tenant_hospital_id)]

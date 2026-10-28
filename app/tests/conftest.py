@@ -18,6 +18,13 @@ if sys.platform == "win32":
 
 
 
+@pytest.fixture(autouse=True)
+async def cleanup_db_engine():
+    await engine.dispose()
+    yield
+    await engine.dispose()
+
+
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
     mock_session = AsyncMock(spec=AsyncSession)

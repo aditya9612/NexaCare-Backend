@@ -171,3 +171,22 @@ class RolePermissionResponse(BaseSchema):
     role_name: str | None = None
     permission_name: str | None = None
     created_at: datetime | None = None
+
+
+class RBACSeedDefaultsRequest(BaseSchema):
+    include_test_users: bool = Field(False, description="Whether to seed default test users (e.g. Nurse Adesh)")
+    sync_super_admin: bool = Field(True, description="Whether to bootstrap/verify the default Super Admin account")
+
+
+class RBACSeedDefaultsResponse(BaseSchema):
+    environment: str
+    roles_created: int
+    roles_existing: int
+    permissions_created: int
+    permissions_existing: int
+    mappings_created: int
+    mappings_existing: int
+    test_users_created: list[str] = Field(default_factory=list)
+    super_admin_status: str
+    execution_time_ms: float
+

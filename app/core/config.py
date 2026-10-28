@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Feature flag to enable/disable the Settings module gracefully.
     ENABLE_SETTINGS: bool = True
+    ENABLE_DEV_RBAC_SEED: bool = True
 
     # TOTP / 2FA Configuration
     TOTP_ENCRYPTION_KEY: str | None = None

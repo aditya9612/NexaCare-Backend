@@ -1,7 +1,7 @@
 """create_razorpay_tables
 
 Revision ID: f9a8b7c6d5e4
-Revises: e3bd4423a766
+Revises: c8d1e2f3a4b5
 Create Date: 2026-10-22 18:20:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = 'f9a8b7c6d5e4'
-down_revision: Union[str, None] = 'e3bd4423a766'
+down_revision: Union[str, None] = 'c8d1e2f3a4b5'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

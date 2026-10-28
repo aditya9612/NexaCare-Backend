@@ -16,11 +16,13 @@ class RoomTariffRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def get_by_room_type(self, room_type: str, hospital_id: Optional[int] = None) -> RoomTariff | None:
+    async def get_by_room_type(self, room_type: str, hospital_id: Optional[int] = None, exact_tenant: bool = False) -> RoomTariff | None:
         clean = room_type.strip()
         query = select(RoomTariff).where(RoomTariff.room_type.ilike(clean))
         if hospital_id is not None:
             query = query.where(RoomTariff.hospital_id == hospital_id)
+        elif exact_tenant:
+            query = query.where(RoomTariff.hospital_id.is_(None))
         result = await self.db.execute(query)
         return result.scalars().first()
 

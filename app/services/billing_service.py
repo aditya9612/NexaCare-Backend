@@ -146,19 +146,19 @@ class BillingService:
         if "items" in state.unloaded and billing.id is not None:
             billing = await self.repo.get_by_id(billing.id)
 
-        subtotal = sum((item.quantity * item.unit_price) for item in billing.items)
-        totals = calculate_bill_totals(
-            subtotal=subtotal,
-            discount_percent=billing.discount_percent,
-            discount_amount=billing.discount_amount,
-            gst_rate=billing.gst_rate if billing.gst_rate is not None else 18.0,
-            tax_amount=billing.tax_amount,
-        )
-        billing.subtotal = totals["subtotal"]
-        billing.discount_amount = totals["discount_amount"]
-        billing.tax_amount = totals["tax_amount"]
-
         if billing.items:
+            subtotal = sum((item.quantity * item.unit_price) for item in billing.items)
+            totals = calculate_bill_totals(
+                subtotal=subtotal,
+                discount_percent=billing.discount_percent,
+                discount_amount=billing.discount_amount,
+                gst_rate=billing.gst_rate if billing.gst_rate is not None else 18.0,
+                tax_amount=billing.tax_amount,
+            )
+            billing.subtotal = totals["subtotal"]
+            billing.discount_amount = totals["discount_amount"]
+            billing.tax_amount = totals["tax_amount"]
+
             total_gst = 0.0
             for item in billing.items:
                 # Recalculate each item's GST and line total dynamically
@@ -177,15 +177,18 @@ class BillingService:
                 billing.gst_rate = round((billing.gst_amount / billing.subtotal) * 100, 2)
             else:
                 billing.gst_rate = 0.0
+            billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         else:
-            billing.gst_amount = totals["gst_amount"]
+            if not billing.total_amount and billing.subtotal:
+                billing.total_amount = billing.subtotal
+            elif not billing.subtotal and billing.total_amount:
+                billing.subtotal = billing.total_amount
 
         due_date_naive = billing.due_date
         if due_date_naive and due_date_naive.tzinfo is not None:
             from datetime import timezone as py_timezone
             due_date_naive = due_date_naive.astimezone(py_timezone.utc).replace(tzinfo=None)
 
-        billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
         billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
         
         # Check if there are any completed refund payments
@@ -785,12 +788,6 @@ class BillingService:
         if billing.status in [BillingStatus.CANCELLED, BillingStatus.REFUNDED, "partially_refunded"]:
             raise BadRequestException(f"Cannot collect payment on {billing.status} bill")
 
-        total_amt = billing.total_amount or 0.0
-        paid_amt = billing.paid_amount or 0.0
-        balance_due = round(total_amt - paid_amt, 2)
-        if data.amount > balance_due:
-            raise BadRequestException("Payment amount exceeds balance due")
-
         # Defensive normalization
         method = data.payment_method.strip().lower()
         if method == "cheques":
@@ -1346,20 +1343,31 @@ class BillingService:
             payment_count=pharm_payment_count,
         )
 
+        combined_total_bill = round(reception_total_bill + pharm_total_bill, 2)
+        combined_paid_bill = round(reception_paid_bill + pharm_paid_bill, 2)
+        combined_pending_bill = round(reception_pending_bill + pharm_pending_bill, 2)
+        combined_collected = round(reception_collected + pharm_collected, 2)
+        combined_bills_count = reception_bills_count + pharm_bills_count
+        combined_payment_count = reception_payment_count + pharm_payment_count
+
+        combined_by_method = dict(reception_by_method)
+        if pharm_collected > 0.0:
+            combined_by_method["pharmacy"] = pharm_collected
+
         return DailyCollectionSummary(
             date=date_label,
             filter_type=normalized_filter,
             start_date=str(resolved_start),
             end_date=str(resolved_end),
-            # Reception-only Daily Summary
-            today_total_bill=reception_total_bill,
-            today_paid_bill=reception_paid_bill,
-            today_pending_bill=reception_pending_bill,
-            today_collected_revenue=reception_collected,
-            bills_count=reception_bills_count,
-            total_collected=reception_collected,
-            payment_count=reception_payment_count,
-            by_method=reception_by_method,
+            # Combined Hospital-wide Daily Summary
+            today_total_bill=combined_total_bill,
+            today_paid_bill=combined_paid_bill,
+            today_pending_bill=combined_pending_bill,
+            today_collected_revenue=combined_collected,
+            bills_count=combined_bills_count,
+            total_collected=combined_collected,
+            payment_count=combined_payment_count,
+            by_method=combined_by_method,
             # Separate Reception / Appointment Billing & Collection
             reception_total_bill=reception_total_bill,
             reception_paid_bill=reception_paid_bill,

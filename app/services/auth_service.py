@@ -362,16 +362,19 @@ class AuthService:
                 raise UnauthorizedException("Account not activated. Please verify OTP.")
 
             # Login Context Validation
-            if getattr(data, "login_type", None):
+            login_type_attr = getattr(data, "login_type", None)
+            if login_type_attr is not None:
+                context_val = (
+                    login_type_attr.value
+                    if isinstance(login_type_attr, LoginContext)
+                    else str(login_type_attr).strip().upper()
+                )
+                if not context_val:
+                    raise BadRequestException("login_type cannot be blank. Allowed values: SUPER_ADMIN, ORGANIZATION, PATIENT")
+
                 actual_role = user.role.name if user.role else None
                 if not actual_role:
                     raise ForbiddenException("Account has no role assigned")
-
-                context_val = (
-                    data.login_type.value
-                    if isinstance(data.login_type, LoginContext)
-                    else str(data.login_type).strip().upper()
-                )
 
                 if context_val == LoginContext.SUPER_ADMIN.value:
                     if actual_role != UserRole.SUPER_ADMIN:

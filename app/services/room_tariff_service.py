@@ -14,10 +14,12 @@ class RoomTariffService:
 
     async def list_tariffs(self, active_only: bool = False, hospital_id: Optional[int] = None) -> list[RoomTariffResponse]:
         tariffs = await self.repo.get_all(active_only=active_only, hospital_id=hospital_id)
-        if not tariffs and not active_only and hospital_id is not None:
+        if not tariffs and hospital_id is not None:
             # Auto-seed standard default tariffs for this hospital if empty
-            await self._seed_default_tariffs(hospital_id=hospital_id)
-            tariffs = await self.repo.get_all(active_only=active_only, hospital_id=hospital_id)
+            all_existing = await self.repo.get_all(active_only=False, hospital_id=hospital_id)
+            if not all_existing:
+                await self._seed_default_tariffs(hospital_id=hospital_id)
+                tariffs = await self.repo.get_all(active_only=active_only, hospital_id=hospital_id)
         return [RoomTariffResponse.model_validate(t) for t in tariffs]
 
     async def get_by_id(self, tariff_id: int, hospital_id: Optional[int] = None) -> RoomTariffResponse:
@@ -30,7 +32,7 @@ class RoomTariffService:
         tariff = await self.repo.get_by_room_type(room_type, hospital_id=hospital_id)
         if not tariff and hospital_id is not None:
             # Fallback to global unassigned tariff if any
-            tariff = await self.repo.get_by_room_type(room_type, hospital_id=None)
+            tariff = await self.repo.get_by_room_type(room_type, hospital_id=None, exact_tenant=True)
         if not tariff:
             # Fallback based on generic room matching
             all_tariffs = await self.repo.get_all(active_only=True, hospital_id=hospital_id)
@@ -50,9 +52,9 @@ class RoomTariffService:
 
     async def create(self, data: RoomTariffCreate, hospital_id: Optional[int] = None) -> RoomTariffResponse:
         target_hospital_id = hospital_id if hospital_id is not None else data.hospital_id
-        existing = await self.repo.get_by_room_type(data.room_type, hospital_id=target_hospital_id)
+        existing = await self.repo.get_by_room_type(data.room_type, hospital_id=target_hospital_id, exact_tenant=True)
         if existing:
-            raise ConflictException(f"Tariff for room type '{data.room_type}' already exists")
+            raise ConflictException(f"Tariff for room type '{data.room_type}' already exists for this tenant")
 
         tariff = RoomTariff(
             hospital_id=target_hospital_id,
@@ -73,9 +75,9 @@ class RoomTariffService:
 
         update_dict = data.model_dump(exclude_unset=True)
         if "room_type" in update_dict and update_dict["room_type"] != tariff.room_type:
-            existing = await self.repo.get_by_room_type(update_dict["room_type"], hospital_id=tariff.hospital_id)
+            existing = await self.repo.get_by_room_type(update_dict["room_type"], hospital_id=tariff.hospital_id, exact_tenant=True)
             if existing and existing.id != tariff.id:
-                raise ConflictException(f"Tariff for room type '{update_dict['room_type']}' already exists")
+                raise ConflictException(f"Tariff for room type '{update_dict['room_type']}' already exists for this tenant")
             tariff.room_type = update_dict["room_type"].strip()
 
         for key, value in update_dict.items():

@@ -99,7 +99,11 @@ async def init_db():
             print("Running seed_roles...")
             await _seed_roles_and_permissions(session)
 
-            print("Running lab...")
+            print("Running module-specific permission seeds...")
+            await _seed_phase3_permissions(session)
+            await _seed_bed_allocation_permissions(session)
+            await _seed_icu_telemetry_permissions(session)
+            await _seed_patient_permissions(session)
             await _seed_lab_technician_permissions(session)
             await _seed_doctor_and_pharmacist_lab_permissions(session)
             await _seed_expense_permissions(session)
@@ -229,9 +233,11 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
                 existing_rp.add((role_obj.id, p_obj.id))
 
     # 1. Super Admin & Hospital Admin (All Permissions)
-    super_admin = roles.get(UserRole.SUPER_ADMIN)
-    hospital_admin = roles.get(UserRole.HOSPITAL_ADMIN)
-    for perm in permissions_map.values():
+    super_admin = roles.get(UserRole.SUPER_ADMIN) or next((r for r in roles.values() if r.name and r.name.lower().replace("_", " ").strip() == "super admin"), None)
+    hospital_admin = roles.get(UserRole.HOSPITAL_ADMIN) or next((r for r in roles.values() if r.name and r.name.lower().replace("_", " ").strip() == "hospital admin"), None)
+
+    all_db_perms_res = await session.execute(select(Permission))
+    for perm in all_db_perms_res.scalars().all():
         if super_admin and (super_admin.id, perm.id) not in existing_rp:
             session.add(RolePermission(role_id=super_admin.id, permission_id=perm.id))
             existing_rp.add((super_admin.id, perm.id))

@@ -47,7 +47,15 @@ router = APIRouter()
             "content": {
                 "multipart/form-data": {
                     "schema": {
-                        "required": ["first_name", "last_name", "specialization", "license_number", "experience"]
+                        "required": ["first_name", "last_name", "specialization", "license_number", "experience"],
+                        "properties": {
+                            "user_id": {
+                                "type": "integer",
+                                "nullable": True,
+                                "description": "Optional User ID to link (leave blank if doctor doesn't have an existing user account)",
+                                "example": None,
+                            }
+                        }
                     }
                 }
             }
@@ -72,6 +80,8 @@ async def create_doctor(
     bio: Optional[str] = Form(None),
     user_id: Optional[int] = Form(None),
     profile_image: Optional[UploadFile] = File(None),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id_param: Optional[int] = Query(None, alias="hospital_id", description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "create")),
 ):
     content_type = request.headers.get("content-type", "")
@@ -122,7 +132,12 @@ async def create_doctor(
             raise RequestValidationError(e.errors())
         image_file = profile_image
 
-    doctor_obj = await DoctorService(db).create(doctor_data, current_user.id, image_file=image_file)
+    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+
+    doctor_obj = await DoctorService(db).create(
+        doctor_data, current_user.id, image_file=image_file, hospital_id=hospital_id
+    )
     return APIResponse(message="Doctor created", data=doctor_obj)
 
 

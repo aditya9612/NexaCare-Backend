@@ -94,6 +94,17 @@ class LoginRequest(EmailOrPhoneRequest):
     otp: str | None = None
     login_type: LoginContext | str | None = None
 
+    @field_validator("login_type", mode="before")
+    @classmethod
+    def validate_login_type(cls, v: Any) -> Any:
+        if v is not None:
+            if isinstance(v, str) and not v.strip():
+                raise ValueError("login_type cannot be blank. Allowed values: SUPER_ADMIN, ORGANIZATION, PATIENT")
+            valid_values = {c.value for c in LoginContext}
+            if isinstance(v, str) and v.strip().upper() not in valid_values:
+                raise ValueError(f"Invalid login_type '{v}'. Allowed values: {', '.join(sorted(valid_values))}")
+        return v
+
     @model_validator(mode="after")
     def validate_login_credential(self):
         if not self.password and not self.otp:

@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta
+﻿from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import math
 from typing import Any, Optional
@@ -633,11 +633,64 @@ class PharmacyService:
 
         items = None
         if data.items is not None:
+            if (prescription.status or "").lower() in ["completed", "dispensed"]:
+                raise BadRequestException("Cannot modify items of an already dispensed prescription")
+            if (prescription.status or "").lower() == "cancelled":
+                raise BadRequestException("Cannot modify items of a cancelled prescription")
+
+            # Release previous active reservations for un-dispensed prescription items
+            for old_item in prescription.items or []:
+                old_med = await self.medicine_repo.get_by_id_for_update(old_item.medicine_id, hospital_id=hospital_id)
+                if old_med:
+                    rel_qty = min(old_med.reserved_quantity or 0, old_item.quantity)
+                    if rel_qty > 0:
+                        await self.medicine_repo.update_reserved_stock(old_med.id, -rel_qty)
+                if old_item.batch_number:
+                    old_batch = await self.batch_repo.get_by_batch_number(old_item.medicine_id, old_item.batch_number)
+                    if old_batch:
+                        rel_b = min(old_batch.reserved_quantity or 0, old_item.quantity)
+                        if rel_b > 0:
+                            await self.batch_repo.update_batch_reserved_stock(old_batch.id, -rel_b)
+
+            # Validate and reserve new items
+            new_prescription_items: list[PrescriptionItem] = []
             for item_data in data.items:
-                medicine = await self.medicine_repo.get_by_id(item_data.medicine_id, hospital_id=hospital_id)
+                medicine = await self.medicine_repo.get_by_id_for_update(item_data.medicine_id, hospital_id=hospital_id)
                 if not medicine:
                     raise NotFoundException(f"Medicine with ID {item_data.medicine_id} not found")
-            items = [PrescriptionItem(**item.model_dump()) for item in data.items]
+                if medicine.expiry_date and medicine.expiry_date < date.today():
+                    raise BadRequestException(f"Medicine '{medicine.name}' has expired on {medicine.expiry_date}")
+
+                avail_stock = max(0, (medicine.stock_quantity or 0) - (medicine.reserved_quantity or 0))
+                if item_data.quantity > avail_stock:
+                    raise BadRequestException(
+                        f"Insufficient available stock for medicine '{medicine.name}'. Available: {avail_stock}, Requested: {item_data.quantity}"
+                    )
+
+                batch_num = item_data.batch_number or medicine.batch_number
+                available_batches = await self.batch_repo.get_available_batches_fefo(medicine.id)
+                if available_batches:
+                    earliest_batch = available_batches[0]
+                    batch_num = earliest_batch.batch_number
+                    await self.batch_repo.update_batch_reserved_stock(earliest_batch.id, item_data.quantity)
+
+                await self.medicine_repo.update_reserved_stock(medicine.id, item_data.quantity)
+
+                new_prescription_items.append(
+                    PrescriptionItem(
+                        medicine_id=item_data.medicine_id,
+                        batch_number=batch_num,
+                        dosage=item_data.dosage,
+                        frequency=item_data.frequency,
+                        duration_days=item_data.duration_days,
+                        quantity=item_data.quantity,
+                        dispensed_quantity=0,
+                        instructions=item_data.instructions,
+                        meal_timing=item_data.meal_timing,
+                        time_of_day=item_data.time_of_day,
+                    )
+                )
+            items = new_prescription_items
 
         prescription = await self.prescription_repo.update(prescription, items)
         prescription = await self.prescription_repo.get_by_id(prescription.id, hospital_id=hospital_id)
@@ -691,6 +744,21 @@ class PharmacyService:
         if current_status == "cancelled" and target_status == "dispensed":
             raise BadRequestException("Cannot dispense a cancelled prescription")
 
+        # If transitioning to cancelled, release any active reservations
+        if target_status == "cancelled" and current_status not in ["completed", "dispensed", "cancelled"]:
+            for item in prescription.items or []:
+                med = await self.medicine_repo.get_by_id_for_update(item.medicine_id, hospital_id=hospital_id)
+                if med:
+                    rel_qty = min(med.reserved_quantity or 0, item.quantity)
+                    if rel_qty > 0:
+                        await self.medicine_repo.update_reserved_stock(med.id, -rel_qty)
+                if item.batch_number:
+                    batch = await self.batch_repo.get_by_batch_number(item.medicine_id, item.batch_number)
+                    if batch:
+                        rel_b = min(batch.reserved_quantity or 0, item.quantity)
+                        if rel_b > 0:
+                            await self.batch_repo.update_batch_reserved_stock(batch.id, -rel_b)
+
         # If transitioning to dispensed, we must perform the stock OUT
         if target_status == "dispensed" and current_status != "dispensed":
             # Locate warehouse
@@ -725,6 +793,9 @@ class PharmacyService:
 
                 # Legacy mirror sync
                 if medicine:
+                    rel_qty = min(medicine.reserved_quantity or 0, item.quantity)
+                    if rel_qty > 0:
+                        await self.medicine_repo.update_reserved_stock(medicine.id, -rel_qty)
                     await self.medicine_repo.update_stock(item.medicine_id, -item.quantity)
 
             prescription.dispensed_at = utc_now()
@@ -857,9 +928,19 @@ class PharmacyService:
             raise ForbiddenException("You do not have permission to delete this prescription")
 
         # Release reserved stock if not dispensed yet
-        if (prescription.status or "").lower() not in ["completed", "dispensed"]:
+        if (prescription.status or "").lower() not in ["completed", "dispensed", "cancelled"]:
             for item in prescription.items:
-                await self.medicine_repo.update_reserved_stock(item.medicine_id, -item.quantity)
+                medicine = await self.medicine_repo.get_by_id_for_update(item.medicine_id, hospital_id=hospital_id)
+                if medicine:
+                    rel_qty = min(medicine.reserved_quantity or 0, item.quantity)
+                    if rel_qty > 0:
+                        await self.medicine_repo.update_reserved_stock(medicine.id, -rel_qty)
+                if item.batch_number:
+                    batch = await self.batch_repo.get_by_batch_number(item.medicine_id, item.batch_number)
+                    if batch:
+                        rel_b = min(batch.reserved_quantity or 0, item.quantity)
+                        if rel_b > 0:
+                            await self.batch_repo.update_batch_reserved_stock(batch.id, -rel_b)
 
         await self.prescription_repo.soft_delete(prescription)
         await self.audit_repo.create("delete", "pharmacy_prescription", user_id=user_id, resource_id=str(prescription.id))
@@ -883,25 +964,67 @@ class PharmacyService:
         if (prescription.status or "").lower() == "cancelled":
             raise BadRequestException("Cannot dispense a cancelled prescription")
 
-        # Deduct physical stock and release reservation for each item
-        invoice_items_create: list[PharmacyInvoiceItemCreate] = []
+        if not prescription.items:
+            raise BadRequestException("Prescription has no items to dispense")
+
+        # Step 1: Pre-validation of all items before performing any stock / reservation mutations
+        item_contexts: list[dict] = []
         for item in prescription.items:
             medicine = await self.medicine_repo.get_by_id_for_update(item.medicine_id, hospital_id=hospital_id)
             if not medicine:
                 raise NotFoundException(f"Medicine {item.medicine_id} not found")
+            if medicine.expiry_date and medicine.expiry_date < date.today():
+                raise BadRequestException(f"Medicine '{medicine.name}' has expired on {medicine.expiry_date}")
             if (medicine.stock_quantity or 0) < item.quantity:
                 raise BadRequestException(f"Insufficient physical stock for medicine '{medicine.name}'")
+
+            # Validate reservation state
+            current_reserved = medicine.reserved_quantity or 0
+            missing_reservation = max(0, item.quantity - current_reserved)
+            if missing_reservation > 0:
+                avail_stock = max(0, (medicine.stock_quantity or 0) - current_reserved)
+                if avail_stock < missing_reservation:
+                    raise BadRequestException(
+                        f"Insufficient available stock to reserve and dispense medicine '{medicine.name}'. "
+                        f"Available unreserved: {avail_stock}, Missing reservation needed: {missing_reservation}"
+                    )
+
+            batch = None
+            if item.batch_number:
+                batch = await self.batch_repo.get_by_batch_number(medicine.id, item.batch_number)
+
+            item_contexts.append({
+                "item": item,
+                "medicine": medicine,
+                "missing_reservation": missing_reservation,
+                "batch": batch,
+            })
+
+        # Step 2: Atomic reservation reconciliation, physical stock deduction, and invoice item creation
+        invoice_items_create: list[PharmacyInvoiceItemCreate] = []
+        for ctx in item_contexts:
+            item = ctx["item"]
+            medicine = ctx["medicine"]
+            missing_reservation = ctx["missing_reservation"]
+            batch = ctx["batch"]
+
+            # Reconcile missing reservation if legacy/inconsistent
+            if missing_reservation > 0:
+                await self.medicine_repo.update_reserved_stock(medicine.id, missing_reservation)
+                if batch:
+                    batch_missing = max(0, item.quantity - (batch.reserved_quantity or 0))
+                    batch_avail = max(0, (batch.stock_quantity or 0) - (batch.reserved_quantity or 0))
+                    if batch_missing > 0 and batch_avail >= batch_missing:
+                        await self.batch_repo.update_batch_reserved_stock(batch.id, batch_missing)
 
             # Release reservation and deduct physical stock atomically
             await self.medicine_repo.update_reserved_stock(medicine.id, -item.quantity)
             await self.medicine_repo.update_stock(medicine.id, -item.quantity)
             item.dispensed_quantity = item.quantity
 
-            if item.batch_number:
-                batch = await self.batch_repo.get_by_batch_number(medicine.id, item.batch_number)
-                if batch:
-                    await self.batch_repo.update_batch_reserved_stock(batch.id, -item.quantity)
-                    await self.batch_repo.update_batch_stock(batch.id, -item.quantity)
+            if batch:
+                await self.batch_repo.update_batch_reserved_stock(batch.id, -item.quantity)
+                await self.batch_repo.update_batch_stock(batch.id, -item.quantity)
 
             invoice_items_create.append(
                 PharmacyInvoiceItemCreate(
@@ -1066,7 +1189,6 @@ class PharmacyService:
 
         from app.models.user_model import User
         from app.services.settings_service import SettingsService
-        from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         from app.utils.helpers import generate_code
 
@@ -2263,7 +2385,14 @@ class PharmacyService:
         if current_status in ("received", "delivered") or purchase.received_at is not None:
             raise BadRequestException("Purchase Order already received")
 
-        allowed_statuses = {"ordered", "pending", "partially_received", "draft"}
+        allowed_statuses = {
+            "ordered",
+            "pending",
+            "partially_received",
+            "draft",
+            "in transit",   # space-separated variant (e.g. DB value "In Transit")
+            "in_transit",   # underscore variant (e.g. DB value "in_transit")
+        }
         if current_status not in allowed_statuses:
             raise BadRequestException("Invalid Purchase Order status")
 

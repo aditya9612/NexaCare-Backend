@@ -779,16 +779,49 @@ class LabService:
         hospital_id = resolve_tenant_id(current_user)
         sample = await self.sample_repo.get_by_id(data.sample_id, hospital_id=hospital_id)
         if not sample:
+            # Fallback: check if data.sample_id is actually test_order_id with an existing sample
+            sample = await self.sample_repo.get_by_test_order(data.sample_id, hospital_id=hospital_id)
+
+        order = None
+        if sample:
+            order = await self.order_repo.get_by_id(sample.test_order_id, hospital_id=hospital_id)
+        else:
+            # Fallback: check if data.sample_id is a test_order_id needing a sample
+            order = await self.order_repo.get_by_id(data.sample_id, hospital_id=hospital_id)
+            if order:
+                if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
+                    raise BadRequestException("Cannot enter result for a completed or cancelled test order")
+                sample_type = "blood"
+                if order.lab_test_id:
+                    lab_test = await self.test_repo.get_by_id(order.lab_test_id)
+                    if lab_test and lab_test.sample_type:
+                        sample_type = lab_test.sample_type
+                sample = Sample(
+                    test_order_id=order.id,
+                    sample_code=generate_sample_code(),
+                    sample_type=sample_type,
+                    collected_at=utc_now(),
+                    collected_by=current_user.id,
+                    status=SampleStatus.COLLECTED,
+                    volume="Standard",
+                    notes="Auto-collected during result entry",
+                )
+                sample = await self.sample_repo.create(sample)
+                order.status = LabOrderStatus.SAMPLE_COLLECTED
+                await self.order_repo.update(order)
+
+        if not sample:
             raise NotFoundException("Sample not found")
 
-        if sample.status != SampleStatus.COLLECTED and not sample.collected_at:
-            raise BadRequestException(
-                "You cannot enter test result before collecting sample"
-            )
-
-        order = await self.order_repo.get_by_id(sample.test_order_id, hospital_id=hospital_id)
         if not order:
             raise NotFoundException("Test order not found")
+
+        if sample.status != SampleStatus.COLLECTED or not sample.collected_at:
+            sample.status = SampleStatus.COLLECTED
+            if not sample.collected_at:
+                sample.collected_at = utc_now()
+            await self.sample_repo.update(sample)
+
         if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
             raise BadRequestException("Cannot enter result for a completed or cancelled test order")
 
@@ -1270,11 +1303,69 @@ class LabService:
             hospital_id=hospital_id,
         )
 
-        return build_paginated_result(
-            [LabReportResponse.model_validate(r) for r in items],
-            total,
-            page,
-            size,
+        # Dashboard card counts for Lab Reports page
+        total_reports_count = await self.report_repo.count_all(
+            department_id=department_id,
+            generated_by=generated_by,
+            doctor_id=doctor_id,
+            hospital_id=hospital_id,
+        )
+        approved_count = await self.report_repo.count_all(
+            status="approved",
+            department_id=department_id,
+            generated_by=generated_by,
+            doctor_id=doctor_id,
+            hospital_id=hospital_id,
+        )
+        rejected_count = await self.report_repo.count_all(
+            status="rejected",
+            department_id=department_id,
+            generated_by=generated_by,
+            doctor_id=doctor_id,
+            hospital_id=hospital_id,
+        )
+        draft_count = await self.report_repo.count_all(
+            status="draft",
+            department_id=department_id,
+            generated_by=generated_by,
+            doctor_id=doctor_id,
+            hospital_id=hospital_id,
+        )
+        tech_verified_count = await self.report_repo.count_all(
+            status="technician_verified",
+            department_id=department_id,
+            generated_by=generated_by,
+            doctor_id=doctor_id,
+            hospital_id=hospital_id,
+        )
+        pending_approval_count = await self.report_repo.count_all(
+            status="pending_approval",
+            department_id=department_id,
+            generated_by=generated_by,
+            doctor_id=doctor_id,
+            hospital_id=hospital_id,
+        )
+        pending_review_count = draft_count + tech_verified_count + pending_approval_count
+        critical_rejected_count = rejected_count
+
+        import math
+        from app.schemas.lab_schema import LabReportListWithCountsResponse
+
+        pages = math.ceil(total / size) if size else 0
+        return LabReportListWithCountsResponse(
+            items=[LabReportResponse.model_validate(r) for r in items],
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+            pending_review_count=pending_review_count,
+            approved_count=approved_count,
+            critical_rejected_count=critical_rejected_count,
+            total_reports_count=total_reports_count,
+            pending_review=pending_review_count,
+            approved=approved_count,
+            critical_rejected=critical_rejected_count,
+            total_reports=total_reports_count,
         )
     
     async def get_report(self, report_id: int, current_user) -> LabReportResponse:

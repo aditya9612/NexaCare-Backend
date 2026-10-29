@@ -268,6 +268,17 @@ class LabReportResponse(BaseSchema):
     created_at: datetime
 
 
+class LabReportListWithCountsResponse(PaginatedResult[LabReportResponse]):
+    pending_review_count: int = 0
+    approved_count: int = 0
+    critical_rejected_count: int = 0
+    total_reports_count: int = 0
+    pending_review: int = 0
+    approved: int = 0
+    critical_rejected: int = 0
+    total_reports: int = 0
+
+
 
 class CriticalAlert(BaseSchema):
     result_id: int

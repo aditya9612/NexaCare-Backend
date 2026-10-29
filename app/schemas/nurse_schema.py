@@ -343,32 +343,32 @@ class NurseHandoverActionRequest(BaseSchema):
         return v.strip() if v else None
 
 
+class HandoverPatientAssignmentItem(BaseSchema):
+    patient_id: int
+    incoming_nurse_id: int | None = None
+    status: str = "Pending"
+
+
 class HandoverHistoryActionItem(BaseSchema):
     action: str
-    performed_by: NurseMiniProfile | None = None
-    action_timestamp: datetime
-    status_before: str | None = None
-    status_after: str | None = None
-    remarks: str | None = None
-    rejection_reason: str | None = None
+    patient_id: int | None = None
+    performed_by: int | None = None
+    status: str = "In Progress"
+    timestamp: datetime
 
 
 class NurseHandoverHistoryResponse(BaseSchema):
     handover_id: int
     handover_date: date
-    current_status: str
-    creator: NurseMiniProfile
-    incoming_nurse: NurseMiniProfile | None = None
+    creator_nurse_id: int
+    creator_name: str
     summary: str
     pending_tasks: str | None = None
     patient_updates: str | None = None
     notes: str | None = None
     created_at: datetime
     updated_at: datetime
-    acceptance_or_rejection_action: str | None = None
-    action_performed_by: NurseMiniProfile | None = None
-    action_timestamp: datetime | None = None
-    rejection_reason: str | None = None
+    patient_assignments: list[HandoverPatientAssignmentItem] = []
     history: list[HandoverHistoryActionItem] = []
 
 

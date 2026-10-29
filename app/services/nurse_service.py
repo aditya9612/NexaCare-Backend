@@ -831,6 +831,7 @@ class NurseService:
         from app.schemas.nurse_schema import (
             NurseMiniProfile,
             HandoverHistoryActionItem,
+            HandoverPatientAssignmentItem,
             NurseHandoverHistoryResponse,
         )
 
@@ -857,16 +858,11 @@ class NurseService:
             if requesting_nurse and requesting_nurse.hospital_id != hospital_id:
                 raise ForbiddenException("Cross-tenant access is prohibited")
 
-        creator_profile = (
-            NurseMiniProfile(
-                id=creator.id,
-                nurse_code=creator.nurse_code,
-                full_name=creator.user.full_name if creator.user else None,
-                license_number=creator.license_number,
-                shift=creator.shift,
-            )
-            if creator
-            else NurseMiniProfile(id=note.nurse_id)
+        creator_nurse_id = creator.id if creator else note.nurse_id
+        creator_name = (
+            creator.user.full_name
+            if (creator and creator.user and creator.user.full_name)
+            else f"Nurse {creator_nurse_id}"
         )
 
         # 3. Retrieve audit logs
@@ -874,13 +870,7 @@ class NurseService:
 
         history_items: list[HandoverHistoryActionItem] = []
         has_creation_log = False
-        incoming_nurse_profile: NurseMiniProfile | None = None
-        action_performed_by: NurseMiniProfile | None = None
-        acceptance_or_rejection_action: str | None = None
-        action_timestamp: datetime | None = None
-        rejection_reason: str | None = None
-
-        user_nurse_cache: dict[int, NurseMiniProfile | None] = {}
+        user_nurse_cache: dict[int, int | None] = {}
 
         for log in logs:
             action_name = log.action.upper()
@@ -894,53 +884,34 @@ class NurseService:
                 except Exception:
                     details_data = {"raw": log.details}
 
-            acting_profile = None
+            acting_nurse_id = None
             if log.user_id:
                 if log.user_id not in user_nurse_cache:
                     n_rec = await self.repo.get_by_user_id(log.user_id)
-                    if n_rec:
-                        user_nurse_cache[log.user_id] = NurseMiniProfile(
-                            id=n_rec.id,
-                            nurse_code=n_rec.nurse_code,
-                            full_name=n_rec.user.full_name if n_rec.user else None,
-                            license_number=n_rec.license_number,
-                            shift=n_rec.shift,
-                        )
-                    else:
-                        user_nurse_cache[log.user_id] = None
-                acting_profile = user_nurse_cache.get(log.user_id)
+                    user_nurse_cache[log.user_id] = n_rec.id if n_rec else None
+                acting_nurse_id = user_nurse_cache.get(log.user_id)
 
-            if not acting_profile and details_data.get("acting_nurse_id"):
-                acting_profile = NurseMiniProfile(
-                    id=details_data["acting_nurse_id"],
-                    nurse_code=details_data.get("acting_nurse_code"),
-                    full_name=details_data.get("acting_nurse_name"),
-                )
+            if acting_nurse_id is None and details_data.get("acting_nurse_id"):
+                acting_nurse_id = details_data["acting_nurse_id"]
 
             normalized_action = "CREATED" if action_name in ("CREATE", "CREATED") else action_name
             if normalized_action == "CREATED":
                 has_creation_log = True
-                if not acting_profile:
-                    acting_profile = creator_profile
+                if acting_nurse_id is None:
+                    acting_nurse_id = creator_nurse_id
 
-            if normalized_action in ("ACCEPT", "ACCEPTED", "REJECT", "REJECTED"):
-                acceptance_or_rejection_action = "ACCEPTED" if "ACCEPT" in normalized_action else "REJECTED"
-                action_performed_by = acting_profile
-                incoming_nurse_profile = acting_profile
-                action_timestamp = log.created_at
-                if details_data.get("rejection_reason"):
-                    rejection_reason = details_data["rejection_reason"]
+            item_status = (
+                details_data.get("status")
+                or ("In Progress" if normalized_action == "CREATED" else (details_data.get("status_after") or note.status))
+            )
 
             history_items.append(
                 HandoverHistoryActionItem(
                     action=normalized_action,
-                    performed_by=acting_profile,
-                    action_timestamp=log.created_at,
-                    status_before=details_data.get("status_before"),
-                    status_after=details_data.get("status_after")
-                    or ("Pending" if normalized_action == "CREATED" else note.status),
-                    remarks=details_data.get("remarks"),
-                    rejection_reason=details_data.get("rejection_reason"),
+                    patient_id=details_data.get("patient_id"),
+                    performed_by=acting_nurse_id,
+                    status=item_status,
+                    timestamp=log.created_at,
                 )
             )
 
@@ -948,33 +919,64 @@ class NurseService:
         if not has_creation_log:
             created_item = HandoverHistoryActionItem(
                 action="CREATED",
-                performed_by=creator_profile,
-                action_timestamp=note.created_at,
-                status_before=None,
-                status_after="Active" if note.status == "Active" else "Pending",
-                remarks="Initial handover note creation",
-                rejection_reason=None,
+                patient_id=None,
+                performed_by=creator_nurse_id,
+                status="In Progress",
+                timestamp=note.created_at,
             )
             history_items.insert(0, created_item)
 
-        history_items.sort(key=lambda x: x.action_timestamp)
+        history_items.sort(key=lambda x: x.timestamp)
+
+        # 5. Extract patient_assignments
+        patient_assignments: list[HandoverPatientAssignmentItem] = []
+        raw_assignments = None
+        if note.patient_updates:
+            try:
+                parsed = json.loads(note.patient_updates)
+                if isinstance(parsed, list):
+                    raw_assignments = parsed
+            except Exception:
+                pass
+
+        if not raw_assignments:
+            for log in logs:
+                if log.details:
+                    try:
+                        d = json.loads(log.details)
+                        if isinstance(d, dict):
+                            if d.get("patient_handovers"):
+                                raw_assignments = d.get("patient_handovers")
+                                break
+                            if d.get("patient_assignments"):
+                                raw_assignments = d.get("patient_assignments")
+                                break
+                    except Exception:
+                        pass
+
+        if raw_assignments:
+            for pa in raw_assignments:
+                if isinstance(pa, dict) and pa.get("patient_id") is not None:
+                    patient_assignments.append(
+                        HandoverPatientAssignmentItem(
+                            patient_id=pa.get("patient_id"),
+                            incoming_nurse_id=pa.get("incoming_nurse_id"),
+                            status=pa.get("status") or "Pending",
+                        )
+                    )
 
         return NurseHandoverHistoryResponse(
             handover_id=note.id,
             handover_date=note.handover_date,
-            current_status=note.status,
-            creator=creator_profile,
-            incoming_nurse=incoming_nurse_profile,
+            creator_nurse_id=creator_nurse_id,
+            creator_name=creator_name,
             summary=note.summary,
             pending_tasks=note.pending_tasks,
             patient_updates=note.patient_updates,
             notes=note.notes,
             created_at=note.created_at,
             updated_at=note.updated_at,
-            acceptance_or_rejection_action=acceptance_or_rejection_action,
-            action_performed_by=action_performed_by,
-            action_timestamp=action_timestamp,
-            rejection_reason=rejection_reason,
+            patient_assignments=patient_assignments,
             history=history_items,
         )
 
@@ -1309,7 +1311,8 @@ class NurseService:
 
     async def list_daily_tasks(
         self,
-        nurse_id: int,
+        current_user: "User",
+        nurse_id: int | None = None,
         task_date: date | None = None,
         page: int = 1,
         size: int = 20,
@@ -1318,12 +1321,43 @@ class NurseService:
         priority: str | None = None,
         sort_by: str = "priority",
         sort_order: str = "desc",
+        hospital_id: int | None = None,
     ):
-        await self._get_nurse_or_raise(nurse_id)
+        from app.models.nurse_model import Nurse
+        from app.core.constants import UserRole
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        role_name = current_user.role.name if current_user.role else ""
+        if role_name == UserRole.NURSE:
+            res = await self.db.execute(
+                select(Nurse).options(selectinload(Nurse.user)).where(Nurse.user_id == current_user.id)
+            )
+            calling_nurse = res.scalar_one_or_none()
+            if not calling_nurse:
+                res = await self.db.execute(
+                    select(Nurse).options(selectinload(Nurse.user)).where(Nurse.id == current_user.id)
+                )
+                calling_nurse = res.scalar_one_or_none()
+            if not calling_nurse:
+                raise NotFoundException("Nurse profile not found for logged-in user")
+
+            if nurse_id is not None and nurse_id != calling_nurse.id:
+                raise ForbiddenException("Nurses can only view their own tasks")
+            nurse = calling_nurse
+        else:
+            if nurse_id is None:
+                raise BadRequestException("Nurse ID is required for non-nurse users to view tasks")
+            nurse = await self._get_nurse_or_raise(nurse_id)
+
+        if role_name != UserRole.SUPER_ADMIN and hospital_id is not None:
+            if nurse.hospital_id is not None and nurse.hospital_id != hospital_id:
+                raise ForbiddenException("Cross-tenant access is prohibited")
+
         due_date = task_date or get_today_ist()
         skip = (page - 1) * size
         items = await self.task_repo.list_by_nurse(
-            nurse_id=nurse_id,
+            nurse_id=nurse.id,
             due_date=due_date,
             skip=skip,
             limit=size,
@@ -1334,7 +1368,7 @@ class NurseService:
             sort_order=sort_order,
         )
         total = await self.task_repo.count_by_nurse(
-            nurse_id=nurse_id,
+            nurse_id=nurse.id,
             due_date=due_date,
             patient_id=patient_id,
             status=status,
@@ -1343,24 +1377,24 @@ class NurseService:
 
         # Calculate overall daily counts for the nurse/patient
         total_tasks = await self.task_repo.count_by_nurse(
-            nurse_id=nurse_id,
+            nurse_id=nurse.id,
             due_date=due_date,
             patient_id=patient_id,
         )
         pending_tasks = await self.task_repo.count_by_nurse(
-            nurse_id=nurse_id,
+            nurse_id=nurse.id,
             due_date=due_date,
             patient_id=patient_id,
             status="Pending",
         )
         completed_tasks = await self.task_repo.count_by_nurse(
-            nurse_id=nurse_id,
+            nurse_id=nurse.id,
             due_date=due_date,
             patient_id=patient_id,
             status="Completed",
         )
         delayed_tasks = await self.task_repo.count_by_nurse(
-            nurse_id=nurse_id,
+            nurse_id=nurse.id,
             due_date=due_date,
             patient_id=patient_id,
             status="Delayed",

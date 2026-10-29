@@ -27,6 +27,11 @@ class EmergencyAlertCreate(BaseSchema):
     message: str
 
 
+class EmergencyAlertUpdate(BaseSchema):
+    emergency_type: str | None = None
+    message: str | None = None
+
+
 class EmergencyAlertResponse(BaseSchema):
     id: int
     patient_id: int

@@ -48,6 +48,7 @@ from app.schemas.nurse_communication_schema import (
     PatientUpdateCreate,
     PatientUpdateResponse,
     EmergencyAlertCreate,
+    EmergencyAlertUpdate,
     EmergencyAlertResponse,
 )
 from typing import List
@@ -911,8 +912,13 @@ async def get_nurse_emergency_alert(
     result = await NurseCommunicationService(db).get_nurse_emergency_alert_by_id(alert_id, current_user.id)
     return APIResponse(message="Emergency alert retrieved successfully", data=result)
 
-
-
-
-
-
+@singular_router.put("/emergency-alerts/{alert_id}", response_model=APIResponse[EmergencyAlertResponse])
+@router.put("/emergency-alerts/{alert_id}", response_model=APIResponse[EmergencyAlertResponse], include_in_schema=False)
+async def update_nurse_emergency_alert(
+    alert_id: int,
+    data: EmergencyAlertUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).update_emergency_alert(alert_id, data, current_user.id)
+    return APIResponse(message="Emergency alert updated successfully", data=result)

@@ -1,4 +1,4 @@
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -145,7 +145,13 @@ class TestOrderRepository:
     ) -> list[TestOrder]:
         query = self._base_query(hospital_id=hospital_id)
         if status:
-            query = query.where(TestOrder.status == status)
+            s_clean = status.strip().lower()
+            if s_clean == "pending":
+                query = query.where(func.lower(TestOrder.status).in_(["pending", "ordered"]))
+            elif s_clean == "in_progress":
+                query = query.where(func.lower(TestOrder.status).in_(["in_progress", "sample_collected", "technician_verified"]))
+            else:
+                query = query.where(func.lower(TestOrder.status) == s_clean)
         if patient_id is not None:
             if isinstance(patient_id, list):
                 query = query.where(TestOrder.patient_id.in_(patient_id))
@@ -194,7 +200,13 @@ class TestOrderRepository:
         if hospital_id is not None:
             query = query.where(TestOrder.hospital_id == hospital_id)
         if status:
-            query = query.where(TestOrder.status == status)
+            s_clean = status.strip().lower()
+            if s_clean == "pending":
+                query = query.where(func.lower(TestOrder.status).in_(["pending", "ordered"]))
+            elif s_clean == "in_progress":
+                query = query.where(func.lower(TestOrder.status).in_(["in_progress", "sample_collected", "technician_verified"]))
+            else:
+                query = query.where(func.lower(TestOrder.status) == s_clean)
         if patient_id is not None:
             if isinstance(patient_id, list):
                 query = query.where(TestOrder.patient_id.in_(patient_id))
@@ -219,6 +231,84 @@ class TestOrderRepository:
                 | (LabTest.test_code.ilike(s))
             )
         return (await self.db.scalar(query)) or 0
+
+    async def get_status_counts(
+        self,
+        patient_id: int | list[int] | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        priority: str | None = None,
+        search: str | None = None,
+        hospital_id: int | None = None,
+    ) -> dict[str, int]:
+        from app.models.patient_model import Patient
+        from app.models.lab_model import LabTest
+
+        status_lower = func.lower(TestOrder.status)
+        query = (
+            select(
+                func.coalesce(
+                    func.sum(case((status_lower.in_(["ordered", "pending"]), 1), else_=0)),
+                    0,
+                ).label("pending"),
+                func.coalesce(
+                    func.sum(case((status_lower.in_(["in_progress", "sample_collected", "technician_verified"]), 1), else_=0)),
+                    0,
+                ).label("in_progress"),
+                func.coalesce(
+                    func.sum(case((status_lower == "completed", 1), else_=0)),
+                    0,
+                ).label("completed"),
+                func.coalesce(
+                    func.sum(case((status_lower == "approved", 1), else_=0)),
+                    0,
+                ).label("approved"),
+            )
+            .select_from(TestOrder)
+            .where(TestOrder.is_deleted.is_(False))
+        )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
+        if patient_id is not None:
+            if isinstance(patient_id, list):
+                query = query.where(TestOrder.patient_id.in_(patient_id))
+            else:
+                query = query.where(TestOrder.patient_id == patient_id)
+        if doctor_id is not None:
+            query = query.where(TestOrder.doctor_id == doctor_id)
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
+        if priority:
+            query = query.where(TestOrder.priority == priority)
+        if search:
+            s = f"%{search.strip()}%"
+            query = query.outerjoin(Patient, TestOrder.patient_id == Patient.id).outerjoin(
+                LabTest, TestOrder.lab_test_id == LabTest.id
+            ).where(
+                (TestOrder.order_number.ilike(s))
+                | (Patient.first_name.ilike(s))
+                | (Patient.last_name.ilike(s))
+                | (Patient.patient_code.ilike(s))
+                | (LabTest.test_name.ilike(s))
+                | (LabTest.test_code.ilike(s))
+            )
+
+        res = await self.db.execute(query)
+        row = res.one()
+        if hasattr(row, "_mapping"):
+            m = row._mapping
+            return {
+                "pending": int(m.get("pending", 0) or 0),
+                "in_progress": int(m.get("in_progress", 0) or 0),
+                "completed": int(m.get("completed", 0) or 0),
+                "approved": int(m.get("approved", 0) or 0),
+            }
+        return {
+            "pending": int(getattr(row, "pending", 0) or 0),
+            "in_progress": int(getattr(row, "in_progress", 0) or 0),
+            "completed": int(getattr(row, "completed", 0) or 0),
+            "approved": int(getattr(row, "approved", 0) or 0),
+        }
 
     async def get_by_id(self, order_id: int, hospital_id: int | None = None) -> TestOrder | None:
         result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(TestOrder.id == order_id))

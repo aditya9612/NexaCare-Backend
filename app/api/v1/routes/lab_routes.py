@@ -21,6 +21,7 @@ from app.schemas.lab_schema import (
     SampleResponse,
     TestOrderCreate,
     TestOrderResponse,
+    TestOrderListResponse,
     TestOrderUpdate,
     TestResultCreate,
     TestResultUpdate,
@@ -205,7 +206,7 @@ async def create_test_order(
     return APIResponse(message="Test order created", data=order)
 
 
-@router.get("/orders", response_model=APIResponse[PaginatedResult[TestOrderResponse]])
+@router.get("/orders", response_model=APIResponse[TestOrderListResponse])
 async def list_test_orders(
     db: DbSession,
     current_user: CurrentUser,

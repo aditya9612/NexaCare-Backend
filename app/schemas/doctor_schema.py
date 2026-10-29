@@ -274,7 +274,7 @@ class DoctorCreate(BaseSchema):
     availability_status: str = "available"
     profile_image: str | None = None
     bio: str | None = None
-    user_id: int | None = Field(None, gt=0)
+    user_id: int | None = Field(None, gt=0, json_schema_extra={"example": None})
 
     @field_validator("specialization")
     @classmethod

@@ -237,7 +237,14 @@ class ReportRepository:
             "reorder_alerts": reorder_alerts
         }
 
-    async def get_pharmacy_sales(self, start_date: date | None, end_date: date | None, hospital_id: int | None = None) -> dict:
+    async def get_pharmacy_sales(
+        self,
+        start_date: date | None,
+        end_date: date | None,
+        hospital_id: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None
+    ) -> dict:
         filters = [
             PharmacyInvoice.status != "cancelled",
             PharmacyInvoice.is_deleted == False
@@ -245,10 +252,11 @@ class ReportRepository:
         if hospital_id is not None:
             filters.append(PharmacyInvoice.hospital_id == hospital_id)
         
-        if start_date and end_date:
+        if start_date:
             start_of_period = datetime.combine(start_date, datetime.min.time())
-            end_of_period = datetime.combine(end_date, datetime.max.time())
             filters.append(PharmacyInvoice.created_at >= start_of_period)
+        if end_date:
+            end_of_period = datetime.combine(end_date, datetime.max.time())
             filters.append(PharmacyInvoice.created_at <= end_of_period)
 
         sales_query = select(
@@ -263,13 +271,55 @@ class ReportRepository:
         total_invoices = int(row.total_invoices) if row and row.total_invoices else 0
         avg_invoice = round(total_sales / total_invoices, 2) if total_invoices > 0 else 0.0
 
+        records_query = (
+            select(
+                PharmacyInvoice,
+                Patient.first_name,
+                Patient.last_name,
+            )
+            .outerjoin(Patient, PharmacyInvoice.patient_id == Patient.id)
+            .where(*filters)
+            .order_by(PharmacyInvoice.created_at.desc(), PharmacyInvoice.id.desc())
+        )
+        if limit is not None:
+            records_query = records_query.limit(limit)
+        if offset is not None:
+            records_query = records_query.offset(offset)
+
+        records_res = await self.db.execute(records_query)
+        items = []
+        for inv, f_name, l_name in records_res.all():
+            patient_name = f"{f_name or ''} {l_name or ''}".strip() or None
+            items.append({
+                "id": inv.id,
+                "invoice_number": inv.invoice_number,
+                "invoice_date": inv.created_at or datetime.now(),
+                "patient_id": inv.patient_id,
+                "patient_name": patient_name,
+                "payment_mode": inv.payment_mode,
+                "subtotal": float(inv.subtotal or 0.0),
+                "discount_amount": float(inv.discount_amount or 0.0),
+                "tax_amount": float(inv.tax_amount or inv.gst_amount or 0.0),
+                "total_amount": float(inv.total_amount or 0.0),
+                "total_sales": float(inv.total_amount or 0.0),
+                "paid_amount": float(inv.paid_amount or 0.0),
+                "status": inv.status or "completed",
+            })
+
         return {
             "total_sales": total_sales,
             "total_invoices": total_invoices,
-            "average_invoice_value": avg_invoice
+            "average_invoice_value": avg_invoice,
+            "items": items
         }
 
-    async def get_pharmacy_inventory(self, category: str | None = None, hospital_id: int | None = None) -> dict:
+    async def get_pharmacy_inventory(
+        self,
+        category: str | None = None,
+        hospital_id: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None
+    ) -> dict:
         filters = [Medicine.is_deleted == False]
         if hospital_id is not None:
             filters.append(Medicine.hospital_id == hospital_id)
@@ -299,14 +349,70 @@ class ReportRepository:
         out_of_stock_medicines = int(row.out_of_stock) if row and row.out_of_stock else 0
         total_stock_quantity = int(row.total_stock) if row and row.total_stock else 0
 
+        records_query = select(Medicine).where(*filters).order_by(Medicine.name.asc(), Medicine.id.asc())
+        if limit is not None:
+            records_query = records_query.limit(limit)
+        if offset is not None:
+            records_query = records_query.offset(offset)
+
+        records_res = await self.db.execute(records_query)
+        medicines = records_res.scalars().all()
+        items = []
+        for med in medicines:
+            if not med.is_active:
+                status = "Inactive"
+            elif (med.stock_quantity or 0) <= 0:
+                status = "Out of Stock"
+            elif (med.stock_quantity or 0) <= (med.reorder_level or 0):
+                status = "Low Stock"
+            else:
+                status = "Active"
+
+            items.append({
+                "id": med.id,
+                "name": med.name,
+                "generic_name": med.generic_name,
+                "sku": med.sku,
+                "batch_number": med.batch_number,
+                "category": med.category,
+                "unit": med.unit,
+                "unit_price": float(med.unit_price or 0.0),
+                "stock_quantity": int(med.stock_quantity or 0),
+                "reorder_level": int(med.reorder_level or 0),
+                "expiry_date": med.expiry_date,
+                "status": status,
+            })
+
         return {
             "total_medicines": total_medicines,
             "active_medicines": active_medicines,
             "inactive_medicines": inactive_medicines,
             "low_stock_medicines": low_stock_medicines,
             "out_of_stock_medicines": out_of_stock_medicines,
-            "total_stock_quantity": total_stock_quantity
+            "total_stock_quantity": total_stock_quantity,
+            "items": items,
         }
+
+    @staticmethod
+    def calculate_expiry_status(exp_date: date | datetime | str | None, current_date: date | None = None) -> str:
+        if exp_date is None:
+            return "Unknown"
+        if isinstance(exp_date, datetime):
+            exp_date = exp_date.date()
+        elif isinstance(exp_date, str):
+            try:
+                exp_date = date.fromisoformat(exp_date.split("T")[0])
+            except Exception:
+                return "Unknown"
+
+        today = current_date or date.today()
+        diff_days = (exp_date - today).days
+
+        if diff_days < 0:
+            return "Expired"
+        if diff_days == 1:
+            return "Expiring in 1 Day"
+        return f"Expiring in {diff_days} Days"
 
     async def get_pharmacy_expiry(self, category: str | None = None, hospital_id: int | None = None) -> dict:
         filters = [
@@ -321,32 +427,52 @@ class ReportRepository:
 
         today = date.today()
         d30 = today + timedelta(days=30)
-        d60 = today + timedelta(days=60)
-        d90 = today + timedelta(days=90)
 
-        metrics_query = select(
-            func.coalesce(func.count(Medicine.id), 0).label("total"),
-            func.coalesce(func.sum(case((Medicine.expiry_date < today, 1), else_=0)), 0).label("expired"),
-            func.coalesce(func.sum(case(((Medicine.expiry_date >= today) & (Medicine.expiry_date <= d30), 1), else_=0)), 0).label("exp30"),
-            func.coalesce(func.sum(case(((Medicine.expiry_date > d30) & (Medicine.expiry_date <= d60), 1), else_=0)), 0).label("exp60"),
-            func.coalesce(func.sum(case(((Medicine.expiry_date > d60) & (Medicine.expiry_date <= d90), 1), else_=0)), 0).label("exp90")
-        ).where(*filters)
+        total_count_query = select(func.count(Medicine.id)).where(
+            *filters,
+            Medicine.expiry_date >= today,
+            Medicine.expiry_date <= d30
+        )
+        res = await self.db.execute(total_count_query)
+        total = res.scalar() or 0
+        exp30 = total
 
-        res = await self.db.execute(metrics_query)
-        row = res.fetchone()
+        records_query = (
+            select(Medicine)
+            .where(
+                *filters,
+                Medicine.expiry_date >= today,
+                Medicine.expiry_date <= d30
+            )
+            .order_by(Medicine.expiry_date.asc(), Medicine.name.asc())
+        )
+        records_res = await self.db.execute(records_query)
+        medicines = records_res.scalars().all()
+        items = []
+        for med in medicines:
+            exp_date = med.expiry_date
+            status = self.calculate_expiry_status(exp_date, current_date=today)
 
-        total = int(row.total) if row and row.total else 0
-        expired = int(row.expired) if row and row.expired else 0
-        exp30 = int(row.exp30) if row and row.exp30 else 0
-        exp60 = int(row.exp60) if row and row.exp60 else 0
-        exp90 = int(row.exp90) if row and row.exp90 else 0
+            items.append({
+                "id": med.id,
+                "name": med.name,
+                "generic_name": med.generic_name,
+                "sku": med.sku,
+                "batch_number": med.batch_number,
+                "category": med.category,
+                "unit": med.unit,
+                "stock_quantity": int(med.stock_quantity or 0),
+                "expiry_date": exp_date,
+                "status": status,
+            })
 
         return {
             "total_medicines": total,
-            "expired_medicines": expired,
+            "expired_medicines": 0,
             "expiring_30_days": exp30,
-            "expiring_60_days": exp60,
-            "expiring_90_days": exp90
+            "expiring_60_days": 0,
+            "expiring_90_days": 0,
+            "items": items,
         }
 
     async def get_lab_test_summary(self, start_date: date, end_date: date, department_id: int | None = None, hospital_id: int | None = None) -> dict:

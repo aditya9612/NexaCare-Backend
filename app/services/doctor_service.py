@@ -258,6 +258,7 @@ class DoctorService:
         data: DoctorCreate,
         user_id: int,
         image_file: Optional[UploadFile] = None,
+        hospital_id: Optional[int] = None,
     ) -> DoctorResponse:
         if data.email:
             existing_email = await self.repo.get_by_email(data.email)
@@ -268,12 +269,32 @@ class DoctorService:
         if existing_license:
             raise ConflictException("A doctor with this license number already exists")
 
-        if data.user_id:
-            user = await self.auth_repo.get_by_id(data.user_id)
-            if not user:
-                raise NotFoundException(f"User with ID {data.user_id} not found")
+        # Resolve actor user
+        actor_user = await self.auth_repo.get_by_id(user_id) if user_id else None
+        if actor_user and actor_user.role and actor_user.role.name == UserRole.PATIENT:
+            raise ForbiddenException("Patients cannot create doctors")
 
-        await self._validate_department(data.department_id)
+        # Determine hospital_id: prioritize explicit tenant override or actor's tenant hospital_id
+        from app.core.dependencies import resolve_tenant_id
+        resolved_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor_user)
+
+        target_user = None
+        if data.user_id:
+            target_user = await self.auth_repo.get_by_id(data.user_id)
+            if not target_user:
+                raise NotFoundException(f"User with ID {data.user_id} not found")
+            if resolved_hospital_id is not None:
+                if target_user.hospital_id and target_user.hospital_id != resolved_hospital_id:
+                    raise BadRequestException(f"User with ID {data.user_id} belongs to another hospital and cannot be linked")
+            elif target_user.hospital_id:
+                resolved_hospital_id = target_user.hospital_id
+
+        if resolved_hospital_id is None and data.department_id:
+            dept = await self.dept_repo.get_by_id(data.department_id)
+            if dept and dept.hospital_id:
+                resolved_hospital_id = dept.hospital_id
+
+        await self._validate_department(data.department_id, hospital_id=resolved_hospital_id)
 
         # Save uploaded image file if provided, otherwise use URL from data
         profile_image_path: Optional[str] = data.profile_image
@@ -282,21 +303,14 @@ class DoctorService:
 
         dump = data.model_dump()
         dump["profile_image"] = profile_image_path
-
-        # Resolve hospital_id from user if not explicitly passed
-        actor_user = await self.auth_repo.get_by_id(user_id) if user_id else None
-        if actor_user and actor_user.role and actor_user.role.name == UserRole.PATIENT:
-            raise ForbiddenException("Patients cannot create doctors")
-        target_user = await self.auth_repo.get_by_id(data.user_id) if data.user_id else None
-        hospital_id = (target_user.hospital_id if target_user and target_user.hospital_id else None) or (actor_user.hospital_id if actor_user else None)
-        dump["hospital_id"] = hospital_id
+        dump["hospital_id"] = resolved_hospital_id
 
         doctor = Doctor(doctor_code=generate_doctor_code(), **dump)
         try:
             doctor = await self.repo.create(doctor)
         except IntegrityError as exc:
             self._raise_doctor_integrity_error(exc)
-        await self.audit_repo.create("create", "doctors", user_id=user_id, resource_id=str(doctor.id))
+        await self.audit_repo.create("create", "doctors", user_id=user_id, resource_id=str(doctor.id), hospital_id=resolved_hospital_id)
         return DoctorResponse.model_validate(doctor)
 
     async def onboard(

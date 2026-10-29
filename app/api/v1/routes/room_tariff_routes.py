@@ -73,7 +73,11 @@ async def create_room_tariff(
     """
     Create a new room tariff configuration for the tenant hospital.
     """
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
+    target_hospital_id = (
+        x_hospital_id
+        if x_hospital_id is not None
+        else (hospital_id_param if hospital_id_param is not None else data.hospital_id)
+    )
     hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     tariff = await RoomTariffService(db).create(data, hospital_id=hospital_id)
     return APIResponse(

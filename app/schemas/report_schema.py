@@ -253,11 +253,32 @@ class ExportPayload(BaseModel):
 
 class PharmacyProfitLossResponse(BaseModel):
     total_sales: float = Field(..., description="Total sales from pharmacy invoices")
-    total_cost: float = Field(..., description="Total cost from pharmacy purchases")
-    gross_profit: float = Field(..., description="Gross profit (sales - cost)")
+    total_cost: float = Field(..., description="Total cost from pharmacy purchases (procurement purchases)")
+    procurement_purchases: float = Field(0.0, description="Total purchases received during period")
+    net_flow: float = Field(0.0, description="Net cash flow (total sales - procurement purchases)")
+    costed_sales: float = Field(0.0, description="Sales revenue from items with tracked COGS")
+    uncosted_sales: float = Field(0.0, description="Sales revenue from items without tracked COGS")
+    cogs: float | None = Field(None, description="Cost of goods sold for costed items")
+    gross_profit: float | None = Field(None, description="Gross profit (costed_sales - cogs)")
+    gross_margin_percentage: float | None = Field(None, description="Gross margin percentage")
     invoice_count: int = Field(..., description="Number of invoices generated")
     medicine_count: int = Field(..., description="Total active medicines in inventory")
     generated_at: datetime = Field(default_factory=datetime.now, description="Report generation timestamp")
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "procurement_purchases" not in data and "total_cost" in data:
+                data["procurement_purchases"] = data["total_cost"]
+            elif "total_cost" not in data and "procurement_purchases" in data:
+                data["total_cost"] = data["procurement_purchases"]
+
+            if "net_flow" not in data or data.get("net_flow") is None:
+                s = float(data.get("total_sales") or 0.0)
+                p = float(data.get("procurement_purchases") or data.get("total_cost") or 0.0)
+                data["net_flow"] = round(s - p, 2)
+        return data
 
 
 class LabSummaryResponse(BaseModel):

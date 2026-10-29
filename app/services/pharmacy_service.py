@@ -208,6 +208,12 @@ class PharmacyService:
             raise ConflictException("Medicine with this name, manufacturer, and batch number already exists")
 
         sku = generate_medicine_sku()
+        med_dict = data.model_dump()
+        purchase_cost = med_dict.pop("purchase_cost", None)
+        avg_cost = None
+        if purchase_cost is not None and (data.stock_quantity or 0) > 0:
+            avg_cost = float(purchase_cost)
+
         inv_item = InventoryItem(
             name=data.name,
             sku=sku,
@@ -215,7 +221,7 @@ class PharmacyService:
             category=data.category,
             quantity=data.stock_quantity if data.stock_quantity is not None else 0,
             unit=data.unit,
-            unit_cost=data.unit_price,
+            unit_cost=avg_cost if avg_cost is not None else data.unit_price,
             reorder_level=data.reorder_level if data.reorder_level is not None else 10,
             expiry_date=data.expiry_date,
             hospital_id=hospital_id,
@@ -223,7 +229,13 @@ class PharmacyService:
         self.db.add(inv_item)
         await self.db.flush()
 
-        medicine = Medicine(sku=sku, inventory_item_id=inv_item.id, hospital_id=hospital_id, **data.model_dump())
+        medicine = Medicine(
+            sku=sku,
+            inventory_item_id=inv_item.id,
+            hospital_id=hospital_id,
+            average_unit_cost=avg_cost,
+            **med_dict
+        )
         medicine = await self.medicine_repo.create(medicine)
 
         if hospital_id is not None and (medicine.stock_quantity or 0) > 0:
@@ -1010,6 +1022,13 @@ class PharmacyService:
             if medicine.expiry_date and medicine.expiry_date < date.today():
                 raise BadRequestException(f"Medicine {medicine.name} has expired")
 
+            unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
+            if unit_price is None or unit_price <= 0:
+                raise BadRequestException(
+                    f"Medicine '{medicine.name}' has no valid selling price configured. "
+                    "Please set a selling price greater than zero before creating an invoice."
+                )
+
             if deduct_stock:
                 avail = max(0, (medicine.stock_quantity or 0) - (medicine.reserved_quantity or 0))
                 if medicine.stock_quantity < item_data.quantity:
@@ -1025,17 +1044,25 @@ class PharmacyService:
                     if batch:
                         await self.batch_repo.update_batch_stock(batch.id, -item_data.quantity)
 
-            unit_price = item_data.unit_price if item_data.unit_price is not None else medicine.unit_price
             line_total = round(item_data.quantity * unit_price, 2)
             subtotal += line_total
+
+            unit_cost = float(medicine.average_unit_cost) if medicine.average_unit_cost is not None else None
+            line_cost = round(item_data.quantity * unit_cost, 2) if unit_cost is not None else None
+
             invoice_items.append(PharmacyInvoiceItem(
                 medicine_id=item_data.medicine_id,
                 batch_number=item_data.batch_number or medicine.batch_number,
                 quantity=item_data.quantity,
                 returned_quantity=0,
                 unit_price=unit_price,
+                unit_cost=unit_cost,
                 line_total=line_total,
+                line_cost=line_cost,
             ))
+
+        if subtotal <= 0:
+            raise BadRequestException("Invoice subtotal must be greater than zero.")
 
         from app.models.user_model import User
         from app.services.settings_service import SettingsService
@@ -1127,7 +1154,7 @@ class PharmacyService:
                     direction="OUT",
                     quantity=item.quantity,
                     batch_id=None,
-                    unit_cost=item.unit_price,
+                    unit_cost=item.unit_cost or 0.0,
                     reference_type="PHARMACY_INVOICE",
                     reference_id=invoice.id,
                     notes=f"Walk-in sale for invoice {invoice.invoice_number}",
@@ -1227,6 +1254,7 @@ class PharmacyService:
                     batch_number=inv_item.batch_number,
                     quantity=req_item.quantity,
                     unit_price=inv_item.unit_price,
+                    unit_cost=inv_item.unit_cost,
                     refund_amount=refund_amt,
                 )
             )
@@ -1441,7 +1469,7 @@ class PharmacyService:
                 direction="IN",
                 quantity=item.quantity,
                 batch_id=None,
-                unit_cost=item.unit_price,
+                unit_cost=item.unit_cost or 0.0,
                 reference_type="PHARMACY_RETURN",
                 reference_id=invoice.id,
                 notes=f"Return for walk-in invoice {invoice.invoice_number}",
@@ -2144,7 +2172,10 @@ class PharmacyService:
 
         # Phase 4 Stock Movement: Process items and integrate with Ledger
         for item in purchase.items or []:
-            medicine = await self.medicine_repo.get_by_id(item.medicine_id, hospital_id=hospital_id)
+            medicine = await self.medicine_repo.get_by_id_for_update(item.medicine_id, hospital_id=hospital_id)
+            if not medicine:
+                medicine = await self.medicine_repo.get_by_id(item.medicine_id, hospital_id=hospital_id)
+
             if medicine and getattr(medicine, "inventory_item_id", None) and warehouse_id:
                 await StockMovementService.create_movement(
                     db=self.db,
@@ -2161,9 +2192,28 @@ class PharmacyService:
                     performed_by=user_id,
                 )
 
-            # Legacy backward compatibility update for older APIs
+            # Moving Weighted Average Cost (WAC) update and stock update
             if medicine:
-                await self.medicine_repo.update_stock(item.medicine_id, item.quantity)
+                old_stock = medicine.stock_quantity or 0
+                old_avg_cost = medicine.average_unit_cost
+                received_qty = item.quantity or 0
+                purchase_unit_cost = float(item.unit_price or 0.0)
+
+                if old_stock <= 0 or old_avg_cost is None:
+                    new_avg_cost = purchase_unit_cost
+                else:
+                    total_qty = old_stock + received_qty
+                    if total_qty > 0:
+                        new_avg_cost = round(
+                            ((old_stock * float(old_avg_cost)) + (received_qty * purchase_unit_cost)) / total_qty,
+                            4
+                        )
+                    else:
+                        new_avg_cost = purchase_unit_cost
+
+                medicine.average_unit_cost = new_avg_cost
+                medicine.stock_quantity = old_stock + received_qty
+                await self.db.flush()
 
         await self.purchase_repo.update(purchase)
 

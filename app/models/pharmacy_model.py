@@ -22,6 +22,7 @@ class Medicine(Base, TimestampMixin, SoftDeleteMixin):
     category: Mapped[str] = mapped_column(String(100), index=True)
     unit: Mapped[str] = mapped_column(String(50))
     unit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    average_unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
     reserved_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reorder_level: Mapped[int] = mapped_column(Integer, default=10)
@@ -138,7 +139,9 @@ class PharmacyInvoiceItem(Base, TimestampMixin):
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     returned_quantity: Mapped[int] = mapped_column(Integer, default=0)
     unit_price: Mapped[float] = mapped_column(Float)
+    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     line_total: Mapped[float] = mapped_column(Float, default=0.0)
+    line_cost: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
 
     invoice: Mapped["PharmacyInvoice"] = relationship(back_populates="items")
     medicine: Mapped["Medicine"] = relationship()
@@ -175,6 +178,7 @@ class PharmacyReturnItem(Base, TimestampMixin):
     batch_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     unit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     refund_amount: Mapped[float] = mapped_column(Float, default=0.0)
 
     pharmacy_return: Mapped["PharmacyReturn"] = relationship(back_populates="items")

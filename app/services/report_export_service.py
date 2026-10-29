@@ -9,10 +9,29 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from app.schemas.report_schema import ExportPayload
 from app.core.report_config import HOSPITAL_BRANDING_NAME, REPORT_THEME, DEFAULT_DATE_FORMAT, DEFAULT_DATETIME_FORMAT, DEFAULT_PAGE_SIZE, DEFAULT_MARGINS
 
 class ReportExportService:
+
+    @classmethod
+    def _ensure_font_registered(cls) -> bool:
+        font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+        if os.path.exists(font_path) and "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+            registerFontFamily(
+                "DejaVuSans",
+                normal="DejaVuSans",
+                bold="DejaVuSans",
+                italic="DejaVuSans",
+                boldItalic="DejaVuSans"
+            )
+            return True
+        return "DejaVuSans" in pdfmetrics.getRegisteredFontNames()
+
 
     @staticmethod
     def resolve_hospital_logo(logo_path_attr: str | None) -> str | None:
@@ -97,7 +116,10 @@ class ReportExportService:
         "inactive_medicines": "Inactive Medicines",
         "low_stock_medicines": "Low Stock",
         "out_of_stock_medicines": "Out of Stock",
-        "total_stock_quantity": "Total Stock Qty",
+        "total_cost": "Procurement Purchases",
+        "gross_profit": "Net Flow (Sales - Purchases)",
+        "invoice_count": "Total Invoices",
+        "medicine_count": "Active Medicines",
         "expired_medicines": "Expired",
         "expiring_30_days": "Expiring (30 Days)",
         "expiring_60_days": "Expiring (60 Days)",
@@ -106,7 +128,7 @@ class ReportExportService:
 
     CURRENCY_KEYS = {
         "subtotal", "discount_amount", "tax_amount", "gst_amount",
-        "total_amount", "paid_amount", "total_sales", "average_invoice_value",
+        "total_amount", "paid_amount", "total_sales", "total_cost", "average_invoice_value",
         "revenue", "billing_revenue", "pharmacy_revenue", "total_revenue",
         "total_billed_amount", "total_collected_amount", "total_expense_amount",
         "net_cash_flow", "cost", "gross_profit", "unit_price"
@@ -426,6 +448,94 @@ class ReportExportService:
         elements.append(Spacer(1, REPORT_THEME['section_spacing']))
 
     @staticmethod
+    def _render_profit_loss_summary_bar(elements, summary_metrics: dict, available_width: float, styles):
+        if not summary_metrics:
+            return
+        ReportExportService._ensure_font_registered()
+        summary_font = "DejaVuSans" if ("DejaVuSans" in pdfmetrics.getRegisteredFontNames()) else REPORT_THEME['font_name_bold']
+        summary_metric_style = ParagraphStyle(
+            'ProfitLossSummaryMetric',
+            parent=styles['Normal'],
+            fontName=summary_font,
+            fontSize=8.5,
+            leading=11.5,
+            alignment=1,
+            textColor=REPORT_THEME['header_bg_color'],
+            spaceAfter=0
+        )
+        total_sales = float(summary_metrics.get("total_sales", 0.0) or 0.0)
+        total_cost = float(summary_metrics.get("total_cost", 0.0) or 0.0)
+        procurement = float(summary_metrics.get("procurement_purchases", total_cost) or 0.0)
+        cogs = summary_metrics.get("cogs")
+        uncosted_sales = summary_metrics.get("uncosted_sales")
+        gross_profit = summary_metrics.get("gross_profit")
+        gross_margin_pct = summary_metrics.get("gross_margin_percentage")
+        invoice_count = summary_metrics.get("invoice_count", 0) or 0
+        medicine_count = summary_metrics.get("medicine_count", 0) or 0
+
+        sales_str = f"₹{total_sales:,.2f}"
+        procurement_str = f"₹{procurement:,.2f}"
+
+        net_flow_raw = summary_metrics.get("net_flow")
+        if net_flow_raw is not None:
+            net_flow = float(net_flow_raw)
+        else:
+            net_flow = round(total_sales - procurement, 2)
+        net_flow_str = f"-₹{abs(net_flow):,.2f}" if net_flow < 0 else f"₹{net_flow:,.2f}"
+
+        has_cogs = cogs is not None
+        if has_cogs and gross_profit is not None:
+            cogs_val = float(cogs)
+            cogs_str = f"₹{cogs_val:,.2f}"
+            profit_val = float(gross_profit)
+            profit_str = f"-₹{abs(profit_val):,.2f}" if profit_val < 0 else f"₹{profit_val:,.2f}"
+            margin_str = f"{float(gross_margin_pct):.1f}%" if gross_margin_pct is not None else "N/A"
+
+            summary_table_data = [
+                [
+                    Paragraph(f"<b>Total Sales:</b>  {sales_str}", summary_metric_style),
+                    Paragraph(f"<b>COGS:</b>  {cogs_str}", summary_metric_style),
+                    Paragraph(f"<b>Gross Profit:</b>  {profit_str}", summary_metric_style),
+                ],
+                [
+                    Paragraph(f"<b>Gross Margin:</b>  {margin_str}", summary_metric_style),
+                    Paragraph(f"<b>Procurement Purchases:</b>  {procurement_str}", summary_metric_style),
+                    Paragraph(f"<b>Net Flow (Sales - Purchases):</b>  {net_flow_str}", summary_metric_style),
+                ],
+                [
+                    Paragraph(f"<b>Total Invoices:</b>  {invoice_count}", summary_metric_style),
+                    Paragraph(f"<b>Active Medicines:</b>  {medicine_count}", summary_metric_style),
+                    Paragraph(f"<b>Uncosted Sales:</b>  ₹{float(uncosted_sales or 0.0):,.2f}", summary_metric_style),
+                ]
+            ]
+        else:
+            summary_table_data = [
+                [
+                    Paragraph(f"<b>Total Sales:</b>  {sales_str}", summary_metric_style),
+                    Paragraph(f"<b>Procurement Purchases:</b>  {procurement_str}", summary_metric_style),
+                    Paragraph(f"<b>Net Flow (Sales - Purchases):</b>  {net_flow_str}", summary_metric_style),
+                ],
+                [
+                    Paragraph(f"<b>Total Invoices:</b>  {invoice_count}", summary_metric_style),
+                    Paragraph(f"<b>Active Medicines:</b>  {medicine_count}", summary_metric_style),
+                    Paragraph(f"<b>Gross Margin:</b>  N/A", summary_metric_style),
+                ]
+            ]
+        summary_table = Table(summary_table_data, colWidths=[available_width / 3.0] * 3)
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F2F4F4")),
+            ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#BDC3C7")),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, REPORT_THEME['section_spacing']))
+
+    @staticmethod
     def _render_table(elements, title, rows, available_width, styles, summary_metrics: dict = None):
         is_pharmacy_sales = bool(
             (title and "Pharmacy Sales" in title) or (
@@ -446,7 +556,14 @@ class ReportExportService:
                 )
             )
         )
-        if not rows and not is_pharmacy_sales and not is_pharmacy_inventory and not is_pharmacy_expiry:
+        is_pharmacy_profit_loss = bool(
+            not is_pharmacy_sales and not is_pharmacy_expiry and not is_pharmacy_inventory and (
+                (title and ("Profit & Loss" in title or "Profit and Loss" in title)) or (
+                    rows and {"total_sales", "total_cost", "gross_profit"}.issubset(ReportExportService._extract_headers(rows))
+                )
+            )
+        )
+        if not rows and not is_pharmacy_sales and not is_pharmacy_inventory and not is_pharmacy_expiry and not is_pharmacy_profit_loss:
             return
 
         if is_pharmacy_sales:
@@ -517,6 +634,24 @@ class ReportExportService:
             }
 
             ReportExportService._render_expiry_summary_bar(elements, metrics, available_width, styles)
+
+        elif is_pharmacy_profit_loss:
+            row_data = rows[0] if rows else {}
+            src = summary_metrics or row_data
+            metrics = {
+                "total_sales": src.get("total_sales", 0.0),
+                "total_cost": src.get("total_cost", 0.0),
+                "procurement_purchases": src.get("procurement_purchases", src.get("total_cost", 0.0)),
+                "net_flow": src.get("net_flow"),
+                "costed_sales": src.get("costed_sales"),
+                "uncosted_sales": src.get("uncosted_sales"),
+                "cogs": src.get("cogs"),
+                "gross_profit": src.get("gross_profit"),
+                "gross_margin_percentage": src.get("gross_margin_percentage"),
+                "invoice_count": src.get("invoice_count", 0),
+                "medicine_count": src.get("medicine_count", 0),
+            }
+            ReportExportService._render_profit_loss_summary_bar(elements, metrics, available_width, styles)
 
         if title:
             bold_style = ParagraphStyle(
@@ -620,6 +755,30 @@ class ReportExportService:
                     headers.extend(extra)
                     display_headers.extend([ReportExportService._get_header_display_name(k) for k in extra])
                     alignments.extend(["LEFT"] * len(extra))
+        elif is_pharmacy_profit_loss:
+            has_cogs = any(r.get("cogs") is not None for r in rows) if rows else False
+            if has_cogs:
+                preferred_cols = [
+                    ("total_sales", "Total Sales (₹)", "RIGHT"),
+                    ("cogs", "COGS (₹)", "RIGHT"),
+                    ("gross_profit", "Gross Profit (₹)", "RIGHT"),
+                    ("gross_margin_percentage", "Gross Margin", "CENTER"),
+                    ("procurement_purchases", "Procurement Purchases (₹)", "RIGHT"),
+                    ("net_flow", "Net Flow (Sales - Purchases) (₹)", "RIGHT"),
+                    ("invoice_count", "Total Invoices", "CENTER"),
+                    ("medicine_count", "Active Medicines", "CENTER"),
+                ]
+            else:
+                preferred_cols = [
+                    ("total_sales", "Total Sales (₹)", "RIGHT"),
+                    ("procurement_purchases", "Procurement Purchases (₹)", "RIGHT"),
+                    ("net_flow", "Net Flow (Sales - Purchases) (₹)", "RIGHT"),
+                    ("invoice_count", "Total Invoices", "CENTER"),
+                    ("medicine_count", "Active Medicines", "CENTER"),
+                ]
+            headers = [k for k, _, _ in preferred_cols]
+            display_headers = [label for _, label, _ in preferred_cols]
+            alignments = [align for _, _, align in preferred_cols]
         else:
             headers = ReportExportService._extract_headers(rows)
             display_headers = [ReportExportService._get_header_display_name(k) for k in headers]
@@ -634,10 +793,11 @@ class ReportExportService:
         header_row = []
         for dh, align in zip(display_headers, alignments):
             align_code = 2 if align == 'RIGHT' else (1 if align == 'CENTER' else 0)
+            use_dejavu_h = ("₹" in str(dh)) and ("DejaVuSans" in pdfmetrics.getRegisteredFontNames())
             h_style = ParagraphStyle(
-                f'TH_{align}',
+                f'TH_{align}_{"dj" if use_dejavu_h else "std"}',
                 parent=styles['Normal'],
-                fontName=REPORT_THEME['font_name_bold'],
+                fontName="DejaVuSans" if use_dejavu_h else REPORT_THEME['font_name_bold'],
                 fontSize=header_font_size,
                 leading=header_font_size + 2.0,
                 textColor=REPORT_THEME['header_text_color'],
@@ -652,12 +812,46 @@ class ReportExportService:
             for row in rows:
                 cell_row = []
                 for h, align in zip(headers, alignments):
-                    val_str = ReportExportService._format_cell_value(h, row.get(h))
+                    if is_pharmacy_profit_loss and h in (
+                        "total_sales", "total_cost", "gross_profit", "cogs", 
+                        "procurement_purchases", "costed_sales", "uncosted_sales", "net_flow"
+                    ):
+                        if h == "net_flow":
+                            net_raw = row.get("net_flow")
+                            if net_raw is not None:
+                                val_num = float(net_raw)
+                            else:
+                                s = float(row.get("total_sales") or 0.0)
+                                p = float(row.get("procurement_purchases") if row.get("procurement_purchases") is not None else (row.get("total_cost") or 0.0))
+                                val_num = round(s - p, 2)
+                            val_str = f"-₹{abs(val_num):,.2f}" if val_num < 0 else f"₹{val_num:,.2f}"
+                        elif h in ("cogs", "gross_profit"):
+                            raw_val = row.get(h)
+                            if raw_val is None:
+                                val_str = "N/A"
+                            else:
+                                val_num = float(raw_val)
+                                val_str = f"-₹{abs(val_num):,.2f}" if val_num < 0 else f"₹{val_num:,.2f}"
+                        elif h in ("procurement_purchases", "total_cost"):
+                            raw_val = row.get("procurement_purchases")
+                            if raw_val is None:
+                                raw_val = row.get("total_cost") or 0.0
+                            val_num = float(raw_val)
+                            val_str = f"-₹{abs(val_num):,.2f}" if val_num < 0 else f"₹{val_num:,.2f}"
+                        else:
+                            val_num = float(row.get(h) or 0.0)
+                            val_str = f"-₹{abs(val_num):,.2f}" if val_num < 0 else f"₹{val_num:,.2f}"
+                    elif is_pharmacy_profit_loss and h == "gross_margin_percentage":
+                        val_m = row.get(h)
+                        val_str = f"{float(val_m):.1f}%" if val_m is not None else "N/A"
+                    else:
+                        val_str = ReportExportService._format_cell_value(h, row.get(h))
                     align_code = 2 if align == 'RIGHT' else (1 if align == 'CENTER' else 0)
+                    use_dejavu_b = ("₹" in str(val_str)) and ("DejaVuSans" in pdfmetrics.getRegisteredFontNames())
                     b_style = ParagraphStyle(
-                        f'TD_{align}',
+                        f'TD_{align}_{"dj" if use_dejavu_b else "std"}',
                         parent=styles['Normal'],
-                        fontName=REPORT_THEME['font_name_regular'],
+                        fontName="DejaVuSans" if use_dejavu_b else REPORT_THEME['font_name_regular'],
                         fontSize=body_font_size,
                         leading=body_font_size + 2.0,
                         alignment=align_code,
@@ -811,6 +1005,31 @@ class ReportExportService:
             ])
         table.setStyle(TableStyle(ts))
         elements.append(table)
+        if is_pharmacy_profit_loss:
+            note_font = "DejaVuSans" if ("DejaVuSans" in pdfmetrics.getRegisteredFontNames()) else REPORT_THEME['font_name_regular']
+            note_style = ParagraphStyle(
+                'ProfitLossFootnote',
+                parent=styles['Normal'],
+                fontName=note_font,
+                fontSize=7.5,
+                leading=10.0,
+                textColor=colors.HexColor("#7F8C8D"),
+                spaceBefore=3,
+                spaceAfter=4
+            )
+            has_cogs = any(r.get("cogs") is not None for r in rows) if rows else (summary_metrics and summary_metrics.get("cogs") is not None)
+            if has_cogs:
+                uncosted = float((summary_metrics and summary_metrics.get("uncosted_sales")) or (rows and rows[0].get("uncosted_sales")) or 0.0)
+                uncosted_note = f" Uncosted Sales of ₹{uncosted:,.2f} are excluded from margin calculations." if uncosted > 0 else ""
+                elements.append(Paragraph(
+                    f"<i>* Note: Cost of Goods Sold (COGS) is calculated using Moving Weighted Average Cost (WAC) for items sold during the period. Gross Profit = Costed Sales - COGS.{uncosted_note} Net Flow indicates Total Sales minus Total Procurement Purchases in the selected period.</i>",
+                    note_style
+                ))
+            else:
+                elements.append(Paragraph(
+                    "<i>* Note: Accounting Gross Profit and Profit Margin are not displayed because the medicines sold during this period do not have tracked acquisition costs (Cost of Goods Sold / COGS). Net Flow indicates Total Sales minus Total Procurement Purchases in the selected period.</i>",
+                    note_style
+                ))
         elements.append(Spacer(1, REPORT_THEME['table_spacing']))
 
     @staticmethod
@@ -826,24 +1045,25 @@ class ReportExportService:
             leading=13,
             spaceAfter=6
         )
-        metric_style = ParagraphStyle(
-            'SummaryMetric',
-            parent=styles['Normal'],
-            fontName=REPORT_THEME['font_name_regular'],
-            fontSize=9,
-            leading=12,
-            spaceAfter=3
-        )
-        
         elements.append(Paragraph(f"<b>{title}:</b>", bold_style))
         for k, v in data_dict.items():
             display_k = ReportExportService._get_header_display_name(k)
             formatted_val = ReportExportService._format_cell_value(k, v)
-            elements.append(Paragraph(f"<b>{display_k}:</b> {formatted_val}", metric_style))
+            use_dejavu_s = ("₹" in str(formatted_val)) and ("DejaVuSans" in pdfmetrics.getRegisteredFontNames())
+            val_style = ParagraphStyle(
+                f'SummaryMetric_{"dj" if use_dejavu_s else "std"}',
+                parent=styles['Normal'],
+                fontName="DejaVuSans" if use_dejavu_s else REPORT_THEME['font_name_regular'],
+                fontSize=9,
+                leading=12,
+                spaceAfter=3
+            )
+            elements.append(Paragraph(f"<b>{display_k}:</b> {formatted_val}", val_style))
         elements.append(Spacer(1, REPORT_THEME['section_spacing']))
 
     @staticmethod
     def export_pdf(payload: ExportPayload) -> io.BytesIO:
+        ReportExportService._ensure_font_registered()
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -938,7 +1158,14 @@ class ReportExportService:
                 (payload.main_rows and any(k in ReportExportService._extract_headers(payload.main_rows) for k in ("stock_quantity", "reorder_level")))
             )
         )
-        is_custom_pharm_report = is_pharm_sales or is_pharm_inv or is_pharm_exp
+        is_pharm_pl = bool(
+            not is_pharm_sales and not is_pharm_exp and not is_pharm_inv and (
+                (payload.title and ("Profit & Loss" in payload.title or "Profit and Loss" in payload.title)) or 
+                (payload.main_table_title and ("Profit & Loss" in payload.main_table_title or "Profit and Loss" in payload.main_table_title)) or
+                (payload.main_rows and {"total_sales", "total_cost", "gross_profit"}.issubset(ReportExportService._extract_headers(payload.main_rows)))
+            )
+        )
+        is_custom_pharm_report = is_pharm_sales or is_pharm_inv or is_pharm_exp or is_pharm_pl
 
         # Filters and Summary
         ReportExportService._render_summary(elements, "Applied Filters", payload.filters, styles)

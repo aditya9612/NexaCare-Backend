@@ -419,15 +419,27 @@ async def get_pharmacy_profit_loss(
     start_date: date | None = Query(None, description="Start date for the report (YYYY-MM-DD)."),
     end_date: date | None = Query(None, description="End date for the report (YYYY-MM-DD)."),
     format: ReportFormat = Query(ReportFormat.JSON, description="Output format (json, pdf, csv). Default is json."),
+    export_format: ReportFormat | None = Query(None, description="Alternative alias for format (pdf, csv, json)"),
     download: bool = Query(False, description="Set to true to force download as an attachment. Default is false."),
     _: User = Depends(require_permission("pharmacy", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user)
+    hospital_name = None
+    hospital_logo = None
+    if hospital_id:
+        from app.repositories.hospital_repository import HospitalRepository
+        hospital = await HospitalRepository(db).get_by_id(hospital_id)
+        if hospital:
+            hospital_name = hospital.name
+            logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
+            hospital_logo = ReportExportService.resolve_hospital_logo(logo_attr)
+
     if start_date and end_date:
         if start_date > end_date:
             raise HTTPException(status_code=400, detail="start_date cannot be greater than end_date")
         s_date = start_date
         e_date = end_date
+        effective_period = None
     else:
         today = date.today()
         effective_period = period or "monthly"
@@ -447,10 +459,25 @@ async def get_pharmacy_profit_loss(
         else:
             raise HTTPException(status_code=400, detail="Invalid period value. Must be daily, monthly, yearly, or all.")
 
+    filters = {}
+    if s_date and e_date:
+        filters["Date Range"] = f"{s_date.strftime('%Y-%m-%d')} to {e_date.strftime('%Y-%m-%d')}"
+    elif effective_period:
+        filters["Period"] = effective_period.capitalize()
+
     data = await ReportService(db).get_pharmacy_profit_loss(s_date, e_date, hospital_id=hospital_id)
+    active_format = export_format or format
+    payload = ReportService.build_export_payload(
+        "Pharmacy Profit & Loss Report",
+        data,
+        filters=filters,
+        main_table_title="Pharmacy Profit & Loss Report",
+        hospital_name=hospital_name,
+        hospital_logo=hospital_logo,
+    )
     return export_response(
-        ReportService.build_export_payload("Pharmacy Profit and Loss", data),
-        format,
+        payload,
+        active_format,
         download,
         "pharmacy-profit-loss",
         data,

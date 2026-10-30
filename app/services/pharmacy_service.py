@@ -525,6 +525,14 @@ class PharmacyService:
         current_user: Any | None = None,
     ):
         hospital_id = resolve_tenant_id(current_user)
+
+        # Validate doctor_id against tenant hospital
+        if doctor_id is not None:
+            from app.repositories.doctor_repository import DoctorRepository
+            doctor = await DoctorRepository(self.db).get_by_id(doctor_id, hospital_id=hospital_id)
+            if not doctor:
+                raise NotFoundException("Doctor not found")
+
         if assigned_patient_ids == []:
             return PrescriptionListResponse(
                 items=[],

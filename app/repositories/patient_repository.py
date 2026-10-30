@@ -16,6 +16,7 @@ class PatientRepository:
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
         hospital_id: int | None = None,
+        doctor_id: int | None = None,
     ):
         query = select(Patient).where(Patient.is_deleted.is_(False))
         if hospital_id is not None:
@@ -31,6 +32,15 @@ class PatientRepository:
                 NursePatientAssignment.nurse_id == nurse_id,
                 NursePatientAssignment.status == "Active"
             )
+        if doctor_id is not None:
+            query = query.where(
+                select(Appointment.id)
+                .where(
+                    Appointment.patient_id == Patient.id,
+                    Appointment.doctor_id == doctor_id,
+                )
+                .exists()
+            )
         return query
 
     async def list_all(
@@ -44,9 +54,15 @@ class PatientRepository:
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
         hospital_id: int | None = None,
+        doctor_id: int | None = None,
     ) -> list[Patient]:
         from datetime import datetime, time
-        query = self._base_query(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
+        query = self._base_query(
+            nurse_id=nurse_id,
+            allowed_patient_ids=allowed_patient_ids,
+            hospital_id=hospital_id,
+            doctor_id=doctor_id,
+        )
         if start_date:
             start_dt = datetime.combine(start_date, time.min)
             query = query.where(Patient.created_at >= start_dt)
@@ -66,6 +82,7 @@ class PatientRepository:
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
         hospital_id: int | None = None,
+        doctor_id: int | None = None,
     ) -> int:
         from datetime import datetime, time
         query = select(func.count()).select_from(Patient).where(Patient.is_deleted.is_(False))
@@ -81,6 +98,15 @@ class PatientRepository:
             ).where(
                 NursePatientAssignment.nurse_id == nurse_id,
                 NursePatientAssignment.status == "Active"
+            )
+        if doctor_id is not None:
+            query = query.where(
+                select(Appointment.id)
+                .where(
+                    Appointment.patient_id == Patient.id,
+                    Appointment.doctor_id == doctor_id,
+                )
+                .exists()
             )
         if start_date:
             start_dt = datetime.combine(start_date, time.min)
@@ -284,6 +310,7 @@ class PatientRepository:
         nurse_id: int | None = None,
         allowed_patient_ids: list[int] | None = None,
         hospital_id: int | None = None,
+        doctor_id: int | None = None,
     ) -> dict[str, int]:
         from datetime import datetime, time
         import calendar
@@ -339,6 +366,15 @@ class PatientRepository:
                 NursePatientAssignment.nurse_id == nurse_id,
                 NursePatientAssignment.status == "Active"
             )
+        if doctor_id is not None:
+            query = query.where(
+                select(Appointment.id)
+                .where(
+                    Appointment.patient_id == Patient.id,
+                    Appointment.doctor_id == doctor_id,
+                )
+                .exists()
+            )
         
         result = await self.db.execute(query)
         row = result.one()
@@ -353,6 +389,8 @@ class PatientRepository:
         )
         if hospital_id is not None:
             admitted_subq = admitted_subq.where(Appointment.hospital_id == hospital_id)
+        if doctor_id is not None:
+            admitted_subq = admitted_subq.where(Appointment.doctor_id == doctor_id)
 
         occupied_bed_subq = (
             select(Bed.patient_id)
@@ -385,6 +423,15 @@ class PatientRepository:
             ).where(
                 NursePatientAssignment.nurse_id == nurse_id,
                 NursePatientAssignment.status == "Active",
+            )
+        if doctor_id is not None:
+            ipd_query = ipd_query.where(
+                select(Appointment.id)
+                .where(
+                    Appointment.patient_id == Patient.id,
+                    Appointment.doctor_id == doctor_id,
+                )
+                .exists()
             )
         ipd_count = await self.db.scalar(ipd_query) or 0
 
@@ -421,11 +468,13 @@ class PatientRepository:
                 NursePatientAssignment.nurse_id == nurse_id,
                 NursePatientAssignment.status == "Active",
             )
+        if doctor_id is not None:
+            opd_query = opd_query.where(Appointment.doctor_id == doctor_id)
         opd_count = await self.db.scalar(opd_query) or 0
 
         # 4. today_discharge: Unique patients actually discharged today
         today_discharge_count = await DischargeRepository(self.db).count_today_discharged(
-            on_date=today, nurse_id=nurse_id, hospital_id=hospital_id
+            on_date=today, nurse_id=nurse_id, hospital_id=hospital_id, doctor_id=doctor_id
         )
 
         return {

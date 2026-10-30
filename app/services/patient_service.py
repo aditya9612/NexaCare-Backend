@@ -161,12 +161,21 @@ class PatientService:
         sort_order: str = "desc",
         start_date: date | None = None,
         end_date: date | None = None,
+        doctor_id: int | None = None,
         current_user = None,
     ):
         if start_date and end_date and start_date > end_date:
             raise BadRequestException("Start date cannot be greater than end date")
 
         hospital_id = self._resolve_tenant_hospital_id(current_user)
+
+        # Validate doctor_id if provided
+        if doctor_id is not None:
+            from app.repositories.doctor_repository import DoctorRepository
+            from app.core.exceptions import NotFoundException
+            doctor = await DoctorRepository(self.db).get_by_id(doctor_id, hospital_id=hospital_id)
+            if not doctor:
+                raise NotFoundException("Doctor not found")
 
         # Resolve nurse_id if role is Nurse
         nurse_id = None
@@ -216,6 +225,7 @@ class PatientService:
             nurse_id=nurse_id,
             allowed_patient_ids=allowed_patient_ids,
             hospital_id=hospital_id,
+            doctor_id=doctor_id,
         )
         total = await self.repo.count_all(
             start_date=start_date,
@@ -223,6 +233,7 @@ class PatientService:
             nurse_id=nurse_id,
             allowed_patient_ids=allowed_patient_ids,
             hospital_id=hospital_id,
+            doctor_id=doctor_id,
         )
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
@@ -232,7 +243,7 @@ class PatientService:
         paginated = build_paginated_result(
             patient_responses, total, page, size
         )
-        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
+        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id, doctor_id=doctor_id)
         return {
             "items": paginated.items,
             "total": paginated.total,

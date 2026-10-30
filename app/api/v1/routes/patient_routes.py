@@ -144,6 +144,7 @@ async def list_patients(
     sort_order: str = "desc",
     start_date: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="End date (YYYY-MM-DD)"),
+    doctor_id: int | None = Query(None, description="Filter patients by doctor ID", ge=1),
     _: User = Depends(require_permission("patients", "read")),
 ):
     result = await PatientService(db).list_patients(
@@ -153,6 +154,7 @@ async def list_patients(
         sort_order=sort_order,
         start_date=start_date,
         end_date=end_date,
+        doctor_id=doctor_id,
         current_user=current_user,
     )
     return APIResponse(message="Patients retrieved", data=result)

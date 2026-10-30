@@ -68,6 +68,8 @@ async def test_patients_export_pdf_and_excel_null_logo():
             hospital_id=hosp.id,
             phone="+919876543210",
             email=f"patient_{uid}@test.com",
+            weight=65.5,
+            blood_pressure="120/80",
             created_at=utc_now(),
         )
         db.add(p)
@@ -109,6 +111,10 @@ async def test_patients_export_pdf_and_excel_null_logo():
                 assert ws.cell(row=1, column=1).value == f"Test Hospital NullLogo {uid}"
                 assert ws.freeze_panes == "A6"
                 assert ws.cell(row=5, column=1).value == "Sr. No."
+                assert ws.cell(row=5, column=7).value == "Weight (kg)"
+                assert ws.cell(row=5, column=8).value == "Blood Pressure"
+                assert ws.cell(row=6, column=7).value == 65.5
+                assert ws.cell(row=6, column=8).value == "120/80"
 
                 # 2. Test PDF Export (Logo Null)
                 resp_pdf = await ac.get("/api/v1/patients/export?format=pdf")
@@ -147,6 +153,8 @@ async def test_hospital_logo_upload_and_export_with_logo():
             gender="Male",
             status="active",
             hospital_id=hosp.id,
+            weight=82.0,
+            blood_pressure="130/85",
             created_at=utc_now(),
         )
         db.add(p)
@@ -198,6 +206,10 @@ async def test_hospital_logo_upload_and_export_with_logo():
                 ws = excel_wb.active
                 assert ws.cell(row=1, column=1).value == f"Test Hospital WithLogo {uid}"
                 assert len(ws._images) == 1, "Excel export must contain exactly 1 embedded logo image"
+                assert ws.cell(row=5, column=7).value == "Weight (kg)"
+                assert ws.cell(row=5, column=8).value == "Blood Pressure"
+                assert ws.cell(row=6, column=7).value == 82.0
+                assert ws.cell(row=6, column=8).value == "130/85"
 
                 # 3. Test PDF Export with logo
                 resp_pdf = await ac.get("/api/v1/patients/export?format=pdf")

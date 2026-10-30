@@ -213,6 +213,8 @@
         <th class="short-col" style="width: 5%;">Gender</th>
         <th class="nowrap-col" style="width: 6%;">DOB</th>
         <th class="short-col" style="width: 4%;">Blood</th>
+        <th class="short-col" style="width: 4%;">Weight</th>
+        <th class="nowrap-col" style="width: 5%;">BP</th>
         <th class="nowrap-col" style="width: 8%;">Phone</th>
         <th class="wrap-email" style="width: 14%;">Email</th>
         <th class="wrap-address" style="width: 13%;">Full Address</th>
@@ -230,6 +232,8 @@
         <td class="short-col">{{ item.gender or "-" }}</td>
         <td class="nowrap-col">{{ item.dob or "-" }}</td>
         <td class="short-col">{{ item.blood_group or "-" }}</td>
+        <td class="short-col">{{ item.weight or "-" }}</td>
+        <td class="nowrap-col">{{ item.blood_pressure or "-" }}</td>
         <td class="nowrap-col">{{ item.phone or "-" }}</td>
         <td class="wrap-email">{{ item.email or "-" }}</td>
         <td class="wrap-address">{{ item.full_address or "-" }}</td>

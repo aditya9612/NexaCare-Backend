@@ -923,6 +923,7 @@ class BillingService:
                 reason=data.refund_reason,
                 status="completed",
                 processed_by=user_id,
+                hospital_id=invoice.hospital_id,
             )
             self.db.add(return_record)
 
@@ -1289,6 +1290,11 @@ class BillingService:
         reception_collected = round(float(data.get("today_collected_revenue", 0.0)), 2)
         reception_bills_count = int(data.get("bills_count", 0))
         reception_payment_count = int(data.get("payment_count", 0))
+        reception_refunds_issued = round(
+            float(data.get("refunds_issued", data.get("by_method", {}).get("refund", 0.0))),
+            2,
+        )
+        reception_refund_count = int(data.get("refund_count", 0))
         reception_by_method = {
             str(k): round(abs(float(v)), 2)
             for k, v in data.get("by_method", {}).items()
@@ -1296,8 +1302,8 @@ class BillingService:
         }
 
         # 2. Pharmacy Invoices & Collection Stats
-        from app.models.pharmacy_model import PharmacyInvoice
-        from sqlalchemy import select, func, case
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
+        from sqlalchemy import select, func, case, or_
 
         pharmacy_stmt = select(
             func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
@@ -1322,6 +1328,33 @@ class BillingService:
         pharm_payment_count = int(p_row[4] if (p_row and len(p_row) > 4 and p_row[4] is not None) else 0)
         pharm_collected = pharm_paid_bill
 
+        # 3. Pharmacy Returns / Refunds Query
+        pharm_ret_stmt = (
+            select(
+                func.coalesce(func.sum(PharmacyReturn.total_refund_amount), 0.0),
+                func.count(PharmacyReturn.id),
+            )
+            .outerjoin(PharmacyInvoice, PharmacyReturn.invoice_id == PharmacyInvoice.id)
+            .where(
+                PharmacyReturn.is_deleted == False,
+                PharmacyReturn.status == "completed",
+                PharmacyReturn.created_at >= start,
+                PharmacyReturn.created_at <= end,
+            )
+        )
+        if hospital_id is not None:
+            pharm_ret_stmt = pharm_ret_stmt.where(
+                or_(
+                    PharmacyReturn.hospital_id == hospital_id,
+                    PharmacyInvoice.hospital_id == hospital_id,
+                )
+            )
+
+        ret_res = await self.db.execute(pharm_ret_stmt)
+        ret_row = ret_res.first()
+        pharm_refunds_issued = round(float(ret_row[0] if (ret_row and len(ret_row) > 0 and ret_row[0] is not None) else 0.0), 2)
+        pharm_refund_count = int(ret_row[1] if (ret_row and len(ret_row) > 1 and ret_row[1] is not None) else 0)
+
         date_label = str(resolved_start) if resolved_start == resolved_end else f"{resolved_start} to {resolved_end}"
 
         reception_summary = ReceptionCollectionSummary(
@@ -1331,6 +1364,8 @@ class BillingService:
             collected_revenue=reception_collected,
             bills_count=reception_bills_count,
             payment_count=reception_payment_count,
+            refunds_issued=reception_refunds_issued,
+            refund_count=reception_refund_count,
             by_method=reception_by_method,
         )
 
@@ -1341,6 +1376,8 @@ class BillingService:
             collected_revenue=pharm_collected,
             bills_count=pharm_bills_count,
             payment_count=pharm_payment_count,
+            refunds_issued=pharm_refunds_issued,
+            refund_count=pharm_refund_count,
         )
 
         combined_total_bill = round(reception_total_bill + pharm_total_bill, 2)
@@ -1350,9 +1387,14 @@ class BillingService:
         combined_bills_count = reception_bills_count + pharm_bills_count
         combined_payment_count = reception_payment_count + pharm_payment_count
 
+        combined_refunds_issued = round(reception_refunds_issued + pharm_refunds_issued, 2)
+        combined_refund_count = reception_refund_count + pharm_refund_count
+
         combined_by_method = dict(reception_by_method)
         if pharm_collected > 0.0:
             combined_by_method["pharmacy"] = pharm_collected
+        if combined_refunds_issued > 0.0:
+            combined_by_method["refund"] = combined_refunds_issued
 
         return DailyCollectionSummary(
             date=date_label,
@@ -1367,6 +1409,8 @@ class BillingService:
             bills_count=combined_bills_count,
             total_collected=combined_collected,
             payment_count=combined_payment_count,
+            refunds_issued=combined_refunds_issued,
+            refund_count=combined_refund_count,
             by_method=combined_by_method,
             # Separate Reception / Appointment Billing & Collection
             reception_total_bill=reception_total_bill,
@@ -1375,6 +1419,8 @@ class BillingService:
             reception_collected_revenue=reception_collected,
             reception_bills_count=reception_bills_count,
             reception_payment_count=reception_payment_count,
+            reception_refunds_issued=reception_refunds_issued,
+            reception_refund_count=reception_refund_count,
             reception_by_method=reception_by_method,
             # Separate Pharmacy Billing & Collection
             pharmacy_total_bill=pharm_total_bill,
@@ -1383,6 +1429,8 @@ class BillingService:
             pharmacy_collected_revenue=pharm_collected,
             pharmacy_bills_count=pharm_bills_count,
             pharmacy_payment_count=pharm_payment_count,
+            pharmacy_refunds_issued=pharm_refunds_issued,
+            pharmacy_refund_count=pharm_refund_count,
             # Nested section objects
             reception_collection=reception_summary,
             pharmacy_collection=pharmacy_summary,

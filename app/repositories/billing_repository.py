@@ -335,6 +335,21 @@ class BillingRepository:
         net_collected = max(0.0, gross_collected - refund_total)
         total = round(net_collected, 2)
 
+        ref_cnt_stmt = (
+            select(func.count())
+            .select_from(Payment)
+            .join(Billing, Payment.billing_id == Billing.id)
+            .where(
+                Payment.is_refund.is_(True),
+                Payment.status == "completed",
+                Payment.payment_date >= start,
+                Payment.payment_date <= end,
+            )
+        )
+        if hospital_id is not None:
+            ref_cnt_stmt = ref_cnt_stmt.where(Billing.hospital_id == hospital_id)
+        refund_count = await self.db.scalar(ref_cnt_stmt)
+
         cnt_stmt = (
             select(func.count())
             .select_from(Payment)
@@ -358,6 +373,8 @@ class BillingRepository:
             "bills_count": bills_count,
             "total_collected": total,
             "payment_count": count or 0,
+            "refunds_issued": round(refund_total, 2),
+            "refund_count": int(refund_count or 0),
             "by_method": by_method,
         }
 

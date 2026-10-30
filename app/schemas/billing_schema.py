@@ -213,7 +213,14 @@ class ReceptionCollectionSummary(BaseSchema):
     collected_revenue: float = 0.0
     bills_count: int = 0
     payment_count: int = 0
+    refunds_issued: float = 0.0
+    refund_count: int = 0
     by_method: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator('total_bill', 'paid_bill', 'pending_bill', 'collected_revenue', 'refunds_issued', mode='after')
+    @classmethod
+    def round_money_fields(cls, v: float) -> float:
+        return max(0.0, round(float(v), 2))
 
 
 class PharmacyCollectionSummary(BaseSchema):
@@ -223,6 +230,13 @@ class PharmacyCollectionSummary(BaseSchema):
     collected_revenue: float = 0.0
     bills_count: int = 0
     payment_count: int = 0
+    refunds_issued: float = 0.0
+    refund_count: int = 0
+
+    @field_validator('total_bill', 'paid_bill', 'pending_bill', 'collected_revenue', 'refunds_issued', mode='after')
+    @classmethod
+    def round_money_fields(cls, v: float) -> float:
+        return max(0.0, round(float(v), 2))
 
 
 class DailyCollectionSummary(BaseSchema):
@@ -239,6 +253,8 @@ class DailyCollectionSummary(BaseSchema):
     bills_count: int = 0
     total_collected: float = 0.0
     payment_count: int = 0
+    refunds_issued: float = 0.0
+    refund_count: int = 0
     by_method: dict[str, float] = Field(default_factory=dict)
 
     # Separate Reception / Appointment Billing & Collection
@@ -248,6 +264,8 @@ class DailyCollectionSummary(BaseSchema):
     reception_collected_revenue: float = 0.0
     reception_bills_count: int = 0
     reception_payment_count: int = 0
+    reception_refunds_issued: float = 0.0
+    reception_refund_count: int = 0
     reception_by_method: dict[str, float] = Field(default_factory=dict)
 
     # Separate Pharmacy Billing & Collection
@@ -257,6 +275,8 @@ class DailyCollectionSummary(BaseSchema):
     pharmacy_collected_revenue: float = 0.0
     pharmacy_bills_count: int = 0
     pharmacy_payment_count: int = 0
+    pharmacy_refunds_issued: float = 0.0
+    pharmacy_refund_count: int = 0
 
     # Nested section objects for convenience
     reception_collection: ReceptionCollectionSummary | None = None
@@ -268,14 +288,17 @@ class DailyCollectionSummary(BaseSchema):
         "today_pending_bill",
         "today_collected_revenue",
         "total_collected",
+        "refunds_issued",
         "reception_total_bill",
         "reception_paid_bill",
         "reception_pending_bill",
         "reception_collected_revenue",
+        "reception_refunds_issued",
         "pharmacy_total_bill",
         "pharmacy_paid_bill",
         "pharmacy_pending_bill",
         "pharmacy_collected_revenue",
+        "pharmacy_refunds_issued",
         mode="after",
     )
     @classmethod

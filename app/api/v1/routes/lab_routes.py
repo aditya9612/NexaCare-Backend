@@ -13,6 +13,7 @@ from app.schemas.lab_schema import (
     RejectLabReportRequest,
     LabReportCreate,
     LabReportResponse,
+    LabReportListWithCountsResponse,
     LabTestCreate,
     LabTestResponse,
     LabTestUpdate,
@@ -445,7 +446,7 @@ async def create_lab_report(
     return APIResponse(message="Lab report created", data=report)
 
 
-@router.get("/reports", response_model=APIResponse[PaginatedResult[LabReportResponse]])
+@router.get("/reports", response_model=APIResponse[LabReportListWithCountsResponse])
 async def list_lab_reports(
     db: DbSession,
     current_user: CurrentUser,

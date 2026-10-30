@@ -97,6 +97,32 @@ class NurseHandoverNote(Base, TimestampMixin):
     nurse = relationship("Nurse", back_populates="handover_notes")
     shift = relationship("NurseShift", back_populates="handover_notes")
 
+    @property
+    def handover_id(self) -> int:
+        return self.id
+
+    @property
+    def outgoing_nurse_id(self) -> int:
+        return self.nurse_id
+
+    @property
+    def acceptance_status(self) -> str:
+        return self.status
+
+    @property
+    def patient_handovers(self) -> list[dict]:
+        if not self.patient_updates:
+            return []
+        try:
+            import json
+            parsed = json.loads(self.patient_updates)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            pass
+        return []
+
+
 
 class NursePatientAssignment(Base, TimestampMixin):
     __tablename__ = "nurse_patient_assignments"

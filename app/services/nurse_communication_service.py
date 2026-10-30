@@ -15,6 +15,7 @@ from app.schemas.nurse_communication_schema import (
     PatientUpdateCreate,
     PatientUpdateResponse,
     EmergencyAlertCreate,
+    EmergencyAlertUpdate,
     EmergencyAlertResponse,
 )
 from app.services.notification_service import NotificationService
@@ -223,6 +224,32 @@ class NurseCommunicationService:
         alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
         if not alert:
             raise NotFoundException("Emergency alert not found")
+        return EmergencyAlertResponse(
+            id=alert.id,
+            patient_id=alert.patient_id,
+            nurse_id=alert.nurse_id,
+            emergency_type=alert.emergency_type,
+            message=alert.message,
+            created_at=alert.created_at,
+        )
+
+    async def update_emergency_alert(
+        self,
+        alert_id: int,
+        data: EmergencyAlertUpdate,
+        user_id: int,
+    ) -> EmergencyAlertResponse:
+        nurse = await self._get_nurse_by_user_id(user_id)
+        alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+        if not alert:
+            raise NotFoundException("Emergency alert not found")
+
+        update_dict = data.model_dump(exclude_unset=True)
+        for key, value in update_dict.items():
+            if value is not None:
+                setattr(alert, key, value)
+
+        await self.repo.update_emergency_alert(alert)
         return EmergencyAlertResponse(
             id=alert.id,
             patient_id=alert.patient_id,

@@ -44,3 +44,8 @@ class NurseCommunicationRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def update_emergency_alert(self, emergency_alert: EmergencyAlert) -> EmergencyAlert:
+        await self.db.flush()
+        await self.db.refresh(emergency_alert)
+        return emergency_alert

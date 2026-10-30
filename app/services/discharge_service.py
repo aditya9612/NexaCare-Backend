@@ -802,30 +802,6 @@ class DischargeService:
                     "outstanding_balance": float(fb_bal),
                     "reason": f"IPD final bill #{final_bill.bill_number} has an outstanding balance of ₹{fb_bal:,.2f} (status: {final_bill.status}).",
                 })
-            else:
-                # If Razorpay payment order exists, verify it is genuinely captured & paid, not pending or failed
-                from app.models.payment_order_model import RazorpayOrder
-                rp_orders = (
-                    await self.db.scalars(
-                        select(RazorpayOrder).where(
-                            RazorpayOrder.bill_type == "ipd",
-                            RazorpayOrder.bill_id == final_bill.id,
-                        )
-                    )
-                ).all()
-                if rp_orders:
-                    has_paid = any(o.status == "paid" for o in rp_orders)
-                    if not has_paid and all(o.status in ("failed", "pending", "authorized", "created") for o in rp_orders):
-                        outstanding_bills.append({
-                            "bill_type": "ipd_final_bill",
-                            "bill_id": final_bill.id,
-                            "bill_number": final_bill.bill_number,
-                            "status": rp_orders[0].status,
-                            "total_amount": float(fb_net),
-                            "paid_amount": 0.0,
-                            "outstanding_balance": float(fb_net),
-                            "reason": f"Razorpay payment attempt for IPD final bill #{final_bill.bill_number} is unverified or failed (status: {rp_orders[0].status}).",
-                        })
 
         # 2. General Billing Records for this Admission
         from sqlalchemy import or_

@@ -974,6 +974,7 @@ class PharmacyService:
     ) -> PharmacyInvoiceResponse:
         from app.models.inventory_model import Warehouse
         from app.services.stock_movement_service import StockMovementService
+        from app.services.settings_service import SettingsService
 
         hospital_id = resolve_tenant_id(current_user)
         if hospital_id is None:
@@ -1036,12 +1037,6 @@ class PharmacyService:
                 unit_price=unit_price,
                 line_total=line_total,
             ))
-
-        from app.models.user_model import User
-        from app.services.settings_service import SettingsService
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-        from app.utils.helpers import generate_code
 
         billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
 

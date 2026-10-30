@@ -138,6 +138,7 @@ class RBACService:
             _seed_doctor_and_pharmacist_lab_permissions,
             _seed_expense_permissions,
             _seed_nurse_adesh,
+            _seed_doctor_medical_records_and_inventory_permissions,
         )
         from app.core.security import get_password_hash
         from app.models.permission_model import Permission
@@ -162,6 +163,7 @@ class RBACService:
             await _seed_lab_technician_permissions(self.repo.db)
             await _seed_doctor_and_pharmacist_lab_permissions(self.repo.db)
             await _seed_expense_permissions(self.repo.db)
+            await _seed_doctor_medical_records_and_inventory_permissions(self.repo.db)
 
             # 3. Super Admin & Hospital Admin catch-all: ensure every single permission in DB is mapped
             admin_roles_res = await self.repo.db.execute(

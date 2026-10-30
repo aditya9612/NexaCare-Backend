@@ -107,6 +107,7 @@ async def init_db():
             await _seed_lab_technician_permissions(session)
             await _seed_doctor_and_pharmacist_lab_permissions(session)
             await _seed_expense_permissions(session)
+            await _seed_doctor_medical_records_and_inventory_permissions(session)
 
             print("Running default super admin seed...")
             await _seed_default_super_admin(session)
@@ -250,7 +251,8 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
     if doc_role:
         _grant(doc_role, "appointments", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.APPROVE])
         _grant(doc_role, "patients", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
-        _grant(doc_role, "doctors", [PermissionAction.READ])
+        _grant(doc_role, "doctors", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.DELETE])
+        _grant(doc_role, "inventory", [PermissionAction.READ])
         _grant(doc_role, "nurses", [PermissionAction.READ])
         _grant(doc_role, "departments", [PermissionAction.READ])
         _grant(doc_role, "dashboard", [PermissionAction.READ])
@@ -827,3 +829,47 @@ async def _seed_doctor_and_pharmacist_lab_permissions(session: AsyncSession) -> 
             )
             if not rp.scalar_one_or_none():
                 session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+
+
+async def _seed_doctor_medical_records_and_inventory_permissions(session: AsyncSession) -> None:
+    """Grant Doctor role permissions for medical records (doctors: create, read, update, delete) and inventory (inventory: read)."""
+    from app.core.constants import PermissionAction, UserRole
+    from app.models.permission_model import Permission
+    from app.models.role_model import Role, RolePermission
+
+    result = await session.execute(select(Role).where(Role.name == UserRole.DOCTOR))
+    doc_role = result.scalar_one_or_none()
+    if not doc_role:
+        return
+
+    doc_grants = [
+        ("doctors", PermissionAction.CREATE),
+        ("doctors", PermissionAction.READ),
+        ("doctors", PermissionAction.UPDATE),
+        ("doctors", PermissionAction.DELETE),
+        ("inventory", PermissionAction.READ),
+    ]
+
+    for resource, action in doc_grants:
+        action_value = action.value if hasattr(action, "value") else action
+        perm_name = f"{resource}:{action_value}"
+        result = await session.execute(select(Permission).where(Permission.name == perm_name))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            perm = Permission(
+                name=perm_name,
+                resource=resource,
+                action=action,
+                description=f"{action_value} {resource}",
+            )
+            session.add(perm)
+            await session.flush()
+
+        rp = await session.execute(
+            select(RolePermission).where(
+                RolePermission.role_id == doc_role.id,
+                RolePermission.permission_id == perm.id,
+            )
+        )
+        if not rp.scalar_one_or_none():
+            session.add(RolePermission(role_id=doc_role.id, permission_id=perm.id))

@@ -839,13 +839,88 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(**repo_kwargs)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self, on_date: date | None = None, current_user = None) -> dict:
+    async def get_today(
+        self,
+        on_date: date | None = None,
+        current_user = None,
+        patient_id: int | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        status: str | None = None,
+        admission_status: str | None = None,
+        x_hospital_id: int | None = None,
+    ) -> dict:
         from app.core.dependencies import resolve_tenant_id
         from app.utils.helpers import get_today_ist
-        hospital_id = resolve_tenant_id(current_user)
+        hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
         if on_date is None:
             on_date = get_today_ist()
-        appointments = await self.repo.get_today(on_date, hospital_id=hospital_id)
+
+        effective_doctor_id = doctor_id
+        effective_patient_id = patient_id
+
+        if current_user:
+            role_name = ""
+            role_obj = getattr(current_user, "role", None)
+            if role_obj:
+                if isinstance(role_obj, str):
+                    role_name = role_obj.strip().lower()
+                elif hasattr(role_obj, "name"):
+                    role_name = str(role_obj.name).strip().lower()
+
+            if role_name == "doctor":
+                doctor = await self.doctor_repo.get_by_user_id(current_user.id)
+                if not doctor:
+                    return {
+                        "items": [], "total": 0, "total_appointments": 0,
+                        "total_today_appointments": 0, "total_today_tokens": 0,
+                        "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                        "completed": 0, "checked_in": 0, "checked_out": 0,
+                        "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                    }
+                if doctor_id is not None and doctor_id != doctor.id:
+                    return {
+                        "items": [], "total": 0, "total_appointments": 0,
+                        "total_today_appointments": 0, "total_today_tokens": 0,
+                        "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                        "completed": 0, "checked_in": 0, "checked_out": 0,
+                        "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                    }
+                effective_doctor_id = doctor.id
+            elif role_name == "patient":
+                from app.services.patient_service import PatientService
+                allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+                if not allowed_ids:
+                    return {
+                        "items": [], "total": 0, "total_appointments": 0,
+                        "total_today_appointments": 0, "total_today_tokens": 0,
+                        "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                        "completed": 0, "checked_in": 0, "checked_out": 0,
+                        "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                    }
+                if patient_id is not None:
+                    allowed_set = set(allowed_ids) if isinstance(allowed_ids, (list, tuple, set)) else {allowed_ids}
+                    if patient_id not in allowed_set:
+                        return {
+                            "items": [], "total": 0, "total_appointments": 0,
+                            "total_today_appointments": 0, "total_today_tokens": 0,
+                            "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                            "completed": 0, "checked_in": 0, "checked_out": 0,
+                            "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                        }
+                    effective_patient_id = patient_id
+                else:
+                    effective_patient_id = allowed_ids
+
+        appointments = await self.repo.get_today(
+            on_date=on_date,
+            hospital_id=hospital_id,
+            patient_id=effective_patient_id,
+            doctor_id=effective_doctor_id,
+            department_id=department_id,
+            status=status,
+            admission_status=admission_status,
+        )
         has_updated = False
         today = on_date
         next_num = None

@@ -347,17 +347,35 @@ class AppointmentRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_today(self, on_date: date | None = None, hospital_id: int | None = None) -> list[Appointment]:
+    async def get_today(
+        self,
+        on_date: date | None = None,
+        hospital_id: int | None = None,
+        patient_id: int | list[int] | set[int] | tuple[int, ...] | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        status: str | None = None,
+        admission_status: str | None = None,
+    ) -> list[Appointment]:
         if on_date is None:
             from app.utils.helpers import get_today_ist
             on_date = get_today_ist()
+        if patient_id is not None and isinstance(patient_id, (list, tuple, set)) and len(patient_id) == 0:
+            return []
         query = (
             select(Appointment)
             .options(joinedload(Appointment.patient))
             .where(Appointment.appointment_date == on_date)
         )
-        if hospital_id is not None:
-            query = query.where(Appointment.hospital_id == hospital_id)
+        query = self._apply_filters(
+            query=query,
+            hospital_id=hospital_id,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            status=status,
+            admission_status=admission_status,
+        )
         query = query.order_by(Appointment.appointment_time)
         result = await self.db.execute(query)
         return list(result.scalars().all())

@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -21,6 +21,26 @@ class NurseCommunicationRepository:
             .where(PatientUpdate.patient_id == patient_id)
             .order_by(PatientUpdate.created_at.desc())
         )
+        return list(result.scalars().all())
+
+    async def list_patient_updates(
+        self,
+        nurse_id: int | None = None,
+        patient_id: int | None = None,
+        severity: str | None = None,
+    ) -> list[PatientUpdate]:
+        query = (
+            select(PatientUpdate)
+            .options(joinedload(PatientUpdate.nurse).joinedload(Nurse.user))
+        )
+        if patient_id is not None:
+            query = query.where(PatientUpdate.patient_id == patient_id)
+        if nurse_id is not None:
+            query = query.where(PatientUpdate.nurse_id == nurse_id)
+        if severity is not None:
+            query = query.where(func.upper(PatientUpdate.severity) == severity.upper())
+        query = query.order_by(PatientUpdate.created_at.desc())
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def create_emergency_alert(self, emergency_alert: EmergencyAlert) -> EmergencyAlert:

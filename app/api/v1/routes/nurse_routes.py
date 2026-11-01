@@ -1010,6 +1010,22 @@ async def create_patient_update(
     return APIResponse(message="Patient update recorded successfully", data=result)
 
 
+@singular_router.get("/patient-updates", response_model=APIResponse[List[PatientUpdateResponse]])
+@router.get("/patient-updates", response_model=APIResponse[List[PatientUpdateResponse]], include_in_schema=False)
+async def list_patient_updates(
+    db: DbSession,
+    current_user: CurrentUser,
+    patient_id: int | None = Query(None, description="Filter by Patient ID"),
+    severity: str | None = Query(None, description="Filter by severity (NORMAL, WARNING, CRITICAL)"),
+):
+    result = await NurseCommunicationService(db).list_patient_updates(
+        user=current_user,
+        patient_id=patient_id,
+        severity=severity,
+    )
+    return APIResponse(message="Patient updates retrieved successfully", data=result)
+
+
 @singular_router.get("/patient-updates/{patient_id}", response_model=APIResponse[List[PatientUpdateResponse]])
 async def get_patient_updates(
     patient_id: int,

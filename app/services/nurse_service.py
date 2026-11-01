@@ -2530,6 +2530,18 @@ class NurseService:
 
         return NurseTaskResponse.model_validate(task)
 
+    async def get_task(
+        self,
+        nurse_id: int,
+        task_id: int,
+        current_user = None,
+    ) -> NurseTaskResponse:
+        await self._get_nurse_or_raise(nurse_id)
+        task = await self.task_repo.get_by_id(task_id, nurse_id)
+        if not task:
+            raise NotFoundException("Nurse task not found")
+        return NurseTaskResponse.model_validate(task)
+
     async def delete_task(
         self, nurse_id: int, task_id: int, user_id: int
     ) -> None:

@@ -489,6 +489,27 @@ async def assign_patient_to_nurse(
     return APIResponse(message="Patient assigned to nurse successfully", data=assignment)
 
 
+@router.get(
+    "/{nurse_id}/tasks/{task_id}",
+    response_model=APIResponse[NurseTaskResponse],
+    summary="Get Nurse Task",
+)
+@singular_router.get(
+    "/{nurse_id}/tasks/{task_id}",
+    response_model=APIResponse[NurseTaskResponse],
+    include_in_schema=False,
+)
+async def get_nurse_task(
+    nurse_id: int,
+    task_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    task = await NurseService(db).get_task(nurse_id=nurse_id, task_id=task_id, current_user=current_user)
+    return APIResponse(message="Nurse task retrieved successfully", data=task)
+
+
 @router.put(
     "/{nurse_id}/tasks/{task_id}/status",
     response_model=APIResponse[NurseTaskResponse],

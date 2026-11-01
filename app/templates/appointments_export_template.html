@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ hospital_name | default('NexaCare Hospital', true) }} - Appointments Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 20pt 25pt 45pt 25pt;
+    }
+
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, 'NotoSansDevanagari', 'DejaVuSans', sans-serif;
+      font-size: 7.5pt;
+      line-height: 1.3;
+      color: #333333;
+      position: relative;
+      padding-bottom: 35pt;
+    }
+
+    /* Header Section */
+    .header-table {
+      width: 100%;
+      border-bottom: 2px solid #2563eb;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+
+    .brand-title {
+      font-size: 14pt;
+      font-weight: bold;
+      color: #2563eb;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .brand-sub {
+      font-size: 8pt;
+      color: #475569;
+      margin-top: 2px;
+      line-height: 1.3;
+    }
+
+    .hospital-logo {
+      max-height: 65px;
+      max-width: 160px;
+      height: auto;
+      width: auto;
+      object-fit: contain;
+      vertical-align: middle;
+      margin-right: 12px;
+    }
+
+    .report-title {
+      font-size: 14pt;
+      font-weight: bold;
+      color: #1e293b;
+      text-align: right;
+      letter-spacing: 0.5px;
+    }
+
+    .meta-info {
+      font-size: 8pt;
+      color: #64748b;
+      text-align: right;
+      margin-top: 3px;
+    }
+
+    /* Table Styles */
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      table-layout: fixed;
+    }
+
+    thead {
+      display: table-header-group;
+    }
+
+    tr {
+      page-break-inside: avoid;
+    }
+
+    th, td {
+      border: 0.5px solid #cbd5e1;
+      padding: 4px 5px;
+      text-align: left;
+      vertical-align: top;
+      overflow: hidden;
+    }
+
+    th {
+      background-color: #2563eb;
+      color: #ffffff;
+      font-weight: bold;
+      font-size: 7.5pt;
+    }
+
+    tr:nth-child(even) {
+      background-color: #f8fafc;
+    }
+
+    .wrap-col {
+      white-space: normal;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .nowrap-col {
+      white-space: nowrap;
+    }
+
+    .center {
+      text-align: center;
+    }
+
+    /* Status Badges */
+    .badge {
+      display: inline-block;
+      padding: 1.5px 4px;
+      border-radius: 3px;
+      font-size: 6.5pt;
+      font-weight: bold;
+      text-align: center;
+      text-transform: capitalize;
+    }
+
+    .badge-confirmed { background-color: #dcfce7; color: #15803d; border: 0.5px solid #bbf7d0; }
+    .badge-pending { background-color: #fef9c3; color: #a16207; border: 0.5px solid #fef08a; }
+    .badge-completed { background-color: #e0f2fe; color: #0369a1; border: 0.5px solid #bae6fd; }
+    .badge-cancelled, .badge-no-show { background-color: #fee2e2; color: #b91c1c; border: 0.5px solid #fecaca; }
+    .badge-checked-in { background-color: #ffedd5; color: #c2410c; border: 0.5px solid #fed7aa; }
+    .badge-checked-out { background-color: #f1f5f9; color: #475569; border: 0.5px solid #e2e8f0; }
+    .badge-in-progress { background-color: #ede9fe; color: #6d28d9; border: 0.5px solid #ddd6fe; }
+    .badge-admitted { background-color: #fce7f3; color: #be185d; border: 0.5px solid #fbcfe8; }
+    .badge-waiting { background-color: #fef3c7; color: #b45309; border: 0.5px solid #fde68a; }
+    .badge-default { background-color: #f1f5f9; color: #334155; border: 0.5px solid #cbd5e1; }
+
+    /* Footer / Page Numbering */
+    .footer-table {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      border-top: 1px solid #cbd5e1;
+      padding-top: 4px;
+      font-size: 7.5pt;
+      color: #64748b;
+    }
+
+    .page-number:after {
+      content: counter(page);
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <table class="header-table" cellpadding="0" cellspacing="0">
+    <tr>
+      <td style="border: none; padding: 0; vertical-align: middle; width: 60%;">
+        <table cellpadding="0" cellspacing="0" style="border: none; width: 100%;">
+          <tr>
+            {% if logo_base64 %}
+            <td style="border: none; padding: 0 10px 0 0; width: 1px; vertical-align: middle;">
+              <img src="data:image/png;base64,{{ logo_base64 }}" class="hospital-logo" alt="Logo" />
+            </td>
+            {% endif %}
+            <td style="border: none; padding: 0; vertical-align: middle;">
+              <div class="brand-title">{{ hospital_name | default('NexaCare Hospital', true) }}</div>
+              <div class="brand-sub">
+                {% if hospital_address %}{{ hospital_address }}<br/>{% endif %}
+                {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
+                {% if hospital_email %} | Email: {{ hospital_email }}{% endif %}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+      <td style="border: none; padding: 0; vertical-align: middle; width: 40%; text-align: right;">
+        <div class="report-title">APPOINTMENT MANAGEMENT REPORT</div>
+        <div class="meta-info">
+          {% if date_range_label %}<strong>Scope:</strong> {{ date_range_label }} | {% endif %}
+          <strong>Total Records:</strong> {{ appointments|length }}<br/>
+          <strong>Generated At:</strong> {{ generated_at }}
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Data Table -->
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th class="center" style="width: 3%;">#</th>
+        <th style="width: 9%;">Appt. Number</th>
+        <th style="width: 9%;">Date & Time</th>
+        <th class="center" style="width: 5%;">Token</th>
+        <th style="width: 15%;">Patient Details</th>
+        <th style="width: 13%;">Doctor</th>
+        <th style="width: 10%;">Department</th>
+        <th style="width: 8%;">Type / Source</th>
+        <th class="center" style="width: 9%;">Status</th>
+        <th class="center" style="width: 7%;">Queue</th>
+        <th style="width: 7%;">Check-In/Out</th>
+        <th class="center" style="width: 5%;">Admission</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in appointments %}
+      <tr>
+        <td class="center">{{ loop.index }}</td>
+        <td class="wrap-col" style="font-weight: bold; color: #1e40af;">{{ a.appointment_number }}</td>
+        <td class="nowrap-col">
+          {{ a.appointment_date }}<br/>
+          <span style="color: #64748b;">{{ a.appointment_time }}</span>
+        </td>
+        <td class="center" style="font-weight: bold;">{{ a.queue_token or a.token_number or "-" }}</td>
+        <td class="wrap-col">
+          <strong>{{ a.patient_name or "-" }}</strong>
+          {% if a.patient_code %}<br/><span style="color: #64748b;">Code: {{ a.patient_code }}</span>{% endif %}
+          {% if a.patient_phone %}<br/><span style="color: #64748b;">Ph: {{ a.patient_phone }}</span>{% endif %}
+        </td>
+        <td class="wrap-col">
+          {% if a.doctor_name %}Dr. {{ a.doctor_name }}{% else %}-{% endif %}
+        </td>
+        <td class="wrap-col">{{ a.department_name or "-" }}</td>
+        <td class="wrap-col">
+          {{ a.appointment_type or "OPD" }}
+          {% if a.booking_source %}<br/><span style="color: #64748b; font-size: 6.5pt;">({{ a.booking_source }})</span>{% endif %}
+        </td>
+        <td class="center">
+          {% set st = (a.appointment_status or "Pending")|lower %}
+          {% if 'confirmed' in st %}
+            <span class="badge badge-confirmed">{{ a.appointment_status }}</span>
+          {% elif 'completed' in st %}
+            <span class="badge badge-completed">{{ a.appointment_status }}</span>
+          {% elif 'cancel' in st or 'no show' in st %}
+            <span class="badge badge-cancelled">{{ a.appointment_status }}</span>
+          {% elif 'checked-in' in st or 'check-in' in st %}
+            <span class="badge badge-checked-in">{{ a.appointment_status }}</span>
+          {% elif 'checked-out' in st or 'check-out' in st %}
+            <span class="badge badge-checked-out">{{ a.appointment_status }}</span>
+          {% elif 'progress' in st or 'consultation' in st %}
+            <span class="badge badge-in-progress">{{ a.appointment_status }}</span>
+          {% elif 'admitted' in st %}
+            <span class="badge badge-admitted">{{ a.appointment_status }}</span>
+          {% else %}
+            <span class="badge badge-pending">{{ a.appointment_status }}</span>
+          {% endif %}
+        </td>
+        <td class="center">
+          {% if a.queue_status %}
+            {% set qs = a.queue_status|upper %}
+            {% if qs == 'WAITING' %}
+              <span class="badge badge-waiting">WAITING</span>
+            {% elif qs in ['CALLED', 'IN_PROGRESS', 'IN_CONSULTATION'] %}
+              <span class="badge badge-in-progress">{{ qs }}</span>
+            {% elif qs == 'COMPLETED' %}
+              <span class="badge badge-completed">DONE</span>
+            {% elif qs == 'SKIPPED' %}
+              <span class="badge badge-default">SKIPPED</span>
+            {% elif qs == 'CANCELLED' %}
+              <span class="badge badge-cancelled">CANCELLED</span>
+            {% else %}
+              <span class="badge badge-default">{{ a.queue_status }}</span>
+            {% endif %}
+          {% else %}
+            <span style="color: #94a3b8;">-</span>
+          {% endif %}
+        </td>
+        <td class="nowrap-col" style="font-size: 6.5pt;">
+          {% if a.check_in_time %}In: {{ a.check_in_time }}<br/>{% endif %}
+          {% if a.check_out_time %}Out: {{ a.check_out_time }}{% endif %}
+          {% if not a.check_in_time and not a.check_out_time %}-{% endif %}
+        </td>
+        <td class="center">
+          {% if a.admission_status %}
+            <span class="badge badge-admitted">{{ a.admission_status }}</span>
+          {% elif a.admission_recommended %}
+            <span class="badge badge-pending">Rec.</span>
+          {% else %}
+            <span style="color: #94a3b8;">-</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="12" class="center" style="padding: 15px; color: #64748b;">No appointment records found matching the specified criteria.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Footer -->
+  <table class="footer-table" cellpadding="0" cellspacing="0">
+    <tr>
+      <td style="border: none; width: 50%;">NexaCare HMS &bull; Confidential Medical Records</td>
+      <td style="border: none; width: 50%; text-align: right;">Page <span class="page-number"></span></td>
+    </tr>
+  </table>
+</body>
+</html>

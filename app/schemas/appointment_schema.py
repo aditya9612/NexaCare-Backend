@@ -1,4 +1,5 @@
 from datetime import date, datetime, time
+from enum import Enum
 
 from pydantic import Field, field_validator, model_validator
 
@@ -364,6 +365,7 @@ class AppointmentFilterQuery(BaseSchema):
     appointment_date: date | None = None
     appointment_type: str | None = None
     booking_source: BookingSource | None = None
+    search: str | None = None
     page: int = 1
     size: int = 20
 
@@ -388,6 +390,7 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     total_scheduled: int
     completed: int
     cancelled: int
+    no_show: int = 0
     pending: int = 0
     confirmed: int = 0
     in_progress: int = 0
@@ -408,6 +411,7 @@ class TodayAppointmentsResponse(BaseSchema):
     total_today_tokens: int = 0
     today_appointments: int = 0
     cancelled: int = 0
+    no_show: int = 0
     waiting: int = 0
     completed: int = 0
     checked_in: int = 0
@@ -450,3 +454,6 @@ class ScheduledDoctorResponse(BaseSchema):
     is_available: bool
 
 
+class AppointmentExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"

@@ -161,12 +161,21 @@ class PatientService:
         sort_order: str = "desc",
         start_date: date | None = None,
         end_date: date | None = None,
+        doctor_id: int | None = None,
         current_user = None,
     ):
         if start_date and end_date and start_date > end_date:
             raise BadRequestException("Start date cannot be greater than end date")
 
         hospital_id = self._resolve_tenant_hospital_id(current_user)
+
+        # Validate doctor_id if provided
+        if doctor_id is not None:
+            from app.repositories.doctor_repository import DoctorRepository
+            from app.core.exceptions import NotFoundException
+            doctor = await DoctorRepository(self.db).get_by_id(doctor_id, hospital_id=hospital_id)
+            if not doctor:
+                raise NotFoundException("Doctor not found")
 
         # Resolve nurse_id if role is Nurse
         nurse_id = None
@@ -216,6 +225,7 @@ class PatientService:
             nurse_id=nurse_id,
             allowed_patient_ids=allowed_patient_ids,
             hospital_id=hospital_id,
+            doctor_id=doctor_id,
         )
         total = await self.repo.count_all(
             start_date=start_date,
@@ -223,6 +233,7 @@ class PatientService:
             nurse_id=nurse_id,
             allowed_patient_ids=allowed_patient_ids,
             hospital_id=hospital_id,
+            doctor_id=doctor_id,
         )
         
         patient_responses = [PatientResponse.model_validate(p) for p in items]
@@ -232,7 +243,7 @@ class PatientService:
         paginated = build_paginated_result(
             patient_responses, total, page, size
         )
-        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id)
+        stats = await self.repo.get_patient_stats(nurse_id=nurse_id, allowed_patient_ids=allowed_patient_ids, hospital_id=hospital_id, doctor_id=doctor_id)
         return {
             "items": paginated.items,
             "total": paginated.total,
@@ -554,6 +565,7 @@ class PatientService:
             "Marital Status", "Phone", "Email", "Address", "City", "State", 
             "Pincode", "Emergency Contact Name", "Emergency Contact Number", 
             "Allergies", "Medical History", "Chronic Disease", "Diagnosis *", 
+            "Weight (kg)", "Blood Pressure", 
             "Insurance Provider", "Insurance Number", "Status", "Preferred Language"
         ]
         ws.append(headers)
@@ -562,7 +574,7 @@ class PatientService:
             "John", "Doe", "Male", "1985-05-15", "O+", "Married", "9876543210", 
             "john.doe@example.com", "123 Health Street", "Mumbai", "Maharashtra", 
             "400001", "Jane Doe", "9876543211", "Peanuts", "Hypertension", "None", 
-            "Routine Checkup", "Star Health", "SH123456", "active", "English"
+            "Routine Checkup", 70.5, "120/80", "Star Health", "SH123456", "active", "English"
         ])
 
         mandatory_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
@@ -659,6 +671,12 @@ class PatientService:
             "medical history": "medical_history",
             "chronic disease": "chronic_disease",
             "diagnosis": "diagnosis",
+            "weight": "weight",
+            "weight (kg)": "weight",
+            "weight(kg)": "weight",
+            "blood pressure": "blood_pressure",
+            "blood_pressure": "blood_pressure",
+            "bp": "blood_pressure",
             "insurance provider": "insurance_provider",
             "insurance_number": "insurance_number",
             "insurance number": "insurance_number",
@@ -679,7 +697,13 @@ class PatientService:
                 if val is None or str(val).strip() == "" or str(val).strip().lower() == "none":
                     row_dict[mapped_key] = None
                 else:
-                    row_dict[mapped_key] = str(val).strip()
+                    if mapped_key == "weight":
+                        try:
+                            row_dict[mapped_key] = float(val)
+                        except (ValueError, TypeError):
+                            row_dict[mapped_key] = str(val).strip()
+                    else:
+                        row_dict[mapped_key] = str(val).strip()
 
             if not row_dict.get("status"):
                 row_dict["status"] = "active"
@@ -941,7 +965,7 @@ class PatientService:
             # Row 5: Table Headers
             headers = [
                 "Sr. No.", "Patient Code", "Full Name", "Gender", "DOB", 
-                "Blood Group", "Phone", "Email", "Full Address", 
+                "Blood Group", "Weight (kg)", "Blood Pressure", "Phone", "Email", "Full Address", 
                 "Emergency Contact", "Diagnosis", "Created At"
             ]
 
@@ -967,6 +991,8 @@ class PatientService:
                     p.gender or "",
                     str(p.dob) if p.dob else "",
                     p.blood_group or "",
+                    p.weight if p.weight is not None else "",
+                    p.blood_pressure or "",
                     p.phone or "",
                     p.email or "",
                     format_full_address(p.address, p.city, p.state, p.pincode),
@@ -976,7 +1002,7 @@ class PatientService:
                 ]
                 for col_idx, val in enumerate(row, start=1):
                     cell = ws.cell(row=row_idx, column=col_idx, value=val)
-                    if col_idx in (1, 4, 6):
+                    if col_idx in (1, 4, 6, 7, 8):
                         cell.alignment = Alignment(horizontal="center", vertical="top")
                     else:
                         cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -1034,6 +1060,8 @@ class PatientService:
                     "full_address": format_full_address(p.address, p.city, p.state, p.pincode),
                     "status": p.status,
                     "diagnosis": p.diagnosis,
+                    "weight": p.weight if p.weight is not None else "-",
+                    "blood_pressure": p.blood_pressure or "-",
                     "emergency_contact": format_emergency_contact(p.emergency_contact_name, p.emergency_contact_number, "<br/>"),
                     "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at),
                 })

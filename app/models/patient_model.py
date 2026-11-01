@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, String, Text
+from sqlalchemy import Date, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -34,6 +34,8 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
     medical_history: Mapped[str | None] = mapped_column(Text, nullable=True)
     chronic_disease: Mapped[str | None] = mapped_column(Text, nullable=True)
     diagnosis: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    blood_pressure: Mapped[str | None] = mapped_column(String(20), nullable=True)
     insurance_provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
     insurance_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)

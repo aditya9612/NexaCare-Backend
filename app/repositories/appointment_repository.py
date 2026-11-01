@@ -30,6 +30,7 @@ class AppointmentRepository:
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        search: str | None = None,
         hospital_id: int | None = None,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
@@ -47,12 +48,13 @@ class AppointmentRepository:
             admission_status=admission_status,
             triage_level=triage_level,
             disposition=disposition,
+            search=search,
             hospital_id=hospital_id,
         )
         column = getattr(Appointment, sort_by, Appointment.appointment_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
         result = await self.db.execute(query.offset(skip).limit(limit))
-        return list(result.scalars().all())
+        return list(result.scalars().unique().all())
 
     async def count_all(
         self,
@@ -68,9 +70,10 @@ class AppointmentRepository:
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        search: str | None = None,
         hospital_id: int | None = None,
     ) -> int:
-        query = select(func.count()).select_from(Appointment)
+        query = select(func.count(func.distinct(Appointment.id))).select_from(Appointment)
         query = self._apply_filters(
             query=query,
             patient_id=patient_id,
@@ -85,6 +88,7 @@ class AppointmentRepository:
             admission_status=admission_status,
             triage_level=triage_level,
             disposition=disposition,
+            search=search,
             hospital_id=hospital_id,
         )
         return await self.db.scalar(query) or 0
@@ -104,6 +108,7 @@ class AppointmentRepository:
         admission_status=None,
         triage_level=None,
         disposition=None,
+        search: str | None = None,
         hospital_id: int | None = None,
     ):
         if hospital_id is not None:
@@ -201,6 +206,24 @@ class AppointmentRepository:
             query = query.where(Appointment.triage_level == triage_level)
         if disposition:
             query = query.where(func.lower(Appointment.disposition) == func.lower(str(disposition).strip()))
+        if search and str(search).strip():
+            from app.models.patient_model import Patient
+            from app.models.doctor_model import Doctor
+            search_pattern = f"%{str(search).strip().lower()}%"
+            query = (
+                query.outerjoin(Patient, Appointment.patient_id == Patient.id)
+                .outerjoin(Doctor, Appointment.doctor_id == Doctor.id)
+                .where(
+                    or_(
+                        func.lower(Appointment.appointment_number).like(search_pattern),
+                        func.lower(Patient.first_name).like(search_pattern),
+                        func.lower(Patient.last_name).like(search_pattern),
+                        func.lower(Patient.patient_code).like(search_pattern),
+                        func.lower(Doctor.first_name).like(search_pattern),
+                        func.lower(Doctor.last_name).like(search_pattern),
+                    )
+                )
+            )
         return query
 
     async def get_by_id(self, appointment_id: int, hospital_id: int | None = None) -> Appointment | None:
@@ -524,4 +547,55 @@ class AppointmentRepository:
             query = query.where(Appointment.appointment_date == appointment_date)
             
         return await self.db.scalar(query) or 0
+
+    async def list_for_export(
+        self,
+        patient_id: int | list[int] | set[int] | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        status: str | None = None,
+        appointment_date: date | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: str | None = None,
+        admission_status: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
+        search: str | None = None,
+        hospital_id: int | None = None,
+        limit: int = 10000,
+    ) -> list[Appointment]:
+        from app.models.department_model import Department
+        from app.models.doctor_model import Doctor
+        from app.models.patient_model import Patient
+
+        query = (
+            select(Appointment)
+            .options(
+                joinedload(Appointment.patient),
+                joinedload(Appointment.doctor),
+                joinedload(Appointment.department),
+            )
+        )
+        query = self._apply_filters(
+            query=query,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            status=status,
+            appointment_date=appointment_date,
+            start_date=start_date,
+            end_date=end_date,
+            appointment_type=appointment_type,
+            booking_source=booking_source,
+            admission_status=admission_status,
+            triage_level=triage_level,
+            disposition=disposition,
+            search=search,
+            hospital_id=hospital_id,
+        )
+        query = query.order_by(Appointment.appointment_date.desc(), Appointment.appointment_time.desc()).limit(limit)
+        result = await self.db.execute(query)
+        return list(result.scalars().unique().all())
 

@@ -7,7 +7,7 @@ from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
 
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx"}
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx"}
 
 
 async def save_upload(file: UploadFile, subfolder: str) -> str:
@@ -34,5 +34,23 @@ async def save_upload(file: UploadFile, subfolder: str) -> str:
     return str(filepath).replace(os.sep, "/")
 
 
-async def save_upload_file(file: UploadFile, upload_dir: str | None = None, subfolder: str = "patients") -> str:
-    return await save_upload(file, subfolder)
+async def save_upload_file(file: UploadFile, upload_dir: str | Path | None = None, subfolder: str = "patients") -> str:
+    norm_root = Path(settings.UPLOAD_DIR).resolve()
+    if upload_dir is not None:
+        target_path = Path(upload_dir).resolve()
+        try:
+            rel = target_path.relative_to(norm_root)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid upload destination",
+            )
+
+        if target_path == norm_root:
+            target_subfolder = subfolder
+        else:
+            target_subfolder = str(rel).replace("\\", "/")
+    else:
+        target_subfolder = subfolder
+
+    return await save_upload(file, target_subfolder)

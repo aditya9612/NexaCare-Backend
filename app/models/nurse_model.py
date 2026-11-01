@@ -28,7 +28,10 @@ class Nurse(Base, TimestampMixin):
         "NurseAttendance", back_populates="nurse", cascade="all, delete-orphan"
     )
     handover_notes = relationship(
-        "NurseHandoverNote", back_populates="nurse", cascade="all, delete-orphan"
+        "NurseHandoverNote",
+        foreign_keys="NurseHandoverNote.nurse_id",
+        back_populates="nurse",
+        cascade="all, delete-orphan",
     )
     patient_assignments = relationship(
         "NursePatientAssignment", back_populates="nurse", cascade="all, delete-orphan"
@@ -93,8 +96,16 @@ class NurseHandoverNote(Base, TimestampMixin):
     patient_updates: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="Active", index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    incoming_nurse_id: Mapped[int | None] = mapped_column(
+        ForeignKey("nurses.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    patient_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
-    nurse = relationship("Nurse", back_populates="handover_notes")
+    nurse = relationship("Nurse", foreign_keys=[nurse_id], back_populates="handover_notes")
+    incoming_nurse = relationship("Nurse", foreign_keys=[incoming_nurse_id])
+    patient = relationship("Patient", foreign_keys=[patient_id])
     shift = relationship("NurseShift", back_populates="handover_notes")
 
     @property
@@ -242,8 +253,13 @@ class NurseMedicationLog(Base, TimestampMixin):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     prescription = relationship("NursePrescription", back_populates="logs")
     nurse = relationship("Nurse")
+    canceller = relationship("User", foreign_keys=[cancelled_by])
 
 
 class PatientUpdate(Base, TimestampMixin):
@@ -266,11 +282,15 @@ class EmergencyAlert(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
     nurse_id: Mapped[int] = mapped_column(ForeignKey("nurses.id", ondelete="CASCADE"), index=True)
+    appointment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     emergency_type: Mapped[str] = mapped_column(String(100), index=True)
     message: Mapped[str] = mapped_column(Text)
 
     patient = relationship("Patient")
     nurse = relationship("Nurse")
+    appointment = relationship("Appointment")
 
 
 __all__ = [

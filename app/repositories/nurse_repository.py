@@ -417,6 +417,8 @@ class NurseHandoverNoteRepository:
             select(NurseHandoverNote)
             .options(
                 selectinload(NurseHandoverNote.nurse).selectinload(Nurse.user),
+                selectinload(NurseHandoverNote.incoming_nurse).selectinload(Nurse.user),
+                selectinload(NurseHandoverNote.patient),
                 selectinload(NurseHandoverNote.shift),
             )
             .where(NurseHandoverNote.id == note_id)

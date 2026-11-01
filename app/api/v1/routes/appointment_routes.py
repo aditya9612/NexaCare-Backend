@@ -1,7 +1,7 @@
 from datetime import date, time
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Query, Response
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles
 from app.models.user_model import User
@@ -27,6 +27,7 @@ from app.schemas.appointment_schema import (
     PendingAdmissionItem,
     EmergencyTriageRequest,
     EmergencyDispositionRequest,
+    AppointmentExportFormat,
 )
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.services.appointment_service import AppointmentService
@@ -85,6 +86,8 @@ async def list_appointments(
     booking_source: BookingSource | None = None,
     triage_level: int | None = None,
     disposition: str | None = None,
+    search: str | None = None,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("appointments", "read")),
 ):
     if appointment_type:
@@ -97,10 +100,75 @@ async def list_appointments(
         date_filter=date_filter, start_date=start_date, end_date=end_date,
         appointment_type=appointment_type, booking_source=booking_source,
         admission_status=admission_status, triage_level=triage_level, disposition=disposition,
+        search=search,
         current_user=current_user,
+        x_hospital_id=x_hospital_id,
     )
     return APIResponse(message="Appointments retrieved", data=result)
 
+
+
+
+@router.get("/export")
+async def export_appointments(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: AppointmentExportFormat = Query(AppointmentExportFormat.EXCEL, description="Export format: excel or pdf"),
+    patient_id: int | None = None,
+    doctor_id: int | None = None,
+    department_id: int | None = None,
+    status: str | None = None,
+    admission_status: str | None = None,
+    appointment_date: date | None = None,
+    date_filter: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    appointment_type: str | None = None,
+    booking_source: BookingSource | None = None,
+    triage_level: int | None = None,
+    disposition: str | None = None,
+    search: str | None = None,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    """
+    Export appointment records to Excel (.xlsx) or PDF (.pdf).
+    Enforces tenant isolation, RBAC permissions, and a 10,000-record safety cap.
+    """
+    if appointment_type:
+        from app.schemas.appointment_schema import normalize_and_validate_appointment_type
+        appointment_type = normalize_and_validate_appointment_type(appointment_type)
+
+    data, media_type = await AppointmentService(db).export_appointments(
+        format_type=format.value if hasattr(format, "value") else str(format),
+        doctor_id=doctor_id,
+        department_id=department_id,
+        patient_id=patient_id,
+        status=status,
+        admission_status=admission_status,
+        appointment_date=appointment_date,
+        date_filter=date_filter,
+        start_date=start_date,
+        end_date=end_date,
+        appointment_type=appointment_type,
+        booking_source=booking_source,
+        triage_level=triage_level,
+        disposition=disposition,
+        search=search,
+        current_user=current_user,
+        x_hospital_id=x_hospital_id,
+    )
+
+    from app.utils.helpers import utc_now
+    timestamp_str = utc_now().strftime("%Y%m%d_%H%M%S")
+    ext = "xlsx" if (format == AppointmentExportFormat.EXCEL or str(format).lower() == "excel") else "pdf"
+    filename = f"appointments_export_{timestamp_str}.{ext}"
+
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 @router.get("/calendar", response_model=APIResponse[List[AppointmentResponse]])
 async def calendar_view(

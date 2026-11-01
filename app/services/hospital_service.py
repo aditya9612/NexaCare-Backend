@@ -72,16 +72,29 @@ class HospitalService:
         from app.utils.file_upload import save_upload_file
         from app.core.config import settings
 
-        if hospital.logo_path and os.path.exists(hospital.logo_path):
+        old_logo_path = hospital.logo_path
+        dest_dir = os.path.join(settings.UPLOAD_DIR, "hospitals")
+
+        logo_file_path = await save_upload_file(file, dest_dir, subfolder="hospitals")
+        hospital.logo_path = logo_file_path
+
+        try:
+            hospital = await self.repo.update(hospital)
+        except Exception:
+            hospital.logo_path = old_logo_path
+            if logo_file_path and os.path.exists(logo_file_path):
+                try:
+                    os.remove(logo_file_path)
+                except Exception:
+                    pass
+            raise
+
+        if old_logo_path and old_logo_path != logo_file_path and os.path.exists(old_logo_path):
             try:
-                os.remove(hospital.logo_path)
+                os.remove(old_logo_path)
             except Exception:
                 pass
 
-        dest_dir = os.path.join(settings.UPLOAD_DIR, "hospitals")
-        logo_file_path = await save_upload_file(file, dest_dir)
-        hospital.logo_path = logo_file_path
-        hospital = await self.repo.update(hospital)
         await self.audit_repo.create("upload_logo", "hospitals", user_id=user_id, resource_id=str(hospital.id))
         return HospitalResponse.model_validate(hospital)
 
@@ -227,4 +240,3 @@ class HospitalService:
         admin.is_active = False
         await self.db.flush()
         await self.audit_repo.create("deactivate", "users", user_id=user_id, resource_id=str(admin_id))
-

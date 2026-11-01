@@ -328,6 +328,7 @@ async def list_prescriptions(
     page: int = 1,
     size: int = 20,
     status: str | None = None,
+    doctor_id: Optional[int] = Query(None, description="Filter prescriptions by doctor ID", ge=1),
     patient_id: int | None = Query(None),
     appointment_id: int | None = Query(None),
     date: Optional[date] = Query(None, description="Filter by prescription date (YYYY-MM-DD)"),
@@ -342,7 +343,7 @@ async def list_prescriptions(
 
     role_name = current_user.role.name.lower() if current_user.role else ""
 
-    doctor_id = None
+    target_doctor_id = doctor_id
     department_id = None
     assigned_patient_ids = None
 
@@ -363,9 +364,11 @@ async def list_prescriptions(
             )
         )
         assigned_patient_ids = list(res.scalars().all())
-    elif role_name == UserRole.DOCTOR:
+    elif role_name in ("doctor", UserRole.DOCTOR.lower()):
         doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
-        doctor_id = doctor.id if doctor else None
+        if not doctor:
+            raise NotFoundException("Doctor profile not found")
+        target_doctor_id = doctor.id
 
     from datetime import date as dt_date
     resolved_start = start_date if isinstance(start_date, dt_date) else None
@@ -384,9 +387,10 @@ async def list_prescriptions(
         page=page,
         size=size,
         status=status,
-        doctor_id=doctor_id,
+        doctor_id=target_doctor_id,
         patient_id=p_id,
         appointment_id=apt_id,
+        assigned_patient_ids=assigned_patient_ids,
         start_date=resolved_start,
         end_date=resolved_end,
         current_user=current_user,

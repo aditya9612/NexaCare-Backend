@@ -7,6 +7,7 @@ from app.models.pharmacy_model import Medicine, Prescription, PrescriptionItem
 from app.models.doctor_model import Doctor
 from app.models.patient_model import Patient
 from app.models.appointment_model import Appointment
+from app.models.user_model import User
 from app.schemas.pharmacy_schema import (
     PrescriptionCreate,
     PrescriptionItemCreate,
@@ -133,10 +134,22 @@ async def test_create_prescription_with_both_meal_timing_and_time_of_day():
     service.medicine_repo.update_reserved_stock = AsyncMock()
     service.batch_repo.get_available_batches_fefo = AsyncMock(return_value=[])
 
-    def mock_db_scalar(stmt):
-        return mock_doc
 
-    mock_db.scalar = AsyncMock(side_effect=[mock_doc, mock_pat, None]) # doctor, patient, duplicate check
+
+
+    mock_user = User(id=1, hospital_id=1)
+
+    def mock_db_scalar(stmt):
+        stmt_str = str(stmt).lower()
+        if "users" in stmt_str:
+            return mock_user
+        if "doctors" in stmt_str:
+            return mock_doc
+        if "patients" in stmt_str:
+            return mock_pat
+        return None
+
+    mock_db.scalar = AsyncMock(side_effect=mock_db_scalar)
     mock_res_appt = MagicMock()
     mock_res_appt.scalar_one_or_none.return_value = mock_appt
     mock_db.execute.return_value = mock_res_appt
@@ -210,7 +223,19 @@ async def test_create_prescription_without_optional_fields_backward_compatibilit
     service.medicine_repo.update_reserved_stock = AsyncMock()
     service.batch_repo.get_available_batches_fefo = AsyncMock(return_value=[])
 
-    mock_db.scalar = AsyncMock(side_effect=[mock_doc, mock_pat, None])
+    mock_user = User(id=1, hospital_id=1)
+
+    def mock_db_scalar(stmt):
+        stmt_str = str(stmt).lower()
+        if "users" in stmt_str:
+            return mock_user
+        if "doctors" in stmt_str:
+            return mock_doc
+        if "patients" in stmt_str:
+            return mock_pat
+        return None
+
+    mock_db.scalar = AsyncMock(side_effect=mock_db_scalar)
     mock_res_appt = MagicMock()
     mock_res_appt.scalar_one_or_none.return_value = mock_appt
     mock_db.execute.return_value = mock_res_appt

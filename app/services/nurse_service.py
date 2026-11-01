@@ -591,6 +591,51 @@ class NurseService:
         if not shift or shift.nurse_id != nurse_id:
             raise NotFoundException(f"Shift with ID {shift_id} not found for this nurse")
 
+    async def _enrich_handover_note_response(
+        self,
+        note: NurseHandoverNote,
+        incoming_nurse=None,
+        patient=None,
+        current_nurse=None,
+    ) -> NurseHandoverNoteResponse:
+        import json
+        from sqlalchemy import select
+        from app.models.patient_model import Patient
+        from app.models.nurse_model import Nurse
+        from app.models.user_model import User
+
+        resp_dict = NurseHandoverNoteResponse.model_validate(note).model_dump()
+
+        # 1. Outgoing Nurse Name
+        if not resp_dict.get("outgoing_nurse_name"):
+            creator_nurse_id = note.nurse_id
+            if creator_nurse_id:
+                stmt = select(User.full_name).join(Nurse, Nurse.user_id == User.id).where(Nurse.id == creator_nurse_id)
+                res = await self.db.execute(stmt)
+                name = res.scalar_one_or_none()
+                if name:
+                    resp_dict["outgoing_nurse_name"] = name
+
+        # 2. Incoming Nurse Name
+        inc_id = resp_dict.get("incoming_nurse_id")
+        if not resp_dict.get("incoming_nurse_name") and inc_id:
+            stmt = select(User.full_name).join(Nurse, Nurse.user_id == User.id).where(Nurse.id == inc_id)
+            res = await self.db.execute(stmt)
+            name = res.scalar_one_or_none()
+            if name:
+                resp_dict["incoming_nurse_name"] = name
+
+        # 3. Patient Name
+        pat_id = resp_dict.get("patient_id")
+        if not resp_dict.get("patient_name") and pat_id:
+            stmt = select(Patient.first_name, Patient.last_name).where(Patient.id == pat_id)
+            res = await self.db.execute(stmt)
+            row = res.first()
+            if row:
+                resp_dict["patient_name"] = f"{row[0]} {row[1]}"
+
+        return NurseHandoverNoteResponse(**resp_dict)
+
     async def create_handover_note(
         self, nurse_id: int, data: NurseHandoverNoteCreate, user_id: int
     ) -> NurseHandoverNoteResponse:
@@ -615,16 +660,47 @@ class NurseService:
         if not attendance or attendance.check_out_time is None:
             raise BadRequestException("Handover note can only be created after check-out")
 
-        # 3. Validate patient handovers if provided
+        # Resolve top-level incoming_nurse_id, patient_id, pending_tasks
+        eff_incoming_nurse_id = data.incoming_nurse_id or data.upcoming_nurse_id or data.another_nurse_id
+        eff_patient_id = data.patient_id
+        eff_pending_tasks = data.pending_tasks
+
+        incoming_nurse_obj = None
+        patient_obj = None
+
+        # Validate top-level incoming nurse if provided
+        if eff_incoming_nurse_id:
+            if eff_incoming_nurse_id == nurse_id:
+                raise BadRequestException("Incoming nurse cannot be the same as outgoing nurse")
+            incoming_nurse_obj = await self.repo.get_by_id(eff_incoming_nurse_id)
+            if not incoming_nurse_obj:
+                raise NotFoundException(f"Incoming nurse with ID {eff_incoming_nurse_id} not found")
+            if nurse.hospital_id is not None and incoming_nurse_obj.hospital_id != nurse.hospital_id:
+                raise ForbiddenException("Cross-tenant incoming nurse assignment is prohibited")
+
+        # Validate top-level patient if provided
+        if eff_patient_id:
+            stmt = select(Patient).where(
+                Patient.id == eff_patient_id,
+                Patient.is_deleted.is_(False),
+            )
+            res = await self.db.execute(stmt)
+            patient_obj = res.scalar_one_or_none()
+            if not patient_obj:
+                raise NotFoundException(f"Patient with ID {eff_patient_id} not found")
+            if nurse.hospital_id is not None and patient_obj.hospital_id != nurse.hospital_id:
+                raise ForbiddenException(f"Patient with ID {eff_patient_id} belongs to a different hospital")
+
+        # Validate patient handovers if provided
         if data.patient_handovers:
             for item in data.patient_handovers:
                 if item.incoming_nurse_id == nurse_id:
                     raise BadRequestException("Incoming nurse cannot be the same as outgoing nurse")
 
-                incoming_nurse = await self.repo.get_by_id(item.incoming_nurse_id)
-                if not incoming_nurse:
+                inc = await self.repo.get_by_id(item.incoming_nurse_id)
+                if not inc:
                     raise NotFoundException(f"Incoming nurse with ID {item.incoming_nurse_id} not found")
-                if nurse.hospital_id is not None and incoming_nurse.hospital_id != nurse.hospital_id:
+                if nurse.hospital_id is not None and inc.hospital_id != nurse.hospital_id:
                     raise ForbiddenException("Cross-tenant incoming nurse assignment is prohibited")
 
                 stmt = select(Patient).where(
@@ -632,15 +708,45 @@ class NurseService:
                     Patient.is_deleted.is_(False),
                 )
                 res = await self.db.execute(stmt)
-                patient = res.scalar_one_or_none()
-                if not patient:
+                pt = res.scalar_one_or_none()
+                if not pt:
                     raise NotFoundException(f"Patient with ID {item.patient_id} not found")
-                if nurse.hospital_id is not None and patient.hospital_id != nurse.hospital_id:
+                if nurse.hospital_id is not None and pt.hospital_id != nurse.hospital_id:
                     raise ForbiddenException(f"Patient with ID {item.patient_id} belongs to a different hospital")
 
-        dump_data = data.model_dump(exclude={"patient_handovers"})
+        # Format pending tasks string for database column
+        pending_tasks_str = None
+        if isinstance(eff_pending_tasks, list):
+            pending_tasks_str = ", ".join(eff_pending_tasks)
+        elif isinstance(eff_pending_tasks, str):
+            pending_tasks_str = eff_pending_tasks.strip()
+
+        # If patient_handovers is empty but top-level fields were provided, synthesize patient_updates
+        patient_updates_json = None
         if data.patient_handovers:
-            dump_data["patient_updates"] = json.dumps([item.model_dump() for item in data.patient_handovers])
+            patient_updates_json = json.dumps([item.model_dump() for item in data.patient_handovers])
+        elif eff_incoming_nurse_id or eff_patient_id:
+            pt_list = eff_pending_tasks if isinstance(eff_pending_tasks, list) else ([eff_pending_tasks] if eff_pending_tasks else [])
+            patient_updates_json = json.dumps([{
+                "patient_id": eff_patient_id or 0,
+                "incoming_nurse_id": eff_incoming_nurse_id or 0,
+                "patient_update": data.notes or data.summary or "Shift handover update",
+                "pending_tasks": pt_list
+            }])
+
+        dump_data = data.model_dump(exclude={
+            "patient_handovers",
+            "incoming_nurse_id",
+            "upcoming_nurse_id",
+            "another_nurse_id",
+            "patient_id",
+            "pending_tasks",
+        })
+        dump_data["incoming_nurse_id"] = eff_incoming_nurse_id
+        dump_data["patient_id"] = eff_patient_id
+        dump_data["pending_tasks"] = pending_tasks_str
+        if patient_updates_json:
+            dump_data["patient_updates"] = patient_updates_json
 
         note = NurseHandoverNote(
             nurse_id=nurse_id,
@@ -661,10 +767,14 @@ class NurseService:
                 "nurse_code": nurse.nurse_code,
                 "status_after": note.status,
                 "summary": note.summary,
-                "patient_count": len(data.patient_handovers) if data.patient_handovers else 0,
+                "incoming_nurse_id": eff_incoming_nurse_id,
+                "patient_id": eff_patient_id,
+                "patient_count": len(data.patient_handovers) if data.patient_handovers else (1 if (eff_incoming_nurse_id or eff_patient_id) else 0),
             }),
         )
-        return NurseHandoverNoteResponse.model_validate(note)
+        return await self._enrich_handover_note_response(
+            note, incoming_nurse=incoming_nurse_obj, patient=patient_obj, current_nurse=nurse
+        )
 
     async def list_handover_notes(
         self,
@@ -704,6 +814,26 @@ class NurseService:
             page,
             size,
         )
+
+    async def get_handover_note(
+        self,
+        nurse_id: int | None,
+        note_id: int,
+        current_user: User | None = None,
+        hospital_id: int | None = None,
+    ) -> NurseHandoverNoteResponse:
+        note = await self.handover_repo.get_by_id_scoped(note_id)
+        if not note:
+            raise NotFoundException("Handover note not found")
+
+        if nurse_id is not None and note.nurse_id != nurse_id:
+            raise NotFoundException("Handover note not found for this nurse")
+
+        if hospital_id is not None and note.nurse and note.nurse.hospital_id is not None:
+            if note.nurse.hospital_id != hospital_id:
+                raise ForbiddenException("Access denied: Tenant hospital mismatch")
+
+        return await self._enrich_handover_note_response(note)
 
     async def update_handover_note(
         self,
@@ -1165,16 +1295,39 @@ class NurseService:
             )
 
     async def list_patient_vitals(
-        self, patient_id: int, page: int = 1, size: int = 20
+        self,
+        patient_id: int,
+        page: int = 1,
+        size: int = 20,
+        gender: str | None = None,
+        blood_group: str | None = None,
     ):
         patient = await self.assignment_repo.get_patient_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
+
+        if gender is not None and gender.strip():
+            patient_gender = (patient.gender or "").strip().lower()
+            if patient_gender != gender.strip().lower():
+                return build_paginated_result([], 0, page, size)
+
+        if blood_group is not None and blood_group.strip():
+            patient_bg = (patient.blood_group or "").strip().lower()
+            if patient_bg != blood_group.strip().lower():
+                return build_paginated_result([], 0, page, size)
+
         skip = (page - 1) * size
         items = await self.vital_repo.list_by_patient_id(patient_id, skip=skip, limit=size)
         total = await self.vital_repo.count_by_patient_id(patient_id)
+        vital_responses = []
+        for item in items:
+            res = PatientVitalResponse.model_validate(item)
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+            vital_responses.append(res)
+
         return build_paginated_result(
-            [PatientVitalResponse.model_validate(item) for item in items],
+            vital_responses,
             total,
             page,
             size,
@@ -1738,6 +1891,152 @@ class NurseService:
             raise NotFoundException("Log not found")
         await self.db.delete(log)
         await self.db.commit()
+
+    async def get_medication_log(self, log_id: int, prescription_id: int | None = None):
+        from app.models.nurse_model import NurseMedicationLog, NursePrescription, Nurse
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.user_model import User
+        from sqlalchemy import select
+        from sqlalchemy.orm import aliased
+        from app.schemas.nurse_schema import NurseMedicationLogDetailResponse
+
+        canceller_user = aliased(User)
+        query = (
+            select(NurseMedicationLog, NursePrescription, Patient, Doctor, User, canceller_user)
+            .join(NursePrescription, NurseMedicationLog.prescription_id == NursePrescription.id)
+            .outerjoin(Patient, NursePrescription.patient_id == Patient.id)
+            .outerjoin(Doctor, NursePrescription.doctor_id == Doctor.id)
+            .outerjoin(Nurse, NurseMedicationLog.nurse_id == Nurse.id)
+            .outerjoin(User, Nurse.user_id == User.id)
+            .outerjoin(canceller_user, NurseMedicationLog.cancelled_by == canceller_user.id)
+            .where(NurseMedicationLog.id == log_id)
+        )
+        if prescription_id is not None:
+            query = query.where(NurseMedicationLog.prescription_id == prescription_id)
+
+        res = await self.db.execute(query)
+        row = res.first()
+        if not row:
+            raise NotFoundException("Medication log not found")
+
+        log, presc, patient, doctor, nurse_user, canceller_u = row
+        return NurseMedicationLogDetailResponse(
+            id=log.id,
+            prescription_id=log.prescription_id,
+            nurse_id=log.nurse_id,
+            nurse_name=nurse_user.full_name if nurse_user else None,
+            status=log.status,
+            time_of_day_slot=log.time_of_day_slot,
+            notes=log.notes,
+            timestamp=log.timestamp,
+            created_at=log.created_at,
+            cancellation_reason=log.cancellation_reason,
+            cancelled_by=log.cancelled_by,
+            cancelled_by_name=canceller_u.full_name if canceller_u else None,
+            cancelled_at=log.cancelled_at,
+            medicine_name=presc.medicine_name if presc else None,
+            dosage=presc.dosage if presc else None,
+            frequency=presc.frequency if presc else None,
+            patient_id=patient.id if patient else None,
+            patient_name=f"{patient.first_name} {patient.last_name}" if patient else None,
+            doctor_id=doctor.id if doctor else None,
+            doctor_name=f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else None,
+            meal_timing=presc.meal_timing if presc else None,
+            special_instructions=presc.special_instructions if presc else None,
+        )
+
+    async def list_medication_logs(self, prescription_id: int | None = None, patient_id: int | None = None):
+        from app.models.nurse_model import NurseMedicationLog, NursePrescription, Nurse
+        from app.models.patient_model import Patient
+        from app.models.doctor_model import Doctor
+        from app.models.user_model import User
+        from sqlalchemy import select
+        from sqlalchemy.orm import aliased
+        from app.schemas.nurse_schema import NurseMedicationLogDetailResponse
+
+        canceller_user = aliased(User)
+        query = (
+            select(NurseMedicationLog, NursePrescription, Patient, Doctor, User, canceller_user)
+            .join(NursePrescription, NurseMedicationLog.prescription_id == NursePrescription.id)
+            .outerjoin(Patient, NursePrescription.patient_id == Patient.id)
+            .outerjoin(Doctor, NursePrescription.doctor_id == Doctor.id)
+            .outerjoin(Nurse, NurseMedicationLog.nurse_id == Nurse.id)
+            .outerjoin(User, Nurse.user_id == User.id)
+            .outerjoin(canceller_user, NurseMedicationLog.cancelled_by == canceller_user.id)
+            .order_by(NurseMedicationLog.timestamp.desc())
+        )
+        if prescription_id is not None:
+            query = query.where(NurseMedicationLog.prescription_id == prescription_id)
+        if patient_id is not None:
+            query = query.where(NursePrescription.patient_id == patient_id)
+
+        res = await self.db.execute(query)
+        rows = res.all()
+
+        results = []
+        for log, presc, patient, doctor, nurse_user, canceller_u in rows:
+            results.append(
+                NurseMedicationLogDetailResponse(
+                    id=log.id,
+                    prescription_id=log.prescription_id,
+                    nurse_id=log.nurse_id,
+                    nurse_name=nurse_user.full_name if nurse_user else None,
+                    status=log.status,
+                    time_of_day_slot=log.time_of_day_slot,
+                    notes=log.notes,
+                    timestamp=log.timestamp,
+                    created_at=log.created_at,
+                    cancellation_reason=log.cancellation_reason,
+                    cancelled_by=log.cancelled_by,
+                    cancelled_by_name=canceller_u.full_name if canceller_u else None,
+                    cancelled_at=log.cancelled_at,
+                    medicine_name=presc.medicine_name if presc else None,
+                    dosage=presc.dosage if presc else None,
+                    frequency=presc.frequency if presc else None,
+                    patient_id=patient.id if patient else None,
+                    patient_name=f"{patient.first_name} {patient.last_name}" if patient else None,
+                    doctor_id=doctor.id if doctor else None,
+                    doctor_name=f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else None,
+                    meal_timing=presc.meal_timing if presc else None,
+                    special_instructions=presc.special_instructions if presc else None,
+                )
+            )
+        return results
+
+    async def cancel_medication_log(
+        self,
+        log_id: int,
+        cancellation_reason: str,
+        user_id: int,
+        prescription_id: int | None = None,
+    ):
+        from app.models.nurse_model import NurseMedicationLog
+        import datetime
+
+        log = await self.db.get(NurseMedicationLog, log_id)
+        if not log:
+            raise NotFoundException("Medication log not found")
+
+        if prescription_id is not None and log.prescription_id != prescription_id:
+            raise NotFoundException("Medication log does not belong to the specified prescription")
+
+        if log.status == "Cancelled":
+            raise BadRequestException("Medication log is already cancelled")
+
+        reason_clean = cancellation_reason.strip() if cancellation_reason else ""
+        if not reason_clean:
+            raise BadRequestException("cancellation_reason is mandatory and cannot be empty")
+
+        log.status = "Cancelled"
+        log.cancellation_reason = reason_clean
+        log.cancelled_by = user_id
+        log.cancelled_at = datetime.datetime.now()
+
+        await self.db.flush()
+        await self.db.commit()
+
+        return await self.get_medication_log(log_id=log.id, prescription_id=prescription_id)
 
     async def list_medication_schedules(self, hospital_id: int | None = None):
         from sqlalchemy import select

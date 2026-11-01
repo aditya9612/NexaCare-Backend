@@ -1,4 +1,5 @@
 from datetime import date, datetime, time
+from enum import Enum
 
 from pydantic import Field, field_validator, model_validator
 
@@ -364,6 +365,7 @@ class AppointmentFilterQuery(BaseSchema):
     appointment_date: date | None = None
     appointment_type: str | None = None
     booking_source: BookingSource | None = None
+    search: str | None = None
     page: int = 1
     size: int = 20
 
@@ -450,3 +452,6 @@ class ScheduledDoctorResponse(BaseSchema):
     is_available: bool
 
 
+class AppointmentExportFormat(str, Enum):
+    EXCEL = "excel"
+    PDF = "pdf"

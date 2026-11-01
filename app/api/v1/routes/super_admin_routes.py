@@ -23,6 +23,22 @@ async def require_super_admin(user: CurrentUser) -> User:
         raise ForbiddenException("Requires Super Admin role")
     return user
 
+
+async def require_hospital_logo_uploader(user: CurrentUser) -> User:
+    role = getattr(user, "role", None)
+    role_name = ""
+    if hasattr(role, "name"):
+        role_name = str(role.name).lower().strip()
+    elif isinstance(role, str):
+        role_name = role.lower().strip()
+    elif getattr(user, "is_superuser", False):
+        role_name = "super admin"
+
+    role_name_norm = role_name.replace("_", " ").strip()
+    if role_name_norm not in ("super admin", "hospital admin"):
+        raise ForbiddenException("Requires Super Admin or Hospital Admin role")
+    return user
+
 @router.post("/hospitals", response_model=APIResponse[HospitalResponse], status_code=201)
 async def create_hospital(
     data: HospitalCreate,
@@ -64,9 +80,32 @@ async def upload_hospital_logo(
     id: int,
     db: DbSession,
     file: UploadFile = File(...),
-    current_user: User = Depends(require_super_admin)
+    current_user: User = Depends(require_hospital_logo_uploader)
 ):
-    hospital = await HospitalService(db).upload_logo(id, file, current_user.id)
+    role = getattr(current_user, "role", None)
+    role_name = ""
+    if hasattr(role, "name"):
+        role_name = str(role.name).lower().strip()
+    elif isinstance(role, str):
+        role_name = role.lower().strip()
+    elif getattr(current_user, "is_superuser", False):
+        role_name = "super admin"
+
+    role_name_norm = role_name.replace("_", " ").strip()
+
+    if role_name_norm in ("super admin", "super_admin"):
+        effective_hospital_id = id
+    elif role_name_norm in ("hospital admin", "hospital_admin"):
+        user_hosp_id = getattr(current_user, "hospital_id", None)
+        if not user_hosp_id or user_hosp_id <= 0:
+            raise ForbiddenException("Access denied: User is not associated with a valid hospital")
+        if id != user_hosp_id:
+            raise ForbiddenException("Access denied: Cannot upload logo for another hospital")
+        effective_hospital_id = user_hosp_id
+    else:
+        raise ForbiddenException("Requires Super Admin or Hospital Admin role")
+
+    hospital = await HospitalService(db).upload_logo(effective_hospital_id, file, current_user.id)
     return APIResponse(message="Hospital logo uploaded successfully", data=hospital)
 
 @router.delete("/hospitals/{id}", response_model=APIResponse[MessageResponse])

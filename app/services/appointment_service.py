@@ -1,4 +1,6 @@
 from datetime import date, datetime, time
+from decimal import Decimal
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,8 +33,35 @@ from app.schemas.appointment_schema import (
 from app.utils.helpers import generate_appointment_number
 from app.utils.pagination import build_paginated_result
 
+_EXCEL_CONTROL_AND_WS = "".join(chr(c) for c in range(33)) + "\x7f"
+
+
+def sanitize_excel_cell(val: Any) -> Any:
+    """
+    Sanitize values written to Excel cells to prevent Formula Injection (CWE-1236).
+    If a string value (after stripping leading whitespace and ASCII control characters)
+    starts with a formula trigger character ('=', '+', '-', '@'), prepend a single quote (')
+    so that spreadsheet applications treat it strictly as literal text.
+    Numeric values (int, float, Decimal), booleans, dates, and None are preserved.
+    """
+    if val is None:
+        return val
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float, Decimal)):
+        return val
+    if isinstance(val, (date, datetime, time)):
+        return val
+
+    s = str(val)
+    stripped = s.lstrip(_EXCEL_CONTROL_AND_WS)
+    if stripped and stripped[0] in ("=", "+", "-", "@"):
+        return f"'{s}"
+    return s
+
 
 class AppointmentService:
+    sanitize_excel_cell = staticmethod(sanitize_excel_cell)
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = AppointmentRepository(db)
@@ -93,6 +122,44 @@ class AppointmentService:
 
 
 
+    async def _resolve_and_validate_tenant_id(
+        self,
+        current_user,
+        x_hospital_id: int | None = None,
+    ) -> int | None:
+        from app.core.dependencies import resolve_tenant_id
+        from app.core.exceptions import BadRequestException, ForbiddenException
+        from app.repositories.hospital_repository import HospitalRepository
+
+        role = getattr(current_user, "role", None)
+        role_name = ""
+        if hasattr(role, "name"):
+            role_name = str(role.name).lower().strip()
+        elif isinstance(role, str):
+            role_name = role.lower().strip()
+        elif getattr(current_user, "is_superuser", False):
+            role_name = "super admin"
+
+        # Patient role does not use hospital-based tenant scoping for listing (scoped by patient_id)
+        if role_name == "patient":
+            return None
+
+        # Check tenant resolution using existing resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+
+        # Super Admin MUST provide X-Hospital-Id (cannot be None) and target hospital must exist and be active
+        if role_name in ("super admin", "super_admin"):
+            if hospital_id is None:
+                raise BadRequestException("X-Hospital-Id header is required for Super Admin to access appointment records")
+
+            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
+            if not hospital:
+                raise BadRequestException(f"Hospital with ID {hospital_id} does not exist")
+            if not hospital.is_active:
+                raise BadRequestException(f"Hospital with ID {hospital_id} is inactive")
+
+        return hospital_id
+
     async def list_appointments(
         self,
         page: int = 1,
@@ -110,7 +177,9 @@ class AppointmentService:
         admission_status: str | None = None,
         triage_level: int | None = None,
         disposition: str | None = None,
+        search: str | None = None,
         current_user = None,
+        x_hospital_id: int | None = None,
     ):
         if date_filter is not None:
             valid_filters = {"today", "yesterday", "last_7_days", "last_30_days", "last_3_months", "overall", "custom"}
@@ -183,8 +252,7 @@ class AppointmentService:
             else:
                 effective_patient_id = allowed_ids
 
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
+        hospital_id = await self._resolve_and_validate_tenant_id(current_user, x_hospital_id=x_hospital_id)
 
         items = await self.repo.list_all(
             skip=skip, limit=size, patient_id=effective_patient_id, doctor_id=doctor_id,
@@ -192,7 +260,7 @@ class AppointmentService:
             start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
-            hospital_id=hospital_id,
+            search=search, hospital_id=hospital_id,
         )
         total = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id,
@@ -200,181 +268,101 @@ class AppointmentService:
             start_date=filter_start, end_date=filter_end,
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
-            hospital_id=hospital_id,
+            search=search, hospital_id=hospital_id,
         )
 
-        # --- Optimized summary counts via grouped SQL (replaces 10 sequential count_all calls) ---
-        from app.utils.helpers import utc_now
-        from sqlalchemy import and_, case, func, or_, select, text
-        # Calculate summary counts independently of pagination and status/date filters where appropriate
-        from app.utils.helpers import get_today_ist, utc_now
-        today_ist = get_today_ist()
-        today = today_ist
+        # Determine effective date boundaries for dashboard status counts:
+        # If single appointment_date is passed, use it directly.
+        # Else if filter_start or filter_end are resolved, scope to the date range.
+        # Else, status counts are all-time within tenant scope.
+        status_appt_date = appointment_date
+        status_start = filter_start if not status_appt_date else None
+        status_end = filter_end if not status_appt_date else None
 
-        def _base_filter(q):
-            """Apply patient/doctor/dept/tenant scope filters — no status/date filter."""
-            if hospital_id is not None:
-                q = q.where(Appointment.hospital_id == hospital_id)
-            if effective_patient_id:
-                if isinstance(effective_patient_id, (list, tuple, set)):
-                    q = q.where(Appointment.patient_id.in_(effective_patient_id))
-                else:
-                    q = q.where(Appointment.patient_id == effective_patient_id)
-            if doctor_id:
-                q = q.where(Appointment.doctor_id == doctor_id)
-            if department_id:
-                q = q.where(Appointment.department_id == department_id)
-            return q
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
 
-        # Query 1: aggregate over all appointments (no date/status filter) — total + today
-        q_all = _base_filter(
-            select(
-                func.count().label("total"),
-                func.sum(case((Appointment.appointment_date == today, 1), else_=0)).label("today"),
-            ).select_from(Appointment)
-        )
-        all_row = (await self.db.execute(q_all)).one()
-        total_appointments = all_row.total or 0
-        today_appointments = all_row.today or 0
-
-        # Query 2: aggregate status breakdown scoped by date & other optional filters
-        q_status = _base_filter(
-            select(
-                Appointment.appointment_status,
-                Appointment.queue_status,
-                Appointment.admission_status,
-                Appointment.admission_recommended,
-                func.count().label("cnt"),
-            ).select_from(Appointment)
-        )
-        if appointment_date:
-            q_status = q_status.where(Appointment.appointment_date == appointment_date)
-
-        rows = (await self.db.execute(q_status.group_by(
-            Appointment.appointment_status,
-            Appointment.queue_status,
-            Appointment.admission_status,
-            Appointment.admission_recommended,
-        ))).all()
-
-        # Python-side bucketing — matches the semantics of the original count_all filter branches
-        _CONFIRMED_SET = {"Confirmed", "confirmed", "CONFIRMED"}
-        _PENDING_SET = {"Pending", "pending", "PENDING"}
-        _COMPLETED_SET = {"Completed", "completed", "COMPLETED"}
-        _CANCELLED_SET = {"Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled", "No Show", "no show", "NO SHOW", "No-Show", "no-show"}
-        _CHECKED_IN_SET = {"Checked-In", "Check-in", "checked-in", "checked_in", "Check-In"}
-        _CHECKED_OUT_SET = {"Checked-Out", "Checked-out", "checked-out", "Check-out", "Check-Out"}
-        _IN_PROGRESS_STATUS = {"In-Progress", "in-progress", "In-progress", "in_progress", "In_Progress"}
-        _IN_PROGRESS_QUEUE = {"IN_CONSULTATION", "in_consultation", "IN-PROGRESS", "in-progress"}
-        _WAITING_QUEUE = {"WAITING"}
-        _ADMIT_REC_STATUS = {"Admit Recommended", "admit recommended", "Admit-Recommended", "admit-recommended", "admit_recommended"}
-        _ADMITTED_STATUS = {"Admitted", "admitted", "ADMITTED"}
-
-        completed = pending = confirmed = in_progress = checked_in = checked_out = 0
-        waiting = admit_recommended = admitted = 0
-        total_scheduled = 0
-
-        for row in rows:
-            appt_status = row.appointment_status or ""
-            queue_status = row.queue_status or ""
-            adm_status = row.admission_status or ""
-            adm_rec = bool(row.admission_recommended)
-            cnt = row.cnt
-
-            if appt_status in _COMPLETED_SET:
-                completed += cnt
-            elif appt_status in _PENDING_SET:
-                pending += cnt
-                total_scheduled += cnt
-            elif appt_status in _CONFIRMED_SET:
-                confirmed += cnt
-                total_scheduled += cnt
-            elif appt_status in _CHECKED_IN_SET:
-                checked_in += cnt
-            elif appt_status in _CHECKED_OUT_SET:
-                checked_out += cnt
-            elif appt_status in _CANCELLED_SET:
-                cancelled_no_show_cnt = cnt  # counted below in total
-                pass
-            elif appt_status in _IN_PROGRESS_STATUS or queue_status in _IN_PROGRESS_QUEUE:
-                in_progress += cnt
-            elif queue_status.upper() in _WAITING_QUEUE:
-                waiting += cnt
-            if appt_status in _ADMIT_REC_STATUS or adm_status in _ADMIT_REC_STATUS or adm_rec:
-                admit_recommended += cnt
-            if appt_status in _ADMITTED_STATUS or adm_status in _ADMITTED_STATUS:
-                admitted += cnt
-
-        # cancelled = CANCELLED + NO_SHOW statuses combined
-        cancelled = sum(
-            row.cnt for row in rows
-            if (row.appointment_status or "") in _CANCELLED_SET
-        )
+        # 1. Total appointments: all-time historical tenant total (unreduced by date)
         total_appointments = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
             hospital_id=hospital_id,
         )
+
+        # 2. Today appointments: strictly today's appointments in IST
         today_appointments = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
             appointment_date=today, hospital_id=hospital_id,
         )
+
         total_today_discharged = await self.discharge_repo.count_today_discharged(
-            on_date=today_ist, hospital_id=hospital_id
+            on_date=today, hospital_id=hospital_id
         )
+
+        # 3. Status metrics respecting the active date range & separate Cancelled / No Show:
         total_scheduled = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING], appointment_date=appointment_date,
+            status=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING],
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         completed = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.COMPLETED, appointment_date=appointment_date,
+            status=AppointmentStatus.COMPLETED,
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         cancelled = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW], appointment_date=appointment_date,
+            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW],
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         pending = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.PENDING, appointment_date=appointment_date,
+            status=AppointmentStatus.PENDING,
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         confirmed = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CONFIRMED, appointment_date=appointment_date,
+            status=AppointmentStatus.CONFIRMED,
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
-
         in_progress = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="In-Progress", appointment_date=appointment_date,
+            status="In-Progress",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         checked_in = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Check-in", appointment_date=appointment_date,
+            status="Check-in",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         checked_out = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="Checked-Out", appointment_date=appointment_date,
+            status="Checked-Out",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         admit_recommended = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admit-recommended", appointment_date=appointment_date,
+            status="admit-recommended",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         admitted = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="admitted", appointment_date=appointment_date,
+            status="admitted",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
         waiting = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status="waiting", appointment_date=appointment_date,
+            status="waiting",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
 
@@ -1935,4 +1923,376 @@ class AppointmentService:
             )
 
         return items
+
+    def _resolve_date_filter(
+        self,
+        date_filter: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> tuple[date | None, date | None]:
+        if date_filter is not None:
+            valid_filters = {"today", "yesterday", "last_7_days", "last_30_days", "last_3_months", "overall", "custom"}
+            if date_filter not in valid_filters:
+                raise BadRequestException(f"Invalid date_filter. Must be one of: {', '.join(sorted(valid_filters))}")
+
+            if date_filter == "custom":
+                if not start_date or not end_date:
+                    raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
+                if start_date > end_date:
+                    raise BadRequestException("start_date cannot be greater than end_date")
+
+        filter_start = None
+        filter_end = None
+
+        if date_filter:
+            from datetime import timedelta
+            from app.utils.helpers import get_today_ist
+            today = get_today_ist()
+
+            if date_filter == "today":
+                filter_start = today
+                filter_end = today
+            elif date_filter == "yesterday":
+                yesterday = today - timedelta(days=1)
+                filter_start = yesterday
+                filter_end = yesterday
+            elif date_filter == "last_7_days":
+                filter_start = today - timedelta(days=7)
+                filter_end = today
+            elif date_filter == "last_30_days":
+                filter_start = today - timedelta(days=30)
+                filter_end = today
+            elif date_filter == "last_3_months":
+                import calendar
+                month = today.month - 3
+                year = today.year
+                if month <= 0:
+                    year -= 1
+                    month += 12
+                day = min(today.day, calendar.monthrange(year, month)[1])
+                filter_start = date(year, month, day)
+                filter_end = today
+            elif date_filter == "custom":
+                filter_start = start_date
+                filter_end = end_date
+
+        return filter_start, filter_end
+
+    async def export_appointments(
+        self,
+        format_type: str,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        patient_id: int | None = None,
+        status: str | None = None,
+        admission_status: str | None = None,
+        appointment_date: date | None = None,
+        date_filter: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        appointment_type: str | None = None,
+        booking_source: str | None = None,
+        triage_level: int | None = None,
+        disposition: str | None = None,
+        search: str | None = None,
+        current_user = None,
+        x_hospital_id: int | None = None,
+    ) -> tuple[bytes, str]:
+        from io import BytesIO
+        from datetime import datetime
+        import os
+        from app.core.exceptions import BadRequestException, ForbiddenException
+        from app.core.dependencies import resolve_tenant_id
+        from app.utils.helpers import utc_now
+
+        # 1. Access Control
+        role_name = ""
+        if current_user:
+            role = getattr(current_user, "role", None)
+            if hasattr(role, "name"):
+                role_name = str(role.name).lower()
+            elif isinstance(role, str):
+                role_name = role.lower()
+
+        if role_name == "patient":
+            raise ForbiddenException("Patients are not authorized to export appointment records")
+
+        hospital_id = await self._resolve_and_validate_tenant_id(current_user, x_hospital_id=x_hospital_id)
+
+        # Doctor auto-scoping
+        if role_name == "doctor" and current_user:
+            from app.repositories.doctor_repository import DoctorRepository
+            doctor = await DoctorRepository(self.db).get_by_user_id(current_user.id)
+            if doctor:
+                doctor_id = doctor.id
+
+        # 2. Date Filter Resolution
+        filter_start, filter_end = self._resolve_date_filter(date_filter, start_date, end_date)
+        if not filter_start and not filter_end and (start_date or end_date):
+            filter_start = start_date
+            filter_end = end_date
+
+        # 3. Fetch Data (limit 10,000 safety guardrail)
+        appointments = await self.repo.list_for_export(
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            department_id=department_id,
+            status=status,
+            appointment_date=appointment_date,
+            start_date=filter_start,
+            end_date=filter_end,
+            appointment_type=appointment_type,
+            booking_source=booking_source,
+            admission_status=admission_status,
+            triage_level=triage_level,
+            disposition=disposition,
+            search=search,
+            hospital_id=hospital_id,
+            limit=10000,
+        )
+
+        # 4. Resolve Hospital Branding (Name, Logo, Address, Phone, Email)
+        hospital_name = None
+        hospital_address = None
+        hospital_phone = None
+        hospital_email = None
+        hospital_logo = None
+
+        if hospital_id:
+            from app.repositories.hospital_repository import HospitalRepository
+            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
+            if hospital:
+                hospital_name = hospital.name
+                hospital_address = hospital.address
+                hospital_phone = hospital.phone
+                hospital_email = hospital.email
+                logo_attr = getattr(hospital, "logo_path", None) or getattr(hospital, "logo", None)
+                if logo_attr and os.path.exists(str(logo_attr)):
+                    hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
+
+        if not hospital_logo:
+            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.exists(candidate):
+                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
+                    break
+
+        # 5. Export Format Execution
+        clean_format = str(format_type).strip().lower()
+        if clean_format not in ("excel", "pdf"):
+            raise BadRequestException("Invalid export format. Allowed formats are 'excel' and 'pdf'")
+
+        if clean_format == "excel":
+            import openpyxl
+            from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+            from openpyxl.utils import get_column_letter
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Appointments Export"
+
+            # Set header rows height
+            ws.row_dimensions[1].height = 24
+            ws.row_dimensions[2].height = 20
+            ws.row_dimensions[3].height = 18
+            ws.row_dimensions[4].height = 12
+            ws.row_dimensions[5].height = 24
+
+            # Row 1: Hospital Name
+            ws.cell(row=1, column=1, value=sanitize_excel_cell(hospital_name or "NexaCare Hospital")).font = Font(size=14, bold=True, color="2563EB")
+
+            # Row 2: Hospital Contact Info
+            sub_info = []
+            if hospital_address:
+                sub_info.append(hospital_address)
+            if hospital_phone:
+                sub_info.append(f"Phone: {hospital_phone}")
+            if hospital_email:
+                sub_info.append(f"Contact: {hospital_email}")
+            ws.cell(row=2, column=1, value=sanitize_excel_cell(" | ".join(sub_info) if sub_info else "Appointment Management System")).font = Font(size=9, italic=True, color="475569")
+
+            # Row 3: Report Title & Timestamp
+            gen_time = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+            scope_desc = ""
+            if appointment_date:
+                scope_desc = f" | Date: {appointment_date}"
+            elif filter_start and filter_end:
+                scope_desc = f" | Filter: {filter_start} to {filter_end}"
+            ws.cell(row=3, column=1, value=f"APPOINTMENT MANAGEMENT REPORT  |  Total Records: {len(appointments)}{scope_desc}  |  Generated At: {gen_time}").font = Font(size=10, bold=True, color="1E293B")
+
+            # Add Logo if available
+            if hospital_logo and os.path.exists(hospital_logo):
+                try:
+                    from openpyxl.drawing.image import Image
+                    img = Image(hospital_logo)
+                    orig_w = getattr(img, "width", 0)
+                    orig_h = getattr(img, "height", 0)
+                    max_w, max_h = 160, 65
+                    if orig_w > 0 and orig_h > 0:
+                        scale = min(max_w / orig_w, max_h / orig_h)
+                        img.width = int(orig_w * scale)
+                        img.height = int(orig_h * scale)
+                    else:
+                        img.width = 140
+                        img.height = 65
+                    ws.add_image(img, "L1")
+                except Exception:
+                    pass
+
+            # Row 5: Table Headers
+            headers = [
+                "Sr. No.", "Appointment Number", "Date", "Time", "Token",
+                "Patient Code", "Patient Name", "Patient Phone", "Doctor",
+                "Department", "Type", "Booking Source", "Status",
+                "Queue Status", "Admission Status", "Check-In Time", "Check-Out Time", "Notes"
+            ]
+
+            header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True, size=10)
+            center_align = Alignment(horizontal="center", vertical="top")
+            left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+            thin_border = Border(
+                left=Side(style="thin", color="CBD5E1"),
+                right=Side(style="thin", color="CBD5E1"),
+                top=Side(style="thin", color="CBD5E1"),
+                bottom=Side(style="thin", color="CBD5E1"),
+            )
+
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=5, column=col_idx, value=header)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center" if col_idx in (1, 3, 4, 5, 11, 12, 13, 14, 15) else "left", vertical="center", wrap_text=True)
+
+            # Data rows start at row 6
+            for sr_no, a in enumerate(appointments, start=1):
+                row_idx = sr_no + 5
+                p = a.patient
+                d = a.doctor
+                dept = a.department
+
+                p_code = p.patient_code if p else ""
+                p_name = f"{p.first_name or ''} {p.last_name or ''}".strip() if p else ""
+                p_phone = p.phone if p else ""
+
+                doc_name = f"Dr. {d.first_name} {d.last_name}" if d else ""
+                dept_name = dept.department_name if dept else ""
+
+                row_vals = [
+                    sr_no,
+                    a.appointment_number,
+                    str(a.appointment_date) if a.appointment_date else "",
+                    a.appointment_time.strftime("%H:%M") if a.appointment_time else "",
+                    a.queue_token or (str(a.token_number) if a.token_number else ""),
+                    p_code,
+                    p_name,
+                    p_phone,
+                    doc_name,
+                    dept_name,
+                    a.appointment_type or "OPD",
+                    a.booking_source or "staff",
+                    a.appointment_status or "Pending",
+                    a.queue_status or "",
+                    a.admission_status or ("Admit Recommended" if a.admission_recommended else ""),
+                    a.check_in_time.strftime("%Y-%m-%d %H:%M:%S") if a.check_in_time else "",
+                    a.check_out_time.strftime("%Y-%m-%d %H:%M:%S") if a.check_out_time else "",
+                    a.notes or "",
+                ]
+
+                for col_idx, val in enumerate(row_vals, start=1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=sanitize_excel_cell(val))
+                    cell.border = thin_border
+                    if col_idx in (1, 3, 4, 5, 11, 12, 13, 14, 15):
+                        cell.alignment = center_align
+                    else:
+                        cell.alignment = left_align
+
+            ws.freeze_panes = "A6"
+
+            # Auto-fit columns
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.row < 5:
+                        continue
+                    val_str = str(cell.value or "")
+                    if "\n" in val_str:
+                        max_len = max(max_len, max(len(l) for l in val_str.split("\n")))
+                    else:
+                        max_len = max(max_len, len(val_str))
+                ws.column_dimensions[col_letter].width = max(max_len + 3, 11)
+
+            h_name = hospital_name or "NexaCare Hospital"
+            ws.oddFooter.center.text = f"{h_name} - Appointments Report | Page &P of &N"
+
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        else:
+            # PDF Generation
+            import base64
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("appointments_export_template.html")
+
+            pdf_logo_b64 = None
+            if hospital_logo and os.path.exists(hospital_logo):
+                try:
+                    with open(hospital_logo, "rb") as f:
+                        pdf_logo_b64 = base64.b64encode(f.read()).decode("utf-8")
+                except Exception:
+                    pass
+
+            date_range_label = None
+            if appointment_date:
+                date_range_label = f"Date: {appointment_date}"
+            elif filter_start and filter_end:
+                date_range_label = f"{filter_start} to {filter_end}"
+            elif date_filter:
+                date_range_label = f"Filter: {date_filter}"
+
+            formatted_appts = []
+            for a in appointments:
+                p = a.patient
+                d = a.doctor
+                dept = a.department
+                formatted_appts.append({
+                    "appointment_number": a.appointment_number,
+                    "appointment_date": str(a.appointment_date) if a.appointment_date else "",
+                    "appointment_time": a.appointment_time.strftime("%H:%M") if a.appointment_time else "",
+                    "queue_token": a.queue_token or "",
+                    "token_number": a.token_number or "",
+                    "patient_name": f"{p.first_name or ''} {p.last_name or ''}".strip() if p else "",
+                    "patient_code": p.patient_code if p else "",
+                    "patient_phone": p.phone if p else "",
+                    "doctor_name": f"{d.first_name} {d.last_name}".strip() if d else "",
+                    "department_name": dept.department_name if dept else "",
+                    "appointment_type": a.appointment_type or "OPD",
+                    "booking_source": a.booking_source or "staff",
+                    "appointment_status": a.appointment_status or "Pending",
+                    "queue_status": a.queue_status or "",
+                    "admission_status": a.admission_status or "",
+                    "admission_recommended": bool(a.admission_recommended),
+                    "check_in_time": a.check_in_time.strftime("%H:%M") if a.check_in_time else "",
+                    "check_out_time": a.check_out_time.strftime("%H:%M") if a.check_out_time else "",
+                })
+
+            html_content = template.render(
+                hospital_name=hospital_name or "NexaCare Hospital",
+                hospital_address=hospital_address,
+                hospital_phone=hospital_phone,
+                hospital_email=hospital_email,
+                logo_base64=pdf_logo_b64,
+                appointments=formatted_appts,
+                date_range_label=date_range_label,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+
+            pdf_bytes = html_to_pdf(html_content)
+            return pdf_bytes, "application/pdf"
 

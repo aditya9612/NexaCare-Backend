@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, ForeignKey, String
+from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -7,13 +7,17 @@ from app.models.mixins import TimestampMixin
 
 class Department(Base, TimestampMixin):
     __tablename__ = "departments"
+    __table_args__ = (
+        UniqueConstraint("hospital_id", "department_name", name="uq_department_hospital_name"),
+        UniqueConstraint("hospital_id", "department_code", name="uq_department_hospital_code"),
+    )
 
     department_id: Mapped[int] = mapped_column(primary_key=True, index=True)
     hospital_id: Mapped[int | None] = mapped_column(
         ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    department_code: Mapped[str | None] = mapped_column(String(20), unique=True, index=True, nullable=True)
-    department_name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    department_code: Mapped[str | None] = mapped_column(String(20), index=True, nullable=True)
+    department_name: Mapped[str] = mapped_column(String(100), index=True)
 
     # Existing relations
     appointments = relationship("Appointment", back_populates="department")

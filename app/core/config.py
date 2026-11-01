@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    APP_NAME: str = "NesaCare HMS"
+    APP_NAME: str = "NexaCare HMS"
     APP_ENV: str = "development"
     DEBUG: bool = True
     SQLALCHEMY_ECHO: bool = True
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = "noreply@nesacare.com"
+    SMTP_FROM: str = "nexacareshekrulab@gmail.com"
 
     SMS_API_KEY: str = ""
     WHATSAPP_API_KEY: str = ""
@@ -228,8 +228,9 @@ class Settings(BaseSettings):
     ]
 
     OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5
     # Dev helper: if set, this OTP always works in non-production envs.
-    STATIC_OTP_CODE: str = "123456"
+    STATIC_OTP_CODE: str = ""
 
     # Create a default Super Admin on startup if that email is not registered yet.
     # Override SEED_SUPER_ADMIN_PASSWORD in production.

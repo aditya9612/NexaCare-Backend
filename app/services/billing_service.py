@@ -92,6 +92,8 @@ class BillingService:
         data.source = "billing"
         if billing.bill_number and str(billing.bill_number).upper().startswith("REC"):
             data.bill_type = "pharmacy"
+        elif billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
+            data.bill_type = "ipd"
         else:
             data.bill_type = "consultation"
         return data
@@ -409,7 +411,7 @@ class BillingService:
             if bt_val == "pharmacy":
                 b_query = b_query.where(func.lower(Billing.bill_number).like("rec%"))
                 p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("rec%"))
-            elif bt_val == "consultation":
+            elif bt_val in ("consultation", "consult"):
                 b_query = b_query.where(
                     or_(
                         func.lower(Billing.bill_number).like("bill%"),
@@ -422,6 +424,9 @@ class BillingService:
                         func.lower(PharmacyInvoice.invoice_number).like("bil%"),
                     )
                 )
+            elif bt_val in ("ipd", "final_bill"):
+                b_query = b_query.where(func.lower(Billing.bill_number).like("ipd%"))
+                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("ipd%"))
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -856,6 +861,19 @@ class BillingService:
         billing.paid_amount = round(billing.paid_amount + data.amount, 2)
         await self._recalculate_billing(billing)
         await self.audit_repo.create("payment", "billing", user_id=user_id, resource_id=str(billing_id))
+
+        if billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
+            from app.models.final_bill_model import IPDFinalBill
+            from sqlalchemy import select
+            fb = await self.db.scalar(select(IPDFinalBill).where(IPDFinalBill.bill_number == billing.bill_number))
+            if fb:
+                fb.balance_amount = max(0.0, billing.balance_amount)
+                if str(billing.status).lower() == "paid":
+                    fb.status = "paid"
+                    fb.payment_mode = data.payment_method
+                    fb.settled_at = utc_now()
+                    fb.settled_by = user_id
+                await self.db.flush()
 
         from app.services.transaction_history_service import TransactionHistoryService
         await TransactionHistoryService(self.db).create_event(

@@ -10,6 +10,7 @@ from app.schemas.common_schema import BaseSchema
 class BillType(str, Enum):
     PHARMACY = "pharmacy"
     CONSULTATION = "consultation"
+    IPD = "ipd"
 
 
 class BillingDateFilter(str, Enum):

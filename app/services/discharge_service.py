@@ -23,9 +23,11 @@ from app.repositories.final_bill_repository import FinalBillRepository
 from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
 from app.schemas.billing_schema import BillingCreate, BillingUpdate, BillItemCreate, PaymentCreate
 from app.schemas.discharge_schema import (
+    ActiveDischargesResponse,
     ClearBillingRequest,
     ClearPaymentRequest,
     ClearPharmacyRequest,
+    DischargeActiveSummary,
     DischargeClearanceStatus,
     DischargeGatePassResponse,
     DischargeInitiateRequest,
@@ -192,9 +194,34 @@ class DischargeService:
                 raise ForbiddenException("You do not have permission to view this discharge record")
         return DischargeResponse.model_validate(discharge)
 
-    async def list_active_discharges(self, hospital_id: int | None = None) -> list[DischargeResponse]:
+    async def list_active_discharges(self, hospital_id: int | None = None) -> ActiveDischargesResponse:
         items = await self.repo.get_all_active(hospital_id=hospital_id)
-        return [DischargeResponse.model_validate(d) for d in items]
+        serialized_items = [DischargeResponse.model_validate(d) for d in items]
+
+        active_discharges = len(items)
+        pharmacy_pending = sum(1 for d in items if not d.pharmacy_cleared)
+        billing_pending = sum(1 for d in items if not d.billing_cleared)
+        payment_pending = sum(1 for d in items if not d.payment_cleared)
+        doctor_approval_pending = sum(1 for d in items if not d.doctor_approved)
+
+        summary = DischargeActiveSummary(
+            active_discharges=active_discharges,
+            pharmacy_pending=pharmacy_pending,
+            billing_pending=billing_pending,
+            payment_pending=payment_pending,
+            doctor_approval_pending=doctor_approval_pending,
+        )
+
+        return ActiveDischargesResponse(
+            summary=summary,
+            active_discharges=active_discharges,
+            pharmacy_pending=pharmacy_pending,
+            billing_pending=billing_pending,
+            payment_pending=payment_pending,
+            doctor_approval_pending=doctor_approval_pending,
+            discharges=serialized_items,
+            items=serialized_items,
+        )
 
     async def get_clearance_status(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> DischargeClearanceStatus:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)

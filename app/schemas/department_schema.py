@@ -84,8 +84,10 @@ class DepartmentUpdate(BaseSchema):
 
 class DepartmentResponse(BaseSchema):
     department_id: int
+    hospital_id: Optional[int] = None
     department_code: Optional[str] = None
     department_name: str
     created_at: datetime
     updated_at: datetime
     staff_linked: int = 0
+

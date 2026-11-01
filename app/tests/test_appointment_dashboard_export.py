@@ -233,6 +233,7 @@ async def test_list_appointments_returns_all_12_dashboard_counts():
         assert res["checked_out"] == 1
         assert res["cancelled"] == 2  # Combined Cancelled + No Show
         assert "no_show" not in res
+        assert "total_today_appointments" not in res
         assert len(res["items"]) == 8
 
 
@@ -839,6 +840,7 @@ async def test_cancelled_count_aggregates_cancelled_and_no_show():
         assert res["total_appointments"] == 3
         assert res["cancelled"] == 3  # 2 Cancelled + 1 No Show combined
         assert "no_show" not in res
+        assert "total_today_appointments" not in res
 
         # Listing with status="Cancelled"
         res_can = await service.list_appointments(current_user=user, status="Cancelled")

@@ -23,9 +23,11 @@ from app.repositories.final_bill_repository import FinalBillRepository
 from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
 from app.schemas.billing_schema import BillingCreate, BillingUpdate, BillItemCreate, PaymentCreate
 from app.schemas.discharge_schema import (
+    ActiveDischargesResponse,
     ClearBillingRequest,
     ClearPaymentRequest,
     ClearPharmacyRequest,
+    DischargeActiveSummary,
     DischargeClearanceStatus,
     DischargeGatePassResponse,
     DischargeInitiateRequest,
@@ -192,9 +194,34 @@ class DischargeService:
                 raise ForbiddenException("You do not have permission to view this discharge record")
         return DischargeResponse.model_validate(discharge)
 
-    async def list_active_discharges(self, hospital_id: int | None = None) -> list[DischargeResponse]:
+    async def list_active_discharges(self, hospital_id: int | None = None) -> ActiveDischargesResponse:
         items = await self.repo.get_all_active(hospital_id=hospital_id)
-        return [DischargeResponse.model_validate(d) for d in items]
+        serialized_items = [DischargeResponse.model_validate(d) for d in items]
+
+        active_discharges = len(items)
+        pharmacy_pending = sum(1 for d in items if not d.pharmacy_cleared)
+        billing_pending = sum(1 for d in items if not d.billing_cleared)
+        payment_pending = sum(1 for d in items if not d.payment_cleared)
+        doctor_approval_pending = sum(1 for d in items if not d.doctor_approved)
+
+        summary = DischargeActiveSummary(
+            active_discharges=active_discharges,
+            pharmacy_pending=pharmacy_pending,
+            billing_pending=billing_pending,
+            payment_pending=payment_pending,
+            doctor_approval_pending=doctor_approval_pending,
+        )
+
+        return ActiveDischargesResponse(
+            summary=summary,
+            active_discharges=active_discharges,
+            pharmacy_pending=pharmacy_pending,
+            billing_pending=billing_pending,
+            payment_pending=payment_pending,
+            doctor_approval_pending=doctor_approval_pending,
+            discharges=serialized_items,
+            items=serialized_items,
+        )
 
     async def get_clearance_status(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> DischargeClearanceStatus:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
@@ -274,8 +301,11 @@ class DischargeService:
             raise BadRequestException("Pharmacy Clearance must be completed before generating IPD final bill.")
 
         if discharge.billing_id:
-            existing_bill = await self.db.get(Billing, discharge.billing_id)
-            if existing_bill and existing_bill.paid_amount > 0:
+            from sqlalchemy import func
+            has_actual_payments = await self.db.scalar(
+                select(func.count(Payment.id)).where(Payment.billing_id == discharge.billing_id, Payment.status == "completed")
+            )
+            if (has_actual_payments and has_actual_payments > 0) or discharge.payment_cleared:
                 raise ConflictException("Bill has already been partially or fully paid. Cannot re-generate.")
 
         # 1. Calculate length of stay in days (Calendar days with 1 day minimum)
@@ -735,8 +765,95 @@ class DischargeService:
                 )
             final_bill = await self.final_bill_repo.create(final_bill)
 
+        # 7. Synchronize with Billing model (billings & bill_items tables)
+        billing = None
+        if discharge.billing_id:
+            billing = await self.db.scalar(
+                select(Billing)
+                .options(selectinload(Billing.items))
+                .where(Billing.id == discharge.billing_id)
+            )
+
+        if not billing:
+            billing = await self.db.scalar(
+                select(Billing)
+                .options(selectinload(Billing.items))
+                .where(Billing.bill_number == final_bill.bill_number)
+            )
+
+        discount_pct = round((discount_amount / gross_total) * 100, 2) if gross_total > 0 else 0.0
+
+        if billing:
+            billing.hospital_id = final_bill.hospital_id
+            billing.patient_id = final_bill.patient_id
+            billing.appointment_id = final_bill.appointment_id
+            billing.subtotal = gross_total
+            billing.discount_percent = discount_pct
+            billing.discount_amount = discount_amount
+            billing.gst_rate = gst_rate
+            billing.gst_amount = tax_amount
+            billing.tax_amount = tax_amount
+            billing.total_amount = net_total
+            billing.paid_amount = advance_adjusted
+            billing.balance_amount = balance_amount
+            billing.status = final_bill.status
+            billing.notes = final_bill.notes
+            billing.items.clear()
+            for it in bill_items:
+                it_gst = round((it.quantity * it.unit_price * (it.gst_rate or 0.0)) / 100.0, 2)
+                it_total = round(it.quantity * it.unit_price + it_gst, 2)
+                billing.items.append(
+                    BillItem(
+                        description=str(it.description)[:255],
+                        quantity=it.quantity,
+                        unit_price=it.unit_price,
+                        gst_rate=it.gst_rate or 0.0,
+                        gst_amount=it_gst,
+                        line_total=it_total,
+                        item_type=it.item_type or "service",
+                    )
+                )
+        else:
+            billing = Billing(
+                hospital_id=final_bill.hospital_id,
+                patient_id=final_bill.patient_id,
+                appointment_id=final_bill.appointment_id,
+                bill_number=final_bill.bill_number,
+                subtotal=gross_total,
+                discount_percent=discount_pct,
+                discount_amount=discount_amount,
+                gst_rate=gst_rate,
+                gst_amount=tax_amount,
+                tax_amount=tax_amount,
+                total_amount=net_total,
+                paid_amount=advance_adjusted,
+                balance_amount=balance_amount,
+                status=final_bill.status,
+                due_date=now_dt,
+                notes=final_bill.notes,
+                created_by=user_id,
+            )
+            for it in bill_items:
+                it_gst = round((it.quantity * it.unit_price * (it.gst_rate or 0.0)) / 100.0, 2)
+                it_total = round(it.quantity * it.unit_price + it_gst, 2)
+                billing.items.append(
+                    BillItem(
+                        description=str(it.description)[:255],
+                        quantity=it.quantity,
+                        unit_price=it.unit_price,
+                        gst_rate=it.gst_rate or 0.0,
+                        gst_amount=it_gst,
+                        line_total=it_total,
+                        item_type=it.item_type or "service",
+                    )
+                )
+            self.db.add(billing)
+
+        await self.db.flush()
+
         # Link to discharge
         discharge.final_bill_id = final_bill.id
+        discharge.billing_id = billing.id
         discharge.billing_notes = f"Consolidated IPD Final Bill #{final_bill.bill_number} generated for ₹{final_bill.net_total:,.2f}"
         await self.repo.update(discharge)
         await self.db.flush()
@@ -802,30 +919,6 @@ class DischargeService:
                     "outstanding_balance": float(fb_bal),
                     "reason": f"IPD final bill #{final_bill.bill_number} has an outstanding balance of ₹{fb_bal:,.2f} (status: {final_bill.status}).",
                 })
-            else:
-                # If Razorpay payment order exists, verify it is genuinely captured & paid, not pending or failed
-                from app.models.payment_order_model import RazorpayOrder
-                rp_orders = (
-                    await self.db.scalars(
-                        select(RazorpayOrder).where(
-                            RazorpayOrder.bill_type == "ipd",
-                            RazorpayOrder.bill_id == final_bill.id,
-                        )
-                    )
-                ).all()
-                if rp_orders:
-                    has_paid = any(o.status == "paid" for o in rp_orders)
-                    if not has_paid and all(o.status in ("failed", "pending", "authorized", "created") for o in rp_orders):
-                        outstanding_bills.append({
-                            "bill_type": "ipd_final_bill",
-                            "bill_id": final_bill.id,
-                            "bill_number": final_bill.bill_number,
-                            "status": rp_orders[0].status,
-                            "total_amount": float(fb_net),
-                            "paid_amount": 0.0,
-                            "outstanding_balance": float(fb_net),
-                            "reason": f"Razorpay payment attempt for IPD final bill #{final_bill.bill_number} is unverified or failed (status: {rp_orders[0].status}).",
-                        })
 
         # 2. General Billing Records for this Admission
         from sqlalchemy import or_
@@ -849,6 +942,10 @@ class DischargeService:
             if b.id in seen_b_ids:
                 continue
             seen_b_ids.add(b.id)
+
+            # Skip the synchronized final bill billing record if final_bill is already tracked in Step 1
+            if final_bill and (b.id == discharge.billing_id or b.bill_number == final_bill.bill_number):
+                continue
 
             b_bal = Decimal(str(b.balance_amount or 0.0)).quantize(Decimal("0.01"))
             b_tot = Decimal(str(b.total_amount or 0.0)).quantize(Decimal("0.01"))
@@ -1041,6 +1138,10 @@ class DischargeService:
                 billing.paid_amount = billing.total_amount
                 billing.balance_amount = 0.0
                 billing.status = "paid"
+                await self.db.flush()
+            elif billing.status != "paid":
+                billing.status = "paid"
+                billing.balance_amount = 0.0
                 await self.db.flush()
 
                 try:

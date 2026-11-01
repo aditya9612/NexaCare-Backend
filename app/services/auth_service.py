@@ -72,7 +72,7 @@ class AuthService:
 
     async def _issue_and_deliver_otp(self, user: User, purpose: str) -> str:
         otp = generate_otp()
-        store_otp(user.email, otp, settings.OTP_EXPIRE_MINUTES, phone=user.phone)
+        await store_otp(user.email, otp, settings.OTP_EXPIRE_MINUTES, phone=user.phone)
         await deliver_otp(email=user.email, phone=user.phone, otp=otp, purpose=purpose)
         return otp
 
@@ -351,7 +351,7 @@ class AuthService:
                 raise UnauthorizedException("Account deactivated or deleted")
 
             if data.otp:
-                if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+                if not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
                     raise UnauthorizedException("Invalid credentials")
             elif not data.password or not verify_password(
                 data.password, user.hashed_password
@@ -543,7 +543,7 @@ class AuthService:
         await self._issue_and_deliver_otp(user, "password reset")
 
     async def reset_password(self, data: ResetPasswordRequest) -> None:
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+        if not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user or await self._is_user_deleted(user):
@@ -568,7 +568,7 @@ class AuthService:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
             raise NotFoundException("User not found")
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+        if not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user.is_verified = True
         await self.repo.update(user)
@@ -578,7 +578,7 @@ class AuthService:
         if not user:
             raise NotFoundException("User not found")
         if not user.is_verified:
-            if not data.otp or not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+            if not data.otp or not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
                 raise BadRequestException("Invalid or expired OTP. Please verify OTP before activating your account.")
             user.is_verified = True
         user.is_active = True
@@ -586,6 +586,9 @@ class AuthService:
 
 
     async def get_profile(self, user: User) -> UserProfileResponse:
+        role_name = user.role.name if user.role else None
+        active_hosp = getattr(user, "active_hospital_id", None)
+        hospital_id = active_hosp if active_hosp is not None else user.hospital_id
         return UserProfileResponse(
             id=user.id,
             user_code=user.user_code,
@@ -593,7 +596,9 @@ class AuthService:
             email=user.email,
             phone=user.phone,
             role_id=user.role_id,
-            role_name=user.role.name if user.role else None,
+            role_name=role_name,
+            role=role_name,
+            hospital_id=hospital_id,
             profile_image=user.profile_image,
             gender=user.gender,
             date_of_birth=user.date_of_birth,
@@ -604,6 +609,7 @@ class AuthService:
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
+
 
     async def update_profile(self, user: User, data: ProfileUpdateRequest) -> UserProfileResponse:
         if data.email is not None and data.email != user.email:

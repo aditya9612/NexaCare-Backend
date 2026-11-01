@@ -1049,6 +1049,7 @@ async def get_nurse_emergency_alert(
     return APIResponse(message="Emergency alert retrieved successfully", data=result)
 
 @singular_router.put("/emergency-alerts/{alert_id}", response_model=APIResponse[EmergencyAlertResponse])
+@singular_router.put("/emergency-alert/{alert_id}", response_model=APIResponse[EmergencyAlertResponse], include_in_schema=False)
 @router.put("/emergency-alerts/{alert_id}", response_model=APIResponse[EmergencyAlertResponse], include_in_schema=False)
 async def update_nurse_emergency_alert(
     alert_id: int,
@@ -1058,3 +1059,15 @@ async def update_nurse_emergency_alert(
 ):
     result = await NurseCommunicationService(db).update_emergency_alert(alert_id, data, current_user.id)
     return APIResponse(message="Emergency alert updated successfully", data=result)
+
+
+@singular_router.delete("/emergency-alerts/{alert_id}", response_model=APIResponse[MessageResponse])
+@singular_router.delete("/emergency-alert/{alert_id}", response_model=APIResponse[MessageResponse], include_in_schema=False)
+@router.delete("/emergency-alerts/{alert_id}", response_model=APIResponse[MessageResponse], include_in_schema=False)
+async def delete_nurse_emergency_alert(
+    alert_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    await NurseCommunicationService(db).delete_emergency_alert(alert_id, current_user.id)
+    return APIResponse(message="Emergency alert deleted successfully", data=MessageResponse(message="Emergency alert deleted successfully"))

@@ -267,8 +267,15 @@ class NurseCommunicationService:
         data: EmergencyAlertUpdate,
         user_id: int,
     ) -> EmergencyAlertResponse:
-        nurse = await self._get_nurse_by_user_id(user_id)
-        alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+        result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
+        nurse = result.scalar_one_or_none()
+        if nurse:
+            alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+            if not alert:
+                alert = await self.repo.get_emergency_alert(alert_id)
+        else:
+            alert = await self.repo.get_emergency_alert(alert_id)
+
         if not alert:
             raise NotFoundException("Emergency alert not found")
 
@@ -287,6 +294,21 @@ class NurseCommunicationService:
             message=alert.message,
             created_at=alert.created_at,
         )
+
+    async def delete_emergency_alert(self, alert_id: int, user_id: int) -> None:
+        result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
+        nurse = result.scalar_one_or_none()
+        if nurse:
+            alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+            if not alert:
+                alert = await self.repo.get_emergency_alert(alert_id)
+        else:
+            alert = await self.repo.get_emergency_alert(alert_id)
+
+        if not alert:
+            raise NotFoundException("Emergency alert not found")
+
+        await self.repo.delete_emergency_alert(alert)
 
     async def _notify_emergency_channels(self, patient_id: int, message: str, appointment_id: int | None = None) -> None:
         title = "Patient Emergency Alert"

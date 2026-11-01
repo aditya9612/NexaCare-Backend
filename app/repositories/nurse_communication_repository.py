@@ -49,3 +49,13 @@ class NurseCommunicationRepository:
         await self.db.flush()
         await self.db.refresh(emergency_alert)
         return emergency_alert
+
+    async def get_emergency_alert(self, alert_id: int) -> EmergencyAlert | None:
+        result = await self.db.execute(
+            select(EmergencyAlert).where(EmergencyAlert.id == alert_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def delete_emergency_alert(self, emergency_alert: EmergencyAlert) -> None:
+        await self.db.delete(emergency_alert)
+        await self.db.flush()

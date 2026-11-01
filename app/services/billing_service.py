@@ -1413,14 +1413,19 @@ class BillingService:
             refund_count=combined_refund_count,
             by_method=combined_by_method,
             # Separate Reception / Appointment Billing & Collection
-            reception_total_bill=reception_total_bill,
-            reception_paid_bill=reception_paid_bill,
-            reception_pending_bill=reception_pending_bill,
+            reception_today_total_bill=reception_total_bill,
+            reception_today_paid_bill=reception_paid_bill,
+            reception_today_pending_bill=reception_pending_bill,
             reception_collected_revenue=reception_collected,
+
             reception_bills_count=reception_bills_count,
             reception_payment_count=reception_payment_count,
             reception_refunds_issued=reception_refunds_issued,
             reception_refund_count=reception_refund_count,
+
+            reception_today_bills_count=reception_bills_count,
+            reception_today_payment_count=reception_payment_count,
+
             reception_by_method=reception_by_method,
             # Separate Pharmacy Billing & Collection
             pharmacy_total_bill=pharm_total_bill,

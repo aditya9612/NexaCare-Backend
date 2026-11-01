@@ -217,12 +217,26 @@ class PatientHandoverItemResponse(BaseSchema):
 
 class NurseHandoverNoteCreate(BaseSchema):
     shift_id: int = Field(..., description="Linked shift ID", gt=0)
+    incoming_nurse_id: int | None = Field(None, description="Incoming/Upcoming nurse ID (another nurse)", gt=0)
+    upcoming_nurse_id: int | None = Field(None, description="Alias for incoming_nurse_id", gt=0)
+    another_nurse_id: int | None = Field(None, description="Alias for incoming_nurse_id", gt=0)
+    patient_id: int | None = Field(None, description="Patient ID", gt=0)
+    pending_tasks: str | list[str] | None = Field(None, description="Pending tasks for incoming nurse/shift")
     handover_date: date = Field(..., description="Date of the handover")
     summary: str = Field(..., description="Summary of the shift handover", min_length=1)
     notes: str | None = Field(None, description="Additional notes")
     patient_handovers: list[PatientHandoverItemCreate] = Field(
         default_factory=list, description="List of patient-specific handovers"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            incoming = data.get("incoming_nurse_id") or data.get("upcoming_nurse_id") or data.get("another_nurse_id")
+            if incoming:
+                data["incoming_nurse_id"] = incoming
+        return data
 
     @field_validator("summary")
     @classmethod
@@ -242,11 +256,25 @@ class NurseHandoverNoteCreate(BaseSchema):
 
 class NurseHandoverNoteUpdate(BaseSchema):
     shift_id: int | None = Field(None, gt=0)
+    incoming_nurse_id: int | None = Field(None, gt=0)
+    upcoming_nurse_id: int | None = Field(None, gt=0)
+    another_nurse_id: int | None = Field(None, gt=0)
+    patient_id: int | None = Field(None, gt=0)
+    pending_tasks: str | list[str] | None = None
     handover_date: date | None = None
     summary: str | None = Field(None, min_length=1)
     status: str | None = Field(None, min_length=1, max_length=50)
     notes: str | None = None
     patient_handovers: list[PatientHandoverItemCreate] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            incoming = data.get("incoming_nurse_id") or data.get("upcoming_nurse_id") or data.get("another_nurse_id")
+            if incoming:
+                data["incoming_nurse_id"] = incoming
+        return data
 
     @field_validator("summary", "status")
     @classmethod
@@ -269,6 +297,12 @@ class NurseHandoverNoteUpdate(BaseSchema):
 class NurseHandoverNoteResponse(BaseSchema):
     handover_id: int
     outgoing_nurse_id: int
+    outgoing_nurse_name: str | None = None
+    incoming_nurse_id: int | None = None
+    incoming_nurse_name: str | None = None
+    patient_id: int | None = None
+    patient_name: str | None = None
+    pending_tasks: str | None = None
     shift_id: int | None = None
     handover_date: date
     summary: str
@@ -281,23 +315,59 @@ class NurseHandoverNoteResponse(BaseSchema):
     @model_validator(mode="before")
     @classmethod
     def populate_handover_fields(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "handover_id" not in data and "id" in data:
-                data["handover_id"] = data["id"]
-            if "outgoing_nurse_id" not in data:
-                if "nurse_id" in data:
-                    data["outgoing_nurse_id"] = data["nurse_id"]
-            if "acceptance_status" not in data:
-                if "status" in data:
-                    data["acceptance_status"] = data["status"]
-            if not data.get("patient_handovers") and data.get("patient_updates"):
-                try:
-                    import json
-                    parsed = json.loads(data["patient_updates"])
-                    if isinstance(parsed, list):
-                        data["patient_handovers"] = parsed
-                except Exception:
-                    pass
+        import json
+
+        if not isinstance(data, dict):
+            d = {
+                "handover_id": getattr(data, "handover_id", getattr(data, "id", None)),
+                "outgoing_nurse_id": getattr(data, "outgoing_nurse_id", getattr(data, "nurse_id", None)),
+                "shift_id": getattr(data, "shift_id", None),
+                "handover_date": getattr(data, "handover_date", None),
+                "summary": getattr(data, "summary", None),
+                "notes": getattr(data, "notes", None),
+                "acceptance_status": getattr(data, "acceptance_status", getattr(data, "status", "Pending")),
+                "pending_tasks": getattr(data, "pending_tasks", None),
+                "patient_handovers": getattr(data, "patient_handovers", []),
+                "created_at": getattr(data, "created_at", None),
+                "updated_at": getattr(data, "updated_at", None),
+                "outgoing_nurse_name": getattr(data, "outgoing_nurse_name", None),
+                "incoming_nurse_id": getattr(data, "incoming_nurse_id", None),
+                "incoming_nurse_name": getattr(data, "incoming_nurse_name", None),
+                "patient_id": getattr(data, "patient_id", None),
+                "patient_name": getattr(data, "patient_name", None),
+            }
+            data = d
+
+        if "handover_id" not in data and "id" in data:
+            data["handover_id"] = data["id"]
+        if "outgoing_nurse_id" not in data and "nurse_id" in data:
+            data["outgoing_nurse_id"] = data["nurse_id"]
+        if "acceptance_status" not in data and "status" in data:
+            data["acceptance_status"] = data["status"]
+
+        handovers = data.get("patient_handovers") or []
+        if not handovers and data.get("patient_updates"):
+            try:
+                parsed = json.loads(data["patient_updates"])
+                if isinstance(parsed, list):
+                    handovers = parsed
+                    data["patient_handovers"] = handovers
+            except Exception:
+                pass
+
+        if handovers and len(handovers) > 0:
+            first_item = handovers[0]
+            if not data.get("incoming_nurse_id"):
+                data["incoming_nurse_id"] = first_item.get("incoming_nurse_id")
+            if not data.get("patient_id"):
+                data["patient_id"] = first_item.get("patient_id")
+            if not data.get("pending_tasks"):
+                pt = first_item.get("pending_tasks")
+                if isinstance(pt, list):
+                    data["pending_tasks"] = ", ".join(pt)
+                elif isinstance(pt, str):
+                    data["pending_tasks"] = pt
+
         return data
 
 
@@ -483,6 +553,8 @@ class PatientVitalResponse(BaseSchema):
     notes: str | None = None
     created_at: datetime
     updated_at: datetime
+    gender: str | None = None
+    blood_group: str | None = None
 
 
 class PatientVitalUpdate(BaseSchema):
@@ -589,6 +661,18 @@ class NurseMedicationLogCreate(BaseSchema):
     timestamp: datetime | None = None
 
 
+class NurseMedicationLogCancelRequest(BaseSchema):
+    cancellation_reason: str = Field(..., min_length=1, description="Mandatory cancellation reason")
+
+    @field_validator("cancellation_reason")
+    @classmethod
+    def validate_reason(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("cancellation_reason cannot be empty or only spaces")
+        return stripped
+
+
 class NurseMedicationLogResponse(BaseSchema):
     id: int
     prescription_id: int
@@ -599,6 +683,22 @@ class NurseMedicationLogResponse(BaseSchema):
     notes: str | None = None
     timestamp: datetime
     created_at: datetime
+    cancellation_reason: str | None = None
+    cancelled_by: int | None = None
+    cancelled_by_name: str | None = None
+    cancelled_at: datetime | None = None
+
+
+class NurseMedicationLogDetailResponse(NurseMedicationLogResponse):
+    medicine_name: str | None = None
+    dosage: str | None = None
+    frequency: str | None = None
+    patient_id: int | None = None
+    patient_name: str | None = None
+    doctor_id: int | None = None
+    doctor_name: str | None = None
+    meal_timing: str | None = None
+    special_instructions: str | None = None
 
 
 class UpcomingMedicationResponse(BaseSchema):

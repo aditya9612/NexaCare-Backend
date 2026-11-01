@@ -36,6 +36,8 @@ from app.schemas.nurse_schema import (
     NursePrescriptionResponse,
     NurseMedicationLogCreate,
     NurseMedicationLogResponse,
+    NurseMedicationLogDetailResponse,
+    NurseMedicationLogCancelRequest,
     NurseDashboardResponse,
     NurseTaskCreate,
     NursePatientAssignmentCreate,
@@ -218,6 +220,7 @@ async def log_medication(
 
 
 @router.delete("/prescriptions/{prescription_id}/logs/{log_id}", response_model=APIResponse[MessageResponse])
+@singular_router.delete("/prescriptions/{prescription_id}/logs/{log_id}", response_model=APIResponse[MessageResponse], include_in_schema=False)
 async def delete_medication_log(
     prescription_id: int,
     log_id: int,
@@ -227,6 +230,94 @@ async def delete_medication_log(
 ):
     await NurseService(db).delete_medication_log(prescription_id, log_id, current_user.id)
     return APIResponse(message="Medication log deleted successfully", data=MessageResponse(message="Deleted successfully"))
+
+
+@router.get(
+    "/prescriptions/{prescription_id}/logs",
+    response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
+    summary="List Medication Logs for Prescription",
+)
+@singular_router.get(
+    "/prescriptions/{prescription_id}/logs",
+    response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
+    include_in_schema=False,
+)
+async def list_medication_logs(
+    prescription_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    logs = await NurseService(db).list_medication_logs(prescription_id=prescription_id)
+    return APIResponse(message="Medication logs retrieved successfully", data=logs)
+
+
+@router.get(
+    "/prescriptions/{prescription_id}/logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    summary="Get Medication Log Details",
+)
+@singular_router.get(
+    "/prescriptions/{prescription_id}/logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    include_in_schema=False,
+)
+async def get_medication_log(
+    prescription_id: int,
+    log_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    log = await NurseService(db).get_medication_log(log_id=log_id, prescription_id=prescription_id)
+    return APIResponse(message="Medication log retrieved successfully", data=log)
+
+
+@router.get(
+    "/medication-logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    summary="Get Medication Log by ID",
+)
+@singular_router.get(
+    "/medication-logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    include_in_schema=False,
+)
+async def get_medication_log_by_id(
+    log_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    log = await NurseService(db).get_medication_log(log_id=log_id)
+    return APIResponse(message="Medication log retrieved successfully", data=log)
+
+
+@router.post(
+    "/prescriptions/{prescription_id}/logs/{log_id}/cancel",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    summary="Cancel Medication Log",
+)
+@singular_router.post(
+    "/prescriptions/{prescription_id}/logs/{log_id}/cancel",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    include_in_schema=False,
+)
+async def cancel_medication_log(
+    prescription_id: int,
+    log_id: int,
+    data: NurseMedicationLogCancelRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    log = await NurseService(db).cancel_medication_log(
+        log_id=log_id,
+        cancellation_reason=data.cancellation_reason,
+        user_id=current_user.id,
+        prescription_id=prescription_id,
+    )
+    return APIResponse(message="Medication log cancelled successfully", data=log)
 
 
 @router.get(
@@ -539,9 +630,17 @@ async def list_patient_vitals(
     current_user: CurrentUser,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    gender: str | None = Query(None, description="Filter by gender (e.g. Male, Female, Other)"),
+    blood_group: str | None = Query(None, description="Filter by blood group (e.g. A+, O+, B-, etc.)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    result = await NurseService(db).list_patient_vitals(patient_id, page, size)
+    result = await NurseService(db).list_patient_vitals(
+        patient_id=patient_id,
+        page=page,
+        size=size,
+        gender=gender,
+        blood_group=blood_group,
+    )
     return APIResponse(message="Patient vitals retrieved", data=result)
 
 
@@ -769,6 +868,43 @@ async def list_nurse_handover_notes(
         sort_order=sort_order,
     )
     return APIResponse(message="Nurse handover notes retrieved", data=result)
+
+
+@router.get(
+    "/{nurse_id}/handover-notes/{note_id}",
+    response_model=APIResponse[NurseHandoverNoteResponse],
+    summary="Get Handover Details",
+)
+@singular_router.get(
+    "/{nurse_id}/handover-notes/{note_id}",
+    response_model=APIResponse[NurseHandoverNoteResponse],
+    include_in_schema=False,
+)
+@router.get(
+    "/handover-notes/{note_id}",
+    response_model=APIResponse[NurseHandoverNoteResponse],
+    include_in_schema=False,
+)
+@singular_router.get(
+    "/handover-notes/{note_id}",
+    response_model=APIResponse[NurseHandoverNoteResponse],
+    include_in_schema=False,
+)
+async def get_nurse_handover_note(
+    note_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    nurse_id: int | None = None,
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    hospital_id = resolve_tenant_id(current_user)
+    note = await NurseService(db).get_handover_note(
+        nurse_id=nurse_id,
+        note_id=note_id,
+        current_user=current_user,
+        hospital_id=hospital_id,
+    )
+    return APIResponse(message="Nurse handover note retrieved", data=note)
 
 
 @router.put(

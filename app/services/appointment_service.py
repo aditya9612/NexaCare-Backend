@@ -313,13 +313,7 @@ class AppointmentService:
         )
         cancelled = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.CANCELLED,
-            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
-            hospital_id=hospital_id,
-        )
-        no_show = await self.repo.count_all(
-            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
-            status=AppointmentStatus.NO_SHOW,
+            status=[AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW],
             appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
@@ -389,7 +383,6 @@ class AppointmentService:
             "total_scheduled": total_scheduled,
             "completed": completed,
             "cancelled": cancelled,
-            "no_show": no_show,
             "pending": pending,
             "confirmed": confirmed,
             "in_progress": in_progress,
@@ -876,8 +869,7 @@ class AppointmentService:
 
         items = [AppointmentResponse.model_validate(a) for a in appointments]
         total_today = len(items)
-        cancelled_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("cancelled", "canceled") or (a.queue_status or "").upper() == "CANCELLED")
-        no_show_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("no show", "no-show"))
+        cancelled_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("cancelled", "canceled", "no show", "no-show") or (a.queue_status or "").upper() == "CANCELLED")
         waiting_count = sum(1 for a in items if (a.queue_status or "").upper() == "WAITING")
         completed_count = sum(1 for a in items if (a.appointment_status or "").lower() == "completed" or (a.queue_status or "").upper() == "COMPLETED")
         checked_in_count = sum(1 for a in items if a.check_in_time is not None or (a.appointment_status or "").lower() in ("checked-in", "checked_in", "check-in"))
@@ -895,7 +887,6 @@ class AppointmentService:
             "total_today_tokens": total_today,
             "today_appointments": total_today,
             "cancelled": cancelled_count,
-            "no_show": no_show_count,
             "waiting": waiting_count,
             "completed": completed_count,
             "checked_in": checked_in_count,

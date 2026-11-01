@@ -231,8 +231,8 @@ async def test_list_appointments_returns_all_12_dashboard_counts():
         assert res["admitted"] == 1
         assert res["completed"] == 1
         assert res["checked_out"] == 1
-        assert res["cancelled"] == 1  # Only Cancelled
-        assert res["no_show"] == 1    # Separate No Show
+        assert res["cancelled"] == 2  # Combined Cancelled + No Show
+        assert "no_show" not in res
         assert len(res["items"]) == 8
 
 
@@ -647,7 +647,7 @@ async def test_api_endpoints_export_and_removal_verification():
                 assert "completed" in data
                 assert "checked_out" in data
                 assert "cancelled" in data
-                assert "no_show" in data
+                assert "no_show" not in data
 
                 # 2. Test GET /export?format=excel
                 resp_excel = await ac.get("/api/v1/appointments/export?format=excel")
@@ -682,7 +682,7 @@ async def test_dashboard_date_filtering_scopes_status_counts_correctly():
     """
     Verify that:
     1. total_appointments is all-time historical tenant count.
-    2. Status counts (completed, cancelled, no_show, pending, etc.) are scoped to the active date range.
+    2. Status counts (completed, cancelled, pending, etc.) are scoped to the active date range.
     3. date_filter=today scopes status counts to today only.
     4. date_filter=last_7_days scopes status counts to the 7-day window.
     5. date_filter=custom scopes status counts to [start_date, end_date].
@@ -773,11 +773,11 @@ async def test_dashboard_date_filtering_scopes_status_counts_correctly():
 
 
 @pytest.mark.asyncio
-async def test_no_show_vs_cancelled_separation():
+async def test_cancelled_count_aggregates_cancelled_and_no_show():
     """
     Verify that:
-    1. Cancelled count includes ONLY Cancelled appointments.
-    2. No Show count includes ONLY No Show appointments.
+    1. Cancelled count aggregates both Cancelled and No Show appointments.
+    2. No separate no_show key exists in dashboard metrics.
     3. status=Cancelled filter returns ONLY Cancelled records.
     4. status=No Show filter returns ONLY No Show records.
     """
@@ -837,8 +837,8 @@ async def test_no_show_vs_cancelled_separation():
         # Listing without filter
         res = await service.list_appointments(current_user=user)
         assert res["total_appointments"] == 3
-        assert res["cancelled"] == 2
-        assert res["no_show"] == 1
+        assert res["cancelled"] == 3  # 2 Cancelled + 1 No Show combined
+        assert "no_show" not in res
 
         # Listing with status="Cancelled"
         res_can = await service.list_appointments(current_user=user, status="Cancelled")
@@ -1073,7 +1073,8 @@ async def test_api_route_super_admin_x_hospital_id_http_behavior():
                 data = r_valid.json()["data"]
                 assert data["total"] == 1
                 assert data["items"][0]["appointment_number"] == f"APT_API_{uid}"
-                assert "no_show" in data
+                assert "cancelled" in data
+                assert "no_show" not in data
 
                 # 5. Super Admin export without X-Hospital-Id -> 400
                 r_exp_no = await ac.get("/api/v1/appointments/export?format=excel")

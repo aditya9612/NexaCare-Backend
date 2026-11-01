@@ -390,7 +390,6 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     total_scheduled: int
     completed: int
     cancelled: int
-    no_show: int = 0
     pending: int = 0
     confirmed: int = 0
     in_progress: int = 0
@@ -411,7 +410,6 @@ class TodayAppointmentsResponse(BaseSchema):
     total_today_tokens: int = 0
     today_appointments: int = 0
     cancelled: int = 0
-    no_show: int = 0
     waiting: int = 0
     completed: int = 0
     checked_in: int = 0

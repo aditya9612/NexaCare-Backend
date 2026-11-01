@@ -23,11 +23,13 @@ class PatientUpdateResponse(BaseSchema):
 
 class EmergencyAlertCreate(BaseSchema):
     patient_id: int
+    appointment_id: int | None = None
     emergency_type: str
     message: str
 
 
 class EmergencyAlertUpdate(BaseSchema):
+    appointment_id: int | None = None
     emergency_type: str | None = None
     message: str | None = None
 
@@ -36,6 +38,7 @@ class EmergencyAlertResponse(BaseSchema):
     id: int
     patient_id: int
     nurse_id: int
+    appointment_id: int | None = None
     emergency_type: str
     message: str
     created_at: datetime

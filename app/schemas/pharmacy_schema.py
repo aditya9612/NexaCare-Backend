@@ -90,6 +90,7 @@ class MedicineCreate(BaseSchema):
     category: str
     unit: str
     unit_price: float = Field(..., ge=0)
+    purchase_cost: float | None = Field(None, ge=0)
     stock_quantity: int = Field(..., ge=0)
     reorder_level: int = Field(..., ge=0)
     expiry_date: date
@@ -187,6 +188,7 @@ class MedicineResponse(BaseSchema):
     category: str
     unit: str
     unit_price: float
+    average_unit_cost: float | None = None
     stock_quantity: int
     reserved_quantity: int = 0
     available_quantity: int = 0
@@ -368,7 +370,7 @@ class PrescriptionStatusUpdate(BaseSchema):
 class PharmacyInvoiceItemCreate(BaseSchema):
     medicine_id: int = Field(..., gt=0)
     quantity: int = Field(1, ge=1)
-    unit_price: float | None = Field(None, ge=0)
+    unit_price: float | None = Field(None, gt=0, description="Optional override selling price, must be greater than zero if provided")
     batch_number: str | None = None
 
 
@@ -405,7 +407,9 @@ class PharmacyInvoiceItemResponse(BaseSchema):
     quantity: int
     returned_quantity: int = 0
     unit_price: float
+    unit_cost: float | None = None
     line_total: float
+    line_cost: float | None = None
 
 
 class PharmacyReturnItemRequest(BaseSchema):
@@ -429,6 +433,7 @@ class PharmacyReturnItemResponse(BaseSchema):
     batch_number: str | None = None
     quantity: int
     unit_price: float
+    unit_cost: float | None = None
     refund_amount: float
 
 

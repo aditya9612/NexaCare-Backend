@@ -110,6 +110,31 @@ def validate_state_field(v: str | None) -> str | None:
     return cleaned
 
 
+def validate_weight_field(v: float | None) -> float | None:
+    if v is None:
+        return None
+    try:
+        val = float(v)
+    except (ValueError, TypeError):
+        raise ValueError("Weight must be a valid positive number")
+    if val <= 0:
+        raise ValueError("Weight must be greater than 0")
+    if val > 500:
+        raise ValueError("Weight cannot exceed 500 kg")
+    return round(val, 2)
+
+
+def validate_blood_pressure_field(v: str | None) -> str | None:
+    if v is None:
+        return None
+    cleaned = str(v).strip()
+    if not cleaned or cleaned.lower() in ("null", "none"):
+        return None
+    if len(cleaned) > 20:
+        raise ValueError("Blood pressure cannot exceed 20 characters")
+    return cleaned
+
+
 
 
 class PatientCreate(BaseSchema):
@@ -131,6 +156,8 @@ class PatientCreate(BaseSchema):
     medical_history: str | None = None
     chronic_disease: str | None = None
     diagnosis: str
+    weight: float | None = None
+    blood_pressure: str | None = None
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str | None = "active"
@@ -213,6 +240,16 @@ class PatientCreate(BaseSchema):
     def val_state(cls, v: str | None) -> str | None:
         return validate_state_field(v)
 
+    @field_validator("weight")
+    @classmethod
+    def val_weight(cls, v: float | None) -> float | None:
+        return validate_weight_field(v)
+
+    @field_validator("blood_pressure")
+    @classmethod
+    def val_blood_pressure(cls, v: str | None) -> str | None:
+        return validate_blood_pressure_field(v)
+
 
 
 
@@ -235,6 +272,8 @@ class PatientUpdate(BaseSchema):
     medical_history: str | None = None
     chronic_disease: str | None = None
     diagnosis: str | None = None
+    weight: float | None = None
+    blood_pressure: str | None = None
     insurance_provider: str | None = None
     insurance_number: str | None = None
     status: str | None = None
@@ -304,6 +343,16 @@ class PatientUpdate(BaseSchema):
     @classmethod
     def val_state(cls, v: str | None) -> str | None:
         return validate_state_field(v)
+
+    @field_validator("weight")
+    @classmethod
+    def val_weight(cls, v: float | None) -> float | None:
+        return validate_weight_field(v)
+
+    @field_validator("blood_pressure")
+    @classmethod
+    def val_blood_pressure(cls, v: str | None) -> str | None:
+        return validate_blood_pressure_field(v)
 
 
 
@@ -457,6 +506,8 @@ class PatientResponseBase(BaseSchema):
     medical_history: str | None
     chronic_disease: str | None
     diagnosis: str | None = ""
+    weight: float | None = None
+    blood_pressure: str | None = None
     insurance_provider: str | None
     insurance_number: str | None
     status: str

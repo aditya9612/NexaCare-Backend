@@ -47,7 +47,21 @@ class NurseCommunicationService:
         if not assignment:
             raise ForbiddenException("Nurse is not actively assigned to this patient")
 
-    async def get_assigned_doctor_user_id(self, patient_id: int) -> int | None:
+    async def get_assigned_doctor_user_id(self, patient_id: int, appointment_id: int | None = None) -> int | None:
+        # 0. If appointment_id provided, fetch doctor directly from that specific appointment
+        if appointment_id:
+            stmt_appt = (
+                select(Doctor.user_id)
+                .join(Appointment, Appointment.doctor_id == Doctor.id)
+                .where(
+                    Appointment.id == appointment_id,
+                    Appointment.patient_id == patient_id,
+                )
+            )
+            doc_user_id = await self.db.scalar(stmt_appt)
+            if doc_user_id:
+                return doc_user_id
+
         # 1. Try from latest confirmed/pending appointments
         stmt = (
             select(Doctor.user_id)
@@ -183,22 +197,34 @@ class NurseCommunicationService:
         nurse = await self._get_nurse_by_user_id(user_id)
         await self._validate_assignment(nurse.id, data.patient_id)
 
+        # Validate appointment if provided
+        if data.appointment_id:
+            stmt_appt = select(Appointment).where(
+                Appointment.id == data.appointment_id,
+                Appointment.patient_id == data.patient_id,
+            )
+            appt = await self.db.scalar(stmt_appt)
+            if not appt:
+                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found for this patient")
+
         # Save alert
         alert = EmergencyAlert(
             patient_id=data.patient_id,
             nurse_id=nurse.id,
+            appointment_id=data.appointment_id,
             emergency_type=data.emergency_type,
             message=data.message,
         )
         await self.repo.create_emergency_alert(alert)
 
-        # Trigger notifications asynchronously
-        await self._notify_emergency_channels(data.patient_id, data.message)
+        # Trigger notifications asynchronously to responsible recipients
+        await self._notify_emergency_channels(data.patient_id, data.message, appointment_id=data.appointment_id)
 
         return EmergencyAlertResponse(
             id=alert.id,
             patient_id=alert.patient_id,
             nurse_id=alert.nurse_id,
+            appointment_id=alert.appointment_id,
             emergency_type=alert.emergency_type,
             message=alert.message,
             created_at=alert.created_at,
@@ -212,6 +238,7 @@ class NurseCommunicationService:
                 id=alert.id,
                 patient_id=alert.patient_id,
                 nurse_id=alert.nurse_id,
+                appointment_id=alert.appointment_id,
                 emergency_type=alert.emergency_type,
                 message=alert.message,
                 created_at=alert.created_at,
@@ -228,6 +255,7 @@ class NurseCommunicationService:
             id=alert.id,
             patient_id=alert.patient_id,
             nurse_id=alert.nurse_id,
+            appointment_id=alert.appointment_id,
             emergency_type=alert.emergency_type,
             message=alert.message,
             created_at=alert.created_at,
@@ -254,17 +282,18 @@ class NurseCommunicationService:
             id=alert.id,
             patient_id=alert.patient_id,
             nurse_id=alert.nurse_id,
+            appointment_id=alert.appointment_id,
             emergency_type=alert.emergency_type,
             message=alert.message,
             created_at=alert.created_at,
         )
 
-    async def _notify_emergency_channels(self, patient_id: int, message: str) -> None:
+    async def _notify_emergency_channels(self, patient_id: int, message: str, appointment_id: int | None = None) -> None:
         title = "Patient Emergency Alert"
         notif_service = NotificationService(self.db)
 
-        # 1. Notify doctor
-        doctor_user_id = await self.get_assigned_doctor_user_id(patient_id)
+        # 1. Notify responsible doctor
+        doctor_user_id = await self.get_assigned_doctor_user_id(patient_id, appointment_id=appointment_id)
         if doctor_user_id:
             doc_user = await self.db.get(User, doctor_user_id)
             await notif_service.dispatch_notification(

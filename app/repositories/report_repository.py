@@ -812,6 +812,8 @@ class ReportRepository:
             cost_filters.append(Purchase.hospital_id == hospital_id)
             med_filters.append(Medicine.hospital_id == hospital_id)
 
+        start_time = None
+        end_time = None
         if start_date and end_date:
             start_time = datetime.combine(start_date, datetime.min.time())
             end_time = datetime.combine(end_date, datetime.max.time())
@@ -831,6 +833,55 @@ class ReportRepository:
 
         medicine_query = select(func.count(Medicine.id).label('medicine_count')).where(*med_filters)
 
+        # COGS and costed sales query over invoice line items
+        from app.models.pharmacy_model import PharmacyInvoiceItem
+        from sqlalchemy import case
+
+        item_filters = [
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.status != 'cancelled',
+            PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id,
+        ]
+        if hospital_id is not None:
+            item_filters.append(PharmacyInvoice.hospital_id == hospital_id)
+        if start_time and end_time:
+            item_filters.append(PharmacyInvoice.created_at >= start_time)
+            item_filters.append(PharmacyInvoice.created_at <= end_time)
+
+        effective_qty = func.greatest(0, PharmacyInvoiceItem.quantity - func.coalesce(PharmacyInvoiceItem.returned_quantity, 0))
+
+        cogs_query = select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (PharmacyInvoiceItem.unit_cost.isnot(None), effective_qty * PharmacyInvoiceItem.unit_cost),
+                        else_=0.0
+                    )
+                ),
+                0.0
+            ).label('cogs'),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (PharmacyInvoiceItem.unit_cost.isnot(None), effective_qty * PharmacyInvoiceItem.unit_price),
+                        else_=0.0
+                    )
+                ),
+                0.0
+            ).label('costed_sales'),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (PharmacyInvoiceItem.unit_cost.isnot(None), 1),
+                        else_=0
+                    )
+                ),
+                0
+            ).label('costed_item_count')
+        ).select_from(PharmacyInvoiceItem).join(
+            PharmacyInvoice, PharmacyInvoiceItem.invoice_id == PharmacyInvoice.id
+        ).where(*item_filters)
+
         sales_result = await self.db.execute(sales_query)
         sales_row = sales_result.first()
 
@@ -840,15 +891,51 @@ class ReportRepository:
         med_result = await self.db.execute(medicine_query)
         med_row = med_result.first()
 
+        cogs_result = await self.db.execute(cogs_query)
+        cogs_row = cogs_result.first()
+
         total_sales = float(sales_row.total_sales) if sales_row else 0.0
         invoice_count = int(sales_row.invoice_count) if sales_row else 0
         total_cost = float(cost_row.total_cost) if cost_row else 0.0
+        procurement_purchases = total_cost
         medicine_count = int(med_row.medicine_count) if med_row else 0
+
+        cogs_val = float(cogs_row.cogs) if cogs_row else 0.0
+        costed_sales_val = float(cogs_row.costed_sales) if cogs_row else 0.0
+        costed_item_count = int(cogs_row.costed_item_count) if cogs_row else 0
+
+        if costed_item_count > 0 and costed_sales_val > 0:
+            cogs = round(cogs_val, 2)
+            costed_sales = round(costed_sales_val, 2)
+            uncosted_sales = max(0.0, round(total_sales - costed_sales, 2))
+            gross_profit = round(costed_sales - cogs, 2)
+            gross_margin_percentage = round((gross_profit / costed_sales) * 100, 2)
+        elif total_sales == 0.0:
+            cogs = 0.0
+            costed_sales = 0.0
+            uncosted_sales = 0.0
+            gross_profit = 0.0
+            gross_margin_percentage = None
+        else:
+            # Sales exist but no items have tracked COGS (legacy historical data)
+            cogs = None
+            costed_sales = 0.0
+            uncosted_sales = round(total_sales, 2)
+            gross_profit = None
+            gross_margin_percentage = None
+
+        net_flow = round(total_sales - procurement_purchases, 2)
 
         return {
             "total_sales": total_sales,
             "total_cost": total_cost,
-            "gross_profit": total_sales - total_cost,
+            "procurement_purchases": procurement_purchases,
+            "net_flow": net_flow,
+            "costed_sales": costed_sales,
+            "uncosted_sales": uncosted_sales,
+            "cogs": cogs,
+            "gross_profit": gross_profit,
+            "gross_margin_percentage": gross_margin_percentage,
             "invoice_count": invoice_count,
             "medicine_count": medicine_count
         }

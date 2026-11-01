@@ -1117,6 +1117,7 @@ class PharmacyService:
     ) -> PharmacyInvoiceResponse:
         from app.models.inventory_model import Warehouse
         from app.services.stock_movement_service import StockMovementService
+        from app.services.settings_service import SettingsService
 
         hospital_id = resolve_tenant_id(current_user)
         if hospital_id is None:

@@ -26,10 +26,11 @@ class DepartmentRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_code(self, code: str) -> Department | None:
-        result = await self.db.execute(
-            select(Department).where(Department.department_code == code)
-        )
+    async def get_by_code(self, code: str, hospital_id: int | None = None) -> Department | None:
+        stmt = select(Department).where(func.lower(Department.department_code) == code.strip().lower())
+        if hospital_id is not None:
+            stmt = stmt.where(Department.hospital_id == hospital_id)
+        result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def list_all(

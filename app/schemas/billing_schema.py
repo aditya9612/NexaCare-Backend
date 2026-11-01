@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
@@ -242,12 +242,12 @@ class DailyCollectionSummary(BaseSchema):
     by_method: dict[str, float] = Field(default_factory=dict)
 
     # Separate Reception / Appointment Billing & Collection
-    reception_total_bill: float = 0.0
-    reception_paid_bill: float = 0.0
-    reception_pending_bill: float = 0.0
+    reception_today_total_bill: float = 0.0
+    reception_today_paid_bill: float = 0.0
+    reception_today_pending_bill: float = 0.0
     reception_collected_revenue: float = 0.0
-    reception_bills_count: int = 0
-    reception_payment_count: int = 0
+    reception_today_bills_count: int = 0
+    reception_today_payment_count: int = 0
     reception_by_method: dict[str, float] = Field(default_factory=dict)
 
     # Separate Pharmacy Billing & Collection
@@ -262,15 +262,33 @@ class DailyCollectionSummary(BaseSchema):
     reception_collection: ReceptionCollectionSummary | None = None
     pharmacy_collection: PharmacyCollectionSummary | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_reception_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "reception_total_bill" in data and "reception_today_total_bill" not in data:
+                data["reception_today_total_bill"] = data["reception_total_bill"]
+            if "reception_paid_bill" in data and "reception_today_paid_bill" not in data:
+                data["reception_today_paid_bill"] = data["reception_paid_bill"]
+            if "reception_pending_bill" in data and "reception_today_pending_bill" not in data:
+                data["reception_today_pending_bill"] = data["reception_pending_bill"]
+            if "reception_today_collected_revenue" in data and "reception_collected_revenue" not in data:
+                data["reception_collected_revenue"] = data["reception_today_collected_revenue"]
+            if "reception_bills_count" in data and "reception_today_bills_count" not in data:
+                data["reception_today_bills_count"] = data["reception_bills_count"]
+            if "reception_payment_count" in data and "reception_today_payment_count" not in data:
+                data["reception_today_payment_count"] = data["reception_payment_count"]
+        return data
+
     @field_validator(
         "today_total_bill",
         "today_paid_bill",
         "today_pending_bill",
         "today_collected_revenue",
         "total_collected",
-        "reception_total_bill",
-        "reception_paid_bill",
-        "reception_pending_bill",
+        "reception_today_total_bill",
+        "reception_today_paid_bill",
+        "reception_today_pending_bill",
         "reception_collected_revenue",
         "pharmacy_total_bill",
         "pharmacy_paid_bill",

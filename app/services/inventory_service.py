@@ -200,7 +200,9 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
-    async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
+    async def create_transaction(
+        self, data: StockTransactionCreate, user_id: int, hospital_id: int | None = None
+    ) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
@@ -219,6 +221,10 @@ class InventoryService:
             warehouse_id = available_wh or item.warehouse_id
             if not warehouse_id:
                 raise BadRequestException("Warehouse ID is required for stock transaction")
+
+        wh = await self.warehouse_repo.get_by_id(warehouse_id)
+        if not wh:
+            raise NotFoundException("Warehouse not found")
 
         quantity = data.quantity
         if tx_type == StockTransactionType.ADJUSTMENT:

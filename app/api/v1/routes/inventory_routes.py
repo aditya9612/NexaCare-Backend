@@ -174,9 +174,11 @@ async def create_stock_transaction(
     data: StockTransactionCreate,
     db: DbSession,
     current_user: CurrentUser,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    transaction = await InventoryService(db).create_transaction(data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+    transaction = await InventoryService(db).create_transaction(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Stock transaction created", data=transaction)
 
 

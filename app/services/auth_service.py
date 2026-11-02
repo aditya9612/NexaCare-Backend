@@ -594,6 +594,7 @@ class AuthService:
             phone=user.phone,
             role_id=user.role_id,
             role_name=user.role.name if user.role else None,
+            hospital_id=user.hospital_id,
             profile_image=user.profile_image,
             gender=user.gender,
             date_of_birth=user.date_of_birth,

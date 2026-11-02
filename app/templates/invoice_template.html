@@ -270,20 +270,35 @@
 <body>
 
   <!-- Header Section -->
-  <table class="header-table">
+  <table class="header-table" style="width: 100%; border-bottom: 2px solid #2563eb; padding-bottom: 12px; margin-bottom: 15px;">
     <tr>
-      <td style="border: none; padding: 0;">
-        <div class="brand-title">NEXACARE AI 360</div>
-        <div class="brand-sub">
-          {% if hospital_address %}{{ hospital_address }}{% else %}NexaCare Hospital | Wing B, Floor 1{% endif %}
-          {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
-          {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{
-          hospital_email }}{% elif not hospital_phone and not hospital_address %} | Contact: info@nexacare360.com{%
-          endif %}
-        </div>
+      <td style="border: none; padding: 0; vertical-align: middle;">
+        <table style="border: none; width: 100%;">
+          <tr>
+            {% if logo_data_uri %}
+            <td style="border: none; padding: 0 14px 0 0; width: 1px; vertical-align: middle;">
+              <img src="{{ logo_data_uri }}" style="max-height: 52px; max-width: 150px; object-fit: contain; display: block;" alt="Logo" />
+            </td>
+            {% elif logo_base64 %}
+            <td style="border: none; padding: 0 14px 0 0; width: 1px; vertical-align: middle;">
+              <img src="data:image/png;base64,{{ logo_base64 }}" style="max-height: 52px; max-width: 150px; object-fit: contain; display: block;" alt="Logo" />
+            </td>
+            {% endif %}
+            <td style="border: none; padding: 0; vertical-align: middle;">
+              <div class="brand-title">{{ hospital_name | default('NexaCare Hospital', true) }}</div>
+              <div class="brand-sub">
+                {% if hospital_address %}{{ hospital_address }}<br/>{% endif %}
+                {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
+                {% if hospital_email %}{% if hospital_phone %} &bull; {% endif %}Email: {{ hospital_email }}{% endif %}
+                {% if hospital_website %}{% if hospital_phone or hospital_email %} &bull; {% endif %}Web: {{ hospital_website }}{% endif %}
+              </div>
+            </td>
+          </tr>
+        </table>
       </td>
-      <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
-        <div class="invoice-title">{{ hospital_name or 'NexaCare Hospital' }}</div>
+      <td style="text-align: right; vertical-align: middle; border: none; padding: 0; white-space: nowrap;">
+        <div class="invoice-title">TAX INVOICE</div>
+        <div style="font-size: 8.5pt; color: #64748b; margin-top: 4px;">Original for Recipient</div>
       </td>
     </tr>
   </table>

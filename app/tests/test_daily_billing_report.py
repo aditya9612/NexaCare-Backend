@@ -180,6 +180,7 @@ async def test_get_daily_collection_date_filtering():
 @pytest.mark.asyncio
 async def test_daily_report_service_schema_mapping_with_refunds():
     mock_db = AsyncMock()
+    mock_db.add = MagicMock()
     service = BillingService(mock_db)
 
     mock_res_pharm = MagicMock()
@@ -225,6 +226,7 @@ async def test_daily_report_service_schema_mapping_with_refunds():
 @pytest.mark.asyncio
 async def test_daily_report_service_schema_mapping_zero_refunds():
     mock_db = AsyncMock()
+    mock_db.add = MagicMock()
     service = BillingService(mock_db)
 
     mock_res_pharm = MagicMock()
@@ -383,6 +385,7 @@ async def test_daily_report_service_with_both_reception_and_pharmacy_refunds():
 async def test_process_refund_pharmacy_invoice_sets_hospital_id():
     """Verify that process_refund for a pharmacy invoice populates hospital_id on PharmacyReturn."""
     mock_db = AsyncMock()
+    mock_db.add = MagicMock()
     service = BillingService(mock_db)
 
     # Not found in reception billings

@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
-import razorpay
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +48,7 @@ class RazorpayService:
         self.db = db
         self.client = razorpay.Client(
             auth=(settings.RAZORPAY_KEY_ID or "", settings.RAZORPAY_KEY_SECRET or "")
-        )
+        ) if razorpay else None
         self.audit_repo = AuditRepository(db)
         self.tx_service = TransactionHistoryService(db)
 

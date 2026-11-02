@@ -326,141 +326,85 @@ class VendorService:
         format_type: str,
         hospital_id: int | None = None,
         current_user: Any = None
-    ):
+    ) -> tuple[Any, str]:
         from io import BytesIO
         from datetime import datetime, date
         import os
-        
+
         _, hospital_id = self._resolve_context(None, hospital_id, current_user)
-        
-        # Retrieve hospital metadata for branding
-        hospital_name = None
-        hospital_address = None
-        hospital_phone = None
-        hospital_email = None
-        hospital_logo = None
 
-        if hospital_id:
-            from app.repositories.hospital_repository import HospitalRepository
-            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
-            if hospital:
-                hospital_name = hospital.name
-                hospital_address = hospital.address
-                hospital_phone = hospital.phone
-                hospital_email = hospital.email
-                logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
-                if logo_attr and os.path.exists(str(logo_attr)):
-                    hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
+        clean_format = str(format_type).strip().lower()
+        if clean_format not in ("excel", "pdf"):
+            raise BadRequestException("Invalid format specified for export")
 
-        if not hospital_logo:
-            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
-                if os.path.exists(candidate):
-                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
-                    break
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
 
         # Retrieve all non-deleted vendors strictly scoped to hospital
         vendors = await self.vendor_repo.get_all_active(hospital_id=hospital_id)
-        
-        if format_type == "excel":
+
+        if clean_format == "excel":
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Vendors Export"
-            
+
             headers = [
                 "Sr. No.", "name", "vendor_type", "contact_person", "phone",
                 "email", "address", "gst_number", "service_type", "is_active",
                 "created_at", "updated_at"
             ]
-            ws.append(headers)
-            
-            # Configure Header Row Height
-            ws.row_dimensions[1].height = 32
-            
-            # Header Style definition
-            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
-            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            thin_side = Side(style="thin", color="D3D3D3")
-            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = header_border
-            
+
+            hdr_row = apply_excel_hospital_header(ws, branding, "Vendors Export", total_records=len(vendors))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
+
             for sr_no, v in enumerate(vendors, start=1):
                 row = [
-                    sr_no,
-                    v.name,
-                    v.vendor_type,
-                    v.contact_person or "",
-                    v.phone or "",
-                    v.email or "",
-                    v.address or "",
-                    v.gst_number or "",
-                    v.service_type or "",
-                    "Active" if v.is_active else "Inactive",
-                    v.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.created_at, datetime) else str(v.created_at),
-                    v.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.updated_at, datetime) else str(v.updated_at)
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(v.name),
+                    sanitize_excel_cell(v.vendor_type),
+                    sanitize_excel_cell(v.contact_person or ""),
+                    sanitize_excel_cell(v.phone or ""),
+                    sanitize_excel_cell(v.email or ""),
+                    sanitize_excel_cell(v.address or ""),
+                    sanitize_excel_cell(v.gst_number or ""),
+                    sanitize_excel_cell(v.service_type or ""),
+                    sanitize_excel_cell("Active" if v.is_active else "Inactive"),
+                    sanitize_excel_cell(v.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.created_at, datetime) else str(v.created_at)),
+                    sanitize_excel_cell(v.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.updated_at, datetime) else str(v.updated_at))
                 ]
                 ws.append(row)
-                
-            # Freeze panes at A2
-            ws.freeze_panes = "A2"
-            
-            # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
-            total_rows = len(vendors) + 1
-            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
-            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-            
-            # Set custom column widths
-            col_widths = {
-                1: 8,   # Sr. No.
-                2: 25,  # name
-                3: 15,  # vendor_type
-                4: 20,  # contact_person
-                5: 15,  # phone
-                6: 25,  # email
-                7: 30,  # address
-                8: 20,  # gst_number
-                9: 20,  # service_type
-                10: 12, # is_active
-                11: 22, # created_at
-                12: 22  # updated_at
-            }
-            for col_idx, width in col_widths.items():
-                col_letter = openpyxl.utils.get_column_letter(col_idx)
-                ws.column_dimensions[col_letter].width = width
+
+            auto_fit_columns(ws)
 
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
             return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
-        elif format_type == "pdf":
+
+        elif clean_format == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
             from app.utils.helpers import utc_now
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
-            
+
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                
+
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
-            
+
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("vendors_export_template.html")
-            
+
             def wrap_unbroken_text(text: str, max_chars: int = 12) -> str:
                 if not text:
                     return ""
@@ -469,7 +413,7 @@ class VendorService:
                 for word in words:
                     if len(word) > max_chars:
                         chunks = [word[i:i+max_chars] for i in range(0, len(word), max_chars)]
-                        processed_words.append("\u200b".join(chunks))
+                        processed_words.append("​".join(chunks))
                     else:
                         processed_words.append(word)
                 return " ".join(processed_words)
@@ -478,7 +422,7 @@ class VendorService:
                 if val is None:
                     return ""
                 return wrap_unbroken_text(str(val), max_chars)
-            
+
             formatted_vendors = []
             for v in vendors:
                 formatted_vendors.append({
@@ -495,16 +439,22 @@ class VendorService:
                     "created_at": v.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.created_at, datetime) else str(v.created_at),
                     "updated_at": v.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v.updated_at, datetime) else str(v.updated_at)
                 })
-                
+
             html_content = template.render(
                 vendors=formatted_vendors,
                 generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
-                hospital_name=hospital_name,
-                hospital_address=hospital_address,
-                hospital_phone=hospital_phone,
-                hospital_email=hospital_email,
-                hospital_logo=hospital_logo,
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Vendors Report",
+                total_records=len(vendors),
             )
-            
+
             pdf_data = html_to_pdf(html_content)
             return pdf_data, "application/pdf"
+        else:
+            raise BadRequestException("Invalid format specified for export")

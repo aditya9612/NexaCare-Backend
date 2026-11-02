@@ -1042,12 +1042,15 @@ class BillingService:
                 raise NotFoundException("Billing record not found")
 
             target_hospital_id = hospital_id or getattr(invoice, "hospital_id", None)
-            hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
-
-            hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
-            hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
-            hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
-            hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
+            from app.services.branding_resolver_service import BrandingResolverService
+            branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=target_hospital_id)
+            hospital_name = branding.hospital_name
+            hospital_address = branding.hospital_address or ""
+            hospital_phone = branding.hospital_phone or ""
+            hospital_email = branding.hospital_email or ""
+            hospital_website = branding.hospital_website or ""
+            logo_data_uri = branding.logo_data_uri
+            logo_base64 = branding.logo_base64
 
             patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
             patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1077,10 +1080,12 @@ class BillingService:
                 invoice.invoice_number,
                 {
                     "hospital_name": hospital_name,
-                    "hospital_name": hospital_name,
                     "hospital_address": hospital_address,
                     "hospital_phone": hospital_phone,
                     "hospital_email": hospital_email,
+                    "hospital_website": hospital_website,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
                     "patient_name": patient_name,
                     "patient_phone": patient_phone,
                     "patient_email": patient_email,
@@ -1103,12 +1108,15 @@ class BillingService:
             return path, pdf_bytes
 
         target_hospital_id = hospital_id or getattr(billing, "hospital_id", None)
-        hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
-
-        hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
-        hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
-        hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
-        hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
+        from app.services.branding_resolver_service import BrandingResolverService
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=target_hospital_id)
+        hospital_name = branding.hospital_name
+        hospital_address = branding.hospital_address or ""
+        hospital_phone = branding.hospital_phone or ""
+        hospital_email = branding.hospital_email or ""
+        hospital_website = branding.hospital_website or ""
+        logo_data_uri = branding.logo_data_uri
+        logo_base64 = branding.logo_base64
 
         patient = await self.patient_repo.get_by_id(billing.patient_id)
         patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1138,10 +1146,12 @@ class BillingService:
             billing.bill_number,
             {
                 "hospital_name": hospital_name,
-                "hospital_name": hospital_name,
                 "hospital_address": hospital_address,
                 "hospital_phone": hospital_phone,
                 "hospital_email": hospital_email,
+                "hospital_website": hospital_website,
+                "logo_data_uri": logo_data_uri,
+                "logo_base64": logo_base64,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,
@@ -1931,7 +1941,12 @@ class BillingService:
         sort_order: str = "desc",
         current_user: Any | None = None,
     ):
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+
         hospital_id = resolve_tenant_id(current_user)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
         from sqlalchemy import select, or_, func, union_all
@@ -2064,7 +2079,8 @@ class BillingService:
                 "item_id", "item_description", "item_quantity", "item_unit_price",
                 "item_gst_rate", "item_gst_amount", "item_line_total", "item_type"
             ]
-            ws.append(headers)
+            hdr_row = apply_excel_hospital_header(ws, branding, "Billings & Invoices Report", total_records=len(ordered_items))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
             
             for sr_no, b in enumerate(ordered_items, start=1):
                 p_name = patients_map.get(b.patient_id, "")
@@ -2073,38 +2089,46 @@ class BillingService:
                 # Check if there are items to export. If not, output one row with empty item columns
                 if not b.items:
                     row = [
-                        sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
-                        f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
-                        f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
-                        b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                        b.notes or "", b.invoice_path or "", appt_num_str,
-                        b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                        b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
-                        b.source,
+                        sanitize_excel_cell(sr_no), sanitize_excel_cell(p_name), sanitize_excel_cell(b.bill_number),
+                        sanitize_excel_cell(f"₹{b.subtotal:.2f}"), sanitize_excel_cell(b.discount_percent),
+                        sanitize_excel_cell(f"₹{b.discount_amount:.2f}"), sanitize_excel_cell(b.gst_rate),
+                        sanitize_excel_cell(f"₹{b.gst_amount:.2f}"), sanitize_excel_cell(f"₹{b.tax_amount:.2f}"),
+                        sanitize_excel_cell(f"₹{b.total_amount:.2f}"), sanitize_excel_cell(f"₹{b.paid_amount:.2f}"),
+                        sanitize_excel_cell(f"₹{b.balance_amount:.2f}"), sanitize_excel_cell(b.status),
+                        sanitize_excel_cell(b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else "")),
+                        sanitize_excel_cell(b.notes or ""), sanitize_excel_cell(b.invoice_path or ""), sanitize_excel_cell(appt_num_str),
+                        sanitize_excel_cell(b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at)),
+                        sanitize_excel_cell(b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at)),
+                        sanitize_excel_cell(b.source),
                         "", "", "", "", "", "", "", ""
                     ]
                     ws.append(row)
                 else:
                     for item in b.items:
                         row = [
-                            sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
-                            f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
-                            f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
-                            b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                            b.notes or "", b.invoice_path or "", appt_num_str,
-                            b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                            b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
-                            b.source,
-                            item.id,
-                            item.description,
-                            item.quantity,
-                            f"₹{item.unit_price:.2f}",
-                            item.gst_rate,
-                            f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else "",
-                            f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else "",
-                            item.item_type
+                            sanitize_excel_cell(sr_no), sanitize_excel_cell(p_name), sanitize_excel_cell(b.bill_number),
+                            sanitize_excel_cell(f"₹{b.subtotal:.2f}"), sanitize_excel_cell(b.discount_percent),
+                            sanitize_excel_cell(f"₹{b.discount_amount:.2f}"), sanitize_excel_cell(b.gst_rate),
+                            sanitize_excel_cell(f"₹{b.gst_amount:.2f}"), sanitize_excel_cell(f"₹{b.tax_amount:.2f}"),
+                            sanitize_excel_cell(f"₹{b.total_amount:.2f}"), sanitize_excel_cell(f"₹{b.paid_amount:.2f}"),
+                            sanitize_excel_cell(f"₹{b.balance_amount:.2f}"), sanitize_excel_cell(b.status),
+                            sanitize_excel_cell(b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else "")),
+                            sanitize_excel_cell(b.notes or ""), sanitize_excel_cell(b.invoice_path or ""), sanitize_excel_cell(appt_num_str),
+                            sanitize_excel_cell(b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at)),
+                            sanitize_excel_cell(b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at)),
+                            sanitize_excel_cell(b.source),
+                            sanitize_excel_cell(item.id),
+                            sanitize_excel_cell(item.description),
+                            sanitize_excel_cell(item.quantity),
+                            sanitize_excel_cell(f"₹{item.unit_price:.2f}"),
+                            sanitize_excel_cell(item.gst_rate),
+                            sanitize_excel_cell(f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else ""),
+                            sanitize_excel_cell(f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else ""),
+                            sanitize_excel_cell(item.item_type)
                         ]
                         ws.append(row)
+
+            auto_fit_columns(ws)
                         
             stream = BytesIO()
             wb.save(stream)
@@ -2173,7 +2197,16 @@ class BillingService:
                 
             html_content = template.render(
                 billings=formatted_billings,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Billings & Invoices Report",
+                total_records=len(ordered_items),
             )
             
             pdf_data = html_to_pdf(html_content)

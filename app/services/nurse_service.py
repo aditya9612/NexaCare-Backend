@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1884,6 +1885,29 @@ class NurseService:
 
         return log
 
+    async def update_medication_log(
+        self,
+        log_id: int,
+        data: Any,
+        user_id: int,
+        prescription_id: int | None = None,
+    ):
+        from app.models.nurse_model import NurseMedicationLog
+        log = await self.db.get(NurseMedicationLog, log_id)
+        if not log:
+            raise NotFoundException("Medication log not found")
+
+        if prescription_id is not None and log.prescription_id != prescription_id:
+            raise NotFoundException("Medication log does not belong to the specified prescription")
+
+        update_dict = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else data.dict(exclude_unset=True)
+        for field, value in update_dict.items():
+            setattr(log, field, value)
+
+        await self.db.flush()
+        await self.db.commit()
+        return await self.get_medication_log(log_id=log.id, prescription_id=prescription_id)
+
     async def delete_medication_log(self, prescription_id: int, log_id: int, user_id: int):
         from app.models.nurse_model import NurseMedicationLog
         log = await self.db.get(NurseMedicationLog, log_id)
@@ -1946,12 +1970,19 @@ class NurseService:
             special_instructions=presc.special_instructions if presc else None,
         )
 
-    async def list_medication_logs(self, prescription_id: int | None = None, patient_id: int | None = None):
+    async def list_medication_logs(
+        self,
+        prescription_id: int | None = None,
+        patient_id: int | None = None,
+        nurse_id: int | None = None,
+        status: str | None = None,
+        hospital_id: int | None = None,
+    ):
         from app.models.nurse_model import NurseMedicationLog, NursePrescription, Nurse
         from app.models.patient_model import Patient
         from app.models.doctor_model import Doctor
         from app.models.user_model import User
-        from sqlalchemy import select
+        from sqlalchemy import func, select
         from sqlalchemy.orm import aliased
         from app.schemas.nurse_schema import NurseMedicationLogDetailResponse
 
@@ -1966,10 +1997,16 @@ class NurseService:
             .outerjoin(canceller_user, NurseMedicationLog.cancelled_by == canceller_user.id)
             .order_by(NurseMedicationLog.timestamp.desc())
         )
+        if hospital_id is not None:
+            query = query.where(Patient.hospital_id == hospital_id)
         if prescription_id is not None:
             query = query.where(NurseMedicationLog.prescription_id == prescription_id)
         if patient_id is not None:
             query = query.where(NursePrescription.patient_id == patient_id)
+        if nurse_id is not None:
+            query = query.where(NurseMedicationLog.nurse_id == nurse_id)
+        if status:
+            query = query.where(func.lower(NurseMedicationLog.status) == status.strip().lower())
 
         res = await self.db.execute(query)
         rows = res.all()

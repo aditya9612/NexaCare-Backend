@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Header
 
 from app.core.constants import UserRole
 from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
@@ -35,6 +35,7 @@ from app.schemas.nurse_schema import (
     NursePrescriptionCreate,
     NursePrescriptionResponse,
     NurseMedicationLogCreate,
+    NurseMedicationLogUpdate,
     NurseMedicationLogResponse,
     NurseMedicationLogDetailResponse,
     NurseMedicationLogCancelRequest,
@@ -53,7 +54,7 @@ from app.schemas.nurse_communication_schema import (
     EmergencyAlertUpdate,
     EmergencyAlertResponse,
 )
-from typing import List
+from typing import List, Optional
 from app.utils.pagination import PaginatedResult
 
 router = APIRouter()
@@ -232,6 +233,33 @@ async def delete_medication_log(
     return APIResponse(message="Medication log deleted successfully", data=MessageResponse(message="Deleted successfully"))
 
 
+@router.put(
+    "/prescriptions/{prescription_id}/logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    summary="Update Medication Log for Prescription",
+)
+@singular_router.put(
+    "/prescriptions/{prescription_id}/logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    include_in_schema=False,
+)
+async def update_medication_log(
+    prescription_id: int,
+    log_id: int,
+    data: NurseMedicationLogUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    log = await NurseService(db).update_medication_log(
+        log_id=log_id,
+        data=data,
+        user_id=current_user.id,
+        prescription_id=prescription_id,
+    )
+    return APIResponse(message="Medication log updated successfully", data=log)
+
+
 @router.get(
     "/prescriptions/{prescription_id}/logs",
     response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
@@ -274,6 +302,37 @@ async def get_medication_log(
 
 
 @router.get(
+    "/medication-logs",
+    response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
+    summary="List All Medication Logs",
+)
+@singular_router.get(
+    "/medication-logs",
+    response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
+    include_in_schema=False,
+)
+async def list_all_medication_logs(
+    db: DbSession,
+    current_user: CurrentUser,
+    prescription_id: Optional[int] = Query(None, description="Filter by Prescription ID"),
+    patient_id: Optional[int] = Query(None, description="Filter by Patient ID"),
+    nurse_id: Optional[int] = Query(None, description="Filter by Nurse ID"),
+    status: Optional[str] = Query(None, description="Filter by Status (e.g. Administered, Missed, Deleted)"),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    hospital_id = resolve_tenant_id(current_user, x_hospital_id)
+    logs = await NurseService(db).list_medication_logs(
+        prescription_id=prescription_id,
+        patient_id=patient_id,
+        nurse_id=nurse_id,
+        status=status,
+        hospital_id=hospital_id,
+    )
+    return APIResponse(message="Medication logs retrieved successfully", data=logs)
+
+
+@router.get(
     "/medication-logs/{log_id}",
     response_model=APIResponse[NurseMedicationLogDetailResponse],
     summary="Get Medication Log by ID",
@@ -291,6 +350,31 @@ async def get_medication_log_by_id(
 ):
     log = await NurseService(db).get_medication_log(log_id=log_id)
     return APIResponse(message="Medication log retrieved successfully", data=log)
+
+
+@router.put(
+    "/medication-logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    summary="Update Medication Log by ID",
+)
+@singular_router.put(
+    "/medication-logs/{log_id}",
+    response_model=APIResponse[NurseMedicationLogDetailResponse],
+    include_in_schema=False,
+)
+async def update_medication_log_by_id(
+    log_id: int,
+    data: NurseMedicationLogUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("nurses", "update")),
+):
+    log = await NurseService(db).update_medication_log(
+        log_id=log_id,
+        data=data,
+        user_id=current_user.id,
+    )
+    return APIResponse(message="Medication log updated successfully", data=log)
 
 
 @router.post(

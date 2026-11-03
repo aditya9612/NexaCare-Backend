@@ -661,6 +661,13 @@ class NurseMedicationLogCreate(BaseSchema):
     timestamp: datetime | None = None
 
 
+class NurseMedicationLogUpdate(BaseSchema):
+    status: str | None = None
+    time_of_day_slot: str | None = None
+    notes: str | None = None
+    timestamp: datetime | None = None
+
+
 class NurseMedicationLogCancelRequest(BaseSchema):
     cancellation_reason: str = Field(..., min_length=1, description="Mandatory cancellation reason")
 

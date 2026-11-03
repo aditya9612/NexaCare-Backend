@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -30,9 +30,19 @@ class User(Base, TimestampMixin):
     last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_logout_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # PIN authentication fields
+    hashed_pin: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pin_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pin_failed_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    pin_locked_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     role = relationship("Role", back_populates="users", lazy="joined")
     hospital = relationship("Hospital", back_populates="users")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def is_pin_set(self) -> bool:
+        return bool(self.hashed_pin)
 
     @property
     def first_name(self) -> str:

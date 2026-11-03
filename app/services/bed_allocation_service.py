@@ -455,7 +455,28 @@ class BedAllocationService:
                 raise BadRequestException("Bed is already occupied")
             raise BadRequestException(f"Bed {bed.name} is not available. Current status: {bed.status}.")
 
-        patient = await self.get_patient(data.patientId, current_user=current_user)
+        appointment = None
+        patient = None
+
+        if getattr(data, "appointmentId", None):
+            stmt = select(Appointment).where(
+                Appointment.id == data.appointmentId
+            )
+            res = await self.db.execute(stmt)
+            appointment = res.scalar_one_or_none()
+            if not appointment:
+                raise NotFoundException(
+                    f"Appointment {data.appointmentId} not found."
+                )
+            if getattr(data, "patientId", None) and appointment.patient_id != data.patientId:
+                raise BadRequestException(
+                    f"Appointment {data.appointmentId} does not belong to patient {data.patientId}."
+                )
+            patient = await self.get_patient(appointment.patient_id, current_user=current_user)
+        elif getattr(data, "patientId", None):
+            patient = await self.get_patient(data.patientId, current_user=current_user)
+        else:
+            raise BadRequestException("Either patientId or appointmentId must be provided.")
 
         if bed.hospital_id is not None and patient.hospital_id is not None and bed.hospital_id != patient.hospital_id:
             raise BadRequestException("Cannot allocate bed: Patient and Bed belong to different hospitals.")
@@ -475,19 +496,7 @@ class BedAllocationService:
         if admission_date_ist < current_date_ist:
             raise BadRequestException("Admission date cannot be in the past.")
 
-        appointment = None
-        if getattr(data, "appointmentId", None):
-            stmt = select(Appointment).where(
-                Appointment.id == data.appointmentId,
-                Appointment.patient_id == patient.id
-            )
-            res = await self.db.execute(stmt)
-            appointment = res.scalar_one_or_none()
-            if not appointment:
-                raise NotFoundException(
-                    f"Appointment {data.appointmentId} not found for this patient."
-                )
-        else:
+        if not appointment:
             # 1. Search for appointment where admission was recommended or admitted with IPD type
             stmt = (
                 select(Appointment)
@@ -504,7 +513,21 @@ class BedAllocationService:
             res = await self.db.execute(stmt)
             appointment = res.scalar_one_or_none()
 
-            # 2. Fallback to latest appointment if no recommended appointment found
+            # 2. Fallback to latest IPD appointment
+            if not appointment:
+                stmt = (
+                    select(Appointment)
+                    .where(
+                        Appointment.patient_id == patient.id,
+                        Appointment.appointment_type == AppointmentType.IPD.value,
+                    )
+                    .order_by(desc(Appointment.id))
+                    .limit(1)
+                )
+                res = await self.db.execute(stmt)
+                appointment = res.scalar_one_or_none()
+
+            # 3. Fallback to latest appointment if no recommended appointment found
             if not appointment:
                 stmt = (
                     select(Appointment)
@@ -551,11 +574,15 @@ class BedAllocationService:
             raise BadRequestException("Cannot allocate bed for an already discharged patient.")
 
         # Check 3: Admission Recommendation & Record State
+        is_explicitly_not_rec = adm_status_norm in ("not recommended", "not_recommended")
+        is_term = adm_status_norm in ("cancelled", "discharged") or status_norm in ("cancelled", "discharged")
+
         is_admission_valid = (
             bool(appointment.admission_recommended)
             or adm_status_norm in ("admit recommended", "admit_recommended", "admitted")
             or status_norm in ("admit recommended", "admit_recommended", "admitted")
-        ) and adm_status_norm not in ("not recommended", "not_recommended", "cancelled", "discharged")
+            or (appt_type_norm == AppointmentType.IPD.value and not is_explicitly_not_rec and not is_term)
+        ) and not is_explicitly_not_rec and not is_term
 
         if not is_admission_valid:
             raise BadRequestException(
@@ -579,7 +606,7 @@ class BedAllocationService:
         appointment.appointment_type = AppointmentType.IPD.value
         appointment.admission_recommended = True
         appointment.admission_number = appointment.admission_number or generate_admission_number()
-        if status_norm in ("admit recommended", "admit_recommended"):
+        if status_norm in ("admit recommended", "admit_recommended", "confirmed"):
             appointment.appointment_status = AppointmentStatus.COMPLETED
 
         bed.status = BedStatus.OCCUPIED.value

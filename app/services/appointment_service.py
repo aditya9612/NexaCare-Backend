@@ -474,12 +474,26 @@ class AppointmentService:
             patient = await self.patient_repo.get_by_id(data.patient_id)
             appointment_data["hospital_id"] = hospital_id or (patient.hospital_id if patient else None)
 
+        appt_type_str = (appointment_data.get("appointment_type") or "").strip().upper()
+        if appt_type_str == "IPD":
+            from app.core.constants import AdmissionStatus, AppointmentType
+            from app.utils.helpers import generate_admission_number
+            appointment_data["appointment_type"] = AppointmentType.IPD.value
+            appointment_data["admission_recommended"] = True
+            if not appointment_data.get("admission_status"):
+                appointment_data["admission_status"] = AdmissionStatus.ADMIT_RECOMMENDED
+            if not appointment_data.get("admission_number"):
+                appointment_data["admission_number"] = generate_admission_number()
+            initial_status = AppointmentStatus.ADMIT_RECOMMENDED
+        else:
+            initial_status = AppointmentStatus.PENDING
+
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
             queue_token=queue_tok,
             queue_status="WAITING",
-            appointment_status=AppointmentStatus.PENDING,
+            appointment_status=appointment_data.pop("appointment_status", None) or initial_status,
             **appointment_data,
         )
         appointment = await self.repo.create(appointment)
@@ -616,6 +630,17 @@ class AppointmentService:
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
+        if (appointment.appointment_type or "").strip().upper() == "IPD":
+            from app.core.constants import AdmissionStatus, AppointmentType
+            from app.utils.helpers import generate_admission_number
+            appointment.appointment_type = AppointmentType.IPD.value
+            appointment.admission_recommended = True
+            if not appointment.admission_status:
+                appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
+            if not appointment.admission_number:
+                appointment.admission_number = generate_admission_number()
+            if appointment.appointment_status == AppointmentStatus.PENDING:
+                appointment.appointment_status = AppointmentStatus.ADMIT_RECOMMENDED
         if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
             appointment.queue_status = "CANCELLED"
         elif appointment.appointment_status in (AppointmentStatus.COMPLETED, "Completed", "completed", "Checked-Out", "checked-out"):
@@ -1880,6 +1905,21 @@ class AppointmentService:
                             Appointment.admission_status.in_(admit_rec_variants),
                         ),
                     ),
+                    and_(
+                        Appointment.appointment_type == "IPD",
+                        or_(
+                            Appointment.admission_status.is_(None),
+                            Appointment.admission_status.notin_(
+                                [
+                                    "Not Recommended",
+                                    "not recommended",
+                                    "Not-Recommended",
+                                    "not-recommended",
+                                    "not_recommended",
+                                ]
+                            ),
+                        ),
+                    ),
                 ),
                 or_(
                     Appointment.admission_status.is_(None),
@@ -1983,8 +2023,8 @@ class AppointmentService:
                     appointment_number=a.appointment_number,
                     appointment_date=a.appointment_date,
                     appointment_status=a.appointment_status,
-                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if a.admission_recommended else None),
-                    admission_recommended=a.admission_recommended,
+                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if (a.admission_recommended or (a.appointment_type or "").upper() == "IPD") else None),
+                    admission_recommended=bool(a.admission_recommended or (a.appointment_type or "").upper() == "IPD"),
                     admission_reason=a.admission_reason,
                     expected_los=a.expected_los,
                     recommended_ward=a.recommended_ward,

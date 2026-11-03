@@ -99,3 +99,47 @@ def decrypt_totp_secret(encrypted_secret: str) -> str:
         return f.decrypt(encrypted_secret.encode("utf-8")).decode("utf-8")
     except InvalidToken:
         raise ValueError("Failed to decrypt TOTP secret")
+
+
+def hash_pin(pin: str) -> str:
+    return get_password_hash(pin)
+
+
+def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
+    return verify_password(plain_pin, hashed_pin)
+
+
+def create_login_otp_challenge_token(
+    subject: str | Any, email: str, purpose: str = "password_login"
+) -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=5)
+    jti = secrets.token_urlsafe(32)
+    payload = {
+        "sub": str(subject),
+        "email": email,
+        "purpose": purpose,
+        "exp": expire,
+        "type": "login_otp_challenge",
+        "iat": now,
+        "jti": jti,
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return token, jti
+
+
+def create_pin_setup_token(subject: str | Any, email: str) -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=15)
+    jti = secrets.token_urlsafe(32)
+    payload = {
+        "sub": str(subject),
+        "email": email,
+        "exp": expire,
+        "type": "pin_setup",
+        "iat": now,
+        "jti": jti,
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return token, jti
+

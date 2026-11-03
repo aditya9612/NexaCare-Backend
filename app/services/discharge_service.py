@@ -270,12 +270,24 @@ class DischargeService:
             Prescription.is_deleted == False
         )
         prescriptions = (await self.db.scalars(rx_stmt)).all()
+        rx_ids = [p.id for p in (prescriptions or []) if hasattr(p, "id")]
+
+        pharm_count = 0
+        if rx_ids:
+            inv_stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.prescription_id.in_(rx_ids),
+                PharmacyInvoice.is_deleted == False
+            )
+            if getattr(discharge, "hospital_id", None) is not None:
+                inv_stmt = inv_stmt.where(PharmacyInvoice.hospital_id == discharge.hospital_id)
+            pharm_invoices = (await self.db.scalars(inv_stmt)).all()
+            pharm_count = len(pharm_invoices or [])
 
         discharge.pharmacy_cleared = True
         discharge.pharmacy_cleared_by = user_id
         discharge.pharmacy_cleared_at = utc_now()
         
-        verification_msg = f"Verified {len(prescriptions)} prescription(s) for IPD appointment #{discharge.appointment_id}."
+        verification_msg = f"Verified {len(prescriptions)} prescription(s) and {pharm_count} pharmacy bill(s) for IPD appointment #{discharge.appointment_id}."
         if data and data.notes:
             discharge.pharmacy_notes = f"{verification_msg} Notes: {data.notes}"
         else:
@@ -560,32 +572,62 @@ class DischargeService:
         rx_ids = [r for r in rx_ids if isinstance(r, int)]
 
         from sqlalchemy import or_, func
-        pharm_conditions = [PharmacyInvoice.patient_id == discharge.patient_id]
+        pharm_conditions = []
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
+        if discharge.admission_date:
+            admission_end = discharge.discharge_date or now_dt
+            pharm_conditions.append(
+                (PharmacyInvoice.patient_id == discharge.patient_id)
+                & (PharmacyInvoice.created_at >= discharge.admission_date)
+                & (PharmacyInvoice.created_at <= admission_end)
+            )
 
-        unpaid_pharm_stmt = select(PharmacyInvoice).where(
-            or_(*pharm_conditions),
-            PharmacyInvoice.is_deleted == False,
-            (func.lower(PharmacyInvoice.status) != "paid") | (PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount)
-        )
-        unpaid_pharm = (await self.db.scalars(unpaid_pharm_stmt)).all()
+        applicable_pharm = []
+        if pharm_conditions:
+            pharm_stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.is_deleted == False,
+                or_(*pharm_conditions),
+            )
+            if getattr(discharge, "hospital_id", None) is not None:
+                pharm_stmt = pharm_stmt.where(PharmacyInvoice.hospital_id == discharge.hospital_id)
+            applicable_pharm = (await self.db.scalars(pharm_stmt)).all()
 
         seen_invoices = set()
-        for inv in (unpaid_pharm or []):
+        total_pharmacy_paid = 0.0
+        for inv in (applicable_pharm or []):
             if not inv or not hasattr(inv, "id"):
                 continue
             if inv.id in seen_invoices:
                 continue
             seen_invoices.add(inv.id)
-            inv_balance = max(0.0, getattr(inv, "total_amount", 0.0) - getattr(inv, "paid_amount", 0.0))
-            if inv_balance > 0:
+
+            inv_tot = float(getattr(inv, "total_amount", 0.0) or 0.0)
+            inv_paid = float(getattr(inv, "paid_amount", 0.0) or 0.0)
+            inv_status = str(getattr(inv, "status", "") or "").strip().lower()
+
+            is_paid = inv_status in ("paid", "completed", "settled") or (inv_tot > 0 and inv_paid >= inv_tot)
+            if is_paid:
+                inv_paid = inv_tot
+                inv_balance = 0.0
+                status_desc = "Fully Paid"
+                total_pharmacy_paid += inv_paid
+                if inv.status != "paid" or getattr(inv, "paid_amount", 0.0) < inv_tot:
+                    inv.status = "paid"
+                    inv.paid_amount = inv_tot
+                    await self.db.flush()
+            else:
+                inv_balance = max(0.0, round(inv_tot - inv_paid, 2))
+                total_pharmacy_paid += inv_paid
+                status_desc = f"Partially Paid (Paid: ₹{inv_paid:,.2f}, Due: ₹{inv_balance:,.2f})" if inv_paid > 0 else "Unpaid"
+
+            if inv_tot > 0:
                 bill_items.append(
                     BillItemCreate(
                         item_type="pharmacy_invoice",
-                        description=f"Pharmacy Invoice #{getattr(inv, 'invoice_number', inv.id)} (Prescription #{getattr(inv, 'prescription_id', None) or 'IPD'})",
+                        description=f"Pharmacy Invoice #{getattr(inv, 'invoice_number', inv.id)} ({status_desc})",
                         quantity=1,
-                        unit_price=inv_balance,
+                        unit_price=inv_tot,
                         gst_rate=0.0,
                         reference_id=inv.id,
                     )
@@ -675,10 +717,11 @@ class DischargeService:
                 else:
                     total_refunds += abs(float(amt))
 
-        net_advance_paid = max(0.0, total_advances - total_refunds)
-        advance_adjusted = min(net_advance_paid, net_total)
+        # Net prior payments include general advance deposits and paid pharmacy counter amounts
+        net_prior_paid = max(0.0, total_advances + total_pharmacy_paid - total_refunds)
+        advance_adjusted = min(net_prior_paid, net_total)
         balance_amount = max(0.0, round(net_total - advance_adjusted, 2))
-        refund_amount = max(0.0, round(net_advance_paid - net_total, 2)) if net_advance_paid > net_total else 0.0
+        refund_amount = max(0.0, round(net_prior_paid - net_total, 2)) if net_prior_paid > net_total else 0.0
 
         # 6. Save or Update Dedicated IPD Final Bill
         existing_final_bill = None
@@ -705,8 +748,10 @@ class DischargeService:
             existing_final_bill.advance_adjusted = advance_adjusted
             existing_final_bill.balance_amount = balance_amount
             existing_final_bill.refund_amount = refund_amount
-            if balance_amount == 0.0 and net_advance_paid > 0:
+            if balance_amount == 0.0 and (net_prior_paid > 0 or net_total == 0.0):
                 existing_final_bill.status = "paid"
+            else:
+                existing_final_bill.status = "pending"
             existing_final_bill.notes = data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}"
 
             # Replace items
@@ -748,7 +793,7 @@ class DischargeService:
                 advance_adjusted=advance_adjusted,
                 balance_amount=balance_amount,
                 refund_amount=refund_amount,
-                status="paid" if balance_amount == 0.0 and net_advance_paid > 0 else "pending",
+                status="paid" if balance_amount == 0.0 and (net_prior_paid > 0 or net_total == 0.0) else "pending",
                 notes=data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}",
             )
             for it in bill_items:
@@ -855,6 +900,8 @@ class DischargeService:
         discharge.final_bill_id = final_bill.id
         discharge.billing_id = billing.id
         discharge.billing_notes = f"Consolidated IPD Final Bill #{final_bill.bill_number} generated for ₹{final_bill.net_total:,.2f}"
+        if final_bill.pharmacy_charges > 0:
+            discharge.billing_notes += f" (includes ₹{final_bill.pharmacy_charges:,.2f} pharmacy charges)"
         await self.repo.update(discharge)
         await self.db.flush()
 
@@ -908,6 +955,13 @@ class DischargeService:
             fb_status = str(final_bill.status or "").strip().lower()
             fb_net = Decimal(str(final_bill.net_total or 0.0)).quantize(Decimal("0.01"))
 
+            # Normalize status to paid if balance is zero and not yet marked paid
+            if fb_bal <= Decimal("0.00") and fb_status != "paid":
+                final_bill.status = "paid"
+                final_bill.balance_amount = 0.0
+                await self.final_bill_repo.update(final_bill)
+                fb_status = "paid"
+
             if fb_bal > Decimal("0.00") or fb_status != "paid":
                 outstanding_bills.append({
                     "bill_type": "ipd_final_bill",
@@ -952,6 +1006,13 @@ class DischargeService:
             b_paid = Decimal(str(b.paid_amount or 0.0)).quantize(Decimal("0.01"))
             b_status = str(b.status or "").strip().lower()
 
+            # Normalize status to paid if balance is zero
+            if (b_bal <= Decimal("0.00") or b_paid >= b_tot or b_status in ("completed", "settled")) and b.status != "paid":
+                b.status = "paid"
+                b.balance_amount = 0.0
+                await self.db.flush()
+                b_status = "paid"
+
             if b_bal > Decimal("0.00") or b_status != "paid" or b_paid < b_tot:
                 outstanding_bills.append({
                     "bill_type": "billing",
@@ -983,11 +1044,17 @@ class DischargeService:
             pharm_conds.append(PharmacyInvoice.prescription_id.in_(rx_ids))
         if pharm_ref_ids:
             pharm_conds.append(PharmacyInvoice.id.in_(list(pharm_ref_ids)))
+        if discharge.admission_date:
+            admission_end = discharge.discharge_date or now_dt
+            pharm_conds.append(
+                (PharmacyInvoice.patient_id == discharge.patient_id)
+                & (PharmacyInvoice.created_at >= discharge.admission_date)
+                & (PharmacyInvoice.created_at <= admission_end)
+            )
 
         if pharm_conds:
             pharm_stmt = select(PharmacyInvoice).where(
                 PharmacyInvoice.is_deleted == False,
-                PharmacyInvoice.patient_id == discharge.patient_id,
                 or_(*pharm_conds)
             )
             if hospital_id is not None:
@@ -1005,17 +1072,39 @@ class DischargeService:
                 inv_bal = max(Decimal("0.00"), inv_tot - inv_paid).quantize(Decimal("0.01"))
                 inv_status = str(inv.status or "").strip().lower()
 
-                if inv_bal > Decimal("0.00") or inv_status != "paid":
-                    outstanding_bills.append({
-                        "bill_type": "pharmacy_invoice",
-                        "bill_id": inv.id,
-                        "bill_number": inv.invoice_number,
-                        "status": inv.status,
-                        "total_amount": float(inv_tot),
-                        "paid_amount": float(inv_paid),
-                        "outstanding_balance": float(inv_bal),
-                        "reason": f"Pharmacy invoice #{inv.invoice_number} has an outstanding balance of ₹{inv_bal:,.2f} (status: {inv.status}).",
-                    })
+                # If consolidated into final_bill:
+                if inv.id in pharm_ref_ids:
+                    # If final_bill is fully settled, ensure invoice reflects paid status
+                    if final_bill and str(final_bill.status or "").strip().lower() == "paid" and Decimal(str(final_bill.balance_amount or 0.0)) <= Decimal("0.00"):
+                        if inv.status != "paid" or inv_paid < inv_tot:
+                            inv.status = "paid"
+                            inv.paid_amount = float(inv_tot)
+                            await self.db.flush()
+                        continue
+                    else:
+                        # Consolidated in final_bill, and final_bill's outstanding balance is already
+                        # reported in Step 1. Do not double-count it under pharmacy_invoice!
+                        continue
+
+                # If paid directly or at pharmacy counter:
+                if inv_bal <= Decimal("0.00") or inv_paid >= inv_tot or inv_status in ("paid", "completed", "settled"):
+                    if inv.status != "paid" or inv_paid < inv_tot:
+                        inv.status = "paid"
+                        inv.paid_amount = float(inv_tot)
+                        await self.db.flush()
+                    continue
+
+                # Genuine outstanding separate pharmacy invoice
+                outstanding_bills.append({
+                    "bill_type": "pharmacy_invoice",
+                    "bill_id": inv.id,
+                    "bill_number": inv.invoice_number,
+                    "status": inv.status,
+                    "total_amount": float(inv_tot),
+                    "paid_amount": float(inv_paid),
+                    "outstanding_balance": float(inv_bal),
+                    "reason": f"Pharmacy invoice #{inv.invoice_number} has an outstanding balance of ₹{inv_bal:,.2f} (status: {inv.status}).",
+                })
 
         return len(outstanding_bills) == 0, outstanding_bills
 
@@ -1184,12 +1273,18 @@ class DischargeService:
             pharm_conditions.append(PharmacyInvoice.id.in_(list(pharm_invoice_ids)))
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
+        if discharge.admission_date:
+            admission_end = discharge.discharge_date or now_dt
+            pharm_conditions.append(
+                (PharmacyInvoice.patient_id == discharge.patient_id)
+                & (PharmacyInvoice.created_at >= discharge.admission_date)
+                & (PharmacyInvoice.created_at <= admission_end)
+            )
 
         if pharm_conditions:
             from sqlalchemy import or_, func
             unpaid_pharm_stmt = select(PharmacyInvoice).where(
                 PharmacyInvoice.is_deleted == False,
-                PharmacyInvoice.patient_id == discharge.patient_id,
                 or_(*pharm_conditions),
                 (func.lower(PharmacyInvoice.status) != "paid") | (PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount)
             )

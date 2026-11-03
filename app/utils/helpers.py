@@ -139,3 +139,19 @@ def calculate_bill_totals(
         "tax_amount": round(tax_amount, 2),
         "total_amount": total,
     }
+
+
+def mask_email(email: str | None) -> str:
+    """Mask email for privacy, e.g. 'aditya@hospital.com' -> 'ad****a@hospital.com'."""
+    if not email or "@" not in email:
+        return ""
+    parts = email.strip().split("@", 1)
+    local = parts[0]
+    domain = parts[1]
+    if len(local) <= 1:
+        masked_local = f"{local}****"
+    elif len(local) == 2:
+        masked_local = f"{local[0]}****{local[1]}"
+    else:
+        masked_local = f"{local[:2]}****{local[-1]}"
+    return f"{masked_local}@{domain}"

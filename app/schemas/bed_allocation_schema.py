@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common_schema import BaseSchema
 from app.schemas.patient_schema import PatientResponse
@@ -272,10 +272,16 @@ class FloorResponse(BaseSchema):
 
 # Bed Allocation Operations
 class BedAllocationRequest(BaseModel):
-    patientId: int = Field(..., gt=0)
+    patientId: Optional[int] = Field(None, gt=0, description="Patient ID (optional if appointmentId is provided)")
     appointmentId: Optional[int] = Field(None, gt=0, description="Specific appointment ID for admission")
     admissionDate: datetime
     notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_ids(self) -> "BedAllocationRequest":
+        if self.patientId is None and self.appointmentId is None:
+            raise ValueError("Either patientId or appointmentId must be provided")
+        return self
 
     @field_validator("notes")
     @classmethod

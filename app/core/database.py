@@ -96,24 +96,7 @@ async def init_db():
     # Enabled select auto-seeding on server startup
     async with AsyncSessionLocal() as session:
         try:
-            print("Running seed_roles...")
-            await _seed_roles_and_permissions(session)
-
-            print("Running module-specific permission seeds...")
-            await _seed_phase3_permissions(session)
-            await _seed_bed_allocation_permissions(session)
-            await _seed_icu_telemetry_permissions(session)
-            await _seed_patient_permissions(session)
-            await _seed_lab_technician_permissions(session)
-            await _seed_doctor_and_pharmacist_lab_permissions(session)
-            await _seed_expense_permissions(session)
-            await _seed_doctor_medical_records_and_inventory_permissions(session)
-
-            print("Running default super admin seed...")
-            await _seed_default_super_admin(session)
-            await _seed_nurse_adesh(session)
-
-            # Ensure any missing columns are created
+            # Ensure any missing columns are created before running seeds/queries
             from sqlalchemy import text
             for col_stmt in [
                 "ALTER TABLE patient_vitals ADD COLUMN notes TEXT NULL",
@@ -127,6 +110,10 @@ async def init_db():
                 "ALTER TABLE room_tariffs ADD COLUMN hospital_id INT NULL",
                 "ALTER TABLE room_tariffs DROP INDEX ix_room_tariffs_room_type",
                 "ALTER TABLE room_tariffs ADD UNIQUE KEY uq_room_tariffs_hospital_room_type (hospital_id, room_type)",
+                "ALTER TABLE users ADD COLUMN hashed_pin VARCHAR(255) NULL",
+                "ALTER TABLE users ADD COLUMN pin_set_at DATETIME NULL",
+                "ALTER TABLE users ADD COLUMN pin_failed_attempts INT NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN pin_locked_until DATETIME NULL",
             ]:
                 try:
                     await session.execute(text(col_stmt))
@@ -149,6 +136,24 @@ async def init_db():
                     await session.commit()
                 except Exception:
                     await session.rollback()
+
+            print("Running seed_roles...")
+            await _seed_roles_and_permissions(session)
+
+            print("Running module-specific permission seeds...")
+            await _seed_phase3_permissions(session)
+            await _seed_bed_allocation_permissions(session)
+            await _seed_icu_telemetry_permissions(session)
+            await _seed_patient_permissions(session)
+            await _seed_lab_technician_permissions(session)
+            await _seed_doctor_and_pharmacist_lab_permissions(session)
+            await _seed_expense_permissions(session)
+            await _seed_doctor_medical_records_and_inventory_permissions(session)
+
+            print("Running default super admin seed...")
+            await _seed_default_super_admin(session)
+            await _seed_nurse_adesh(session)
+
 
 
             await session.commit()

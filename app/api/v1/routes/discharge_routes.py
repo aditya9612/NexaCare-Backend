@@ -14,6 +14,7 @@ from app.models.user_model import User
 from app.schemas.common_schema import APIResponse
 from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
 from app.schemas.discharge_schema import (
+    ActiveDischargesResponse,
     ClearBillingRequest,
     ClearPaymentRequest,
     ClearPharmacyRequest,
@@ -49,7 +50,7 @@ async def initiate_discharge(
     )
 
 
-@router.get("/active", response_model=APIResponse[list[DischargeResponse]])
+@router.get("/active", response_model=APIResponse[ActiveDischargesResponse])
 async def list_active_discharges(
     db: DbSession,
     current_user: CurrentUser,

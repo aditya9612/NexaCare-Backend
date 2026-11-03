@@ -193,6 +193,49 @@ class NurseCommunicationService:
             )
         return results
 
+    async def list_patient_updates(
+        self,
+        user: User,
+        patient_id: int | None = None,
+        severity: str | None = None,
+    ) -> list[PatientUpdateResponse]:
+        role_name = user.role.name if user.role else None
+        nurse_id = None
+
+        if role_name in UserRole.ADMIN_ROLES:
+            pass
+        elif role_name == UserRole.DOCTOR:
+            doctor = await self.db.scalar(select(Doctor).where(Doctor.user_id == user.id))
+            if not doctor:
+                raise ForbiddenException("Access denied: doctor profile not found")
+        elif role_name == UserRole.NURSE:
+            nurse = await self.db.scalar(select(Nurse).where(Nurse.user_id == user.id))
+            if nurse:
+                nurse_id = nurse.id
+        else:
+            raise ForbiddenException("Requires Nurse, Doctor, or Admin permissions")
+
+        updates = await self.repo.list_patient_updates(
+            nurse_id=nurse_id,
+            patient_id=patient_id,
+            severity=severity,
+        )
+        results = []
+        for u in updates:
+            n_name = u.nurse.user.full_name if u.nurse and u.nurse.user else "Nurse"
+            results.append(
+                PatientUpdateResponse(
+                    update_id=u.id,
+                    patient_id=u.patient_id,
+                    nurse_name=n_name,
+                    update_type=u.update_type,
+                    message=u.message,
+                    severity=u.severity,
+                    created_at=u.created_at,
+                )
+            )
+        return results
+
     async def create_emergency_alert(self, data: EmergencyAlertCreate, user_id: int) -> EmergencyAlertResponse:
         nurse = await self._get_nurse_by_user_id(user_id)
         await self._validate_assignment(nurse.id, data.patient_id)
@@ -267,8 +310,15 @@ class NurseCommunicationService:
         data: EmergencyAlertUpdate,
         user_id: int,
     ) -> EmergencyAlertResponse:
-        nurse = await self._get_nurse_by_user_id(user_id)
-        alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+        result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
+        nurse = result.scalar_one_or_none()
+        if nurse:
+            alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+            if not alert:
+                alert = await self.repo.get_emergency_alert(alert_id)
+        else:
+            alert = await self.repo.get_emergency_alert(alert_id)
+
         if not alert:
             raise NotFoundException("Emergency alert not found")
 
@@ -287,6 +337,21 @@ class NurseCommunicationService:
             message=alert.message,
             created_at=alert.created_at,
         )
+
+    async def delete_emergency_alert(self, alert_id: int, user_id: int) -> None:
+        result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))
+        nurse = result.scalar_one_or_none()
+        if nurse:
+            alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
+            if not alert:
+                alert = await self.repo.get_emergency_alert(alert_id)
+        else:
+            alert = await self.repo.get_emergency_alert(alert_id)
+
+        if not alert:
+            raise NotFoundException("Emergency alert not found")
+
+        await self.repo.delete_emergency_alert(alert)
 
     async def _notify_emergency_channels(self, patient_id: int, message: str, appointment_id: int | None = None) -> None:
         title = "Patient Emergency Alert"

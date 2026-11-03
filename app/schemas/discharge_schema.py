@@ -111,6 +111,28 @@ class DischargeResponse(BaseSchema):
     updated_at: datetime
 
 
+class DischargeActiveSummary(BaseSchema):
+    active_discharges: int = Field(default=0, description="Total number of active discharge records")
+    pharmacy_pending: int = Field(default=0, description="Active records awaiting pharmacy clearance")
+    billing_pending: int = Field(default=0, description="Active records awaiting billing clearance")
+    payment_pending: int = Field(default=0, description="Active records awaiting payment clearance")
+    doctor_approval_pending: int = Field(default=0, description="Active records awaiting doctor approval")
+
+
+class ActiveDischargesResponse(BaseSchema):
+    summary: DischargeActiveSummary
+    active_discharges: int = Field(default=0, exclude=True, description="Total number of active discharge records (internal alias)")
+    pharmacy_pending: int = Field(default=0, exclude=True, description="Active records awaiting pharmacy clearance (internal alias)")
+    billing_pending: int = Field(default=0, exclude=True, description="Active records awaiting billing clearance (internal alias)")
+    payment_pending: int = Field(default=0, exclude=True, description="Active records awaiting payment clearance (internal alias)")
+    doctor_approval_pending: int = Field(default=0, exclude=True, description="Active records awaiting doctor approval (internal alias)")
+    discharges: list[DischargeResponse] = Field(default_factory=list)
+    items: list[DischargeResponse] = Field(default_factory=list, exclude=True, description="Internal alias for discharges, excluded from JSON serialization to prevent payload duplication")
+
+
+ActiveDischargesWithSummaryResponse = ActiveDischargesResponse
+
+
 class DischargeGatePassResponse(BaseSchema):
     gate_pass_number: str
     discharge_number: str

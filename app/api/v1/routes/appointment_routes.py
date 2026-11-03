@@ -192,9 +192,23 @@ async def calendar_view(
 async def today_appointments(
     db: DbSession,
     current_user: CurrentUser,
+    patient_id: int | None = None,
+    doctor_id: int | None = None,
+    department_id: int | None = None,
+    status: str | None = None,
+    admission_status: str | None = None,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("appointments", "read")),
 ):
-    appointments = await AppointmentService(db).get_today(current_user=current_user)
+    appointments = await AppointmentService(db).get_today(
+        current_user=current_user,
+        patient_id=patient_id,
+        doctor_id=doctor_id,
+        department_id=department_id,
+        status=status,
+        admission_status=admission_status,
+        x_hospital_id=x_hospital_id,
+    )
     return APIResponse(message="Today's appointments", data=appointments)
 
 

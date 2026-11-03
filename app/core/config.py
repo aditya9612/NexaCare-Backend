@@ -49,11 +49,11 @@ class Settings(BaseSettings):
 
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    SMTP_HOST="smtp.gmail.com"
-    SMTP_PORT=587
-    SMTP_USER="nexacareshekrulab@gmail.com"
-    SMTP_PASSWORD="ddwy jwyp ccgg vzwh"
-    SMTP_FROM="nexacareshekrulab@gmail.com"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "nexacareshekrulab@gmail.com"
 
     SMS_API_KEY: str = ""
     WHATSAPP_API_KEY: str = ""

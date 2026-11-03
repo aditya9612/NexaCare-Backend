@@ -110,10 +110,6 @@ async def init_db():
                 "ALTER TABLE room_tariffs ADD COLUMN hospital_id INT NULL",
                 "ALTER TABLE room_tariffs DROP INDEX ix_room_tariffs_room_type",
                 "ALTER TABLE room_tariffs ADD UNIQUE KEY uq_room_tariffs_hospital_room_type (hospital_id, room_type)",
-                "ALTER TABLE users ADD COLUMN hashed_pin VARCHAR(255) NULL",
-                "ALTER TABLE users ADD COLUMN pin_set_at DATETIME NULL",
-                "ALTER TABLE users ADD COLUMN pin_failed_attempts INT NOT NULL DEFAULT 0",
-                "ALTER TABLE users ADD COLUMN pin_locked_until DATETIME NULL",
             ]:
                 try:
                     await session.execute(text(col_stmt))

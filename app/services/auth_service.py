@@ -504,8 +504,11 @@ class AuthService:
                 if not verify_password(data.password, user.hashed_password):
                     raise UnauthorizedException("Invalid credentials")
 
+                is_super_admin = bool(user.role and user.role.name == UserRole.SUPER_ADMIN)
+
                 # If user has not configured a PIN or explicitly requested OTP: issue short-lived challenge
-                if not user.hashed_pin or data.require_otp:
+                # SUPER_ADMIN has full system access and directly logs in with password without OTP challenge
+                if not is_super_admin and (not user.hashed_pin or data.require_otp):
                     if not user.is_active:
                         raise UnauthorizedException("Account not activated. Please verify OTP.")
 
@@ -616,6 +619,9 @@ class AuthService:
         user_profile.role = role_name
         user_profile.hospital_id = user.hospital_id
         user_profile.is_pin_set = bool(user.hashed_pin)
+        setup_token = None
+        if not user.hashed_pin:
+            setup_token, _ = create_pin_setup_token(user.id, user.email)
         return TokenResponse(
             access_token=access,
             refresh_token=refresh,
@@ -623,6 +629,7 @@ class AuthService:
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             role=role_name,
             is_pin_set=bool(user.hashed_pin),
+            setup_token=setup_token,
             user=user_profile,
         )
 
@@ -1076,7 +1083,7 @@ class AuthService:
             except Exception as exc:
                 raise UnauthorizedException("Invalid or expired setup token") from exc
 
-            if payload.get("type") != "pin_setup":
+            if payload.get("type") not in ("pin_setup", "access"):
                 raise UnauthorizedException("Invalid token type for PIN setup")
 
             user_id = int(payload.get("sub"))

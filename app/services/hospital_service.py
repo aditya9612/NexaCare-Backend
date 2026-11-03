@@ -202,14 +202,24 @@ class HospitalService:
         if not admin:
             raise NotFoundException("Hospital Admin user not found")
         
+        auth_repo = AuthRepository(self.db)
+
+        # Check duplicate email
+        if data.email:
+            email_norm = str(data.email).strip().lower()
+            existing_email = await auth_repo.get_by_email(email_norm)
+            if existing_email and existing_email.id != admin_id:
+                raise ConflictException("User with this email already exists")
+
         # Check duplicate phone
         if data.phone:
-            auth_repo = AuthRepository(self.db)
             existing_phone = await auth_repo.get_by_phone(data.phone)
             if existing_phone and existing_phone.id != admin_id:
                 raise ConflictException("User with this phone number already exists")
 
         for key, value in data.model_dump(exclude_unset=True).items():
+            if key == "email" and value:
+                value = str(value).strip().lower()
             setattr(admin, key, value)
         await self.db.flush()
         await self.db.refresh(admin)

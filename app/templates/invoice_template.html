@@ -28,27 +28,32 @@
     }
 
     .brand-title {
-      font-size: 20pt;
+      font-size: 13pt;
       font-weight: bold;
       color: #2563eb;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.2px;
+      line-height: 1.2;
+      margin: 0;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
 
     .brand-sub {
-      font-size: 9.5pt;
+      font-size: 8.5pt;
       color: #475569;
-      margin-top: 4px;
-      line-height: 1.4;
+      margin-top: 3px;
+      line-height: 1.35;
     }
 
     .invoice-title {
-      font-size: 16pt;
+      font-size: 15pt;
       font-weight: bold;
       color: #1e293b;
       text-align: right;
       line-height: 1.2;
       letter-spacing: 0.5px;
+      white-space: nowrap;
     }
 
     /* Info Section (Patient Details & Invoice Information) */
@@ -276,12 +281,12 @@
         <table style="border: none; width: 100%;">
           <tr>
             {% if logo_data_uri %}
-            <td style="border: none; padding: 0 14px 0 0; width: 1px; vertical-align: middle;">
-              <img src="{{ logo_data_uri }}" style="max-height: 52px; max-width: 150px; object-fit: contain; display: block;" alt="Logo" />
+            <td style="border: none; padding: 0 12px 0 0; width: 1px; vertical-align: middle;">
+              <img src="{{ logo_data_uri }}" style="max-height: 50px; max-width: 110px; height: auto; width: auto; object-fit: contain; display: block;" alt="Logo" />
             </td>
             {% elif logo_base64 %}
-            <td style="border: none; padding: 0 14px 0 0; width: 1px; vertical-align: middle;">
-              <img src="data:image/png;base64,{{ logo_base64 }}" style="max-height: 52px; max-width: 150px; object-fit: contain; display: block;" alt="Logo" />
+            <td style="border: none; padding: 0 12px 0 0; width: 1px; vertical-align: middle;">
+              <img src="data:image/png;base64,{{ logo_base64 }}" style="max-height: 50px; max-width: 110px; height: auto; width: auto; object-fit: contain; display: block;" alt="Logo" />
             </td>
             {% endif %}
             <td style="border: none; padding: 0; vertical-align: middle;">
@@ -296,9 +301,9 @@
           </tr>
         </table>
       </td>
-      <td style="text-align: right; vertical-align: middle; border: none; padding: 0; white-space: nowrap;">
+      <td style="text-align: right; vertical-align: middle; border: none; padding: 0 0 0 16px; width: 25%; white-space: nowrap;">
         <div class="invoice-title">TAX INVOICE</div>
-        <div style="font-size: 8.5pt; color: #64748b; margin-top: 4px;">Original for Recipient</div>
+        <div style="font-size: 8.5pt; color: #64748b; margin-top: 4px; white-space: nowrap;">Original for Recipient</div>
       </td>
     </tr>
   </table>

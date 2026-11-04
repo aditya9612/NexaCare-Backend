@@ -10,7 +10,12 @@ from app.schemas.auth_schema import (
     TOTPEnableResponse,
     ActivateAccountRequest,
     ChangePasswordRequest,
+    ChangePINRequest,
     ForgotPasswordRequest,
+    ForgotPINRequest,
+    LoginContext,
+    LoginOTPChallengeResponse,
+    LoginOTPVerifyRequest,
     LoginRequest,
     OTPVerifyRequest,
     ProfileUpdateRequest,
@@ -20,7 +25,10 @@ from app.schemas.auth_schema import (
     GenderOption,
     RegistrationRoleOption,
     ResetPasswordRequest,
+    ResetPINRequest,
     SendOTPRequest,
+    SendOTPResponse,
+    SetPINRequest,
     TokenResponse,
     UserProfileResponse,
     TOTPSetupResponse,
@@ -89,16 +97,18 @@ async def register(
     )
 
 
-@router.post("/send-otp", response_model=APIResponse[MessageResponse])
+@router.post("/send-otp", response_model=APIResponse[SendOTPResponse])
 async def send_otp(data: SendOTPRequest, db: DbSession):
-    await AuthService(db).send_otp(data)
+    res = await AuthService(db).send_otp(data)
+    if not isinstance(res, SendOTPResponse):
+        res = SendOTPResponse(message="OTP sent to your email and/or mobile number")
     return APIResponse(
         message="OTP sent",
-        data=MessageResponse(message="OTP sent to your email and/or mobile number"),
+        data=res,
     )
 
 
-@router.post("/login", response_model=APIResponse[TokenResponse | TwoFAChallengeResponse])
+@router.post("/login", response_model=APIResponse[TokenResponse | TwoFAChallengeResponse | LoginOTPChallengeResponse])
 async def login(data: LoginRequest, db: DbSession, request: Request):
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -108,7 +118,61 @@ async def login(data: LoginRequest, db: DbSession, request: Request):
     if isinstance(result, TwoFAChallengeResponse):
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=202, content={"message": "2FA required", "data": result.model_dump()})
+    if isinstance(result, LoginOTPChallengeResponse):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"message": result.message, "data": result.model_dump()})
     return APIResponse(message="Login successful", data=result)
+
+
+@router.post("/login/verify-otp", response_model=APIResponse[TokenResponse | TwoFAChallengeResponse])
+async def login_verify_otp(data: LoginOTPVerifyRequest, db: DbSession, request: Request):
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    result = await AuthService(db).verify_password_login_otp(
+        data, ip_address=ip_address, user_agent=user_agent
+    )
+    if isinstance(result, TwoFAChallengeResponse):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"message": "2FA required", "data": result.model_dump()})
+    return APIResponse(message="Login successful", data=result)
+
+
+@router.post("/pin/set", response_model=APIResponse[dict])
+async def set_pin(data: SetPINRequest, db: DbSession, request: Request):
+    user = None
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        from app.core.security import decode_token
+        try:
+            payload = decode_token(token)
+            if payload.get("sub"):
+                from app.repositories.auth_repository import AuthRepository
+                user = await AuthRepository(db).get_by_id(int(payload["sub"]))
+        except Exception:
+            pass
+
+    res = await AuthService(db).set_pin(data=data, current_user=user)
+    return APIResponse(message="PIN configured successfully", data=res)
+
+
+@router.put("/pin/change", response_model=APIResponse[dict])
+async def change_pin(data: ChangePINRequest, db: DbSession, current_user: CurrentUser):
+    res = await AuthService(db).change_pin(current_user=current_user, data=data)
+    return APIResponse(message="PIN updated successfully", data=res)
+
+
+@router.post("/pin/forgot", response_model=APIResponse[SendOTPResponse])
+async def forgot_pin(data: ForgotPINRequest, db: DbSession):
+    res = await AuthService(db).forgot_pin(data)
+    return APIResponse(message="OTP sent", data=res)
+
+
+@router.post("/pin/reset", response_model=APIResponse[MessageResponse])
+async def reset_pin(data: ResetPINRequest, db: DbSession):
+    res = await AuthService(db).reset_pin(data)
+    return APIResponse(message="PIN reset successfully", data=res)
+
 
 @router.post("/login/2fa", response_model=APIResponse[TokenResponse])
 async def login_2fa(data: TOTPLoginRequest, db: DbSession, request: Request):

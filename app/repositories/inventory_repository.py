@@ -456,11 +456,29 @@ class WarehouseRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_code(self, code: str) -> Warehouse | None:
-        result = await self.db.execute(
-            select(Warehouse).where(func.lower(Warehouse.code) == code.lower(), Warehouse.is_deleted.is_(False))
+    async def get_by_code(self, code: str, hospital_id: int | None = None) -> Warehouse | None:
+        query = select(Warehouse).where(
+            func.lower(Warehouse.code) == code.strip().lower(),
+            Warehouse.is_deleted.is_(False),
         )
-        return result.scalar_one_or_none()
+        if hospital_id is not None:
+            query = query.where(Warehouse.hospital_id == hospital_id)
+        else:
+            query = query.where(Warehouse.hospital_id.is_(None))
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_by_name(self, name: str, hospital_id: int | None = None) -> Warehouse | None:
+        query = select(Warehouse).where(
+            func.lower(Warehouse.name) == name.strip().lower(),
+            Warehouse.is_deleted.is_(False),
+        )
+        if hospital_id is not None:
+            query = query.where(Warehouse.hospital_id == hospital_id)
+        else:
+            query = query.where(Warehouse.hospital_id.is_(None))
+        result = await self.db.execute(query)
+        return result.scalars().first()
 
     async def create(self, warehouse: Warehouse) -> Warehouse:
         self.db.add(warehouse)

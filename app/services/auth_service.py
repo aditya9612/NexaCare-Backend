@@ -1,4 +1,7 @@
-from datetime import datetime, timedelta
+import asyncio
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
@@ -10,16 +13,22 @@ from app.core.exceptions import (
     BadRequestException,
     ConflictException,
     ForbiddenException,
+    LockedException,
     NotFoundException,
+    ServiceUnavailableException,
     UnauthorizedException,
 )
 from app.core.security import (
     create_access_token,
     create_refresh_token,
     create_2fa_challenge_token,
+    create_login_otp_challenge_token,
+    create_pin_setup_token,
     decode_token,
     get_password_hash,
+    hash_pin,
     verify_password,
+    verify_pin,
 )
 from app.models.refresh_token_model import RefreshToken
 from app.models.user_model import User
@@ -31,15 +40,22 @@ from app.repositories.rbac_repository import RBACRepository
 from app.schemas.auth_schema import (
     ActivateAccountRequest,
     ChangePasswordRequest,
+    ChangePINRequest,
     ForgotPasswordRequest,
+    ForgotPINRequest,
     LoginContext,
+    LoginOTPChallengeResponse,
+    LoginOTPVerifyRequest,
     LoginRequest,
     OTPVerifyRequest,
     ProfileUpdateRequest,
     RegisterRequest,
     RegistrationRoleOption,
     ResetPasswordRequest,
+    ResetPINRequest,
     SendOTPRequest,
+    SendOTPResponse,
+    SetPINRequest,
     TokenResponse,
     UserProfileResponse,
     TOTPSetupResponse,
@@ -48,10 +64,57 @@ from app.schemas.auth_schema import (
     TOTPLoginRequest,
     Disable2FARequest,
 )
-from app.utils.helpers import generate_user_code, utc_now
+from app.schemas.common_schema import MessageResponse
+from app.utils.helpers import generate_user_code, mask_email, utc_now
 from app.utils.otp_delivery import deliver_otp
 from app.utils.otp_handler import generate_otp, store_otp, verify_otp
+from app.utils.redis_service import cache_delete, cache_get, cache_set
 from app.services.totp_service import TOTPService
+
+
+_IN_MEMORY_CHALLENGE_JTI: dict[str, float] = {}
+_CHALLENGE_JTI_LOCK = asyncio.Lock()
+
+
+async def store_challenge_jti(jti: str, ttl: int = 300) -> None:
+    stored = await cache_set(f"login_otp_jti:{jti}", "valid", ttl=ttl)
+    if not stored:
+        async with _CHALLENGE_JTI_LOCK:
+            _IN_MEMORY_CHALLENGE_JTI[jti] = time.monotonic() + ttl
+
+
+async def consume_challenge_jti(jti: str) -> bool:
+    from app.utils.redis_service import get_redis
+    client = await get_redis()
+    if client:
+        try:
+            res = await client.delete(f"login_otp_jti:{jti}")
+            if res > 0:
+                return True
+        except Exception:
+            pass
+    async with _CHALLENGE_JTI_LOCK:
+        now = time.monotonic()
+        expiry = _IN_MEMORY_CHALLENGE_JTI.get(jti)
+        if expiry and expiry > now:
+            del _IN_MEMORY_CHALLENGE_JTI[jti]
+            return True
+        if jti in _IN_MEMORY_CHALLENGE_JTI:
+            del _IN_MEMORY_CHALLENGE_JTI[jti]
+        return False
+
+
+def validate_non_trivial_pin(pin: str) -> None:
+    if len(set(pin)) == 1:
+        raise BadRequestException("PIN cannot consist of identical digits (e.g., 0000 or 1111)")
+    sequences = {
+        "0123", "1234", "2345", "3456", "4567", "5678", "6789",
+        "9876", "8765", "7654", "6543", "5432", "4321", "3210",
+        "012345", "123456", "234567", "345678", "456789",
+        "987654", "876543", "765432", "654321", "543210"
+    }
+    if pin in sequences:
+        raise BadRequestException("PIN cannot be a simple consecutive sequence (e.g., 1234 or 123456)")
 
 
 class AuthService:
@@ -72,8 +135,12 @@ class AuthService:
 
     async def _issue_and_deliver_otp(self, user: User, purpose: str) -> str:
         otp = generate_otp()
-        store_otp(user.email, otp, settings.OTP_EXPIRE_MINUTES, phone=user.phone)
-        await deliver_otp(email=user.email, phone=user.phone, otp=otp, purpose=purpose)
+        await store_otp(user.email, otp, settings.OTP_EXPIRE_MINUTES, phone=user.phone, purpose=purpose)
+        delivery_res = await deliver_otp(email=user.email, phone=user.phone, otp=otp, purpose=purpose)
+        if user.email and not delivery_res.get("email_sent"):
+            raise ServiceUnavailableException(
+                "Failed to deliver OTP to registered email. Please check SMTP configuration or try again later."
+            )
         return otp
 
     async def _resolve_register_role_id(self, data: RegisterRequest) -> int:
@@ -316,7 +383,7 @@ class AuthService:
         await self.db.flush()
         return user
 
-    async def send_otp(self, data: SendOTPRequest) -> None:
+    async def send_otp(self, data: SendOTPRequest) -> SendOTPResponse:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user or await self._is_user_deleted(user):
             if data.phone or data.email:
@@ -325,14 +392,61 @@ class AuthService:
                     user = await self._create_or_link_patient_user(patient_match)
             if not user or await self._is_user_deleted(user):
                 raise NotFoundException("User not found")
+
+        # Do not send OTPs to placeholder addresses such as @nexacare.local
+        if not user.email or user.email.lower().endswith("@nexacare.local") or ".local" in user.email.lower():
+            raise BadRequestException("No valid email address registered for this account. Please contact hospital support.")
+
         await self._issue_and_deliver_otp(user, "login")
+        masked = mask_email(user.email)
+        return SendOTPResponse(
+            message=f"OTP sent to your registered email {masked}",
+            masked_email=masked,
+        )
+
+    def _validate_login_context(self, user: User, login_type_attr: Any) -> None:
+        if login_type_attr is None:
+            return
+
+        context_val = (
+            login_type_attr.value
+            if isinstance(login_type_attr, LoginContext)
+            else str(login_type_attr).strip().upper()
+        )
+        if not context_val:
+            raise BadRequestException("login_type cannot be blank. Allowed values: SUPER_ADMIN, ORGANIZATION, PATIENT")
+
+        actual_role = user.role.name if user.role else None
+        if not actual_role:
+            raise ForbiddenException("Account has no role assigned")
+
+        if context_val == LoginContext.SUPER_ADMIN.value:
+            if actual_role != UserRole.SUPER_ADMIN:
+                raise ForbiddenException("Access denied: Super Admin portal only accepts Super Admin accounts")
+        elif context_val == LoginContext.ORGANIZATION.value:
+            organization_roles = {
+                UserRole.HOSPITAL_ADMIN,
+                UserRole.DOCTOR,
+                UserRole.NURSE,
+                UserRole.RECEPTIONIST,
+                UserRole.ACCOUNTANT,
+                UserRole.PHARMACIST,
+                UserRole.LAB_TECHNICIAN,
+            }
+            if actual_role not in organization_roles:
+                raise ForbiddenException(f"Access denied: Organization portal does not permit {actual_role} accounts")
+        elif context_val == LoginContext.PATIENT.value:
+            if actual_role != UserRole.PATIENT:
+                raise ForbiddenException("Access denied: Patient portal only accepts Patient accounts")
+        else:
+            raise BadRequestException(f"Invalid login_type: {login_type_attr}")
 
     async def login(
         self,
         data: LoginRequest,
         ip_address: str | None = None,
         user_agent: str | None = None,
-    ) -> TokenResponse:
+    ) -> TokenResponse | TwoFAChallengeResponse | LoginOTPChallengeResponse:
         from app.services.security_service import SecurityService
         from app.core.logger import logger
 
@@ -350,53 +464,73 @@ class AuthService:
             if await self._is_user_deleted(user):
                 raise UnauthorizedException("Account deactivated or deleted")
 
-            if data.otp:
-                if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+            # Validate Login Context before issuing OTP challenge or validating credentials
+            self._validate_login_context(user, getattr(data, "login_type", None))
+
+            # Method A: Mobile / Username + PIN Login
+            if data.pin:
+                if not user.hashed_pin:
+                    raise BadRequestException("PIN is not configured for this account. Please log in with password or OTP.")
+
+                now_utc = datetime.now(timezone.utc)
+                if user.pin_locked_until:
+                    locked_until = user.pin_locked_until
+                    if locked_until.tzinfo is None:
+                        locked_until = locked_until.replace(tzinfo=timezone.utc)
+                    if locked_until > now_utc:
+                        raise LockedException("PIN is temporarily locked due to too many failed attempts. Try again later or reset your PIN.")
+                    else:
+                        user.pin_locked_until = None
+                        user.pin_failed_attempts = 0
+
+                if not verify_pin(data.pin, user.hashed_pin):
+                    user.pin_failed_attempts = (user.pin_failed_attempts or 0) + 1
+                    if user.pin_failed_attempts >= 5:
+                        user.pin_locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+                    await self.repo.update(user)
+                    raise UnauthorizedException("Invalid PIN")
+
+                user.pin_failed_attempts = 0
+                user.pin_locked_until = None
+
+            # Method OTP: Mobile + OTP Login
+            elif data.otp:
+                # Use registered user's email as canonical OTP identity with purpose="login"
+                if not await verify_otp(email=user.email, otp=data.otp, phone=user.phone, purpose="login"):
                     raise UnauthorizedException("Invalid credentials")
-            elif not data.password or not verify_password(
-                data.password, user.hashed_password
-            ):
+
+            # Method B: Password Login
+            elif data.password:
+                if not verify_password(data.password, user.hashed_password):
+                    raise UnauthorizedException("Invalid credentials")
+
+                is_super_admin = bool(user.role and user.role.name == UserRole.SUPER_ADMIN)
+
+                # If user has not configured a PIN or explicitly requested OTP: issue short-lived challenge
+                # SUPER_ADMIN has full system access and directly logs in with password without OTP challenge
+                if not is_super_admin and (not user.hashed_pin or data.require_otp):
+                    if not user.is_active:
+                        raise UnauthorizedException("Account not activated. Please verify OTP.")
+
+                    if not user.email or user.email.lower().endswith("@nexacare.local") or ".local" in user.email.lower():
+                        raise BadRequestException("No valid email address registered for this account. Please contact hospital support.")
+
+                    await self._issue_and_deliver_otp(user, "password_login")
+                    challenge_token, jti = create_login_otp_challenge_token(user.id, user.email, "password_login")
+                    await store_challenge_jti(jti, ttl=300)
+                    masked = mask_email(user.email)
+                    return LoginOTPChallengeResponse(
+                        challenge_token=challenge_token,
+                        masked_email=masked,
+                        message=f"OTP sent to your registered email {masked}",
+                        require_otp=True,
+                        is_pin_set=False,
+                    )
+            else:
                 raise UnauthorizedException("Invalid credentials")
 
             if not user.is_active:
                 raise UnauthorizedException("Account not activated. Please verify OTP.")
-
-            # Login Context Validation
-            login_type_attr = getattr(data, "login_type", None)
-            if login_type_attr is not None:
-                context_val = (
-                    login_type_attr.value
-                    if isinstance(login_type_attr, LoginContext)
-                    else str(login_type_attr).strip().upper()
-                )
-                if not context_val:
-                    raise BadRequestException("login_type cannot be blank. Allowed values: SUPER_ADMIN, ORGANIZATION, PATIENT")
-
-                actual_role = user.role.name if user.role else None
-                if not actual_role:
-                    raise ForbiddenException("Account has no role assigned")
-
-                if context_val == LoginContext.SUPER_ADMIN.value:
-                    if actual_role != UserRole.SUPER_ADMIN:
-                        raise ForbiddenException("Access denied: Super Admin portal only accepts Super Admin accounts")
-                elif context_val == LoginContext.ORGANIZATION.value:
-                    organization_roles = {
-                        UserRole.HOSPITAL_ADMIN,
-                        UserRole.DOCTOR,
-                        UserRole.NURSE,
-                        UserRole.RECEPTIONIST,
-                        UserRole.ACCOUNTANT,
-                        UserRole.PHARMACIST,
-                        UserRole.LAB_TECHNICIAN,
-                    }
-                    if actual_role not in organization_roles:
-                        raise ForbiddenException(f"Access denied: Organization portal does not permit {actual_role} accounts")
-                elif context_val == LoginContext.PATIENT.value:
-                    if actual_role != UserRole.PATIENT:
-                        raise ForbiddenException("Access denied: Patient portal only accepts Patient accounts")
-                else:
-                    raise BadRequestException(f"Invalid login_type: {data.login_type}")
-
 
             # 2FA intercept logic
             if settings.ENABLE_2FA_FEATURE:
@@ -404,7 +538,6 @@ class AuthService:
                 security_settings = result.scalar_one_or_none()
                 if security_settings and security_settings.is_2fa_enabled:
                     challenge_token, jti = create_2fa_challenge_token(user.id)
-                    from app.utils.redis_service import cache_set
                     await cache_set(f"2fa_jti:{jti}", "valid", ttl=300)
 
                     try:
@@ -446,7 +579,7 @@ class AuthService:
 
             return tokens
 
-        except UnauthorizedException as exc:
+        except (UnauthorizedException, BadRequestException, LockedException, ForbiddenException) as exc:
             # Record failed login safely
             try:
                 user_id = user.id if user else None
@@ -485,14 +618,21 @@ class AuthService:
         user_profile.role_name = role_name
         user_profile.role = role_name
         user_profile.hospital_id = user.hospital_id
+        user_profile.is_pin_set = bool(user.hashed_pin)
+        setup_token = None
+        if not user.hashed_pin:
+            setup_token, _ = create_pin_setup_token(user.id, user.email)
         return TokenResponse(
             access_token=access,
             refresh_token=refresh,
             token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             role=role_name,
+            is_pin_set=bool(user.hashed_pin),
+            setup_token=setup_token,
             user=user_profile,
         )
+
 
 
     async def logout(self, refresh_token: str, user: User) -> None:
@@ -543,7 +683,7 @@ class AuthService:
         await self._issue_and_deliver_otp(user, "password reset")
 
     async def reset_password(self, data: ResetPasswordRequest) -> None:
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+        if not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user or await self._is_user_deleted(user):
@@ -568,7 +708,7 @@ class AuthService:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
             raise NotFoundException("User not found")
-        if not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+        if not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user.is_verified = True
         await self.repo.update(user)
@@ -578,7 +718,7 @@ class AuthService:
         if not user:
             raise NotFoundException("User not found")
         if not user.is_verified:
-            if not data.otp or not verify_otp(email=data.email, otp=data.otp, phone=data.phone):
+            if not data.otp or not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
                 raise BadRequestException("Invalid or expired OTP. Please verify OTP before activating your account.")
             user.is_verified = True
         user.is_active = True
@@ -586,6 +726,9 @@ class AuthService:
 
 
     async def get_profile(self, user: User) -> UserProfileResponse:
+        role_name = user.role.name if user.role else None
+        active_hosp = getattr(user, "active_hospital_id", None)
+        hospital_id = active_hosp if active_hosp is not None else user.hospital_id
         return UserProfileResponse(
             id=user.id,
             user_code=user.user_code,
@@ -593,8 +736,9 @@ class AuthService:
             email=user.email,
             phone=user.phone,
             role_id=user.role_id,
-            role_name=user.role.name if user.role else None,
-            hospital_id=user.hospital_id,
+            role_name=role_name,
+            role=role_name,
+            hospital_id=hospital_id,
             profile_image=user.profile_image,
             gender=user.gender,
             date_of_birth=user.date_of_birth,
@@ -605,6 +749,7 @@ class AuthService:
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
+
 
     async def update_profile(self, user: User, data: ProfileUpdateRequest) -> UserProfileResponse:
         if data.email is not None and data.email != user.email:
@@ -827,3 +972,196 @@ class AuthService:
         security_settings.recovery_codes_hashed = None
 
         await self.db.commit()
+
+    async def verify_password_login_otp(
+        self,
+        data: LoginOTPVerifyRequest,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> TokenResponse | TwoFAChallengeResponse:
+        from app.services.security_service import SecurityService
+        from app.core.logger import logger
+
+        try:
+            payload = decode_token(data.challenge_token)
+        except Exception as exc:
+            raise UnauthorizedException("Invalid or expired challenge token") from exc
+
+        if payload.get("type") != "login_otp_challenge":
+            raise UnauthorizedException("Invalid challenge token type")
+
+        jti = payload.get("jti")
+        if not jti or not await consume_challenge_jti(jti):
+            raise UnauthorizedException("Challenge token has expired or already been used")
+
+        user_id = int(payload.get("sub"))
+        user = await self.repo.get_by_id(user_id)
+        if not user or await self._is_user_deleted(user):
+            raise UnauthorizedException("User not found or deactivated")
+
+        if not user.is_active:
+            raise UnauthorizedException("Account not activated. Please verify OTP.")
+
+        # Verify OTP atomically
+        otp_valid = await verify_otp(
+            email=user.email,
+            otp=data.otp,
+            phone=user.phone,
+            purpose="password_login",
+        )
+        if not otp_valid:
+            try:
+                await SecurityService(self.db).record_login(
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILED",
+                    details="Invalid OTP during password+OTP verification",
+                )
+            except Exception:
+                pass
+            raise UnauthorizedException("Invalid credentials")
+
+        # 2FA intercept logic
+        if settings.ENABLE_2FA_FEATURE:
+            result = await self.db.execute(select(UserSecuritySettings).where(UserSecuritySettings.user_id == user.id))
+            security_settings = result.scalar_one_or_none()
+            if security_settings and security_settings.is_2fa_enabled:
+                challenge_token, jti_2fa = create_2fa_challenge_token(user.id)
+                await cache_set(f"2fa_jti:{jti_2fa}", "valid", ttl=300)
+
+                try:
+                    await SecurityService(self.db).record_login(
+                        user_id=user.id,
+                        ip_address=ip_address,
+                        user_agent=user_agent,
+                        status="CHALLENGE",
+                        details="2FA challenge issued",
+                    )
+                except Exception:
+                    pass
+
+                return TwoFAChallengeResponse(challenge_token=challenge_token)
+
+        user.last_login = utc_now()
+        await self.repo.update(user)
+        tokens = await self._issue_tokens(user)
+
+        # If user has not set a PIN yet, provide a setup_token for convenient first-time PIN setup
+        if not user.hashed_pin:
+            setup_token, _ = create_pin_setup_token(user.id, user.email)
+            tokens.setup_token = setup_token
+
+        try:
+            await SecurityService(self.db).record_login(
+                user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="SUCCESS",
+                details="Password + OTP login successful",
+            )
+        except Exception as e:
+            logger.exception("Failed to record login history", exc_info=True)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
+        return tokens
+
+    async def set_pin(
+        self,
+        data: SetPINRequest,
+        current_user: User | None = None,
+    ) -> dict[str, Any]:
+        user = current_user
+        if not user:
+            if not data.setup_token:
+                raise UnauthorizedException("Authentication or setup token is required to set PIN")
+            try:
+                payload = decode_token(data.setup_token)
+            except Exception as exc:
+                raise UnauthorizedException("Invalid or expired setup token") from exc
+
+            if payload.get("type") not in ("pin_setup", "access"):
+                raise UnauthorizedException("Invalid token type for PIN setup")
+
+            user_id = int(payload.get("sub"))
+            user = await self.repo.get_by_id(user_id)
+            if not user or await self._is_user_deleted(user):
+                raise UnauthorizedException("User not found or deactivated")
+
+        # Validate non-trivial PIN
+        validate_non_trivial_pin(data.pin)
+
+        user.hashed_pin = hash_pin(data.pin)
+        user.pin_set_at = datetime.now(timezone.utc)
+        user.pin_failed_attempts = 0
+        user.pin_locked_until = None
+        await self.repo.update(user)
+
+        await self.audit_repo.create("set_pin", "users", user_id=user.id, resource_id=str(user.id))
+        return {"is_pin_set": True, "message": "PIN configured successfully"}
+
+    async def change_pin(
+        self,
+        current_user: User,
+        data: ChangePINRequest,
+    ) -> dict[str, Any]:
+        if not current_user.hashed_pin:
+            raise BadRequestException("No PIN is currently configured. Please set a PIN first.")
+
+        if not verify_pin(data.current_pin, current_user.hashed_pin):
+            raise UnauthorizedException("Current PIN is incorrect")
+
+        validate_non_trivial_pin(data.new_pin)
+
+        current_user.hashed_pin = hash_pin(data.new_pin)
+        current_user.pin_set_at = datetime.now(timezone.utc)
+        current_user.pin_failed_attempts = 0
+        current_user.pin_locked_until = None
+        await self.repo.update(current_user)
+
+        await self.audit_repo.create("change_pin", "users", user_id=current_user.id, resource_id=str(current_user.id))
+        return {"is_pin_set": True, "message": "PIN changed successfully"}
+
+    async def forgot_pin(self, data: ForgotPINRequest) -> SendOTPResponse:
+        user = await self._get_user_by_identifier(data.email, data.phone)
+        if not user or await self._is_user_deleted(user):
+            raise NotFoundException("User not found")
+
+        if not user.email or user.email.lower().endswith("@nexacare.local") or ".local" in user.email.lower():
+            raise BadRequestException("No valid email address registered for this account. Please contact hospital support.")
+
+        await self._issue_and_deliver_otp(user, "pin_reset")
+        masked = mask_email(user.email)
+        return SendOTPResponse(
+            message=f"OTP sent to your registered email {masked} for PIN reset",
+            masked_email=masked,
+        )
+
+    async def reset_pin(self, data: ResetPINRequest) -> MessageResponse:
+        user = await self._get_user_by_identifier(data.email, data.phone)
+        if not user or await self._is_user_deleted(user):
+            raise NotFoundException("User not found")
+
+        otp_valid = await verify_otp(
+            email=user.email,
+            otp=data.otp,
+            phone=user.phone,
+            purpose="pin_reset",
+        )
+        if not otp_valid:
+            raise UnauthorizedException("Invalid or expired OTP")
+
+        validate_non_trivial_pin(data.new_pin)
+
+        user.hashed_pin = hash_pin(data.new_pin)
+        user.pin_set_at = datetime.now(timezone.utc)
+        user.pin_failed_attempts = 0
+        user.pin_locked_until = None
+        await self.repo.update(user)
+
+        await self.audit_repo.create("reset_pin", "users", user_id=user.id, resource_id=str(user.id))
+        return MessageResponse(message="PIN reset successfully. You can now login with your new PIN.")
+

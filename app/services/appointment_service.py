@@ -377,7 +377,6 @@ class AppointmentService:
             "pages": paginated.pages,
             "total_appointments": total_appointments,
             "today_appointments": today_appointments,
-            "total_today_appointments": today_appointments,
             "total_today_tokens": today_appointments,
             "total_today_discharged": total_today_discharged,
             "total_scheduled": total_scheduled,
@@ -475,12 +474,26 @@ class AppointmentService:
             patient = await self.patient_repo.get_by_id(data.patient_id)
             appointment_data["hospital_id"] = hospital_id or (patient.hospital_id if patient else None)
 
+        appt_type_str = (appointment_data.get("appointment_type") or "").strip().upper()
+        if appt_type_str == "IPD":
+            from app.core.constants import AdmissionStatus, AppointmentType
+            from app.utils.helpers import generate_admission_number
+            appointment_data["appointment_type"] = AppointmentType.IPD.value
+            appointment_data["admission_recommended"] = True
+            if not appointment_data.get("admission_status"):
+                appointment_data["admission_status"] = AdmissionStatus.ADMIT_RECOMMENDED
+            if not appointment_data.get("admission_number"):
+                appointment_data["admission_number"] = generate_admission_number()
+            initial_status = AppointmentStatus.ADMIT_RECOMMENDED
+        else:
+            initial_status = AppointmentStatus.PENDING
+
         appointment = Appointment(
             appointment_number=generate_appointment_number(),
             token_number=token,
             queue_token=queue_tok,
             queue_status="WAITING",
-            appointment_status=AppointmentStatus.PENDING,
+            appointment_status=appointment_data.pop("appointment_status", None) or initial_status,
             **appointment_data,
         )
         appointment = await self.repo.create(appointment)
@@ -617,6 +630,17 @@ class AppointmentService:
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
+        if (appointment.appointment_type or "").strip().upper() == "IPD":
+            from app.core.constants import AdmissionStatus, AppointmentType
+            from app.utils.helpers import generate_admission_number
+            appointment.appointment_type = AppointmentType.IPD.value
+            appointment.admission_recommended = True
+            if not appointment.admission_status:
+                appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
+            if not appointment.admission_number:
+                appointment.admission_number = generate_admission_number()
+            if appointment.appointment_status == AppointmentStatus.PENDING:
+                appointment.appointment_status = AppointmentStatus.ADMIT_RECOMMENDED
         if appointment.appointment_status in (AppointmentStatus.CANCELLED, "Cancelled", "cancelled"):
             appointment.queue_status = "CANCELLED"
         elif appointment.appointment_status in (AppointmentStatus.COMPLETED, "Completed", "completed", "Checked-Out", "checked-out"):
@@ -839,13 +863,88 @@ class AppointmentService:
         appointments = await self.repo.get_calendar(**repo_kwargs)
         return [AppointmentResponse.model_validate(a) for a in appointments]
 
-    async def get_today(self, on_date: date | None = None, current_user = None) -> dict:
+    async def get_today(
+        self,
+        on_date: date | None = None,
+        current_user = None,
+        patient_id: int | None = None,
+        doctor_id: int | None = None,
+        department_id: int | None = None,
+        status: str | None = None,
+        admission_status: str | None = None,
+        x_hospital_id: int | None = None,
+    ) -> dict:
         from app.core.dependencies import resolve_tenant_id
         from app.utils.helpers import get_today_ist
-        hospital_id = resolve_tenant_id(current_user)
+        hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
         if on_date is None:
             on_date = get_today_ist()
-        appointments = await self.repo.get_today(on_date, hospital_id=hospital_id)
+
+        effective_doctor_id = doctor_id
+        effective_patient_id = patient_id
+
+        if current_user:
+            role_name = ""
+            role_obj = getattr(current_user, "role", None)
+            if role_obj:
+                if isinstance(role_obj, str):
+                    role_name = role_obj.strip().lower()
+                elif hasattr(role_obj, "name"):
+                    role_name = str(role_obj.name).strip().lower()
+
+            if role_name == "doctor":
+                doctor = await self.doctor_repo.get_by_user_id(current_user.id)
+                if not doctor:
+                    return {
+                        "items": [], "total": 0, "total_appointments": 0,
+                        "total_today_appointments": 0, "total_today_tokens": 0,
+                        "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                        "completed": 0, "checked_in": 0, "checked_out": 0,
+                        "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                    }
+                if doctor_id is not None and doctor_id != doctor.id:
+                    return {
+                        "items": [], "total": 0, "total_appointments": 0,
+                        "total_today_appointments": 0, "total_today_tokens": 0,
+                        "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                        "completed": 0, "checked_in": 0, "checked_out": 0,
+                        "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                    }
+                effective_doctor_id = doctor.id
+            elif role_name == "patient":
+                from app.services.patient_service import PatientService
+                allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
+                if not allowed_ids:
+                    return {
+                        "items": [], "total": 0, "total_appointments": 0,
+                        "total_today_appointments": 0, "total_today_tokens": 0,
+                        "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                        "completed": 0, "checked_in": 0, "checked_out": 0,
+                        "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                    }
+                if patient_id is not None:
+                    allowed_set = set(allowed_ids) if isinstance(allowed_ids, (list, tuple, set)) else {allowed_ids}
+                    if patient_id not in allowed_set:
+                        return {
+                            "items": [], "total": 0, "total_appointments": 0,
+                            "total_today_appointments": 0, "total_today_tokens": 0,
+                            "today_appointments": 0, "cancelled": 0, "waiting": 0,
+                            "completed": 0, "checked_in": 0, "checked_out": 0,
+                            "pending": 0, "confirmed": 0, "in_progress": 0, "admitted": 0,
+                        }
+                    effective_patient_id = patient_id
+                else:
+                    effective_patient_id = allowed_ids
+
+        appointments = await self.repo.get_today(
+            on_date=on_date,
+            hospital_id=hospital_id,
+            patient_id=effective_patient_id,
+            doctor_id=effective_doctor_id,
+            department_id=department_id,
+            status=status,
+            admission_status=admission_status,
+        )
         has_updated = False
         today = on_date
         next_num = None
@@ -883,7 +982,6 @@ class AppointmentService:
             "items": items,
             "total": total_today,
             "total_appointments": total_today,
-            "total_today_appointments": total_today,
             "total_today_tokens": total_today,
             "today_appointments": total_today,
             "cancelled": cancelled_count,
@@ -1807,6 +1905,21 @@ class AppointmentService:
                             Appointment.admission_status.in_(admit_rec_variants),
                         ),
                     ),
+                    and_(
+                        Appointment.appointment_type == "IPD",
+                        or_(
+                            Appointment.admission_status.is_(None),
+                            Appointment.admission_status.notin_(
+                                [
+                                    "Not Recommended",
+                                    "not recommended",
+                                    "Not-Recommended",
+                                    "not-recommended",
+                                    "not_recommended",
+                                ]
+                            ),
+                        ),
+                    ),
                 ),
                 or_(
                     Appointment.admission_status.is_(None),
@@ -1910,8 +2023,8 @@ class AppointmentService:
                     appointment_number=a.appointment_number,
                     appointment_date=a.appointment_date,
                     appointment_status=a.appointment_status,
-                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if a.admission_recommended else None),
-                    admission_recommended=a.admission_recommended,
+                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if (a.admission_recommended or (a.appointment_type or "").upper() == "IPD") else None),
+                    admission_recommended=bool(a.admission_recommended or (a.appointment_type or "").upper() == "IPD"),
                     admission_reason=a.admission_reason,
                     expected_los=a.expected_los,
                     recommended_ward=a.recommended_ward,

@@ -7,7 +7,7 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.core.constants import UserRole
-from app.schemas.common_schema import BaseSchema
+from app.schemas.common_schema import BaseSchema, MessageResponse
 from app.utils.common_validators import (
     validate_full_name as common_validate_full_name,
     validate_mobile,
@@ -92,6 +92,8 @@ class EmailOrPhoneRequest(BaseModel):
 class LoginRequest(EmailOrPhoneRequest):
     password: str | None = None
     otp: str | None = None
+    pin: str | None = None
+    require_otp: bool | None = None
     login_type: LoginContext | str | None = None
 
     @field_validator("login_type", mode="before")
@@ -107,8 +109,8 @@ class LoginRequest(EmailOrPhoneRequest):
 
     @model_validator(mode="after")
     def validate_login_credential(self):
-        if not self.password and not self.otp:
-            raise ValueError("Either password or otp is required")
+        if not self.password and not self.otp and not self.pin:
+            raise ValueError("Either password, otp, or pin is required")
         return self
 
 
@@ -217,6 +219,8 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int | None = None
     role: str | None = None
+    is_pin_set: bool = False
+    setup_token: str | None = None
     user: UserProfileResponse | None = None
 
 
@@ -226,6 +230,11 @@ class RefreshTokenRequest(BaseModel):
 
 class SendOTPRequest(EmailOrPhoneRequest):
     pass
+
+
+class SendOTPResponse(MessageResponse):
+    message: str = "OTP sent to your registered email"
+    masked_email: str | None = None
 
 
 class ForgotPasswordRequest(EmailOrPhoneRequest):
@@ -318,6 +327,7 @@ class UserProfileResponse(BaseSchema):
     address: str | None = None
     is_active: bool
     is_verified: bool
+    is_pin_set: bool = False
     last_login: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -353,5 +363,85 @@ class Disable2FARequest(BaseModel):
     code: str = Field(..., min_length=6, max_length=6)
 
 
+class LoginOTPChallengeResponse(BaseSchema):
+    challenge_token: str
+    masked_email: str | None = None
+    message: str = "OTP sent to your registered email"
+    require_otp: bool = True
+    is_pin_set: bool = False
+
+
+class LoginOTPVerifyRequest(BaseModel):
+    challenge_token: str
+    otp: str = Field(..., min_length=4, max_length=10)
+
+
+class SetPINRequest(BaseModel):
+    pin: str = Field(..., description="4 or 6 digit numeric PIN")
+    confirm_pin: str = Field(..., description="Confirmation of the PIN")
+    setup_token: str | None = Field(default=None, description="Optional setup token from OTP verification")
+
+    @field_validator("pin", "confirm_pin")
+    @classmethod
+    def validate_pin_format(cls, v: str) -> str:
+        v = str(v).strip()
+        if not (v.isdigit() and len(v) in (4, 6)):
+            raise ValueError("PIN must be exactly 4 or 6 numeric digits")
+        return v
+
+    @model_validator(mode="after")
+    def validate_matching_pin(self):
+        if self.pin != self.confirm_pin:
+            raise ValueError("PIN and confirmation PIN do not match")
+        return self
+
+
+class ChangePINRequest(BaseModel):
+    current_pin: str = Field(..., description="Current 4 or 6 digit PIN")
+    new_pin: str = Field(..., description="New 4 or 6 digit numeric PIN")
+    confirm_pin: str = Field(..., description="Confirmation of new PIN")
+
+    @field_validator("current_pin", "new_pin", "confirm_pin")
+    @classmethod
+    def validate_pin_format(cls, v: str) -> str:
+        v = str(v).strip()
+        if not (v.isdigit() and len(v) in (4, 6)):
+            raise ValueError("PIN must be exactly 4 or 6 numeric digits")
+        return v
+
+    @model_validator(mode="after")
+    def validate_matching_pin(self):
+        if self.new_pin != self.confirm_pin:
+            raise ValueError("New PIN and confirmation PIN do not match")
+        if self.current_pin == self.new_pin:
+            raise ValueError("New PIN cannot be the same as current PIN")
+        return self
+
+
+class ForgotPINRequest(EmailOrPhoneRequest):
+    pass
+
+
+class ResetPINRequest(EmailOrPhoneRequest):
+    otp: str = Field(..., min_length=4, max_length=10)
+    new_pin: str = Field(..., description="New 4 or 6 digit numeric PIN")
+    confirm_pin: str = Field(..., description="Confirmation of new PIN")
+
+    @field_validator("new_pin", "confirm_pin")
+    @classmethod
+    def validate_pin_format(cls, v: str) -> str:
+        v = str(v).strip()
+        if not (v.isdigit() and len(v) in (4, 6)):
+            raise ValueError("PIN must be exactly 4 or 6 numeric digits")
+        return v
+
+    @model_validator(mode="after")
+    def validate_matching_pin(self):
+        if self.new_pin != self.confirm_pin:
+            raise ValueError("New PIN and confirmation PIN do not match")
+        return self
+
+
 TokenResponse.model_rebuild()
+
 

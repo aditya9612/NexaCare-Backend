@@ -754,9 +754,19 @@ class InventoryService:
             raise BadRequestException("Invalid format specified for export")
 
     async def create_warehouse(self, data: WarehouseCreate, hospital_id: int | None) -> WarehouseResponse:
+        code = data.code.strip() if hasattr(data, 'code') and data.code else generate_code('WH')
+        existing_code = await self.warehouse_repo.get_by_code(code, hospital_id=hospital_id)
+        if existing_code:
+            raise ConflictException(f"Warehouse with code '{code}' already exists")
+
+        name = data.name.strip()
+        existing_name = await self.warehouse_repo.get_by_name(name, hospital_id=hospital_id)
+        if existing_name:
+            raise ConflictException(f"Warehouse with name '{name}' already exists")
+
         warehouse = Warehouse(
-            name=data.name,
-            code=data.code if hasattr(data, 'code') and data.code else generate_code('WH'),
+            name=name,
+            code=code,
             location=data.location,
             capacity=data.capacity,
             hospital_id=hospital_id
@@ -792,16 +802,32 @@ class InventoryService:
 
     async def update_warehouse(self, warehouse_id: int, data: WarehouseUpdate, hospital_id: int | None) -> WarehouseResponse:
         warehouse = await self.db.get(Warehouse, warehouse_id)
-        if not warehouse or warehouse.hospital_id != hospital_id:
+        if not warehouse or warehouse.hospital_id != hospital_id or getattr(warehouse, 'is_deleted', False):
             raise HTTPException(status_code=404, detail="Warehouse not found")
 
         update_data = data.model_dump(exclude_unset=True)
-        if "name" in update_data:
-            warehouse.name = update_data["name"]
+        if "code" in update_data and update_data["code"] is not None:
+            new_code = update_data["code"].strip()
+            if new_code.lower() != (warehouse.code or "").lower():
+                existing = await self.warehouse_repo.get_by_code(new_code, hospital_id=hospital_id)
+                if existing and existing.id != warehouse_id:
+                    raise ConflictException(f"Warehouse with code '{new_code}' already exists")
+                warehouse.code = new_code
+
+        if "name" in update_data and update_data["name"] is not None:
+            new_name = update_data["name"].strip()
+            if new_name.lower() != (warehouse.name or "").lower():
+                existing = await self.warehouse_repo.get_by_name(new_name, hospital_id=hospital_id)
+                if existing and existing.id != warehouse_id:
+                    raise ConflictException(f"Warehouse with name '{new_name}' already exists")
+                warehouse.name = new_name
+
         if "location" in update_data:
             warehouse.location = update_data["location"]
         if "capacity" in update_data:
             warehouse.capacity = update_data["capacity"]
+        if "is_active" in update_data:
+            warehouse.is_active = update_data["is_active"]
 
         await self.db.flush()
         return WarehouseResponse.model_validate(warehouse)

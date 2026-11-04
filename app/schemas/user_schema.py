@@ -43,6 +43,7 @@ class UserCreate(BaseSchema):
 
 
 class UserUpdate(BaseSchema):
+    email: EmailStr | None = None
     full_name: str | None = Field(None, min_length=2, max_length=255)
     phone: str | None = Field(None, max_length=20)
     gender: GenderOption | None = None

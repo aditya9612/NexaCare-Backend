@@ -16,17 +16,17 @@ class DepartmentService:
         return res
 
     async def create(self, data: DepartmentCreate, current_user = None) -> DepartmentResponse:
-        existing = await self.repo.get_by_name(data.department_name)
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user)
+
+        existing = await self.repo.get_by_name(data.department_name, hospital_id=hospital_id)
         if existing:
             raise ConflictException(f"Department with name '{data.department_name}' already exists")
         
         if data.department_code:
-            existing_code = await self.repo.get_by_code(data.department_code)
+            existing_code = await self.repo.get_by_code(data.department_code, hospital_id=hospital_id)
             if existing_code:
                 raise ConflictException(f"Department with code '{data.department_code}' already exists")
-        
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
 
         department = Department(
             department_code=data.department_code,
@@ -36,8 +36,11 @@ class DepartmentService:
         department = await self.repo.create(department)
         return self._to_response(department, 0)
 
-    async def get_by_id(self, department_id: int) -> DepartmentResponse:
-        department = await self.repo.get_by_id(department_id)
+    async def get_by_id(self, department_id: int, current_user = None) -> DepartmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user) if current_user else None
+
+        department = await self.repo.get_by_id(department_id, hospital_id=hospital_id)
         if not department:
             raise NotFoundException(f"Department with ID {department_id} not found")
         
@@ -94,19 +97,24 @@ class DepartmentService:
             effective_size
         )
 
-    async def update(self, department_id: int, data: DepartmentUpdate) -> DepartmentResponse:
-        department = await self.repo.get_by_id(department_id)
+    async def update(self, department_id: int, data: DepartmentUpdate, current_user = None) -> DepartmentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user) if current_user else None
+
+        department = await self.repo.get_by_id(department_id, hospital_id=hospital_id)
         if not department:
             raise NotFoundException(f"Department with ID {department_id} not found")
 
+        target_hospital_id = department.hospital_id
+
         if data.department_code is not None:
-            existing_code = await self.repo.get_by_code(data.department_code)
+            existing_code = await self.repo.get_by_code(data.department_code, hospital_id=target_hospital_id)
             if existing_code and existing_code.department_id != department_id:
                 raise ConflictException(f"Department with code '{data.department_code}' already exists")
             department.department_code = data.department_code
 
         if data.department_name is not None:
-            existing = await self.repo.get_by_name(data.department_name)
+            existing = await self.repo.get_by_name(data.department_name, hospital_id=target_hospital_id)
             if existing and existing.department_id != department_id:
                 raise ConflictException(f"Department with name '{data.department_name}' already exists")
             department.department_name = data.department_name
@@ -120,9 +128,12 @@ class DepartmentService:
         ) or 0
         return self._to_response(department, staff_count)
 
-    async def delete(self, department_id: int) -> None:
+    async def delete(self, department_id: int, current_user = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        hospital_id = resolve_tenant_id(current_user) if current_user else None
+
         from sqlalchemy.exc import SQLAlchemyError
-        department = await self.repo.get_by_id(department_id)
+        department = await self.repo.get_by_id(department_id, hospital_id=hospital_id)
         if not department:
             raise NotFoundException(f"Department with ID {department_id} not found")
         try:
@@ -133,4 +144,5 @@ class DepartmentService:
             raise ConflictException(
                 "Cannot delete department because it is referenced by other records (e.g., doctors, staff, or appointments)."
             ) from exc
+
 

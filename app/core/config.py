@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    APP_NAME: str = "NesaCare HMS"
+    APP_NAME: str = "NexaCare HMS"
     APP_ENV: str = "development"
     DEBUG: bool = True
     SQLALCHEMY_ECHO: bool = True
@@ -49,11 +49,11 @@ class Settings(BaseSettings):
 
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    SMTP_HOST: str = ""
+    SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = "noreply@nesacare.com"
+    SMTP_FROM: str = "nexacareshekrulab@gmail.com"
 
     SMS_API_KEY: str = ""
     WHATSAPP_API_KEY: str = ""
@@ -72,13 +72,7 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-east-1"
     AWS_STORAGE_BUCKET_NAME: str = ""  
 
-    # Razorpay Payment Gateway Configuration
-    RAZORPAY_KEY_ID: str = ""
-    RAZORPAY_KEY_SECRET: str = ""
-    RAZORPAY_WEBHOOK_SECRET: str = ""
-
     TESSERACT_CMD: str = r""   
-
 
     # Sarvam AI TTS / voice cloning (local + production voice agent prompts)
     # Cloned voice (SHIRISH): set SARVAM_VOICE_ID to Studio voice UUID (voice_id).
@@ -234,8 +228,9 @@ class Settings(BaseSettings):
     ]
 
     OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5
     # Dev helper: if set, this OTP always works in non-production envs.
-    STATIC_OTP_CODE: str = "123456"
+    STATIC_OTP_CODE: str = ""
 
     # Create a default Super Admin on startup if that email is not registered yet.
     # Override SEED_SUPER_ADMIN_PASSWORD in production.
@@ -270,3 +265,4 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+

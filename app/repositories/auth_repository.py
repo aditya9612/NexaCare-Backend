@@ -20,12 +20,36 @@ class AuthRepository:
         return result.scalar_one_or_none()
 
     async def get_by_phone(self, phone: str) -> User | None:
+        from sqlalchemy import or_
+        from app.core.exceptions import ConflictException
+        from app.utils.phone_utils import indian_mobile_last10
+
+        phone_clean = phone.strip()
+        last10 = indian_mobile_last10(phone_clean)
+
+        conditions = [User.phone == phone_clean]
+        if last10 and len(last10) == 10:
+            candidates = {
+                last10,
+                f"+91{last10}",
+                f"91{last10}",
+                f"0{last10}",
+            }
+            for candidate in candidates:
+                conditions.append(User.phone == candidate)
+            conditions.append(User.phone.like(f"%{last10}"))
+
         result = await self.db.execute(
             select(User)
             .options(joinedload(User.role))
-            .where(User.phone == phone)
+            .where(or_(*conditions))
         )
-        return result.scalar_one_or_none()
+        users = list(result.scalars().all())
+        if len(users) > 1:
+            raise ConflictException(
+                "Multiple accounts found associated with this mobile number. Please log in using your registered email."
+            )
+        return users[0] if users else None
 
     async def get_by_id(self, user_id: int) -> User | None:
         result = await self.db.execute(

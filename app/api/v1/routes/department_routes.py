@@ -44,7 +44,7 @@ async def get_department(
     current_user: CurrentUser,
     _: User = Depends(require_permission("departments", "read")),
 ):
-    department = await DepartmentService(db).get_by_id(department_id)
+    department = await DepartmentService(db).get_by_id(department_id, current_user=current_user)
     return APIResponse(message="Department retrieved", data=department)
 
 @router.put("/{department_id}", response_model=APIResponse[DepartmentResponse])
@@ -55,7 +55,7 @@ async def update_department(
     current_user: CurrentUser,
     _: User = Depends(require_permission("departments", "update")),
 ):
-    department = await DepartmentService(db).update(department_id, data)
+    department = await DepartmentService(db).update(department_id, data, current_user=current_user)
     return APIResponse(message="Department updated successfully", data=department)
 
 @router.delete("/{department_id}", response_model=APIResponse[MessageResponse])
@@ -65,5 +65,6 @@ async def delete_department(
     current_user: CurrentUser,
     _: User = Depends(require_permission("departments", "delete")),
 ):
-    await DepartmentService(db).delete(department_id)
+    await DepartmentService(db).delete(department_id, current_user=current_user)
     return APIResponse(message="Department deleted successfully", data=MessageResponse(message="Department deleted"))
+

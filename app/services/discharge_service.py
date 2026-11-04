@@ -23,9 +23,11 @@ from app.repositories.final_bill_repository import FinalBillRepository
 from app.schemas.final_bill_schema import IPDFinalBillResponse, IPDFinalBillSummaryResponse
 from app.schemas.billing_schema import BillingCreate, BillingUpdate, BillItemCreate, PaymentCreate
 from app.schemas.discharge_schema import (
+    ActiveDischargesResponse,
     ClearBillingRequest,
     ClearPaymentRequest,
     ClearPharmacyRequest,
+    DischargeActiveSummary,
     DischargeClearanceStatus,
     DischargeGatePassResponse,
     DischargeInitiateRequest,
@@ -192,9 +194,34 @@ class DischargeService:
                 raise ForbiddenException("You do not have permission to view this discharge record")
         return DischargeResponse.model_validate(discharge)
 
-    async def list_active_discharges(self, hospital_id: int | None = None) -> list[DischargeResponse]:
+    async def list_active_discharges(self, hospital_id: int | None = None) -> ActiveDischargesResponse:
         items = await self.repo.get_all_active(hospital_id=hospital_id)
-        return [DischargeResponse.model_validate(d) for d in items]
+        serialized_items = [DischargeResponse.model_validate(d) for d in items]
+
+        active_discharges = len(items)
+        pharmacy_pending = sum(1 for d in items if not d.pharmacy_cleared)
+        billing_pending = sum(1 for d in items if not d.billing_cleared)
+        payment_pending = sum(1 for d in items if not d.payment_cleared)
+        doctor_approval_pending = sum(1 for d in items if not d.doctor_approved)
+
+        summary = DischargeActiveSummary(
+            active_discharges=active_discharges,
+            pharmacy_pending=pharmacy_pending,
+            billing_pending=billing_pending,
+            payment_pending=payment_pending,
+            doctor_approval_pending=doctor_approval_pending,
+        )
+
+        return ActiveDischargesResponse(
+            summary=summary,
+            active_discharges=active_discharges,
+            pharmacy_pending=pharmacy_pending,
+            billing_pending=billing_pending,
+            payment_pending=payment_pending,
+            doctor_approval_pending=doctor_approval_pending,
+            discharges=serialized_items,
+            items=serialized_items,
+        )
 
     async def get_clearance_status(self, discharge_id: int, hospital_id: int | None = None, current_user = None) -> DischargeClearanceStatus:
         discharge = await self.repo.get_by_id(discharge_id, hospital_id=hospital_id)
@@ -243,12 +270,24 @@ class DischargeService:
             Prescription.is_deleted == False
         )
         prescriptions = (await self.db.scalars(rx_stmt)).all()
+        rx_ids = [p.id for p in (prescriptions or []) if hasattr(p, "id")]
+
+        pharm_count = 0
+        if rx_ids:
+            inv_stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.prescription_id.in_(rx_ids),
+                PharmacyInvoice.is_deleted == False
+            )
+            if getattr(discharge, "hospital_id", None) is not None:
+                inv_stmt = inv_stmt.where(PharmacyInvoice.hospital_id == discharge.hospital_id)
+            pharm_invoices = (await self.db.scalars(inv_stmt)).all()
+            pharm_count = len(pharm_invoices or [])
 
         discharge.pharmacy_cleared = True
         discharge.pharmacy_cleared_by = user_id
         discharge.pharmacy_cleared_at = utc_now()
         
-        verification_msg = f"Verified {len(prescriptions)} prescription(s) for IPD appointment #{discharge.appointment_id}."
+        verification_msg = f"Verified {len(prescriptions)} prescription(s) and {pharm_count} pharmacy bill(s) for IPD appointment #{discharge.appointment_id}."
         if data and data.notes:
             discharge.pharmacy_notes = f"{verification_msg} Notes: {data.notes}"
         else:
@@ -274,8 +313,11 @@ class DischargeService:
             raise BadRequestException("Pharmacy Clearance must be completed before generating IPD final bill.")
 
         if discharge.billing_id:
-            existing_bill = await self.db.get(Billing, discharge.billing_id)
-            if existing_bill and existing_bill.paid_amount > 0:
+            from sqlalchemy import func
+            has_actual_payments = await self.db.scalar(
+                select(func.count(Payment.id)).where(Payment.billing_id == discharge.billing_id, Payment.status == "completed")
+            )
+            if (has_actual_payments and has_actual_payments > 0) or discharge.payment_cleared:
                 raise ConflictException("Bill has already been partially or fully paid. Cannot re-generate.")
 
         # 1. Calculate length of stay in days (Calendar days with 1 day minimum)
@@ -530,32 +572,62 @@ class DischargeService:
         rx_ids = [r for r in rx_ids if isinstance(r, int)]
 
         from sqlalchemy import or_, func
-        pharm_conditions = [PharmacyInvoice.patient_id == discharge.patient_id]
+        pharm_conditions = []
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
+        if discharge.admission_date:
+            admission_end = discharge.discharge_date or now_dt
+            pharm_conditions.append(
+                (PharmacyInvoice.patient_id == discharge.patient_id)
+                & (PharmacyInvoice.created_at >= discharge.admission_date)
+                & (PharmacyInvoice.created_at <= admission_end)
+            )
 
-        unpaid_pharm_stmt = select(PharmacyInvoice).where(
-            or_(*pharm_conditions),
-            PharmacyInvoice.is_deleted == False,
-            (func.lower(PharmacyInvoice.status) != "paid") | (PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount)
-        )
-        unpaid_pharm = (await self.db.scalars(unpaid_pharm_stmt)).all()
+        applicable_pharm = []
+        if pharm_conditions:
+            pharm_stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.is_deleted == False,
+                or_(*pharm_conditions),
+            )
+            if getattr(discharge, "hospital_id", None) is not None:
+                pharm_stmt = pharm_stmt.where(PharmacyInvoice.hospital_id == discharge.hospital_id)
+            applicable_pharm = (await self.db.scalars(pharm_stmt)).all()
 
         seen_invoices = set()
-        for inv in (unpaid_pharm or []):
+        total_pharmacy_paid = 0.0
+        for inv in (applicable_pharm or []):
             if not inv or not hasattr(inv, "id"):
                 continue
             if inv.id in seen_invoices:
                 continue
             seen_invoices.add(inv.id)
-            inv_balance = max(0.0, getattr(inv, "total_amount", 0.0) - getattr(inv, "paid_amount", 0.0))
-            if inv_balance > 0:
+
+            inv_tot = float(getattr(inv, "total_amount", 0.0) or 0.0)
+            inv_paid = float(getattr(inv, "paid_amount", 0.0) or 0.0)
+            inv_status = str(getattr(inv, "status", "") or "").strip().lower()
+
+            is_paid = inv_status in ("paid", "completed", "settled") or (inv_tot > 0 and inv_paid >= inv_tot)
+            if is_paid:
+                inv_paid = inv_tot
+                inv_balance = 0.0
+                status_desc = "Fully Paid"
+                total_pharmacy_paid += inv_paid
+                if inv.status != "paid" or getattr(inv, "paid_amount", 0.0) < inv_tot:
+                    inv.status = "paid"
+                    inv.paid_amount = inv_tot
+                    await self.db.flush()
+            else:
+                inv_balance = max(0.0, round(inv_tot - inv_paid, 2))
+                total_pharmacy_paid += inv_paid
+                status_desc = f"Partially Paid (Paid: ₹{inv_paid:,.2f}, Due: ₹{inv_balance:,.2f})" if inv_paid > 0 else "Unpaid"
+
+            if inv_tot > 0:
                 bill_items.append(
                     BillItemCreate(
                         item_type="pharmacy_invoice",
-                        description=f"Pharmacy Invoice #{getattr(inv, 'invoice_number', inv.id)} (Prescription #{getattr(inv, 'prescription_id', None) or 'IPD'})",
+                        description=f"Pharmacy Invoice #{getattr(inv, 'invoice_number', inv.id)} ({status_desc})",
                         quantity=1,
-                        unit_price=inv_balance,
+                        unit_price=inv_tot,
                         gst_rate=0.0,
                         reference_id=inv.id,
                     )
@@ -645,10 +717,11 @@ class DischargeService:
                 else:
                     total_refunds += abs(float(amt))
 
-        net_advance_paid = max(0.0, total_advances - total_refunds)
-        advance_adjusted = min(net_advance_paid, net_total)
+        # Net prior payments include general advance deposits and paid pharmacy counter amounts
+        net_prior_paid = max(0.0, total_advances + total_pharmacy_paid - total_refunds)
+        advance_adjusted = min(net_prior_paid, net_total)
         balance_amount = max(0.0, round(net_total - advance_adjusted, 2))
-        refund_amount = max(0.0, round(net_advance_paid - net_total, 2)) if net_advance_paid > net_total else 0.0
+        refund_amount = max(0.0, round(net_prior_paid - net_total, 2)) if net_prior_paid > net_total else 0.0
 
         # 6. Save or Update Dedicated IPD Final Bill
         existing_final_bill = None
@@ -675,8 +748,10 @@ class DischargeService:
             existing_final_bill.advance_adjusted = advance_adjusted
             existing_final_bill.balance_amount = balance_amount
             existing_final_bill.refund_amount = refund_amount
-            if balance_amount == 0.0 and net_advance_paid > 0:
+            if balance_amount == 0.0 and (net_prior_paid > 0 or net_total == 0.0):
                 existing_final_bill.status = "paid"
+            else:
+                existing_final_bill.status = "pending"
             existing_final_bill.notes = data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}"
 
             # Replace items
@@ -718,7 +793,7 @@ class DischargeService:
                 advance_adjusted=advance_adjusted,
                 balance_amount=balance_amount,
                 refund_amount=refund_amount,
-                status="paid" if balance_amount == 0.0 and net_advance_paid > 0 else "pending",
+                status="paid" if balance_amount == 0.0 and (net_prior_paid > 0 or net_total == 0.0) else "pending",
                 notes=data.notes or f"Auto-generated IPD Final Bill for {days_stayed} day(s) stay. Discharge No: {discharge.discharge_number}",
             )
             for it in bill_items:
@@ -735,9 +810,98 @@ class DischargeService:
                 )
             final_bill = await self.final_bill_repo.create(final_bill)
 
+        # 7. Synchronize with Billing model (billings & bill_items tables)
+        billing = None
+        if discharge.billing_id:
+            billing = await self.db.scalar(
+                select(Billing)
+                .options(selectinload(Billing.items))
+                .where(Billing.id == discharge.billing_id)
+            )
+
+        if not billing:
+            billing = await self.db.scalar(
+                select(Billing)
+                .options(selectinload(Billing.items))
+                .where(Billing.bill_number == final_bill.bill_number)
+            )
+
+        discount_pct = round((discount_amount / gross_total) * 100, 2) if gross_total > 0 else 0.0
+
+        if billing:
+            billing.hospital_id = final_bill.hospital_id
+            billing.patient_id = final_bill.patient_id
+            billing.appointment_id = final_bill.appointment_id
+            billing.subtotal = gross_total
+            billing.discount_percent = discount_pct
+            billing.discount_amount = discount_amount
+            billing.gst_rate = gst_rate
+            billing.gst_amount = tax_amount
+            billing.tax_amount = tax_amount
+            billing.total_amount = net_total
+            billing.paid_amount = advance_adjusted
+            billing.balance_amount = balance_amount
+            billing.status = final_bill.status
+            billing.notes = final_bill.notes
+            billing.items.clear()
+            for it in bill_items:
+                it_gst = round((it.quantity * it.unit_price * (it.gst_rate or 0.0)) / 100.0, 2)
+                it_total = round(it.quantity * it.unit_price + it_gst, 2)
+                billing.items.append(
+                    BillItem(
+                        description=str(it.description)[:255],
+                        quantity=it.quantity,
+                        unit_price=it.unit_price,
+                        gst_rate=it.gst_rate or 0.0,
+                        gst_amount=it_gst,
+                        line_total=it_total,
+                        item_type=it.item_type or "service",
+                    )
+                )
+        else:
+            billing = Billing(
+                hospital_id=final_bill.hospital_id,
+                patient_id=final_bill.patient_id,
+                appointment_id=final_bill.appointment_id,
+                bill_number=final_bill.bill_number,
+                subtotal=gross_total,
+                discount_percent=discount_pct,
+                discount_amount=discount_amount,
+                gst_rate=gst_rate,
+                gst_amount=tax_amount,
+                tax_amount=tax_amount,
+                total_amount=net_total,
+                paid_amount=advance_adjusted,
+                balance_amount=balance_amount,
+                status=final_bill.status,
+                due_date=now_dt,
+                notes=final_bill.notes,
+                created_by=user_id,
+            )
+            for it in bill_items:
+                it_gst = round((it.quantity * it.unit_price * (it.gst_rate or 0.0)) / 100.0, 2)
+                it_total = round(it.quantity * it.unit_price + it_gst, 2)
+                billing.items.append(
+                    BillItem(
+                        description=str(it.description)[:255],
+                        quantity=it.quantity,
+                        unit_price=it.unit_price,
+                        gst_rate=it.gst_rate or 0.0,
+                        gst_amount=it_gst,
+                        line_total=it_total,
+                        item_type=it.item_type or "service",
+                    )
+                )
+            self.db.add(billing)
+
+        await self.db.flush()
+
         # Link to discharge
         discharge.final_bill_id = final_bill.id
+        discharge.billing_id = billing.id
         discharge.billing_notes = f"Consolidated IPD Final Bill #{final_bill.bill_number} generated for ₹{final_bill.net_total:,.2f}"
+        if final_bill.pharmacy_charges > 0:
+            discharge.billing_notes += f" (includes ₹{final_bill.pharmacy_charges:,.2f} pharmacy charges)"
         await self.repo.update(discharge)
         await self.db.flush()
 
@@ -791,6 +955,13 @@ class DischargeService:
             fb_status = str(final_bill.status or "").strip().lower()
             fb_net = Decimal(str(final_bill.net_total or 0.0)).quantize(Decimal("0.01"))
 
+            # Normalize status to paid if balance is zero and not yet marked paid
+            if fb_bal <= Decimal("0.00") and fb_status != "paid":
+                final_bill.status = "paid"
+                final_bill.balance_amount = 0.0
+                await self.final_bill_repo.update(final_bill)
+                fb_status = "paid"
+
             if fb_bal > Decimal("0.00") or fb_status != "paid":
                 outstanding_bills.append({
                     "bill_type": "ipd_final_bill",
@@ -802,30 +973,6 @@ class DischargeService:
                     "outstanding_balance": float(fb_bal),
                     "reason": f"IPD final bill #{final_bill.bill_number} has an outstanding balance of ₹{fb_bal:,.2f} (status: {final_bill.status}).",
                 })
-            else:
-                # If Razorpay payment order exists, verify it is genuinely captured & paid, not pending or failed
-                from app.models.payment_order_model import RazorpayOrder
-                rp_orders = (
-                    await self.db.scalars(
-                        select(RazorpayOrder).where(
-                            RazorpayOrder.bill_type == "ipd",
-                            RazorpayOrder.bill_id == final_bill.id,
-                        )
-                    )
-                ).all()
-                if rp_orders:
-                    has_paid = any(o.status == "paid" for o in rp_orders)
-                    if not has_paid and all(o.status in ("failed", "pending", "authorized", "created") for o in rp_orders):
-                        outstanding_bills.append({
-                            "bill_type": "ipd_final_bill",
-                            "bill_id": final_bill.id,
-                            "bill_number": final_bill.bill_number,
-                            "status": rp_orders[0].status,
-                            "total_amount": float(fb_net),
-                            "paid_amount": 0.0,
-                            "outstanding_balance": float(fb_net),
-                            "reason": f"Razorpay payment attempt for IPD final bill #{final_bill.bill_number} is unverified or failed (status: {rp_orders[0].status}).",
-                        })
 
         # 2. General Billing Records for this Admission
         from sqlalchemy import or_
@@ -850,10 +997,21 @@ class DischargeService:
                 continue
             seen_b_ids.add(b.id)
 
+            # Skip the synchronized final bill billing record if final_bill is already tracked in Step 1
+            if final_bill and (b.id == discharge.billing_id or b.bill_number == final_bill.bill_number):
+                continue
+
             b_bal = Decimal(str(b.balance_amount or 0.0)).quantize(Decimal("0.01"))
             b_tot = Decimal(str(b.total_amount or 0.0)).quantize(Decimal("0.01"))
             b_paid = Decimal(str(b.paid_amount or 0.0)).quantize(Decimal("0.01"))
             b_status = str(b.status or "").strip().lower()
+
+            # Normalize status to paid if balance is zero
+            if (b_bal <= Decimal("0.00") or b_paid >= b_tot or b_status in ("completed", "settled")) and b.status != "paid":
+                b.status = "paid"
+                b.balance_amount = 0.0
+                await self.db.flush()
+                b_status = "paid"
 
             if b_bal > Decimal("0.00") or b_status != "paid" or b_paid < b_tot:
                 outstanding_bills.append({
@@ -886,11 +1044,17 @@ class DischargeService:
             pharm_conds.append(PharmacyInvoice.prescription_id.in_(rx_ids))
         if pharm_ref_ids:
             pharm_conds.append(PharmacyInvoice.id.in_(list(pharm_ref_ids)))
+        if discharge.admission_date:
+            admission_end = discharge.discharge_date or now_dt
+            pharm_conds.append(
+                (PharmacyInvoice.patient_id == discharge.patient_id)
+                & (PharmacyInvoice.created_at >= discharge.admission_date)
+                & (PharmacyInvoice.created_at <= admission_end)
+            )
 
         if pharm_conds:
             pharm_stmt = select(PharmacyInvoice).where(
                 PharmacyInvoice.is_deleted == False,
-                PharmacyInvoice.patient_id == discharge.patient_id,
                 or_(*pharm_conds)
             )
             if hospital_id is not None:
@@ -908,17 +1072,39 @@ class DischargeService:
                 inv_bal = max(Decimal("0.00"), inv_tot - inv_paid).quantize(Decimal("0.01"))
                 inv_status = str(inv.status or "").strip().lower()
 
-                if inv_bal > Decimal("0.00") or inv_status != "paid":
-                    outstanding_bills.append({
-                        "bill_type": "pharmacy_invoice",
-                        "bill_id": inv.id,
-                        "bill_number": inv.invoice_number,
-                        "status": inv.status,
-                        "total_amount": float(inv_tot),
-                        "paid_amount": float(inv_paid),
-                        "outstanding_balance": float(inv_bal),
-                        "reason": f"Pharmacy invoice #{inv.invoice_number} has an outstanding balance of ₹{inv_bal:,.2f} (status: {inv.status}).",
-                    })
+                # If consolidated into final_bill:
+                if inv.id in pharm_ref_ids:
+                    # If final_bill is fully settled, ensure invoice reflects paid status
+                    if final_bill and str(final_bill.status or "").strip().lower() == "paid" and Decimal(str(final_bill.balance_amount or 0.0)) <= Decimal("0.00"):
+                        if inv.status != "paid" or inv_paid < inv_tot:
+                            inv.status = "paid"
+                            inv.paid_amount = float(inv_tot)
+                            await self.db.flush()
+                        continue
+                    else:
+                        # Consolidated in final_bill, and final_bill's outstanding balance is already
+                        # reported in Step 1. Do not double-count it under pharmacy_invoice!
+                        continue
+
+                # If paid directly or at pharmacy counter:
+                if inv_bal <= Decimal("0.00") or inv_paid >= inv_tot or inv_status in ("paid", "completed", "settled"):
+                    if inv.status != "paid" or inv_paid < inv_tot:
+                        inv.status = "paid"
+                        inv.paid_amount = float(inv_tot)
+                        await self.db.flush()
+                    continue
+
+                # Genuine outstanding separate pharmacy invoice
+                outstanding_bills.append({
+                    "bill_type": "pharmacy_invoice",
+                    "bill_id": inv.id,
+                    "bill_number": inv.invoice_number,
+                    "status": inv.status,
+                    "total_amount": float(inv_tot),
+                    "paid_amount": float(inv_paid),
+                    "outstanding_balance": float(inv_bal),
+                    "reason": f"Pharmacy invoice #{inv.invoice_number} has an outstanding balance of ₹{inv_bal:,.2f} (status: {inv.status}).",
+                })
 
         return len(outstanding_bills) == 0, outstanding_bills
 
@@ -1042,6 +1228,10 @@ class DischargeService:
                 billing.balance_amount = 0.0
                 billing.status = "paid"
                 await self.db.flush()
+            elif billing.status != "paid":
+                billing.status = "paid"
+                billing.balance_amount = 0.0
+                await self.db.flush()
 
                 try:
                     await tx_service.create_event(
@@ -1083,12 +1273,18 @@ class DischargeService:
             pharm_conditions.append(PharmacyInvoice.id.in_(list(pharm_invoice_ids)))
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
+        if discharge.admission_date:
+            admission_end = discharge.discharge_date or now_dt
+            pharm_conditions.append(
+                (PharmacyInvoice.patient_id == discharge.patient_id)
+                & (PharmacyInvoice.created_at >= discharge.admission_date)
+                & (PharmacyInvoice.created_at <= admission_end)
+            )
 
         if pharm_conditions:
             from sqlalchemy import or_, func
             unpaid_pharm_stmt = select(PharmacyInvoice).where(
                 PharmacyInvoice.is_deleted == False,
-                PharmacyInvoice.patient_id == discharge.patient_id,
                 or_(*pharm_conditions),
                 (func.lower(PharmacyInvoice.status) != "paid") | (PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount)
             )

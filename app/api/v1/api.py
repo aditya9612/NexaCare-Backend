@@ -46,7 +46,6 @@ from app.api.v1.routes import (
     room_tariff_routes,
     discharge_routes,
     bed_allocation_routes,
-    payment_routes,
 )
 from app.api import settings
 
@@ -109,5 +108,4 @@ api_router.include_router(faq_ai_health_routes.router, tags=["FAQ AI Health"])
 
 api_router.include_router(room_tariff_routes.router)
 api_router.include_router(discharge_routes.router)
-api_router.include_router(payment_routes.router, prefix="/payments")
 

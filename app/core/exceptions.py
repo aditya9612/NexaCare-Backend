@@ -37,3 +37,14 @@ class RateLimitExceededException(HTTPException):
             detail=detail,
             headers=headers,
         )
+
+
+class ServiceUnavailableException(HTTPException):
+    def __init__(self, detail: str = "Service unavailable"):
+        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+
+
+class LockedException(HTTPException):
+    def __init__(self, detail: str = "Resource is locked"):
+        super().__init__(status_code=status.HTTP_423_LOCKED, detail=detail)
+

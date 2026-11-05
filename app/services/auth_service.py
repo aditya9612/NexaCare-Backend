@@ -48,6 +48,7 @@ from app.schemas.auth_schema import (
     LoginOTPVerifyRequest,
     LoginRequest,
     OTPVerifyRequest,
+    OTPVerifyResponse,
     ProfileUpdateRequest,
     RegisterRequest,
     RegistrationRoleOption,
@@ -134,12 +135,27 @@ class AuthService:
         return None
 
     async def _issue_and_deliver_otp(self, user: User, purpose: str) -> str:
+        from app.core.logger import logger
         otp = generate_otp()
         await store_otp(user.email, otp, settings.OTP_EXPIRE_MINUTES, phone=user.phone, purpose=purpose)
         delivery_res = await deliver_otp(email=user.email, phone=user.phone, otp=otp, purpose=purpose)
-        if user.email and not delivery_res.get("email_sent"):
+        email_sent = delivery_res.get("email_sent", False)
+        sms_sent = delivery_res.get("sms_sent", False)
+
+        if settings.DEBUG:
+            logger.info(
+                "[DEV MODE] Generated OTP for user %s (%s): %s (email_sent=%s, sms_sent=%s)",
+                user.email,
+                user.phone,
+                otp,
+                email_sent,
+                sms_sent,
+            )
+            return otp
+
+        if not email_sent and not sms_sent:
             raise ServiceUnavailableException(
-                "Failed to deliver OTP to registered email. Please check SMTP configuration or try again later."
+                "Failed to deliver OTP to your registered email or phone. Please check configuration or try again later."
             )
         return otp
 
@@ -241,7 +257,6 @@ class AuthService:
                 self.db.add(staff)
                 await self.db.flush()
 
-            await self._issue_and_deliver_otp(user, "account activation")
             await self.audit_repo.create("register", "users", user_id=user.id, resource_id=str(user.id))
         except IntegrityError as exc:
             raise ConflictException("Email or phone already registered") from exc
@@ -397,7 +412,8 @@ class AuthService:
         if not user.email or user.email.lower().endswith("@nexacare.local") or ".local" in user.email.lower():
             raise BadRequestException("No valid email address registered for this account. Please contact hospital support.")
 
-        await self._issue_and_deliver_otp(user, "login")
+        purpose = "account activation" if not user.is_verified else "login"
+        await self._issue_and_deliver_otp(user, purpose)
         masked = mask_email(user.email)
         return SendOTPResponse(
             message=f"OTP sent to your registered email {masked}",
@@ -467,6 +483,10 @@ class AuthService:
             # Validate Login Context before issuing OTP challenge or validating credentials
             self._validate_login_context(user, getattr(data, "login_type", None))
 
+            # Block login if user has not completed OTP verification
+            if not user.is_verified or not user.is_active:
+                raise UnauthorizedException("Account not verified. Please verify OTP first before logging in.")
+
             # Method A: Mobile / Username + PIN Login
             if data.pin:
                 if not user.hashed_pin:
@@ -529,8 +549,8 @@ class AuthService:
             else:
                 raise UnauthorizedException("Invalid credentials")
 
-            if not user.is_active:
-                raise UnauthorizedException("Account not activated. Please verify OTP.")
+            if not user.is_active or not user.is_verified:
+                raise UnauthorizedException("Account not verified. Please verify OTP first before logging in.")
 
             # 2FA intercept logic
             if settings.ENABLE_2FA_FEATURE:
@@ -704,16 +724,24 @@ class AuthService:
         await self.repo.revoke_all_user_tokens(user.id)
 
 
-    async def verify_otp_code(self, data: OTPVerifyRequest) -> None:
+    async def verify_otp_code(self, data: OTPVerifyRequest) -> OTPVerifyResponse:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
             raise NotFoundException("User not found")
         if not await verify_otp(email=data.email, otp=data.otp, phone=data.phone):
             raise BadRequestException("Invalid or expired OTP")
         user.is_verified = True
+        user.is_active = True
         await self.repo.update(user)
+        setup_token, _ = create_pin_setup_token(user.id, user.email or user.phone or "")
+        return OTPVerifyResponse(
+            message="OTP verified successfully",
+            setup_token=setup_token,
+            is_active=True,
+            is_verified=True,
+        )
 
-    async def activate_account(self, data: ActivateAccountRequest) -> None:
+    async def activate_account(self, data: ActivateAccountRequest) -> OTPVerifyResponse:
         user = await self._get_user_by_identifier(data.email, data.phone)
         if not user:
             raise NotFoundException("User not found")
@@ -723,6 +751,13 @@ class AuthService:
             user.is_verified = True
         user.is_active = True
         await self.repo.update(user)
+        setup_token, _ = create_pin_setup_token(user.id, user.email or user.phone or "")
+        return OTPVerifyResponse(
+            message="Account activated successfully",
+            setup_token=setup_token,
+            is_active=True,
+            is_verified=True,
+        )
 
 
     async def get_profile(self, user: User) -> UserProfileResponse:
@@ -999,8 +1034,8 @@ class AuthService:
         if not user or await self._is_user_deleted(user):
             raise UnauthorizedException("User not found or deactivated")
 
-        if not user.is_active:
-            raise UnauthorizedException("Account not activated. Please verify OTP.")
+        if not user.is_active or not user.is_verified:
+            raise UnauthorizedException("Account not verified. Please verify OTP first before logging in.")
 
         # Verify OTP atomically
         otp_valid = await verify_otp(

@@ -18,6 +18,7 @@ from app.schemas.auth_schema import (
     LoginOTPVerifyRequest,
     LoginRequest,
     OTPVerifyRequest,
+    OTPVerifyResponse,
     ProfileUpdateRequest,
     RefreshTokenRequest,
     RegisterRequest,
@@ -92,8 +93,8 @@ async def register(
 
     await AuthService(db).register(data)
     return APIResponse(
-        message="Registration successful. Please verify OTP to activate account.",
-        data=MessageResponse(message="OTP sent to your email and/or mobile number"),
+        message="Registration successful. Please request OTP to verify and activate your account.",
+        data=MessageResponse(message="Registration successful. Please request OTP to verify and activate your account."),
     )
 
 
@@ -222,16 +223,20 @@ async def change_password(data: ChangePasswordRequest, db: DbSession, current_us
     return APIResponse(message="Password changed", data=MessageResponse(message="Password updated"))
 
 
-@router.post("/verify-otp", response_model=APIResponse[MessageResponse])
+@router.post("/verify-otp", response_model=APIResponse[OTPVerifyResponse])
 async def verify_otp(data: OTPVerifyRequest, db: DbSession):
-    await AuthService(db).verify_otp_code(data)
-    return APIResponse(message="OTP verified", data=MessageResponse(message="OTP valid"))
+    res = await AuthService(db).verify_otp_code(data)
+    if not isinstance(res, OTPVerifyResponse):
+        res = OTPVerifyResponse(message="OTP verified successfully")
+    return APIResponse(message="OTP verified", data=res)
 
 
-@router.post("/activate", response_model=APIResponse[MessageResponse])
+@router.post("/activate", response_model=APIResponse[OTPVerifyResponse])
 async def activate_account(data: ActivateAccountRequest, db: DbSession):
-    await AuthService(db).activate_account(data)
-    return APIResponse(message="Account activated", data=MessageResponse(message="Account is now active"))
+    res = await AuthService(db).activate_account(data)
+    if not isinstance(res, OTPVerifyResponse):
+        res = OTPVerifyResponse(message="Account activated successfully")
+    return APIResponse(message="Account activated", data=res)
 
 
 @router.get("/me", response_model=APIResponse[UserProfileResponse])

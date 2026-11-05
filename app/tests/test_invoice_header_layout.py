@@ -60,7 +60,8 @@ def test_invoice_template_fallback_hospital_name():
         balance_amount="0.00",
         notes="",
     )
-    assert "NexaCare Hospital" in html
+    assert "Hospital" in html
+    assert "NexaCare Hospital" not in html
     assert '<div class="invoice-title">INVOICE</div>' not in html
 
 

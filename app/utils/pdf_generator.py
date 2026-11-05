@@ -93,9 +93,66 @@ def html_to_pdf(html_content: str) -> bytes:
     return pdf_bytes
 
 
+def resolve_logo_as_data_uri(logo_path: str | None) -> str | None:
+    """
+    Converts a local image path or existing data URI to a Base64 Data URI.
+    Supports PNG, JPG, and JPEG files.
+    Verifies that the file exists before reading.
+    Returns None if logo_path is missing, invalid, or file does not exist.
+    """
+    if not logo_path or not isinstance(logo_path, str):
+        return None
+
+    stripped_path = logo_path.strip()
+    if not stripped_path:
+        return None
+
+    if stripped_path.startswith("data:"):
+        return stripped_path
+
+    import base64
+    import mimetypes
+    import os
+
+    candidates = [
+        stripped_path,
+        os.path.join("app", stripped_path),
+        os.path.abspath(stripped_path),
+        os.path.abspath(os.path.join("app", stripped_path)),
+    ]
+    resolved = None
+    for c in candidates:
+        if os.path.exists(c) and os.path.isfile(c):
+            resolved = c
+            break
+
+    if not resolved:
+        return None
+
+    mime_type, _ = mimetypes.guess_type(resolved)
+    if not mime_type:
+        ext = os.path.splitext(resolved)[1].lower()
+        if ext in (".jpg", ".jpeg"):
+            mime_type = "image/jpeg"
+        elif ext == ".png":
+            mime_type = "image/png"
+        else:
+            mime_type = "image/png"
+
+    try:
+        with open(resolved, "rb") as f:
+            b64_data = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:{mime_type};base64,{b64_data}"
+    except Exception as exc:
+        logger.warning("Failed to encode hospital logo from %s: %s", resolved, exc)
+        return None
+
+
 async def generate_invoice_html(bill_number: str, data: dict) -> str:
     template = env.get_template("invoice_template.html")
-    html = template.render(invoice_number=bill_number, **data)
+    render_data = dict(data)
+    render_data["hospital_logo"] = resolve_logo_as_data_uri(render_data.get("hospital_logo"))
+    html = template.render(invoice_number=bill_number, **render_data)
     output_dir = _ensure_output_dir("invoices")
     file_path = output_dir / f"{bill_number}.html"
     file_path.write_text(html, encoding="utf-8")
@@ -105,7 +162,9 @@ async def generate_invoice_html(bill_number: str, data: dict) -> str:
 
 async def generate_invoice_pdf(bill_number: str, data: dict) -> tuple[str, bytes]:
     template = env.get_template("invoice_template.html")
-    html = template.render(invoice_number=bill_number, **data)
+    render_data = dict(data)
+    render_data["hospital_logo"] = resolve_logo_as_data_uri(render_data.get("hospital_logo"))
+    html = template.render(invoice_number=bill_number, **render_data)
     pdf_bytes = await run_in_threadpool(html_to_pdf, html)
     output_dir = _ensure_output_dir("invoices")
     file_path = output_dir / f"{bill_number}.pdf"
@@ -144,32 +203,7 @@ async def generate_lab_report_html(report_number: str, data: dict) -> str:
     report_type = data.get("title", "Diagnostic Report")
     
     # Process hospital logo if local file path
-    logo_path = data.get("hospital_logo")
-    if logo_path and isinstance(logo_path, str) and not logo_path.startswith("data:"):
-        import os
-        import mimetypes
-        import base64
-        resolved_logo = None
-        candidates = [
-            logo_path,
-            os.path.join("app", logo_path),
-            os.path.abspath(logo_path),
-            os.path.abspath(os.path.join("app", logo_path)),
-        ]
-        for c in candidates:
-            if os.path.exists(c) and os.path.isfile(c):
-                resolved_logo = c
-                break
-        if resolved_logo:
-            mime_type, _ = mimetypes.guess_type(resolved_logo)
-            if not mime_type:
-                mime_type = "image/png"
-            try:
-                with open(resolved_logo, "rb") as f:
-                    b64_data = base64.b64encode(f.read()).decode("utf-8")
-                data["hospital_logo"] = f"data:{mime_type};base64,{b64_data}"
-            except Exception:
-                pass
+    data["hospital_logo"] = resolve_logo_as_data_uri(data.get("hospital_logo"))
 
     # Process rows/columns to handle lists of dicts (like model_dump from responses)
     rows = data.get("rows", [])

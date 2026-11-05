@@ -1059,13 +1059,15 @@ class BillingService:
             if not invoice:
                 raise NotFoundException("Billing record not found")
 
-            target_hospital_id = hospital_id or getattr(invoice, "hospital_id", None)
-            hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
+            issuing_hospital_id = getattr(invoice, "hospital_id", None) or hospital_id
+            hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
 
-            hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
-            hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
-            hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
-            hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
+            hospital_name = (hospital.name or "").strip() if (hospital and hospital.name) else ""
+            hospital_address = (hospital.address or "").strip() if (hospital and hospital.address) else ""
+            hospital_phone = (hospital.phone or "").strip() if (hospital and hospital.phone) else ""
+            hospital_email = (hospital.email or "").strip() if (hospital and hospital.email) else ""
+            hospital_website = (hospital.website or "").strip() if (hospital and getattr(hospital, "website", None)) else ""
+            hospital_logo = getattr(hospital, "logo_path", None) if hospital else None
 
             patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
             patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1083,22 +1085,15 @@ class BillingService:
                 for item in (invoice.items or [])
             ]
 
-            hospital_name = "NexaCare Hospital"
-            target_hosp_id = invoice.hospital_id or hospital_id
-            if target_hosp_id:
-                from app.models.hospital_model import Hospital
-                hosp = await self.db.get(Hospital, target_hosp_id)
-                if hosp and hosp.name:
-                    hospital_name = hosp.name
-
             path, pdf_bytes = await generate_invoice_pdf(
                 invoice.invoice_number,
                 {
                     "hospital_name": hospital_name,
-                    "hospital_name": hospital_name,
                     "hospital_address": hospital_address,
                     "hospital_phone": hospital_phone,
                     "hospital_email": hospital_email,
+                    "hospital_website": hospital_website,
+                    "hospital_logo": hospital_logo,
                     "patient_name": patient_name,
                     "patient_phone": patient_phone,
                     "patient_email": patient_email,
@@ -1120,13 +1115,15 @@ class BillingService:
             await self.audit_repo.create("export", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
             return path, pdf_bytes
 
-        target_hospital_id = hospital_id or getattr(billing, "hospital_id", None)
-        hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
+        issuing_hospital_id = getattr(billing, "hospital_id", None) or hospital_id
+        hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
 
-        hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
-        hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
-        hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
-        hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
+        hospital_name = (hospital.name or "").strip() if (hospital and hospital.name) else ""
+        hospital_address = (hospital.address or "").strip() if (hospital and hospital.address) else ""
+        hospital_phone = (hospital.phone or "").strip() if (hospital and hospital.phone) else ""
+        hospital_email = (hospital.email or "").strip() if (hospital and hospital.email) else ""
+        hospital_website = (hospital.website or "").strip() if (hospital and getattr(hospital, "website", None)) else ""
+        hospital_logo = getattr(hospital, "logo_path", None) if hospital else None
 
         patient = await self.patient_repo.get_by_id(billing.patient_id)
         patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1144,22 +1141,15 @@ class BillingService:
             for i in billing.items
         ]
 
-        hospital_name = "NexaCare Hospital"
-        target_hosp_id = billing.hospital_id or hospital_id
-        if target_hosp_id:
-            from app.models.hospital_model import Hospital
-            hosp = await self.db.get(Hospital, target_hosp_id)
-            if hosp and hosp.name:
-                hospital_name = hosp.name
-
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
                 "hospital_name": hospital_name,
-                "hospital_name": hospital_name,
                 "hospital_address": hospital_address,
                 "hospital_phone": hospital_phone,
                 "hospital_email": hospital_email,
+                "hospital_website": hospital_website,
+                "hospital_logo": hospital_logo,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,

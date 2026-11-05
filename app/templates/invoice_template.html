@@ -27,6 +27,14 @@
       margin-bottom: 15px;
     }
 
+    .hospital-logo {
+      max-height: 55px;
+      max-width: 150px;
+      object-fit: contain;
+      vertical-align: middle;
+      margin-bottom: 4px;
+    }
+
     .brand-title {
       font-size: 20pt;
       font-weight: bold;
@@ -272,18 +280,26 @@
   <!-- Header Section -->
   <table class="header-table">
     <tr>
-      <td style="border: none; padding: 0;">
-        <div class="brand-title">NEXACARE AI 360</div>
+      <td style="border: none; padding: 0; vertical-align: middle;">
+        {% if hospital_logo %}
+        <div style="margin-bottom: 6px;">
+          <img src="{{ hospital_logo }}" class="hospital-logo" alt="{{ hospital_name or 'Hospital Logo' }}" />
+        </div>
+        {% endif %}
+        <div class="brand-title">{{ hospital_name or 'Hospital' }}</div>
         <div class="brand-sub">
-          {% if hospital_address %}{{ hospital_address }}{% else %}NexaCare Hospital | Wing B, Floor 1{% endif %}
-          {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
-          {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{
-          hospital_email }}{% elif not hospital_phone and not hospital_address %} | Contact: info@nexacare360.com{%
-          endif %}
+          {% if hospital_address %}<div>{{ hospital_address }}</div>{% endif %}
+          <div>
+            {% if hospital_phone %}<span>Phone: {{ hospital_phone }}</span>{% endif %}
+            {% if hospital_phone and hospital_email %} &bull; {% endif %}
+            {% if hospital_email %}<span>Email: {{ hospital_email }}</span>{% endif %}
+            {% if (hospital_phone or hospital_email) and hospital_website %} &bull; {% endif %}
+            {% if hospital_website %}<span>Web: {{ hospital_website }}</span>{% endif %}
+          </div>
         </div>
       </td>
       <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
-        <div class="invoice-title">{{ hospital_name or 'NexaCare Hospital' }}</div>
+        <div class="invoice-title">TAX INVOICE</div>
       </td>
     </tr>
   </table>
@@ -416,8 +432,7 @@
 
   <!-- Footer -->
   <div class="footer">
-    <div class="footer-thankyou">Thank you for choosing {{ hospital_name | default('NexaCare Hospital', true) }}! Wish
-      you good health!</div>
+    <div class="footer-thankyou">Thank you for choosing {{ hospital_name or 'our hospital' }}! Wish you good health!</div>
     <div class="footer-disclaimer">This is a computer-generated invoice and does not require a physical signature.</div>
     {% if hospital_phone or hospital_email %}
     <div class="footer-contact">

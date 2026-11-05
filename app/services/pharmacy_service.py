@@ -477,7 +477,7 @@ class PharmacyService:
             hospital_id=hospital_id,
             prescription_number=generate_prescription_number(),
             instructions=data.instructions,
-            start_date=data.start_date,
+            start_date=data.start_date or date.today(),
             status="pending",
         )
         prescription = await self.prescription_repo.create(prescription, prescription_items)
@@ -728,7 +728,7 @@ class PharmacyService:
         # 1. Lock the prescription row
         prescription = None
         try:
-            query = select(Prescription).where(Prescription.id == prescription_id)
+            query = select(Prescription).options(selectinload(Prescription.items)).where(Prescription.id == prescription_id)
             if hospital_id is not None:
                 query = query.where(Prescription.hospital_id == hospital_id)
             res = await self.db.execute(query.with_for_update())
@@ -864,6 +864,7 @@ class PharmacyService:
 
         res = await self.db.execute(
             select(Prescription)
+            .options(selectinload(Prescription.items))
             .where(Prescription.id == prescription_id, Prescription.hospital_id == hospital_id)
             .with_for_update()
         )
@@ -1102,6 +1103,14 @@ class PharmacyService:
             PrescriptionItemResponse.model_validate(i)
             for i in prescription.items
         ]
+        from datetime import timedelta
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        start = prescription.start_date or (prescription.created_at.date() if prescription.created_at else today)
+        durations = [i.duration_days for i in prescription.items if getattr(i, "duration_days", None)]
+        max_duration = max(durations) if durations else 1
+        end_date = start + timedelta(days=max_duration)
+        resp.prescription_status = "active" if today <= end_date else "completed"
         return resp
 
     # --- Invoices ---

@@ -57,5 +57,3 @@ class Subscription(Base, TimestampMixin):
         "SubscriptionPlan",
         back_populates="subscriptions"
     )
-
-

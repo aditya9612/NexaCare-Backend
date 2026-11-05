@@ -62,8 +62,6 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
-    # GEMINI_MODEL: str = "gemini-2.5-flash"
 
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 
@@ -254,8 +252,6 @@ class Settings(BaseSettings):
     PLATFORM_VERSION: str | None = None
     HIPAA_ENFORCED: bool | None = None
 
-        # pyrefly: ignore [parse-error]
-    TESSERACT_CMD: str = r"" 
 
 
 

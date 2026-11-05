@@ -74,10 +74,7 @@
 </head>
 
 <body>
-  <h1>Lab Test Orders Report</h1>
-  <div class="meta">
-    <strong>Total Records:</strong> {{ orders|length }} | <strong>Generated At:</strong> {{ generated_at }}
-  </div>
+  {% include "partials/brand_header.html" %}
 
   <table>
     <thead>
@@ -135,6 +132,7 @@
       {% endfor %}
     </tbody>
   </table>
+  {% include "partials/brand_footer.html" %}
 </body>
 
 </html>

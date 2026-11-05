@@ -1,0 +1,38 @@
+{% set has_logo = (logo_data_uri or logo_base64 or (hospital_logo and hospital_logo.startswith('data:'))) %}
+<table class="brand-header-table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px; border-bottom: 2px solid #1e40af; padding-bottom: 12px; table-layout: fixed;">
+  <tr>
+    {% if has_logo %}
+    <td class="brand-logo-cell" style="border: none; padding: 0 16px 0 0; width: 72px; vertical-align: middle; text-align: left;">
+      <div style="width: 60px; height: 60px; display: block; text-align: center; overflow: hidden;">
+        {% if logo_data_uri %}
+        <img src="{{ logo_data_uri }}" style="max-height: 56px; max-width: 60px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle;" alt="Hospital Logo" />
+        {% elif logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" style="max-height: 56px; max-width: 60px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle;" alt="Hospital Logo" />
+        {% elif hospital_logo and hospital_logo.startswith('data:') %}
+        <img src="{{ hospital_logo }}" style="max-height: 56px; max-width: 60px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle;" alt="Hospital Logo" />
+        {% endif %}
+      </div>
+    </td>
+    {% endif %}
+    <td class="brand-info-cell" style="border: none; padding: 0; vertical-align: middle; text-align: left;">
+      <div style="font-size: 15pt; font-weight: bold; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.2; word-wrap: break-word; overflow-wrap: break-word;">
+        {{ hospital_name | default('NexaCare Hospital', true) }}
+      </div>
+      <div style="font-size: 8.5pt; color: #4b5563; margin-top: 3px; line-height: 1.35;">
+        {% if hospital_address %}{{ hospital_address }}<br/>{% endif %}
+        {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
+        {% if hospital_email %}{% if hospital_phone %} &bull; {% endif %}Email: {{ hospital_email }}{% endif %}
+        {% if hospital_website %}{% if hospital_phone or hospital_email %} &bull; {% endif %}Web: {{ hospital_website }}{% endif %}
+      </div>
+    </td>
+    <td class="brand-report-cell" style="border: none; padding: 0 0 0 16px; vertical-align: middle; width: 35%; text-align: right;">
+      <div style="font-size: 14pt; font-weight: bold; color: #1f2937; text-transform: uppercase;">{{ report_title | default(title | default('Report', true), true) }}</div>
+      <div style="font-size: 8.5pt; color: #6b7280; margin-top: 4px; line-height: 1.35;">
+        {% if document_number %}<strong>ID:</strong> {{ document_number }}<br/>{% endif %}
+        {% if date_range_label %}<strong>Period:</strong> {{ date_range_label }}<br/>{% endif %}
+        {% if total_records is defined and total_records is not none %}<strong>Records:</strong> {{ total_records }}<br/>{% endif %}
+        <strong>Generated:</strong> {{ generated_at }}
+      </div>
+    </td>
+  </tr>
+</table>

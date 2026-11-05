@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Bed Allocation Report</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 15px;
+    }
+    body { font-family: 'DejaVuSans', sans-serif; font-size: 7px; line-height: 1.3; color: #333333; }
+    h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 6px; margin-bottom: 5px; font-size: 14px; }
+    .meta { margin-bottom: 10px; font-size: 9px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 5px; table-layout: fixed; }
+    th, td { border: 0.5px solid #e5e7eb; padding: 3px 4px; text-align: left; overflow: hidden; }
+    th { background: #f3f4f6; font-weight: bold; color: #1e40af; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    thead { display: table-header-group; }
+    tr { page-break-inside: avoid; }
+    .wrap-col {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      word-wrap: break-word;
+    }
+    .nowrap-col {
+      white-space: nowrap;
+    }
+    .short-col {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    /* Status Badges */
+    .badge {
+      display: inline-block;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-weight: bold;
+      font-size: 6.5px;
+      text-transform: uppercase;
+    }
+    .status-occupied { background-color: #fee2e2; color: #991b1b; }
+    .status-available { background-color: #dcfce7; color: #166534; }
+    .status-cleaning { background-color: #fef3c7; color: #92400e; }
+    .status-maintenance { background-color: #f3f4f6; color: #374151; }
+    .status-reserved { background-color: #e0e7ff; color: #3730a3; }
+  </style>
+</head>
+<body>
+  {% include "partials/brand_header.html" %}
+
+  <table>
+    <thead>
+      <tr>
+        <th class="short-col" style="width: 3%;">#</th>
+        <th class="wrap-col" style="width: 12%;">Floor</th>
+        <th class="short-col" style="width: 7%;">Room No</th>
+        <th class="wrap-col" style="width: 10%;">Room Type</th>
+        <th class="short-col" style="width: 6%;">Bed ID</th>
+        <th class="wrap-col" style="width: 9%;">Bed Type</th>
+        <th class="short-col" style="width: 8%;">Status</th>
+        <th class="short-col" style="width: 8%;">Patient ID</th>
+        <th class="wrap-col" style="width: 13%;">Patient Name</th>
+        <th class="wrap-col" style="width: 13%;">Disease</th>
+        <th class="nowrap-col" style="width: 11%;">Admission Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td class="short-col">{{ loop.index }}</td>
+        <td class="wrap-col">{{ item.floor }}</td>
+        <td class="short-col">{{ item.room_number }}</td>
+        <td class="wrap-col">{{ item.room_type }}</td>
+        <td class="short-col">{{ item.bed_id }}</td>
+        <td class="wrap-col">{{ item.bed_type }}</td>
+        <td class="short-col">
+          {% if item.status|lower == 'occupied' %}
+            <span class="badge status-occupied">Occupied</span>
+          {% elif item.status|lower == 'available' %}
+            <span class="badge status-available">Available</span>
+          {% elif item.status|lower == 'cleaning' %}
+            <span class="badge status-cleaning">Cleaning</span>
+          {% elif item.status|lower == 'maintenance' %}
+            <span class="badge status-maintenance">Maintenance</span>
+          {% elif item.status|lower == 'reserved' %}
+            <span class="badge status-reserved">Reserved</span>
+          {% else %}
+            {{ item.status }}
+          {% endif %}
+        </td>
+        <td class="short-col">{{ item.patient_id }}</td>
+        <td class="wrap-col">{{ item.patient_name }}</td>
+        <td class="wrap-col">{{ item.disease }}</td>
+        <td class="nowrap-col">{{ item.admission_date }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="11" style="text-align: center; padding: 12px; color: #64748b;">
+          No bed allocation records found.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% include "partials/brand_footer.html" %}
+</body>
+</html>

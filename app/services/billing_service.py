@@ -1,2243 +1,2276 @@
-from datetime import date, datetime, timedelta
-from typing import Any
-
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.constants import AppointmentStatus, BillingStatus
-from app.core.dependencies import resolve_tenant_id
-from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
-from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
-from app.repositories.audit_repository import AuditRepository
-from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
-from app.repositories.hospital_repository import HospitalRepository
-from app.repositories.patient_repository import PatientRepository
-from app.schemas.billing_schema import (
-    BillType,
-    BillingCreate,
-    BillingResponse,
-    BillingSummary,
-    BillingUpdate,
-    BillItemResponse,
-    DailyCollectionSummary,
-    ReceptionCollectionSummary,
-    PharmacyCollectionSummary,
-    InsuranceClaimCreate,
-    InsuranceClaimResponse,
-    InsuranceCreate,
-    InsuranceResponse,
-    PaymentCreate,
-    PaymentResponse,
-    RefundCreate,
-    RevenueReport,
-)
-from app.utils.helpers import (
-    calculate_bill_totals,
-    calculate_line_total,
-    generate_bill_number,
-    generate_claim_number,
-    utc_now,
-    get_today_ist,
-)
-from app.utils.pagination import build_paginated_result
-from app.utils.pdf_generator import generate_invoice_pdf
-
-
-def resolve_billing_date_filter(
-    date_filter: str | None,
-    start_date: date | None,
-    end_date: date | None,
-) -> tuple[date | None, date | None]:
-    if not date_filter:
-        if start_date and end_date and start_date > end_date:
-            raise BadRequestException("start_date cannot be greater than end_date")
-        return start_date, end_date
-
-    clean = str(date_filter).strip().lower().replace(" ", "_").replace("-", "_")
-    today = get_today_ist()
-
-    if clean == "today":
-        return today, today
-    elif clean == "yesterday":
-        y = today - timedelta(days=1)
-        return y, y
-    elif clean in ("last_30_days", "30_days", "30days"):
-        return today - timedelta(days=30), today
-    elif clean in ("quarterly", "quarter", "current_quarter"):
-        q_start_month = ((today.month - 1) // 3) * 3 + 1
-        return date(today.year, q_start_month, 1), today
-    elif clean in ("yearly", "year", "current_year"):
-        return date(today.year, 1, 1), today
-    elif clean in ("custom", "custom_range"):
-        if not start_date or not end_date:
-            raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
-        if start_date > end_date:
-            raise BadRequestException("start_date cannot be greater than end_date")
-        return start_date, end_date
-    else:
-        valid = ["today", "yesterday", "last_30_days", "quarterly", "yearly", "custom"]
-        raise BadRequestException(f"Invalid date_filter. Allowed values: {', '.join(valid)}")
-
-
-class BillingService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
-        self.repo = BillingRepository(db)
-        self.patient_repo = PatientRepository(db)
-        self.audit_repo = AuditRepository(db)
-        self.hospital_repo = HospitalRepository(db)
-
-    def _to_response(self, billing: Billing) -> BillingResponse:
-        data = BillingResponse.model_validate(billing)
-        data.items = [BillItemResponse.model_validate(i) for i in billing.items]
-        data.source = "billing"
-        if billing.bill_number and (
-            str(billing.bill_number).upper().startswith("REC")
-            or str(billing.bill_number).upper().startswith("PHR")
-        ):
-            data.bill_type = "pharmacy"
-        elif billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
-            data.bill_type = "ipd"
-        else:
-            data.bill_type = "consultation"
-        return data
-
-    def _pharmacy_invoice_to_billing_response(self, invoice) -> BillingResponse:
-        bill_items = []
-        for item in (invoice.items or []):
-            medicine_name = item.medicine.name if (hasattr(item, "medicine") and item.medicine) else f"Medicine #{item.medicine_id}"
-            bill_items.append(
-                BillItemResponse(
-                    id=item.id,
-                    billing_id=invoice.id,
-                    description=f"{medicine_name} (Qty: {item.quantity})",
-                    quantity=item.quantity,
-                    unit_price=item.unit_price,
-                    gst_rate=invoice.tax_percentage,
-                    gst_amount=invoice.gst_amount / len(invoice.items) if invoice.items else 0.0,
-                    line_total=item.line_total,
-                    item_type="pharmacy_item",
-                    created_at=item.created_at or invoice.created_at or utc_now(),
-                )
-            )
-        
-        return BillingResponse(
-            id=invoice.id,
-            patient_id=invoice.patient_id or 0,
-            bill_number=invoice.invoice_number,
-            subtotal=invoice.subtotal,
-            discount_percent=invoice.discount_percentage,
-            discount_amount=invoice.discount_amount,
-            gst_rate=invoice.tax_percentage,
-            gst_amount=invoice.gst_amount,
-            tax_amount=invoice.tax_amount,
-            total_amount=invoice.total_amount,
-            paid_amount=invoice.paid_amount,
-            balance_amount=round(max(invoice.total_amount - invoice.paid_amount, 0.0), 2),
-            status=invoice.status,
-            due_date=invoice.created_at,
-            notes=f"Pharmacy Invoice (Prescription ID: {invoice.prescription_id})",
-            invoice_path=None,
-            appointment_id=None,
-            items=bill_items,
-            created_at=invoice.created_at or utc_now(),
-            updated_at=invoice.updated_at or utc_now(),
-            source="pharmacy",
-            bill_type="pharmacy",
-        )
-
-    async def _recalculate_billing(self, billing: Billing) -> Billing:
-        from sqlalchemy import inspect
-        state = inspect(billing)
-        if "items" in state.unloaded and billing.id is not None:
-            billing = await self.repo.get_by_id(billing.id)
-
-        if billing.items:
-            subtotal = sum((item.quantity * item.unit_price) for item in billing.items)
-            totals = calculate_bill_totals(
-                subtotal=subtotal,
-                discount_percent=billing.discount_percent,
-                discount_amount=billing.discount_amount,
-                gst_rate=billing.gst_rate if billing.gst_rate is not None else 18.0,
-                tax_amount=billing.tax_amount,
-            )
-            billing.subtotal = totals["subtotal"]
-            billing.discount_amount = totals["discount_amount"]
-            billing.tax_amount = totals["tax_amount"]
-
-            total_gst = 0.0
-            for item in billing.items:
-                # Recalculate each item's GST and line total dynamically
-                _, gst_amt, line_total = calculate_line_total(
-                    item.quantity, item.unit_price, item.gst_rate
-                )
-                item.gst_amount = gst_amt
-                item.line_total = line_total
-                total_gst += gst_amt
-            billing.gst_amount = round(total_gst, 2)
-            
-            # Recalculate the effective gst_rate for the bill
-            if len(billing.items) == 1:
-                billing.gst_rate = billing.items[0].gst_rate
-            elif billing.subtotal > 0:
-                billing.gst_rate = round((billing.gst_amount / billing.subtotal) * 100, 2)
-            else:
-                billing.gst_rate = 0.0
-            billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
-        else:
-            if not billing.total_amount and billing.subtotal:
-                billing.total_amount = billing.subtotal
-            elif not billing.subtotal and billing.total_amount:
-                billing.subtotal = billing.total_amount
-
-        due_date_naive = billing.due_date
-        if due_date_naive and due_date_naive.tzinfo is not None:
-            from datetime import timezone as py_timezone
-            due_date_naive = due_date_naive.astimezone(py_timezone.utc).replace(tzinfo=None)
-
-        billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
-        
-        # Check if there are any completed refund payments
-        has_refund = any(p.is_refund and p.status == "completed" for p in billing.payments) if billing.payments else False
-
-        if billing.balance_amount <= 0:
-            billing.status = BillingStatus.PAID
-        elif has_refund and billing.paid_amount <= 0:
-            billing.status = BillingStatus.REFUNDED
-        elif billing.paid_amount > 0:
-            billing.status = BillingStatus.PARTIAL
-        elif due_date_naive and due_date_naive < utc_now():
-            billing.status = BillingStatus.OVERDUE
-        else:
-            billing.status = BillingStatus.PENDING
-        return await self.repo.update(billing)
-
-    async def create(self, data: BillingCreate, user_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        patient = await self.patient_repo.get_by_id(data.patient_id, hospital_id=hospital_id)
-        if not patient:
-            raise NotFoundException("Patient not found")
-
-        if data.appointment_id is not None:
-            from sqlalchemy import select
-            from app.models.appointment_model import Appointment
-            stmt = select(Appointment).where(Appointment.id == data.appointment_id)
-            apt_result = await self.db.execute(stmt)
-            appointment = apt_result.scalar_one_or_none()
-            if not appointment:
-                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
-            
-            if appointment.patient_id != data.patient_id:
-                raise BadRequestException("Appointment does not belong to the supplied patient")
-
-            if appointment.appointment_status == AppointmentStatus.CANCELLED:
-                raise BadRequestException(
-                    "Billing cannot be created for a cancelled appointment."
-                )
-
-            is_ipd = (
-                (appointment.appointment_type or "").upper() == "IPD"
-                or (appointment.admission_status or "") in ("Admitted", "Discharged", "Admit Recommended")
-                or bool(appointment.admission_recommended)
-            )
-            is_completed = (
-                appointment.appointment_status == AppointmentStatus.COMPLETED
-                or appointment.appointment_status == "Checked-Out"
-                or appointment.queue_status == "COMPLETED"
-                or appointment.check_out_time is not None
-                or is_ipd
-            )
-            if not is_completed:
-                raise BadRequestException(
-                    "Billing can only be created for completed appointments."
-                )
-
-            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
-            if existing_billing:
-                raise ConflictException("Billing already exists for this patient and appointment.")
-
-        due_date = data.due_date
-        if due_date and due_date.tzinfo is not None:
-            from datetime import timezone as py_timezone
-            due_date = due_date.astimezone(py_timezone.utc).replace(tzinfo=None)
-
-        from app.models.user_model import User
-        from app.services.settings_service import SettingsService
-        from sqlalchemy import select
-        from app.utils.helpers import generate_code
-
-        user = await self.db.scalar(select(User).where(User.id == user_id))
-        hospital_id = (user.hospital_id if user and user.hospital_id else None) or (patient.hospital_id if patient else None)
-        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id or 1)
-
-        billing = Billing(
-            patient_id=data.patient_id,
-            hospital_id=hospital_id,
-            bill_number=generate_code(billing_settings.get("invoice_prefix", "BIL")),
-            discount_percent=data.discount_percent,
-            discount_amount=data.discount_amount,
-            due_date=due_date,
-            notes=data.notes,
-            insurance_id=None,
-            appointment_id=data.appointment_id,
-            created_by=user_id,
-        )
-        billing = await self.repo.create(billing)
-
-        subtotal = 0.0
-        for item_data in data.items:
-            _, gst_amt, line_total = calculate_line_total(
-                item_data.quantity, item_data.unit_price, item_data.gst_rate
-            )
-            item = BillItem(
-                billing_id=billing.id,
-                description=item_data.description,
-                quantity=item_data.quantity,
-                unit_price=item_data.unit_price,
-                gst_rate=item_data.gst_rate,
-                gst_amount=gst_amt,
-                line_total=line_total,
-                item_type=item_data.item_type,
-            )
-            await self.repo.add_item(item)
-            subtotal += item_data.quantity * item_data.unit_price
-
-        billing.subtotal = subtotal
-        billing = await self._recalculate_billing(billing)
-        billing = await self.repo.get_by_id(billing.id)
-        await self.audit_repo.create("create", "billing", user_id=user_id, resource_id=str(billing.id))
-
-        from app.services.transaction_history_service import TransactionHistoryService
-        await TransactionHistoryService(self.db).create_event(
-            event_type="INVOICE_CREATED",
-            reference_no=billing.bill_number,
-            description=f"Billing Invoice Created: {billing.notes or ''}",
-            amount=billing.total_amount,
-            source_module="billing",
-            source_id=billing.id,
-            status="completed",
-            user_id=user_id,
-            hospital_id=billing.hospital_id,
-        )
-
-        try:
-            from app.services.notification_service import NotificationService
-            import logging
-
-            if patient and patient.user_id:
-                await NotificationService(self.db).dispatch_notification(
-                    user_id=patient.user_id,
-                    title="Invoice Generated",
-                    message=f"An invoice ({billing.bill_number}) of {billing.total_amount} has been generated.",
-                    notification_type="INVOICE_CREATED",
-                    reference_type="BILLING",
-                    reference_id=billing.id,
-                    priority="NORMAL",
-                    email=patient.email,
-                    phone=patient.phone,
-                )
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
-
-        return self._to_response(billing)
-
-    async def _paginate_combined_billings(
-        self,
-        page: int,
-        size: int,
-        sort_by: str,
-        sort_order: str,
-        status: str | None,
-        patient_id: int | None,
-        q: str | None,
-        start_date: date | None = None,
-        end_date: date | None = None,
-        bill_type: Any | None = None,
-        current_user: Any | None = None,
-    ):
-        from app.models.billing_model import Billing
-        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-        from app.core.dependencies import resolve_tenant_id
-        from sqlalchemy import select, or_, not_, func, union_all
-        from sqlalchemy.sql.expression import literal
-        from sqlalchemy.orm import selectinload
-
-        hospital_id = resolve_tenant_id(current_user)
-
-        sort_field_b = None
-        sort_field_p = None
-        
-        if sort_by in ["created_at", "status", "total_amount"]:
-            sort_field_b = getattr(Billing, sort_by)
-            sort_field_p = getattr(PharmacyInvoice, sort_by)
-        elif sort_by == "bill_number":
-            sort_field_b = Billing.bill_number
-            sort_field_p = PharmacyInvoice.invoice_number
-        else:
-            sort_field_b = Billing.created_at
-            sort_field_p = PharmacyInvoice.created_at
-
-        b_query = select(
-            Billing.id.label("id"),
-            literal("billing").label("source"),
-            sort_field_b.label("sort_val"),
-            Billing.id.label("tie_breaker")
-        ).where(Billing.is_deleted == False)
-
-        p_query = select(
-            PharmacyInvoice.id.label("id"),
-            literal("pharmacy").label("source"),
-            sort_field_p.label("sort_val"),
-            PharmacyInvoice.id.label("tie_breaker")
-        ).where(PharmacyInvoice.is_deleted == False)
-
-        if hospital_id is not None:
-            b_query = b_query.where(Billing.hospital_id == hospital_id)
-            p_query = p_query.where(PharmacyInvoice.hospital_id == hospital_id)
-
-        if status:
-            b_query = b_query.where(Billing.status == status)
-            p_query = p_query.where(PharmacyInvoice.status == status)
-        if patient_id:
-            b_query = b_query.where(Billing.patient_id == patient_id)
-            p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
-        if start_date:
-            start_datetime = datetime.combine(start_date, datetime.min.time())
-            b_query = b_query.where(Billing.created_at >= start_datetime)
-            p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
-        if end_date:
-            end_datetime = datetime.combine(end_date, datetime.max.time())
-            b_query = b_query.where(Billing.created_at <= end_datetime)
-            p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
-        if bill_type:
-            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
-            if bt_val == "pharmacy":
-                b_query = b_query.where(
-                    or_(
-                        func.lower(Billing.bill_number).like("rec%"),
-                        func.lower(Billing.bill_number).like("phr%"),
-                    )
-                )
-                p_query = p_query.where(PharmacyInvoice.id > 0)
-            elif bt_val in ("consultation", "consult"):
-                b_query = b_query.where(
-                    not_(func.lower(Billing.bill_number).like("ipd%")),
-                    not_(func.lower(Billing.bill_number).like("rec%")),
-                    not_(func.lower(Billing.bill_number).like("phr%")),
-                )
-                p_query = p_query.where(PharmacyInvoice.id == -1)
-            elif bt_val in ("ipd", "final_bill"):
-                b_query = b_query.where(func.lower(Billing.bill_number).like("ipd%"))
-                p_query = p_query.where(PharmacyInvoice.id == -1)
-        if q:
-            pattern = f"%{q.lower()}%"
-            b_query = b_query.where(
-                or_(
-                    func.lower(Billing.bill_number).like(pattern),
-                    func.lower(Billing.notes).like(pattern),
-                )
-            )
-            p_query = p_query.where(
-                func.lower(PharmacyInvoice.invoice_number).like(pattern)
-            )
-
-        combined_query = union_all(b_query, p_query)
-
-        subq = combined_query.subquery()
-        count_query = select(func.count()).select_from(subq)
-        total = await self.db.scalar(count_query) or 0
-
-        skip = (page - 1) * size
-        
-        order_col = subq.c.sort_val.desc() if sort_order == "desc" else subq.c.sort_val.asc()
-        tie_col = subq.c.tie_breaker.desc() if sort_order == "desc" else subq.c.tie_breaker.asc()
-        
-        paginated_query = select(subq.c.id, subq.c.source).order_by(order_col, tie_col).offset(skip).limit(size)
-        
-        rows = await self.db.execute(paginated_query)
-        id_source_list = list(rows.all())
-        
-        billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
-        pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
-
-        billing_map = {}
-        if billing_ids:
-            b_full = await self.db.execute(
-                select(Billing).where(Billing.id.in_(billing_ids)).options(
-                    selectinload(Billing.items), selectinload(Billing.payments)
-                )
-            )
-            for b in b_full.scalars().unique().all():
-                billing_map[b.id] = self._to_response(b)
-
-        pharmacy_map = {}
-        if pharmacy_ids:
-            p_full = await self.db.execute(
-                select(PharmacyInvoice).where(PharmacyInvoice.id.in_(pharmacy_ids)).options(
-                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-                )
-            )
-            for p in p_full.scalars().unique().all():
-                pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
-
-        ordered_items = []
-        for r_id, r_source in id_source_list:
-            if r_source == "billing" and r_id in billing_map:
-                ordered_items.append(billing_map[r_id])
-            elif r_source == "pharmacy" and r_id in pharmacy_map:
-                ordered_items.append(pharmacy_map[r_id])
-
-        return build_paginated_result(ordered_items, total, page, size)
-
-
-    async def list_billings(
-        self, page: int = 1, size: int = 20, sort_by: str = "created_at",
-        sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
-        date_filter: str | None = None,
-        start_date: date | None = None, end_date: date | None = None,
-        bill_type: Any | None = None,
-        current_user: Any | None = None,
-    ):
-        resolved_start, resolved_end = resolve_billing_date_filter(date_filter, start_date, end_date)
-        return await self._paginate_combined_billings(
-            page=page, size=size, sort_by=sort_by, sort_order=sort_order,
-            status=status, patient_id=patient_id, q=None,
-            start_date=resolved_start, end_date=resolved_end,
-            bill_type=bill_type,
-            current_user=current_user,
-        )
-
-    async def search(
-        self, q: str, page: int = 1, size: int = 20, status: str | None = None,
-        date_filter: str | None = None,
-        start_date: date | None = None, end_date: date | None = None,
-        bill_type: Any | None = None,
-        current_user: Any | None = None,
-    ):
-        resolved_start, resolved_end = resolve_billing_date_filter(date_filter, start_date, end_date)
-        return await self._paginate_combined_billings(
-            page=page, size=size, sort_by="created_at", sort_order="desc",
-            status=status, patient_id=None, q=q,
-            start_date=resolved_start, end_date=resolved_end,
-            bill_type=bill_type,
-            current_user=current_user,
-        )
-
-    async def get_by_id(self, billing_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-            from sqlalchemy import select
-            from sqlalchemy.orm import selectinload
-            stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.id == billing_id,
-                PharmacyInvoice.is_deleted == False
-            ).options(
-                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-            )
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-            return self._pharmacy_invoice_to_billing_response(invoice)
-        return self._to_response(billing)
-
-    async def update(self, billing_id: int, data: BillingUpdate, user_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-            from sqlalchemy import select
-            from sqlalchemy.orm import selectinload
-            stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.id == billing_id,
-                PharmacyInvoice.is_deleted == False
-            ).options(
-                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-            )
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-
-
-            if invoice.status in ["paid", "refunded", "partially_refunded", "cancelled"]:
-                raise BadRequestException("Cannot modify a billing record in a terminal state")
-
-            dump = data.model_dump(exclude_unset=True)
-
-
-            if "discount_percent" in dump and dump["discount_percent"] is not None:
-                invoice.discount_percentage = float(dump["discount_percent"])
-            elif "discount_percentage" in dump and dump["discount_percentage"] is not None:
-                invoice.discount_percentage = float(dump["discount_percentage"])
-
-            if "gst_rate" in dump and dump["gst_rate"] is not None:
-                invoice.tax_percentage = float(dump["gst_rate"])
-            elif "tax_percentage" in dump and dump["tax_percentage"] is not None:
-                invoice.tax_percentage = float(dump["tax_percentage"])
-
-            subtotal = float(invoice.subtotal or 0.0)
-            discount_amount = round((subtotal * invoice.discount_percentage) / 100, 2)
-            tax_amount = round((subtotal - discount_amount) * invoice.tax_percentage / 100, 2)
-
-            invoice.discount_amount = discount_amount
-            invoice.tax_amount = tax_amount
-            invoice.gst_amount = tax_amount
-            invoice.total_amount = round(subtotal - discount_amount + tax_amount, 2)
-            if invoice.status == "paid":
-                invoice.paid_amount = invoice.total_amount
-
-            await self.db.flush()
-            await self.audit_repo.create("update", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
-            return self._pharmacy_invoice_to_billing_response(invoice)
-
-
-        if billing.status in ["paid", "refunded", "partially_refunded", "cancelled", "Completed", "Refunded"]:
-            raise BadRequestException("Cannot modify a billing record in a terminal state")
-
-        non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount"]
-
-        for field in non_nullable_fields:
-            if field in data.model_fields_set and getattr(data, field) is None:
-                raise BadRequestException(f"Field '{field}' cannot be null")
-
-        # Ignore and do not validate insurance_id from data
-        dump = data.model_dump(exclude_unset=True)
-        dump.pop("insurance_id", None)  # Ignore insurance_id payload
-
-        if "due_date" in dump and dump["due_date"] is not None:
-            dt = dump["due_date"]
-            if dt.tzinfo is not None:
-                from datetime import timezone as py_timezone
-                dump["due_date"] = dt.astimezone(py_timezone.utc).replace(tzinfo=None)
-
-        from app.models.user_model import User
-        from app.services.settings_service import SettingsService
-        from sqlalchemy import select
-        
-        user = await self.db.scalar(select(User).where(User.id == user_id))
-        hospital_id = user.hospital_id if user and user.hospital_id else 1
-        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
-
-        if "items" in dump:
-            items_data = dump.pop("items")
-            # Remove old items
-            billing.items.clear()
-            if items_data:
-                for item_data in items_data:
-                    desc = item_data.get("description")
-                    qty = item_data.get("quantity", 1)
-                    price = item_data.get("unit_price")
-                    gst_r = item_data.get("gst_rate", billing_settings.get("gst_percentage", 18.0))
-                    item_t = item_data.get("item_type", "service")
-                    _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
-                    item = BillItem(
-                        billing_id=billing.id,
-                        description=desc,
-                        quantity=qty,
-                        unit_price=price,
-                        gst_rate=gst_r,
-                        gst_amount=gst_amt,
-                        line_total=line_total,
-                        item_type=item_t
-                    )
-                    billing.items.append(item)
-
-        for key, value in dump.items():
-            setattr(billing, key, value)
-
-        # Always set insurance_id to None during billing update
-        billing.insurance_id = None
-
-        billing = await self._recalculate_billing(billing)
-        billing = await self.repo.get_by_id(billing.id)
-        await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))
-        return self._to_response(billing)
-
-    async def cancel(self, billing_id: int, user_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice
-            from sqlalchemy import select
-            stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.id == billing_id,
-                PharmacyInvoice.is_deleted == False
-            ).with_for_update()
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-            
-            # Validate PharmacyInvoice
-            if invoice.status == "cancelled":
-                raise BadRequestException("Billing record is already cancelled")
-            if invoice.status in ["paid", "refunded", "partially_refunded"]:
-                raise BadRequestException(f"Cannot cancel a billing record in '{invoice.status}' state. Process a refund instead.")
-            if (invoice.paid_amount or 0.0) > 0:
-                raise BadRequestException("Cannot cancel a billing record that has received payments. Process a refund instead.")
-            
-            invoice.status = "cancelled"
-            await self.db.flush()
-            await self.audit_repo.create("cancel", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
-            return self._pharmacy_invoice_to_billing_response(invoice)
-
-        # Validate Billing
-        if billing.status == BillingStatus.CANCELLED:
-            raise BadRequestException("Billing record is already cancelled")
-        if billing.status in [BillingStatus.PAID, BillingStatus.REFUNDED, "partially_refunded"]:
-            raise BadRequestException(f"Cannot cancel a billing record in '{billing.status}' state. Process a refund instead.")
-        if (billing.paid_amount or 0.0) > 0:
-            raise BadRequestException("Cannot cancel a billing record that has received payments. Process a refund instead.")
-            
-        billing.status = BillingStatus.CANCELLED
-        await self.db.flush()
-        await self.audit_repo.create("cancel", "billing", user_id=user_id, resource_id=str(billing.id))
-        return self._to_billing_response(billing)
-
-    async def delete(self, billing_id: int, user_id: int, current_user = None) -> None:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice
-            from sqlalchemy import select
-            stmt = select(PharmacyInvoice).where(PharmacyInvoice.id == billing_id, PharmacyInvoice.is_deleted == False)
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-            from app.services.pharmacy_service import PharmacyService
-            await PharmacyService(self.db).delete_invoice(billing_id)
-            await self.audit_repo.create("delete", "pharmacy_invoice", user_id=user_id, resource_id=str(billing_id))
-            return
-        await self.repo.soft_delete(billing)
-        await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
-
-    async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int, current_user = None) -> PaymentResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice
-            from sqlalchemy import select
-            stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.id == billing_id,
-                PharmacyInvoice.is_deleted == False
-            ).with_for_update()
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-
-            if invoice.status in ["cancelled", "refunded", "partially_refunded"]:
-                raise BadRequestException(f"Cannot collect payment on {invoice.status} bill")
-
-            total_amt = invoice.total_amount or 0.0
-            paid_amt = invoice.paid_amount or 0.0
-            balance_due = round(total_amt - paid_amt, 2)
-            if data.amount > balance_due:
-                raise BadRequestException("Payment amount exceeds balance due")
-
-            method = data.payment_method.strip().lower()
-            if method == "cheques":
-                method = "cheque"
-            data.payment_method = method
-
-            txn_ref = data.transaction_ref.strip() if data.transaction_ref else f"PAY-PHR-{invoice.id}"
-            invoice.paid_amount = round(paid_amt + data.amount, 2)
-            invoice.payment_mode = data.payment_method
-            if invoice.paid_amount >= total_amt:
-                invoice.status = "paid"
-            else:
-                invoice.status = "partially_paid"
-
-            await self.db.flush()
-            await self.audit_repo.create("payment", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
-
-            from app.services.transaction_history_service import TransactionHistoryService
-            await TransactionHistoryService(self.db).create_event(
-                event_type="PAYMENT_RECEIVED",
-                reference_no=txn_ref,
-                description=f"Payment Received on pharmacy bill {invoice.invoice_number} via {data.payment_method}",
-                amount=data.amount,
-                source_module="payments",
-                source_id=invoice.id,
-                status="completed",
-                user_id=user_id,
-                hospital_id=invoice.hospital_id,
-            )
-
-            return PaymentResponse(
-                id=invoice.id,
-                billing_id=invoice.id,
-                amount=data.amount,
-                payment_method=data.payment_method,
-                transaction_ref=txn_ref,
-                payment_date=utc_now(),
-                status="completed",
-                is_refund=False,
-                refund_reason=None,
-                created_at=utc_now(),
-            )
-
-
-        if billing.status in [BillingStatus.CANCELLED, BillingStatus.REFUNDED, "partially_refunded"]:
-            raise BadRequestException(f"Cannot collect payment on {billing.status} bill")
-
-        # Defensive normalization
-        method = data.payment_method.strip().lower()
-        if method == "cheques":
-            method = "cheque"
-        data.payment_method = method
-
-        if data.transaction_ref is not None:
-            data.transaction_ref = data.transaction_ref.strip()
-            if not data.transaction_ref:
-                data.transaction_ref = None
-
-        total_amt = billing.total_amount or 0.0
-        paid_amt = billing.paid_amount or 0.0
-
-        b_status = str(billing.status).strip().lower() if billing.status else ""
-        is_fully_paid = b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt)
-
-        from app.models.billing_model import Payment
-        from sqlalchemy import select
-
-        existing_payments_res = await self.db.scalars(
-            select(Payment).where(
-                Payment.billing_id == billing_id,
-                Payment.is_refund.is_(False),
-                Payment.status == "completed",
-            )
-        )
-        existing_payments = list(existing_payments_res.all())
-
-        is_duplicate = is_fully_paid
-        if not is_duplicate:
-            for p in existing_payments:
-                p_ref = p.transaction_ref.strip() if p.transaction_ref and p.transaction_ref.strip() else None
-                p_method = (p.payment_method or "").strip().lower()
-                if p_method == "cheques":
-                    p_method = "cheque"
-
-                if data.transaction_ref and p_ref and data.transaction_ref.lower() == p_ref.lower():
-                    is_duplicate = True
-                    break
-
-                if (
-                    round(p.amount, 2) == round(data.amount, 2)
-                    and p_method == data.payment_method
-                    and (p_ref == data.transaction_ref or (p_ref is None and data.transaction_ref is None))
-                ):
-                    is_duplicate = True
-                    break
-
-        if is_duplicate:
-            raise BadRequestException("Payment record already exists for this bill")
-
-        balance_due = round(total_amt - paid_amt, 2)
-        if data.amount > balance_due:
-            raise BadRequestException("Payment amount exceeds balance due")
-
-        payment = Payment(
-            billing_id=billing_id,
-            amount=data.amount,
-            payment_method=data.payment_method,
-            transaction_ref=data.transaction_ref,
-            payment_date=utc_now(),
-            received_by=user_id,
-        )
-        payment = await self.repo.add_payment(payment)
-        billing.paid_amount = round(billing.paid_amount + data.amount, 2)
-        await self._recalculate_billing(billing)
-        await self.audit_repo.create("payment", "billing", user_id=user_id, resource_id=str(billing_id))
-
-        if billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
-            from app.models.final_bill_model import IPDFinalBill
-            from sqlalchemy import select
-            fb = await self.db.scalar(select(IPDFinalBill).where(IPDFinalBill.bill_number == billing.bill_number))
-            if fb:
-                fb.balance_amount = max(0.0, billing.balance_amount)
-                if str(billing.status).lower() == "paid":
-                    fb.status = "paid"
-                    fb.payment_mode = data.payment_method
-                    fb.settled_at = utc_now()
-                    fb.settled_by = user_id
-                await self.db.flush()
-
-        from app.services.transaction_history_service import TransactionHistoryService
-        await TransactionHistoryService(self.db).create_event(
-            event_type="PAYMENT_RECEIVED",
-            reference_no=payment.transaction_ref or f"PAY-{payment.id}",
-            description=f"Payment Received on bill {billing.bill_number} via {payment.payment_method}",
-            amount=payment.amount,
-            source_module="payments",
-            source_id=payment.id,
-            status="completed",
-            user_id=user_id,
-            hospital_id=billing.hospital_id,
-        )
-
-        try:
-            from app.services.notification_service import NotificationService
-            from app.models.patient_model import Patient
-            import logging
-
-            patient = await self.db.get(Patient, billing.patient_id)
-            if patient and patient.user_id:
-                await NotificationService(self.db).dispatch_notification(
-                    user_id=patient.user_id,
-                    title="Payment Received",
-                    message=f"A payment of {payment.amount} has been received for bill {billing.bill_number}.",
-                    notification_type="PAYMENT_RECEIVED",
-                    reference_type="PAYMENT",
-                    reference_id=payment.id,
-                    priority="NORMAL",
-                    email=patient.email,
-                    phone=patient.phone,
-                )
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
-
-        return PaymentResponse.model_validate(payment)
-
-    async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int, current_user = None) -> PaymentResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
-            from app.utils.helpers import generate_code
-            from sqlalchemy import select
-            stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.id == billing_id,
-                PharmacyInvoice.is_deleted == False
-            ).with_for_update()
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-            if data.amount > (invoice.paid_amount or 0.0):
-                raise BadRequestException("Refund amount exceeds paid amount")
-
-            return_number = generate_code("RET")
-            return_record = PharmacyReturn(
-                return_number=return_number,
-                invoice_id=invoice.id,
-                patient_id=invoice.patient_id,
-                total_refund_amount=data.amount,
-                reason=data.refund_reason,
-                status="completed",
-                processed_by=user_id,
-                hospital_id=invoice.hospital_id,
-            )
-            self.db.add(return_record)
-
-            invoice.paid_amount = round(max((invoice.paid_amount or 0.0) - data.amount, 0.0), 2)
-            if invoice.paid_amount == 0 and invoice.total_amount > 0:
-                invoice.status = "refunded"
-            elif invoice.paid_amount < invoice.total_amount:
-                invoice.status = "partially_refunded"
-
-            await self.db.flush()
-            await self.audit_repo.create("refund", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
-
-            from app.services.transaction_history_service import TransactionHistoryService
-            await TransactionHistoryService(self.db).create_event(
-                event_type="REFUND_ISSUED",
-                reference_no=return_number,
-                description=f"Refund Issued for pharmacy bill {invoice.invoice_number}: {data.refund_reason or ''}",
-                amount=data.amount,
-                source_module="refunds",
-                source_id=return_record.id,
-                status="completed",
-                user_id=user_id,
-                hospital_id=invoice.hospital_id,
-            )
-
-            return PaymentResponse(
-                id=return_record.id or invoice.id,
-                billing_id=invoice.id,
-                amount=data.amount,
-                payment_method="refund",
-                transaction_ref=return_number,
-                payment_date=utc_now(),
-                status="completed",
-                is_refund=True,
-                refund_reason=data.refund_reason,
-                created_at=utc_now(),
-            )
-
-        if data.amount > billing.paid_amount:
-            raise BadRequestException("Refund amount exceeds paid amount")
-
-        payment = Payment(
-            billing_id=billing_id,
-            amount=data.amount,
-            payment_method="refund",
-            payment_date=utc_now(),
-            is_refund=True,
-            refund_reason=data.refund_reason,
-            received_by=user_id,
-            status="completed",
-        )
-        payment = await self.repo.add_payment(payment)
-        billing.paid_amount = round(billing.paid_amount - data.amount, 2)
-        billing = await self._recalculate_billing(billing)
-        if billing.paid_amount == 0 and billing.balance_amount > 0:
-            billing.status = BillingStatus.REFUNDED
-        await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
-
-        from app.services.transaction_history_service import TransactionHistoryService
-        await TransactionHistoryService(self.db).create_event(
-            event_type="REFUND_ISSUED",
-            reference_no=payment.transaction_ref or f"REF-{payment.id}",
-            description=f"Refund Issued for bill {billing.bill_number}: {payment.refund_reason or ''}",
-            amount=payment.amount,
-            source_module="refunds",
-            source_id=payment.id,
-            status="completed",
-            user_id=user_id,
-            hospital_id=billing.hospital_id,
-        )
-
-        try:
-            if billing.patient_id:
-                from app.models.patient_model import Patient
-                patient = await self.db.get(Patient, billing.patient_id)
-                if not patient and hasattr(self, "patient_repo") and self.patient_repo:
-                    patient = await self.patient_repo.get_by_id(billing.patient_id)
-                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
-                    from app.services.notification_service import NotificationService
-                    await NotificationService(self.db).dispatch_notification(
-                        user_id=patient.user_id,
-                        title="Refund Processed",
-                        message=f"A refund of ₹{payment.amount:,.2f} has been processed for bill {billing.bill_number}.",
-                        notification_type="PATIENT_REFUND_PROCESSED",
-                        reference_type="PAYMENT",
-                        reference_id=payment.id,
-                        priority="NORMAL",
-                    )
-        except Exception as notif_exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Failed to dispatch patient refund processed notification: %s",
-                notif_exc,
-            )
-
-        return PaymentResponse.model_validate(payment)
-
-    async def generate_invoice(self, billing_id: int, user_id: int, current_user = None) -> tuple[str, bytes]:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
-        if not billing:
-            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-            from sqlalchemy import select
-            from sqlalchemy.orm import selectinload
-            stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.id == billing_id,
-                PharmacyInvoice.is_deleted == False
-            ).options(
-                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-            )
-            if hospital_id is not None:
-                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-            res = await self.db.execute(stmt)
-            invoice = res.scalar_one_or_none()
-            if not invoice:
-                raise NotFoundException("Billing record not found")
-
-            target_hospital_id = hospital_id or getattr(invoice, "hospital_id", None)
-            hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
-
-            hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
-            hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
-            hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
-            hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
-
-            patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
-            patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
-            patient_phone = patient.phone if patient else "-"
-            patient_email = patient.email if patient else "-"
-
-            items = [
-                {
-                    "description": (item.medicine.name if item.medicine else f"Medicine #{item.medicine_id}"),
-                    "quantity": item.quantity,
-                    "unit_price": f"{item.unit_price:.2f}",
-                    "gst_rate": f"{invoice.tax_percentage:.1f}",
-                    "line_total": f"{item.line_total:.2f}",
-                }
-                for item in (invoice.items or [])
-            ]
-
-            hospital_name = "NexaCare Hospital"
-            target_hosp_id = invoice.hospital_id or hospital_id
-            if target_hosp_id:
-                from app.models.hospital_model import Hospital
-                hosp = await self.db.get(Hospital, target_hosp_id)
-                if hosp and hosp.name:
-                    hospital_name = hosp.name
-
-            path, pdf_bytes = await generate_invoice_pdf(
-                invoice.invoice_number,
-                {
-                    "hospital_name": hospital_name,
-                    "hospital_name": hospital_name,
-                    "hospital_address": hospital_address,
-                    "hospital_phone": hospital_phone,
-                    "hospital_email": hospital_email,
-                    "patient_name": patient_name,
-                    "patient_phone": patient_phone,
-                    "patient_email": patient_email,
-                    "date": (invoice.created_at or utc_now()).strftime("%Y-%m-%d"),
-                    "items": items,
-                    "subtotal": f"{invoice.subtotal:.2f}",
-                    "discount_percent": f"{invoice.discount_percentage:.1f}",
-                    "discount_amount": f"{invoice.discount_amount:.2f}",
-                    "gst_rate": f"{invoice.tax_percentage:.1f}",
-                    "gst_amount": f"{invoice.gst_amount:.2f}",
-                    "tax_amount": f"{invoice.tax_amount:.2f}",
-                    "total_amount": f"{invoice.total_amount:.2f}",
-                    "paid_amount": f"{invoice.paid_amount:.2f}",
-                    "balance_amount": f"{max((invoice.total_amount or 0.0) - (invoice.paid_amount or 0.0), 0.0):.2f}",
-                    "status": (invoice.status or "").title(),
-                    "notes": f"Pharmacy Invoice (Prescription #{invoice.prescription_id or '-'})",
-                },
-            )
-            await self.audit_repo.create("export", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
-            return path, pdf_bytes
-
-        target_hospital_id = hospital_id or getattr(billing, "hospital_id", None)
-        hospital = await self.hospital_repo.get_by_id(target_hospital_id) if target_hospital_id else None
-
-        hospital_name = (hospital.name if (hospital and hospital.name) else "NexaCare Hospital").strip()
-        hospital_address = (hospital.address if (hospital and hospital.address) else "").strip()
-        hospital_phone = (hospital.phone if (hospital and hospital.phone) else "").strip()
-        hospital_email = (hospital.email if (hospital and hospital.email) else "").strip()
-
-        patient = await self.patient_repo.get_by_id(billing.patient_id)
-        patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
-        patient_phone = patient.phone if patient else "-"
-        patient_email = patient.email if patient else "-"
-
-        items = [
-            {
-                "description": i.description,
-                "quantity": i.quantity,
-                "unit_price": f"{i.unit_price:.2f}",
-                "gst_rate": f"{i.gst_rate:.1f}",
-                "line_total": f"{i.line_total:.2f}",
-            }
-            for i in billing.items
-        ]
-
-        hospital_name = "NexaCare Hospital"
-        target_hosp_id = billing.hospital_id or hospital_id
-        if target_hosp_id:
-            from app.models.hospital_model import Hospital
-            hosp = await self.db.get(Hospital, target_hosp_id)
-            if hosp and hosp.name:
-                hospital_name = hosp.name
-
-        path, pdf_bytes = await generate_invoice_pdf(
-            billing.bill_number,
-            {
-                "hospital_name": hospital_name,
-                "hospital_name": hospital_name,
-                "hospital_address": hospital_address,
-                "hospital_phone": hospital_phone,
-                "hospital_email": hospital_email,
-                "patient_name": patient_name,
-                "patient_phone": patient_phone,
-                "patient_email": patient_email,
-                "date": utc_now().strftime("%Y-%m-%d"),
-                "items": items,
-                "subtotal": f"{billing.subtotal:.2f}",
-                "discount_percent": f"{billing.discount_percent:.1f}",
-                "discount_amount": f"{billing.discount_amount:.2f}",
-                "gst_rate": f"{billing.gst_rate:.1f}",
-                "gst_amount": f"{billing.gst_amount:.2f}",
-                "tax_amount": f"{billing.tax_amount:.2f}",
-                "total_amount": f"{billing.total_amount:.2f}",
-                "paid_amount": f"{billing.paid_amount:.2f}",
-                "balance_amount": f"{billing.balance_amount:.2f}",
-                "status": billing.status.title(),
-                "notes": billing.notes or "",
-            },
-        )
-        billing.invoice_path = path
-        await self.repo.update(billing)
-        await self.audit_repo.create("export", "billing", user_id=user_id, resource_id=str(billing.id))
-        return path, pdf_bytes
-
-    async def get_pending_payments(self, page: int = 1, size: int = 20, current_user: Any | None = None):
-        hospital_id = resolve_tenant_id(current_user)
-        skip = (page - 1) * size
-        items = await self.repo.get_pending_payments(skip=skip, limit=size, hospital_id=hospital_id)
-        total = await self.repo.count_pending_payments(hospital_id=hospital_id)
-        return build_paginated_result([self._to_response(b) for b in items], total, page, size)
-
-    async def get_revenue_summary(self, current_user: Any | None = None) -> BillingSummary:
-        hospital_id = resolve_tenant_id(current_user)
-        data = await self.repo.get_revenue_summary(hospital_id=hospital_id)
-
-        from app.models.pharmacy_model import PharmacyInvoice
-        from sqlalchemy import select, func
-
-        pharmacy_stmt = select(
-            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
-            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0)
-        ).where(
-            PharmacyInvoice.is_deleted == False
-        )
-        if hospital_id is not None:
-            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-
-        res = await self.db.execute(pharmacy_stmt)
-        row = res.first()
-
-        pharm_billed = float(row[0] if row else 0.0)
-        pharm_collected = float(row[1] if row else 0.0)
-        pharm_pending = max(0.0, pharm_billed - pharm_collected)
-
-        pharm_pending_count_stmt = select(func.count(PharmacyInvoice.id)).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount
-        )
-        if hospital_id is not None:
-            pharm_pending_count_stmt = pharm_pending_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-        pharm_pending_count = await self.db.scalar(pharm_pending_count_stmt) or 0
-
-        pharm_overdue_count_stmt = select(func.count(PharmacyInvoice.id)).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.status == "overdue"
-        )
-        if hospital_id is not None:
-            pharm_overdue_count_stmt = pharm_overdue_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-        pharm_overdue = await self.db.scalar(pharm_overdue_count_stmt) or 0
-
-        data["total_revenue"] = round(data["total_revenue"] + pharm_collected, 2)
-        data["total_paid"] = round(data["total_paid"] + pharm_collected, 2)
-        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
-        data["overdue_count"] = data["overdue_count"] + pharm_overdue
-        data["pending_count"] = data["pending_count"] + pharm_pending_count
-
-        return BillingSummary(**data)
-
-    async def get_daily_report(
-        self,
-        target_date: date | None = None,
-        filter_type: str | None = None,
-        start_date: date | None = None,
-        end_date: date | None = None,
-        current_user: Any | None = None,
-    ) -> DailyCollectionSummary:
-        from datetime import date, datetime, timedelta
-        from app.utils.helpers import get_today_ist
-
-        hospital_id = resolve_tenant_id(current_user)
-        today = get_today_ist()
-        raw_filter = (filter_type or "").strip().lower()
-
-        resolved_start: date
-        resolved_end: date
-        normalized_filter: str
-
-        if raw_filter in ("today", "1", "1. today", "1.today"):
-            normalized_filter = "today"
-            resolved_start = today
-            resolved_end = today
-        elif raw_filter in ("yesterday", "2", "2. yesterday", "2.yesterday"):
-            normalized_filter = "yesterday"
-            resolved_start = today - timedelta(days=1)
-            resolved_end = today - timedelta(days=1)
-        elif raw_filter in ("last_30_days", "last 30 days", "30_days", "30days", "3", "3. last 30 days", "3.last 30 days"):
-            normalized_filter = "last_30_days"
-            resolved_start = today - timedelta(days=29)
-            resolved_end = today
-        elif raw_filter in ("last_3_months", "last 3 months", "3_months", "3months", "4", "4. last 3 months", "4.last 3 months"):
-            normalized_filter = "last_3_months"
-            resolved_start = today - timedelta(days=90)
-            resolved_end = today
-        elif raw_filter in ("quarterly", "quarter", "this_quarter", "5", "5. quarterly", "5.quarterly"):
-            normalized_filter = "quarterly"
-            quarter_month = ((today.month - 1) // 3) * 3 + 1
-            resolved_start = date(today.year, quarter_month, 1)
-            resolved_end = today
-        elif raw_filter in ("yearly", "year", "this_year", "6", "6. yearly", "6.yearly"):
-            normalized_filter = "yearly"
-            resolved_start = date(today.year, 1, 1)
-            resolved_end = today
-        elif raw_filter in ("custom", "custom_range", "custom range", "7", "7. custom range", "7.custom range") or (start_date is not None or end_date is not None):
-            normalized_filter = "custom"
-            resolved_start = start_date or today
-            resolved_end = end_date or today
-            if resolved_start > resolved_end:
-                raise BadRequestException("start_date cannot be after end_date")
-        elif target_date is not None:
-            normalized_filter = "custom"
-            resolved_start = target_date
-            resolved_end = target_date
-        else:
-            normalized_filter = "today"
-            resolved_start = today
-            resolved_end = today
-
-        data = await self.repo.get_daily_collection(resolved_start, resolved_end, hospital_id=hospital_id)
-
-        start = datetime.combine(resolved_start, datetime.min.time())
-        end = datetime.combine(resolved_end, datetime.max.time())
-
-        # 1. Reception Billing & Payment Stats
-        reception_total_bill = round(float(data.get("today_total_bill", 0.0)), 2)
-        reception_paid_bill = round(float(data.get("today_paid_bill", 0.0)), 2)
-        reception_pending_bill = round(float(data.get("today_pending_bill", 0.0)), 2)
-        reception_collected = round(float(data.get("today_collected_revenue", 0.0)), 2)
-        reception_bills_count = int(data.get("bills_count", 0))
-        reception_payment_count = int(data.get("payment_count", 0))
-        reception_refunds_issued = round(
-            float(data.get("refunds_issued", data.get("by_method", {}).get("refund", 0.0))),
-            2,
-        )
-        reception_refund_count = int(data.get("refund_count", 0))
-        reception_by_method = {
-            str(k): round(abs(float(v)), 2)
-            for k, v in data.get("by_method", {}).items()
-            if k and str(k).lower() != "pharmacy"
-        }
-
-        # 2. Pharmacy Invoices & Collection Stats
-        from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
-        from sqlalchemy import select, func, case, or_
-
-        pharmacy_stmt = select(
-            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
-            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
-            func.coalesce(func.sum(PharmacyInvoice.total_amount - PharmacyInvoice.paid_amount), 0.0),
-            func.count(PharmacyInvoice.id),
-            func.sum(case((PharmacyInvoice.paid_amount > 0.0, 1), else_=0)),
-        ).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.created_at >= start,
-            PharmacyInvoice.created_at <= end,
-        )
-        if hospital_id is not None:
-            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-
-        res = await self.db.execute(pharmacy_stmt)
-        p_row = res.first()
-        pharm_total_bill = round(float(p_row[0] if (p_row and len(p_row) > 0 and p_row[0] is not None) else 0.0), 2)
-        pharm_paid_bill = round(float(p_row[1] if (p_row and len(p_row) > 1 and p_row[1] is not None) else 0.0), 2)
-        pharm_pending_bill = round(max(0.0, float(p_row[2] if (p_row and len(p_row) > 2 and p_row[2] is not None) else 0.0)), 2)
-        pharm_bills_count = int(p_row[3] if (p_row and len(p_row) > 3 and p_row[3] is not None) else 0)
-        pharm_payment_count = int(p_row[4] if (p_row and len(p_row) > 4 and p_row[4] is not None) else 0)
-        pharm_collected = pharm_paid_bill
-
-        # 3. Pharmacy Returns / Refunds Query
-        pharm_ret_stmt = (
-            select(
-                func.coalesce(func.sum(PharmacyReturn.total_refund_amount), 0.0),
-                func.count(PharmacyReturn.id),
-            )
-            .outerjoin(PharmacyInvoice, PharmacyReturn.invoice_id == PharmacyInvoice.id)
-            .where(
-                PharmacyReturn.is_deleted == False,
-                PharmacyReturn.status == "completed",
-                PharmacyReturn.created_at >= start,
-                PharmacyReturn.created_at <= end,
-            )
-        )
-        if hospital_id is not None:
-            pharm_ret_stmt = pharm_ret_stmt.where(
-                or_(
-                    PharmacyReturn.hospital_id == hospital_id,
-                    PharmacyInvoice.hospital_id == hospital_id,
-                )
-            )
-
-        ret_res = await self.db.execute(pharm_ret_stmt)
-        ret_row = ret_res.first()
-        pharm_refunds_issued = round(float(ret_row[0] if (ret_row and len(ret_row) > 0 and ret_row[0] is not None) else 0.0), 2)
-        pharm_refund_count = int(ret_row[1] if (ret_row and len(ret_row) > 1 and ret_row[1] is not None) else 0)
-
-        date_label = str(resolved_start) if resolved_start == resolved_end else f"{resolved_start} to {resolved_end}"
-
-        reception_summary = ReceptionCollectionSummary(
-            total_bill=reception_total_bill,
-            paid_bill=reception_paid_bill,
-            pending_bill=reception_pending_bill,
-            collected_revenue=reception_collected,
-            bills_count=reception_bills_count,
-            payment_count=reception_payment_count,
-            refunds_issued=reception_refunds_issued,
-            refund_count=reception_refund_count,
-            by_method=reception_by_method,
-        )
-
-        pharmacy_summary = PharmacyCollectionSummary(
-            total_bill=pharm_total_bill,
-            paid_bill=pharm_paid_bill,
-            pending_bill=pharm_pending_bill,
-            collected_revenue=pharm_collected,
-            bills_count=pharm_bills_count,
-            payment_count=pharm_payment_count,
-            refunds_issued=pharm_refunds_issued,
-            refund_count=pharm_refund_count,
-        )
-
-        combined_total_bill = round(reception_total_bill + pharm_total_bill, 2)
-        combined_paid_bill = round(reception_paid_bill + pharm_paid_bill, 2)
-        combined_pending_bill = round(reception_pending_bill + pharm_pending_bill, 2)
-        combined_collected = round(reception_collected + pharm_collected, 2)
-        combined_bills_count = reception_bills_count + pharm_bills_count
-        combined_payment_count = reception_payment_count + pharm_payment_count
-
-        combined_refunds_issued = round(reception_refunds_issued + pharm_refunds_issued, 2)
-        combined_refund_count = reception_refund_count + pharm_refund_count
-
-        combined_by_method = dict(reception_by_method)
-        if pharm_collected > 0.0:
-            combined_by_method["pharmacy"] = pharm_collected
-        if combined_refunds_issued > 0.0:
-            combined_by_method["refund"] = combined_refunds_issued
-
-        return DailyCollectionSummary(
-            date=date_label,
-            filter_type=normalized_filter,
-            start_date=str(resolved_start),
-            end_date=str(resolved_end),
-            # Combined Hospital-wide Daily Summary
-            today_total_bill=combined_total_bill,
-            today_paid_bill=combined_paid_bill,
-            today_pending_bill=combined_pending_bill,
-            today_collected_revenue=combined_collected,
-            bills_count=combined_bills_count,
-            total_collected=combined_collected,
-            payment_count=combined_payment_count,
-            refunds_issued=combined_refunds_issued,
-            refund_count=combined_refund_count,
-            by_method=combined_by_method,
-            # Separate Reception / Appointment Billing & Collection
-            reception_today_total_bill=reception_total_bill,
-            reception_today_paid_bill=reception_paid_bill,
-            reception_today_pending_bill=reception_pending_bill,
-            reception_collected_revenue=reception_collected,
-
-            reception_bills_count=reception_bills_count,
-            reception_payment_count=reception_payment_count,
-            reception_refunds_issued=reception_refunds_issued,
-            reception_refund_count=reception_refund_count,
-
-            reception_today_bills_count=reception_bills_count,
-            reception_today_payment_count=reception_payment_count,
-
-            reception_by_method=reception_by_method,
-            # Separate Pharmacy Billing & Collection
-            pharmacy_total_bill=pharm_total_bill,
-            pharmacy_paid_bill=pharm_paid_bill,
-            pharmacy_pending_bill=pharm_pending_bill,
-            pharmacy_collected_revenue=pharm_collected,
-            pharmacy_bills_count=pharm_bills_count,
-            pharmacy_payment_count=pharm_payment_count,
-            pharmacy_refunds_issued=pharm_refunds_issued,
-            pharmacy_refund_count=pharm_refund_count,
-            # Nested section objects
-            reception_collection=reception_summary,
-            pharmacy_collection=pharmacy_summary,
-        )
-
-    async def get_yearly_report(self, year: int | None = None, current_user: Any | None = None) -> RevenueReport:
-        hospital_id = resolve_tenant_id(current_user)
-        target_year = year or utc_now().year
-        start = datetime.combine(date(target_year, 1, 1), datetime.min.time())
-        end = datetime.combine(date(target_year, 12, 31), datetime.max.time())
-        label = str(target_year)
-
-        data = await self.repo.get_period_report(start, end, hospital_id=hospital_id)
-
-        from app.models.pharmacy_model import PharmacyInvoice
-        from sqlalchemy import select, func
-
-        pharmacy_stmt = select(
-            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
-            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
-            func.count(PharmacyInvoice.id)
-        ).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.created_at >= start,
-            PharmacyInvoice.created_at <= end
-        )
-        if hospital_id is not None:
-            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-
-        res = await self.db.execute(pharmacy_stmt)
-        row = res.first()
-
-        pharm_billed = float(row[0] if row else 0.0)
-        pharm_collected = float(row[1] if row else 0.0)
-        pharm_bill_count = int(row[2] if row else 0)
-
-        pharm_pending = max(0.0, pharm_billed - pharm_collected)
-
-        pharm_pay_count_stmt = select(func.count(PharmacyInvoice.id)).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.created_at >= start,
-            PharmacyInvoice.created_at <= end,
-            PharmacyInvoice.paid_amount > 0.0
-        )
-        if hospital_id is not None:
-            pharm_pay_count_stmt = pharm_pay_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-        pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
-
-        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
-        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
-        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
-        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
-        data["bill_count"] = data["bill_count"] + pharm_bill_count
-        data["payment_count"] = data["payment_count"] + pharm_payment_count
-
-        return RevenueReport(period=label, **data)
-
-    async def get_period_report(
-        self,
-        period: str,
-        target_date: date | None = None,
-        year: int | None = None,
-        month: int | None = None,
-        current_user: Any | None = None,
-    ) -> RevenueReport:
-        hospital_id = resolve_tenant_id(current_user)
-        if period == "monthly":
-            import calendar
-            now = utc_now()
-            y = year or (target_date.year if target_date else now.year)
-            m = month or (target_date.month if target_date else now.month)
-            last_day = calendar.monthrange(y, m)[1]
-            start = datetime.combine(date(y, m, 1), datetime.min.time())
-            end = datetime.combine(date(y, m, last_day), datetime.max.time())
-            label = start.strftime("%Y-%m")
-        elif target_date:
-            y, m = target_date.year, target_date.month
-            if period == "daily":
-                start = datetime.combine(target_date, datetime.min.time())
-                end = datetime.combine(target_date, datetime.max.time())
-                label = str(target_date)
-            else: # yearly
-                start = datetime.combine(date(y, 1, 1), datetime.min.time())
-                end = datetime.combine(date(y, 12, 31), datetime.max.time())
-                label = str(y)
-        else:
-            now = utc_now()
-            if period == "daily":
-                start = datetime.combine(now.date(), datetime.min.time())
-                end = now
-                label = str(now.date())
-            else:
-                y = year or now.year
-                start = datetime.combine(date(y, 1, 1), datetime.min.time())
-                end = datetime.combine(date(y, 12, 31), datetime.max.time())
-                label = str(y)
-        data = await self.repo.get_period_report(start, end, hospital_id=hospital_id)
-
-        from app.models.pharmacy_model import PharmacyInvoice
-        from sqlalchemy import select, func
-
-        pharmacy_stmt = select(
-            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
-            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
-            func.count(PharmacyInvoice.id)
-        ).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.created_at >= start,
-            PharmacyInvoice.created_at <= end
-        )
-        if hospital_id is not None:
-            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-
-        res = await self.db.execute(pharmacy_stmt)
-        row = res.first()
-
-        pharm_billed = float(row[0] if row else 0.0)
-        pharm_collected = float(row[1] if row else 0.0)
-        pharm_bill_count = int(row[2] if row else 0)
-
-        pharm_pending = max(0.0, pharm_billed - pharm_collected)
-
-        pharm_pay_count_stmt = select(func.count(PharmacyInvoice.id)).where(
-            PharmacyInvoice.is_deleted == False,
-            PharmacyInvoice.created_at >= start,
-            PharmacyInvoice.created_at <= end,
-            PharmacyInvoice.paid_amount > 0.0
-        )
-        if hospital_id is not None:
-            pharm_pay_count_stmt = pharm_pay_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
-        pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
-
-        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
-        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
-        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
-        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
-        data["bill_count"] = data["bill_count"] + pharm_bill_count
-        data["payment_count"] = data["payment_count"] + pharm_payment_count
-
-        return RevenueReport(period=label, **data)
-
-    async def generate_billing_bulk_template(self):
-        from io import BytesIO
-        import openpyxl
-        from sqlalchemy import select
-        from app.models.patient_model import Patient
-        
-        # Try to find an actual active patient name
-        stmt = select(Patient).where(Patient.is_deleted == False).limit(1)
-        res = await self.db.execute(stmt)
-        patient = res.scalar_one_or_none()
-        patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Rahul Sharma"
-        
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Billings Bulk Import"
-        
-        headers = [
-            "group_key", "Patient Name", "discount_percent", "discount_amount", "due_date", "notes",
-            "Appointment Number", "item_description", "item_quantity", "item_unit_price", "item_gst_rate", "item_type"
-        ]
-        ws.append(headers)
-        
-        # One valid sample billing with 2 items sharing group_key=1
-        ws.append([
-            1,
-            patient_name,
-            10.0,
-            0.0,
-            "2026-08-30 12:00:00",
-            "Routine clinic visit",
-            "APT-20260825E57D0B",
-            "Consultation Fee",
-            1,
-            500.00,
-            18.0,
-            "service"
-        ])
-        ws.append([
-            1,
-            patient_name,
-            10.0,
-            0.0,
-            "2026-08-30 12:00:00",
-            "Routine clinic visit",
-            "APT-20260825E57D0B",
-            "Disposable Syringe",
-            2,
-            25.00,
-            12.0,
-            "pharmacy_item"
-        ])
-        
-        stream = BytesIO()
-        wb.save(stream)
-        stream.seek(0)
-        return stream
-
-    async def import_billing_from_excel(self, file, user_id: int) -> dict:
-        from io import BytesIO
-        from pydantic import ValidationError
-        import openpyxl
-        
-        contents = await file.read()
-        wb = openpyxl.load_workbook(BytesIO(contents))
-        ws = wb.active
-        
-        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
-        if not header_row:
-            raise BadRequestException("The uploaded file is empty or has no headers.")
-            
-        headers = [str(h).strip().lower() for h in header_row if h is not None]
-        required_headers = {"group_key", "patient name", "item_description", "item_unit_price"}
-        if not required_headers.issubset(set(headers)):
-            raise BadRequestException("Missing required headers in the upload template.")
-            
-        total_rows = 0
-        created = 0
-        failed = 0
-        errors = []
-        
-        groups = {}
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            if all(cell is None for cell in row):
-                continue
-                
-            total_rows += 1
-            row_dict = {}
-            for header, val in zip(headers, row):
-                if val is None or str(val).strip() == "":
-                    row_dict[header] = None
-                else:
-                    row_dict[header] = val
-                    
-            gk = row_dict.get("group_key")
-            if gk is None or str(gk).strip() == "":
-                errors.append({"group_key": "N/A", "row": row_idx, "error": "Missing group_key in row."})
-                failed += 1
-                continue
-                
-            gk_str = str(gk).strip()
-            if gk_str not in groups:
-                groups[gk_str] = []
-            groups[gk_str].append((row_idx, row_dict))
-            
-        total_bills = len(groups)
-        
-        for gk_str, rows in groups.items():
-            # Check consistency of billing-level parameters
-            first_idx, first_row = rows[0]
-            
-            patient_name_raw = first_row.get("patient name")
-            discount_percent_raw = first_row.get("discount_percent")
-            discount_amount_raw = first_row.get("discount_amount")
-            due_date_raw = first_row.get("due_date")
-            notes_raw = first_row.get("notes")
-            appointment_number_raw = first_row.get("appointment number")
-            
-            def val_to_str(val):
-                if val is None:
-                    return ""
-                return str(val).strip().lower()
-                
-            conflict_found = False
-            for idx, r in rows[1:]:
-                if (val_to_str(r.get("patient name")) != val_to_str(patient_name_raw) or
-                    val_to_str(r.get("discount_percent")) != val_to_str(discount_percent_raw) or
-                    val_to_str(r.get("discount_amount")) != val_to_str(discount_amount_raw) or
-                    val_to_str(r.get("due_date")) != val_to_str(due_date_raw) or
-                    val_to_str(r.get("notes")) != val_to_str(notes_raw) or
-                    val_to_str(r.get("appointment number")) != val_to_str(appointment_number_raw)):
-                    conflict_found = True
-                    conflict_idx = idx
-                    break
-                    
-            if conflict_found:
-                failed += 1
-                errors.append({
-                    "group_key": gk_str,
-                    "row": conflict_idx,
-                    "error": "Conflict in billing-level fields within the same group_key."
-                })
-                continue
-                
-            try:
-                # 1. patient resolution
-                patient_name_str = str(patient_name_raw).strip() if patient_name_raw is not None else ""
-                if not patient_name_str:
-                    raise BadRequestException("Patient Name is required.")
-                
-                from sqlalchemy import select, or_
-                from app.models.patient_model import Patient
-                
-                parts = [p for p in patient_name_str.split() if p]
-                if not parts:
-                    raise BadRequestException("Patient Name cannot be empty.")
-                
-                stmt = select(Patient).where(Patient.is_deleted == False)
-                filters = []
-                for part in parts:
-                    filters.append(Patient.first_name.ilike(f"%{part}%"))
-                    filters.append(Patient.last_name.ilike(f"%{part}%"))
-                if filters:
-                    stmt = stmt.where(or_(*filters))
-                    
-                result = await self.db.execute(stmt)
-                candidates = result.scalars().all()
-                
-                matching_patients = []
-                normalized_target = " ".join(parts).lower()
-                for p in candidates:
-                    p_full_name = f"{p.first_name} {p.last_name}".strip().lower()
-                    if p_full_name == normalized_target:
-                        matching_patients.append(p)
-                        
-                if not matching_patients:
-                    raise BadRequestException(f"Patient not found: {patient_name_str}")
-                if len(matching_patients) > 1:
-                    raise BadRequestException(f"Multiple patients found with name {patient_name_str}. Use a unique patient.")
-                    
-                patient_id = matching_patients[0].id
-                
-                appointment_id = None
-                if appointment_number_raw is not None:
-                    appt_num_str = str(appointment_number_raw).strip()
-                    if appt_num_str:
-                        from app.models.appointment_model import Appointment
-                        appt_stmt = select(Appointment.id).where(Appointment.appointment_number == appt_num_str)
-                        appt_res = await self.db.execute(appt_stmt)
-                        appointment_id = appt_res.scalar_one_or_none()
-                        if not appointment_id:
-                            raise BadRequestException(f"Appointment with number {appt_num_str} not found")
-                
-                # 2. discount_percent
-                discount_percent = 0.0
-                if discount_percent_raw is not None:
-                    try:
-                        discount_percent = float(discount_percent_raw)
-                    except (ValueError, TypeError):
-                        raise BadRequestException(f"Invalid discount_percent: {discount_percent_raw}")
-                        
-                # 3. discount_amount
-                discount_amount = 0.0
-                if discount_amount_raw is not None:
-                    try:
-                        discount_amount = float(discount_amount_raw)
-                    except (ValueError, TypeError):
-                        raise BadRequestException(f"Invalid discount_amount: {discount_amount_raw}")
-                        
-                # 4. due_date parsing
-                due_date = None
-                if due_date_raw is not None:
-                    if isinstance(due_date_raw, datetime):
-                        due_date = due_date_raw
-                    elif isinstance(due_date_raw, date) and not isinstance(due_date_raw, datetime):
-                        due_date = datetime.combine(due_date_raw, datetime.min.time())
-                    else:
-                        try:
-                            p_str = str(due_date_raw).strip()
-                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
-                                try:
-                                    due_date = datetime.strptime(p_str, fmt)
-                                    break
-                                except ValueError:
-                                    continue
-                            if due_date is None:
-                                due_date = datetime.fromisoformat(p_str)
-                        except Exception:
-                            raise BadRequestException(f"Invalid datetime format for due_date: {due_date_raw}")
-                            
-                notes = str(notes_raw).strip() if notes_raw is not None else None
-                
-                # 5. Build nested items
-                items = []
-                for idx, r in rows:
-                    desc_raw = r.get("item_description")
-                    if desc_raw is None:
-                        raise BadRequestException("item_description is required.")
-                    description = str(desc_raw).strip()
-                    
-                    qty_raw = r.get("item_quantity")
-                    quantity = 1
-                    if qty_raw is not None:
-                        try:
-                            f_qty = float(qty_raw)
-                            if not f_qty.is_integer() or f_qty < 1:
-                                raise ValueError()
-                            quantity = int(f_qty)
-                        except (ValueError, TypeError):
-                            raise BadRequestException(f"Invalid quantity: {qty_raw} at row {idx}")
-                            
-                    up_raw = r.get("item_unit_price")
-                    if up_raw is None:
-                        raise BadRequestException("item_unit_price is required.")
-                    try:
-                        unit_price = float(up_raw)
-                    except (ValueError, TypeError):
-                        raise BadRequestException(f"Invalid unit_price: {up_raw} at row {idx}")
-                        
-                    gst_raw = r.get("item_gst_rate")
-                    gst_rate = 18.0
-                    if gst_raw is not None:
-                        try:
-                            gst_rate = float(gst_raw)
-                        except (ValueError, TypeError):
-                            raise BadRequestException(f"Invalid gst_rate: {gst_raw} at row {idx}")
-                            
-                    type_raw = r.get("item_type")
-                    item_type = str(type_raw).strip() if type_raw is not None else "service"
-                    
-                    from app.schemas.billing_schema import BillItemCreate
-                    items.append(
-                        BillItemCreate(
-                            description=description,
-                            quantity=quantity,
-                            unit_price=unit_price,
-                            gst_rate=gst_rate,
-                            item_type=item_type
-                        )
-                    )
-                    
-                # Validate the entire BillingCreate object before creation
-                from app.schemas.billing_schema import BillingCreate
-                bill_create = BillingCreate(
-                    patient_id=patient_id,
-                    discount_percent=discount_percent,
-                    discount_amount=discount_amount,
-                    due_date=due_date,
-                    notes=notes,
-                    appointment_id=appointment_id,
-                    items=items
-                )
-                
-                # Call billing create service method
-                await self.create(bill_create, user_id)
-                created += 1
-                
-            except ValidationError as e:
-                failed += 1
-                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
-                errors.append({
-                    "group_key": gk_str,
-                    "row": first_idx,
-                    "error": err_msg
-                })
-            except BadRequestException as e:
-                failed += 1
-                errors.append({
-                    "group_key": gk_str,
-                    "row": first_idx,
-                    "error": str(e.detail)
-                })
-            except NotFoundException as e:
-                failed += 1
-                errors.append({
-                    "group_key": gk_str,
-                    "row": first_idx,
-                    "error": str(e.detail)
-                })
-            except ConflictException as e:
-                failed += 1
-                errors.append({
-                    "group_key": gk_str,
-                    "row": first_idx,
-                    "error": str(e.detail)
-                })
-            except Exception as e:
-                failed += 1
-                errors.append({
-                    "group_key": gk_str,
-                    "row": first_idx,
-                    "error": str(e)
-                })
-                
-        await self.db.flush()
-        return {
-            "total_rows": total_rows,
-            "total_bills": total_bills,
-            "created": created,
-            "failed": failed,
-            "errors": errors
-        }
-
-    async def export_billings(
-        self,
-        format_type: str,
-        status: str | None = None,
-        patient_id: int | None = None,
-        start_date: date | None = None,
-        end_date: date | None = None,
-        q: str | None = None,
-        sort_by: str = "created_at",
-        sort_order: str = "desc",
-        current_user: Any | None = None,
-    ):
-        hospital_id = resolve_tenant_id(current_user)
-        from app.models.billing_model import Billing
-        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
-        from sqlalchemy import select, or_, func, union_all
-        from sqlalchemy.sql.expression import literal
-        from sqlalchemy.orm import selectinload
-        from datetime import datetime, date
-        from io import BytesIO
-
-        sort_field_b = None
-        sort_field_p = None
-        
-        if sort_by in ["created_at", "status", "total_amount"]:
-            sort_field_b = getattr(Billing, sort_by)
-            sort_field_p = getattr(PharmacyInvoice, sort_by)
-        elif sort_by == "bill_number":
-            sort_field_b = Billing.bill_number
-            sort_field_p = PharmacyInvoice.invoice_number
-        else:
-            sort_field_b = Billing.created_at
-            sort_field_p = PharmacyInvoice.created_at
-
-        b_query = select(
-            Billing.id.label("id"),
-            literal("billing").label("source"),
-            sort_field_b.label("sort_val"),
-            Billing.id.label("tie_breaker")
-        ).where(Billing.is_deleted == False)
-
-        p_query = select(
-            PharmacyInvoice.id.label("id"),
-            literal("pharmacy").label("source"),
-            sort_field_p.label("sort_val"),
-            PharmacyInvoice.id.label("tie_breaker")
-        ).where(PharmacyInvoice.is_deleted == False)
-
-        if hospital_id is not None:
-            b_query = b_query.where(Billing.hospital_id == hospital_id)
-            p_query = p_query.where(PharmacyInvoice.hospital_id == hospital_id)
-
-        if status:
-            b_query = b_query.where(Billing.status == status)
-            p_query = p_query.where(PharmacyInvoice.status == status)
-        if patient_id:
-            b_query = b_query.where(Billing.patient_id == patient_id)
-            p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
-        if start_date:
-            start_datetime = datetime.combine(start_date, datetime.min.time())
-            b_query = b_query.where(Billing.created_at >= start_datetime)
-            p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
-        if end_date:
-            end_datetime = datetime.combine(end_date, datetime.max.time())
-            b_query = b_query.where(Billing.created_at <= end_datetime)
-            p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
-        if q:
-            pattern = f"%{q.lower()}%"
-            b_query = b_query.where(
-                or_(
-                    func.lower(Billing.bill_number).like(pattern),
-                    func.lower(Billing.notes).like(pattern),
-                )
-            )
-            p_query = p_query.where(
-                func.lower(PharmacyInvoice.invoice_number).like(pattern)
-            )
-
-        combined_query = union_all(b_query, p_query)
-        subq = combined_query.subquery()
-        
-        order_col = subq.c.sort_val.desc() if sort_order == "desc" else subq.c.sort_val.asc()
-        tie_col = subq.c.tie_breaker.desc() if sort_order == "desc" else subq.c.tie_breaker.asc()
-        
-        non_paginated_query = select(subq.c.id, subq.c.source).order_by(order_col, tie_col)
-        
-        rows = await self.db.execute(non_paginated_query)
-        id_source_list = list(rows.all())
-        
-        billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
-        pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
-
-        billing_map = {}
-        if billing_ids:
-            b_full = await self.db.execute(
-                select(Billing).where(Billing.id.in_(billing_ids)).options(
-                    selectinload(Billing.items), selectinload(Billing.payments)
-                )
-            )
-            for b in b_full.scalars().unique().all():
-                billing_map[b.id] = self._to_response(b)
-
-        pharmacy_map = {}
-        if pharmacy_ids:
-            p_full = await self.db.execute(
-                select(PharmacyInvoice).where(PharmacyInvoice.id.in_(pharmacy_ids)).options(
-                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
-                )
-            )
-            for p in p_full.scalars().unique().all():
-                pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
-
-        ordered_items = []
-        for r_id, r_source in id_source_list:
-            if r_source == "billing" and r_id in billing_map:
-                ordered_items.append(billing_map[r_id])
-            elif r_source == "pharmacy" and r_id in pharmacy_map:
-                ordered_items.append(pharmacy_map[r_id])
-                
-        # Map patient details
-        from app.models.patient_model import Patient
-        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
-        p_res = await self.db.execute(p_stmt)
-        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
-
-        # Map appointment numbers
-        from app.models.appointment_model import Appointment
-        a_stmt = select(Appointment.id, Appointment.appointment_number)
-        a_res = await self.db.execute(a_stmt)
-        appointments_map = {row[0]: row[1] for row in a_res.all()}
-
-        if format_type == "excel":
-            import openpyxl
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Billings Report"
-            
-            headers = [
-                "Sr. No.", "Patient Name", "bill_number", "subtotal", "discount_percent",
-                "discount_amount", "gst_rate", "gst_amount", "tax_amount", "total_amount",
-                "paid_amount", "balance_amount", "status", "due_date", "notes", "invoice_path",
-                "Appointment Number", "created_at", "updated_at", "source",
-                "item_id", "item_description", "item_quantity", "item_unit_price",
-                "item_gst_rate", "item_gst_amount", "item_line_total", "item_type"
-            ]
-            ws.append(headers)
-            
-            for sr_no, b in enumerate(ordered_items, start=1):
-                p_name = patients_map.get(b.patient_id, "")
-                appt_num_str = appointments_map.get(b.appointment_id, "") if b.appointment_id else ""
-                
-                # Check if there are items to export. If not, output one row with empty item columns
-                if not b.items:
-                    row = [
-                        sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
-                        f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
-                        f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
-                        b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                        b.notes or "", b.invoice_path or "", appt_num_str,
-                        b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                        b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
-                        b.source,
-                        "", "", "", "", "", "", "", ""
-                    ]
-                    ws.append(row)
-                else:
-                    for item in b.items:
-                        row = [
-                            sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
-                            f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
-                            f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
-                            b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                            b.notes or "", b.invoice_path or "", appt_num_str,
-                            b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                            b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
-                            b.source,
-                            item.id,
-                            item.description,
-                            item.quantity,
-                            f"₹{item.unit_price:.2f}",
-                            item.gst_rate,
-                            f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else "",
-                            f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else "",
-                            item.item_type
-                        ]
-                        ws.append(row)
-                        
-            stream = BytesIO()
-            wb.save(stream)
-            stream.seek(0)
-            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
-        elif format_type == "pdf":
-            from jinja2 import Environment, FileSystemLoader
-            from app.utils.pdf_generator import html_to_pdf
-            from app.utils.helpers import utc_now
-            from reportlab.pdfbase import pdfmetrics
-            from reportlab.pdfbase.ttfonts import TTFont
-            from xhtml2pdf import default
-            import os
-            
-            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
-            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
-                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                
-            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
-            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
-            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
-            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
-            
-            env = Environment(loader=FileSystemLoader("app/templates"))
-            template = env.get_template("billings_export_template.html")
-            
-            formatted_billings = []
-            for b in ordered_items:
-                p_name = patients_map.get(b.patient_id, "")
-                
-                formatted_billings.append({
-                    "id": b.id,
-                    "patient_id": b.patient_id,
-                    "patient_name": p_name,
-                    "bill_number": b.bill_number,
-                    "subtotal": b.subtotal,
-                    "discount_percent": b.discount_percent,
-                    "discount_amount": b.discount_amount,
-                    "gst_rate": b.gst_rate,
-                    "gst_amount": b.gst_amount,
-                    "tax_amount": b.tax_amount,
-                    "total_amount": b.total_amount,
-                    "paid_amount": b.paid_amount,
-                    "balance_amount": b.balance_amount,
-                    "status": b.status,
-                    "due_date": b.due_date.strftime("%Y-%m-%d") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                    "notes": b.notes,
-                    "appointment_id": b.appointment_id,
-                    "source": b.source,
-                    "created_at": b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                    "bill_items": [
-                        {
-                            "id": item.id,
-                            "description": item.description,
-                            "quantity": item.quantity,
-                            "unit_price": item.unit_price,
-                            "gst_rate": item.gst_rate,
-                            "gst_amount": getattr(item, "gst_amount", 0.0),
-                            "line_total": getattr(item, "line_total", 0.0),
-                            "item_type": item.item_type
-                        }
-                        for item in b.items
-                    ]
-                })
-                
-            html_content = template.render(
-                billings=formatted_billings,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-            
-            pdf_data = html_to_pdf(html_content)
-            return pdf_data, "application/pdf"
-        else:
-            raise BadRequestException("Invalid format specified for export")
-
-
-class InsuranceService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
-        self.repo = InsuranceRepository(db)
-        self.claim_repo = InsuranceClaimRepository(db)
-        self.audit_repo = AuditRepository(db)
-
-    async def create_insurance(self, data: InsuranceCreate, user_id: int) -> InsuranceResponse:
-        insurance = Insurance(**data.model_dump())
-        insurance = await self.repo.create(insurance)
-        await self.audit_repo.create("create", "billing_insurance", user_id=user_id, resource_id=str(insurance.id))
-        return InsuranceResponse.model_validate(insurance)
-
-    async def submit_claim(self, data: InsuranceClaimCreate, user_id: int) -> InsuranceClaimResponse:
-        claim = InsuranceClaim(
-            claim_number=generate_claim_number(),
-            submitted_at=utc_now(),
-            **data.model_dump(),
-        )
-        claim = await self.claim_repo.create(claim)
-        await self.audit_repo.create("create", "billing_claim", user_id=user_id, resource_id=str(claim.id))
-
-        billing = await self.repo.get_by_id(claim.billing_id)
-        hospital_id = billing.hospital_id if billing else None
-
-        from app.services.transaction_history_service import TransactionHistoryService
-        await TransactionHistoryService(self.db).create_event(
-            event_type="INSURANCE_CLAIM",
-            reference_no=claim.claim_number,
-            description=f"Insurance Claim Submitted: {claim.notes or ''}",
-            amount=claim.claimed_amount,
-            source_module="insurance",
-            source_id=claim.id,
-            status="completed",
-            user_id=user_id,
-            hospital_id=hospital_id,
-        )
-
-        return InsuranceClaimResponse.model_validate(claim)
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.constants import AppointmentStatus, BillingStatus
+from app.core.dependencies import resolve_tenant_id
+from app.core.exceptions import BadRequestException, NotFoundException, ConflictException
+from app.models.billing_model import BillItem, Billing, Insurance, InsuranceClaim, Payment
+from app.repositories.audit_repository import AuditRepository
+from app.repositories.billing_repository import BillingRepository, InsuranceClaimRepository, InsuranceRepository
+from app.repositories.hospital_repository import HospitalRepository
+from app.repositories.patient_repository import PatientRepository
+from app.schemas.billing_schema import (
+    BillType,
+    BillingCreate,
+    BillingResponse,
+    BillingSummary,
+    BillingUpdate,
+    BillItemResponse,
+    DailyCollectionSummary,
+    ReceptionCollectionSummary,
+    PharmacyCollectionSummary,
+    InsuranceClaimCreate,
+    InsuranceClaimResponse,
+    InsuranceCreate,
+    InsuranceResponse,
+    PaymentCreate,
+    PaymentResponse,
+    RefundCreate,
+    RevenueReport,
+)
+from app.utils.helpers import (
+    calculate_bill_totals,
+    calculate_line_total,
+    generate_bill_number,
+    generate_claim_number,
+    utc_now,
+    get_today_ist,
+)
+from app.utils.pagination import build_paginated_result
+from app.utils.pdf_generator import generate_invoice_pdf
+
+
+def resolve_billing_date_filter(
+    date_filter: str | None,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[date | None, date | None]:
+    if not date_filter:
+        if start_date and end_date and start_date > end_date:
+            raise BadRequestException("start_date cannot be greater than end_date")
+        return start_date, end_date
+
+    clean = str(date_filter).strip().lower().replace(" ", "_").replace("-", "_")
+    today = get_today_ist()
+
+    if clean == "today":
+        return today, today
+    elif clean == "yesterday":
+        y = today - timedelta(days=1)
+        return y, y
+    elif clean in ("last_30_days", "30_days", "30days"):
+        return today - timedelta(days=30), today
+    elif clean in ("quarterly", "quarter", "current_quarter"):
+        q_start_month = ((today.month - 1) // 3) * 3 + 1
+        return date(today.year, q_start_month, 1), today
+    elif clean in ("yearly", "year", "current_year"):
+        return date(today.year, 1, 1), today
+    elif clean in ("custom", "custom_range"):
+        if not start_date or not end_date:
+            raise BadRequestException("Both start_date and end_date are required when date_filter is 'custom'")
+        if start_date > end_date:
+            raise BadRequestException("start_date cannot be greater than end_date")
+        return start_date, end_date
+    else:
+        valid = ["today", "yesterday", "last_30_days", "quarterly", "yearly", "custom"]
+        raise BadRequestException(f"Invalid date_filter. Allowed values: {', '.join(valid)}")
+
+
+class BillingService:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.repo = BillingRepository(db)
+        self.patient_repo = PatientRepository(db)
+        self.audit_repo = AuditRepository(db)
+        self.hospital_repo = HospitalRepository(db)
+
+    def _to_response(self, billing: Billing) -> BillingResponse:
+        data = BillingResponse.model_validate(billing)
+        data.items = [BillItemResponse.model_validate(i) for i in billing.items]
+        data.source = "billing"
+        if billing.bill_number and (
+            str(billing.bill_number).upper().startswith("REC")
+            or str(billing.bill_number).upper().startswith("PHR")
+        ):
+            data.bill_type = "pharmacy"
+        elif billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
+            data.bill_type = "ipd"
+        else:
+            data.bill_type = "consultation"
+        return data
+
+    def _pharmacy_invoice_to_billing_response(self, invoice) -> BillingResponse:
+        bill_items = []
+        for item in (invoice.items or []):
+            medicine_name = item.medicine.name if (hasattr(item, "medicine") and item.medicine) else f"Medicine #{item.medicine_id}"
+            bill_items.append(
+                BillItemResponse(
+                    id=item.id,
+                    billing_id=invoice.id,
+                    description=f"{medicine_name} (Qty: {item.quantity})",
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    gst_rate=invoice.tax_percentage,
+                    gst_amount=invoice.gst_amount / len(invoice.items) if invoice.items else 0.0,
+                    line_total=item.line_total,
+                    item_type="pharmacy_item",
+                    created_at=item.created_at or invoice.created_at or utc_now(),
+                )
+            )
+        
+        return BillingResponse(
+            id=invoice.id,
+            patient_id=invoice.patient_id or 0,
+            bill_number=invoice.invoice_number,
+            subtotal=invoice.subtotal,
+            discount_percent=invoice.discount_percentage,
+            discount_amount=invoice.discount_amount,
+            gst_rate=invoice.tax_percentage,
+            gst_amount=invoice.gst_amount,
+            tax_amount=invoice.tax_amount,
+            total_amount=invoice.total_amount,
+            paid_amount=invoice.paid_amount,
+            balance_amount=round(max(invoice.total_amount - invoice.paid_amount, 0.0), 2),
+            status=invoice.status,
+            due_date=invoice.created_at,
+            notes=f"Pharmacy Invoice (Prescription ID: {invoice.prescription_id})",
+            invoice_path=None,
+            appointment_id=None,
+            items=bill_items,
+            created_at=invoice.created_at or utc_now(),
+            updated_at=invoice.updated_at or utc_now(),
+            source="pharmacy",
+            bill_type="pharmacy",
+        )
+
+    async def _recalculate_billing(self, billing: Billing) -> Billing:
+        from sqlalchemy import inspect
+        state = inspect(billing)
+        if "items" in state.unloaded and billing.id is not None:
+            billing = await self.repo.get_by_id(billing.id)
+
+        if billing.items:
+            subtotal = sum((item.quantity * item.unit_price) for item in billing.items)
+            totals = calculate_bill_totals(
+                subtotal=subtotal,
+                discount_percent=billing.discount_percent,
+                discount_amount=billing.discount_amount,
+                gst_rate=billing.gst_rate if billing.gst_rate is not None else 18.0,
+                tax_amount=billing.tax_amount,
+            )
+            billing.subtotal = totals["subtotal"]
+            billing.discount_amount = totals["discount_amount"]
+            billing.tax_amount = totals["tax_amount"]
+
+            total_gst = 0.0
+            for item in billing.items:
+                # Recalculate each item's GST and line total dynamically
+                _, gst_amt, line_total = calculate_line_total(
+                    item.quantity, item.unit_price, item.gst_rate
+                )
+                item.gst_amount = gst_amt
+                item.line_total = line_total
+                total_gst += gst_amt
+            billing.gst_amount = round(total_gst, 2)
+            
+            # Recalculate the effective gst_rate for the bill
+            if len(billing.items) == 1:
+                billing.gst_rate = billing.items[0].gst_rate
+            elif billing.subtotal > 0:
+                billing.gst_rate = round((billing.gst_amount / billing.subtotal) * 100, 2)
+            else:
+                billing.gst_rate = 0.0
+            billing.total_amount = round(max(billing.subtotal - billing.discount_amount, 0.0) + billing.gst_amount + billing.tax_amount, 2)
+        else:
+            if not billing.total_amount and billing.subtotal:
+                billing.total_amount = billing.subtotal
+            elif not billing.subtotal and billing.total_amount:
+                billing.subtotal = billing.total_amount
+
+        due_date_naive = billing.due_date
+        if due_date_naive and due_date_naive.tzinfo is not None:
+            from datetime import timezone as py_timezone
+            due_date_naive = due_date_naive.astimezone(py_timezone.utc).replace(tzinfo=None)
+
+        billing.balance_amount = round(billing.total_amount - billing.paid_amount, 2)
+        
+        # Check if there are any completed refund payments
+        has_refund = any(p.is_refund and p.status == "completed" for p in billing.payments) if billing.payments else False
+
+        if billing.balance_amount <= 0:
+            billing.status = BillingStatus.PAID
+        elif has_refund and billing.paid_amount <= 0:
+            billing.status = BillingStatus.REFUNDED
+        elif billing.paid_amount > 0:
+            billing.status = BillingStatus.PARTIAL
+        elif due_date_naive and due_date_naive < utc_now():
+            billing.status = BillingStatus.OVERDUE
+        else:
+            billing.status = BillingStatus.PENDING
+        return await self.repo.update(billing)
+
+    async def create(self, data: BillingCreate, user_id: int, current_user = None) -> BillingResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        patient = await self.patient_repo.get_by_id(data.patient_id, hospital_id=hospital_id)
+        if not patient:
+            raise NotFoundException("Patient not found")
+
+        if data.appointment_id is not None:
+            from sqlalchemy import select
+            from app.models.appointment_model import Appointment
+            stmt = select(Appointment).where(Appointment.id == data.appointment_id)
+            apt_result = await self.db.execute(stmt)
+            appointment = apt_result.scalar_one_or_none()
+            if not appointment:
+                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+            
+            if appointment.patient_id != data.patient_id:
+                raise BadRequestException("Appointment does not belong to the supplied patient")
+
+            if appointment.appointment_status == AppointmentStatus.CANCELLED:
+                raise BadRequestException(
+                    "Billing cannot be created for a cancelled appointment."
+                )
+
+            is_ipd = (
+                (appointment.appointment_type or "").upper() == "IPD"
+                or (appointment.admission_status or "") in ("Admitted", "Discharged", "Admit Recommended")
+                or bool(appointment.admission_recommended)
+            )
+            is_completed = (
+                appointment.appointment_status == AppointmentStatus.COMPLETED
+                or appointment.appointment_status == "Checked-Out"
+                or appointment.queue_status == "COMPLETED"
+                or appointment.check_out_time is not None
+                or is_ipd
+            )
+            if not is_completed:
+                raise BadRequestException(
+                    "Billing can only be created for completed appointments."
+                )
+
+            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
+            if existing_billing:
+                raise ConflictException("Billing already exists for this patient and appointment.")
+
+        due_date = data.due_date
+        if due_date and due_date.tzinfo is not None:
+            from datetime import timezone as py_timezone
+            due_date = due_date.astimezone(py_timezone.utc).replace(tzinfo=None)
+
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        from app.utils.helpers import generate_code
+
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = (user.hospital_id if user and user.hospital_id else None) or (patient.hospital_id if patient else None)
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id or 1)
+
+        billing = Billing(
+            patient_id=data.patient_id,
+            hospital_id=hospital_id,
+            bill_number=generate_code(billing_settings.get("invoice_prefix", "BIL")),
+            discount_percent=data.discount_percent,
+            discount_amount=data.discount_amount,
+            due_date=due_date,
+            notes=data.notes,
+            insurance_id=None,
+            appointment_id=data.appointment_id,
+            created_by=user_id,
+        )
+        billing = await self.repo.create(billing)
+
+        subtotal = 0.0
+        for item_data in data.items:
+            _, gst_amt, line_total = calculate_line_total(
+                item_data.quantity, item_data.unit_price, item_data.gst_rate
+            )
+            item = BillItem(
+                billing_id=billing.id,
+                description=item_data.description,
+                quantity=item_data.quantity,
+                unit_price=item_data.unit_price,
+                gst_rate=item_data.gst_rate,
+                gst_amount=gst_amt,
+                line_total=line_total,
+                item_type=item_data.item_type,
+            )
+            await self.repo.add_item(item)
+            subtotal += item_data.quantity * item_data.unit_price
+
+        billing.subtotal = subtotal
+        billing = await self._recalculate_billing(billing)
+        billing = await self.repo.get_by_id(billing.id)
+        await self.audit_repo.create("create", "billing", user_id=user_id, resource_id=str(billing.id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="INVOICE_CREATED",
+            reference_no=billing.bill_number,
+            description=f"Billing Invoice Created: {billing.notes or ''}",
+            amount=billing.total_amount,
+            source_module="billing",
+            source_id=billing.id,
+            status="completed",
+            user_id=user_id,
+            hospital_id=billing.hospital_id,
+        )
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+
+            if patient and patient.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Invoice Generated",
+                    message=f"An invoice ({billing.bill_number}) of {billing.total_amount} has been generated.",
+                    notification_type="INVOICE_CREATED",
+                    reference_type="BILLING",
+                    reference_id=billing.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
+
+        return self._to_response(billing)
+
+    async def _paginate_combined_billings(
+        self,
+        page: int,
+        size: int,
+        sort_by: str,
+        sort_order: str,
+        status: str | None,
+        patient_id: int | None,
+        q: str | None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        bill_type: Any | None = None,
+        current_user: Any | None = None,
+    ):
+        from app.models.billing_model import Billing
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        from app.core.dependencies import resolve_tenant_id
+        from sqlalchemy import select, or_, not_, func, union_all
+        from sqlalchemy.sql.expression import literal
+        from sqlalchemy.orm import selectinload
+
+        hospital_id = resolve_tenant_id(current_user)
+
+        sort_field_b = None
+        sort_field_p = None
+        
+        if sort_by in ["created_at", "status", "total_amount"]:
+            sort_field_b = getattr(Billing, sort_by)
+            sort_field_p = getattr(PharmacyInvoice, sort_by)
+        elif sort_by == "bill_number":
+            sort_field_b = Billing.bill_number
+            sort_field_p = PharmacyInvoice.invoice_number
+        else:
+            sort_field_b = Billing.created_at
+            sort_field_p = PharmacyInvoice.created_at
+
+        b_query = select(
+            Billing.id.label("id"),
+            literal("billing").label("source"),
+            sort_field_b.label("sort_val"),
+            Billing.id.label("tie_breaker")
+        ).where(Billing.is_deleted == False)
+
+        p_query = select(
+            PharmacyInvoice.id.label("id"),
+            literal("pharmacy").label("source"),
+            sort_field_p.label("sort_val"),
+            PharmacyInvoice.id.label("tie_breaker")
+        ).where(PharmacyInvoice.is_deleted == False)
+
+        if hospital_id is not None:
+            b_query = b_query.where(Billing.hospital_id == hospital_id)
+            p_query = p_query.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        if status:
+            b_query = b_query.where(Billing.status == status)
+            p_query = p_query.where(PharmacyInvoice.status == status)
+        if patient_id:
+            b_query = b_query.where(Billing.patient_id == patient_id)
+            p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
+        if start_date:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            b_query = b_query.where(Billing.created_at >= start_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
+        if end_date:
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            b_query = b_query.where(Billing.created_at <= end_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
+        if bill_type:
+            bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
+            if bt_val == "pharmacy":
+                b_query = b_query.where(
+                    or_(
+                        func.lower(Billing.bill_number).like("rec%"),
+                        func.lower(Billing.bill_number).like("phr%"),
+                    )
+                )
+                p_query = p_query.where(PharmacyInvoice.id > 0)
+            elif bt_val in ("consultation", "consult"):
+                b_query = b_query.where(
+                    not_(func.lower(Billing.bill_number).like("ipd%")),
+                    not_(func.lower(Billing.bill_number).like("rec%")),
+                    not_(func.lower(Billing.bill_number).like("phr%")),
+                )
+                p_query = p_query.where(PharmacyInvoice.id == -1)
+            elif bt_val in ("ipd", "final_bill"):
+                b_query = b_query.where(func.lower(Billing.bill_number).like("ipd%"))
+                p_query = p_query.where(PharmacyInvoice.id == -1)
+        if q:
+            pattern = f"%{q.lower()}%"
+            b_query = b_query.where(
+                or_(
+                    func.lower(Billing.bill_number).like(pattern),
+                    func.lower(Billing.notes).like(pattern),
+                )
+            )
+            p_query = p_query.where(
+                func.lower(PharmacyInvoice.invoice_number).like(pattern)
+            )
+
+        combined_query = union_all(b_query, p_query)
+
+        subq = combined_query.subquery()
+        count_query = select(func.count()).select_from(subq)
+        total = await self.db.scalar(count_query) or 0
+
+        skip = (page - 1) * size
+        
+        order_col = subq.c.sort_val.desc() if sort_order == "desc" else subq.c.sort_val.asc()
+        tie_col = subq.c.tie_breaker.desc() if sort_order == "desc" else subq.c.tie_breaker.asc()
+        
+        paginated_query = select(subq.c.id, subq.c.source).order_by(order_col, tie_col).offset(skip).limit(size)
+        
+        rows = await self.db.execute(paginated_query)
+        id_source_list = list(rows.all())
+        
+        billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
+        pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
+
+        billing_map = {}
+        if billing_ids:
+            b_full = await self.db.execute(
+                select(Billing).where(Billing.id.in_(billing_ids)).options(
+                    selectinload(Billing.items), selectinload(Billing.payments)
+                )
+            )
+            for b in b_full.scalars().unique().all():
+                billing_map[b.id] = self._to_response(b)
+
+        pharmacy_map = {}
+        if pharmacy_ids:
+            p_full = await self.db.execute(
+                select(PharmacyInvoice).where(PharmacyInvoice.id.in_(pharmacy_ids)).options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+            )
+            for p in p_full.scalars().unique().all():
+                pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
+
+        ordered_items = []
+        for r_id, r_source in id_source_list:
+            if r_source == "billing" and r_id in billing_map:
+                ordered_items.append(billing_map[r_id])
+            elif r_source == "pharmacy" and r_id in pharmacy_map:
+                ordered_items.append(pharmacy_map[r_id])
+
+        return build_paginated_result(ordered_items, total, page, size)
+
+
+    async def list_billings(
+        self, page: int = 1, size: int = 20, sort_by: str = "created_at",
+        sort_order: str = "desc", status: str | None = None, patient_id: int | None = None,
+        date_filter: str | None = None,
+        start_date: date | None = None, end_date: date | None = None,
+        bill_type: Any | None = None,
+        current_user: Any | None = None,
+    ):
+        resolved_start, resolved_end = resolve_billing_date_filter(date_filter, start_date, end_date)
+        return await self._paginate_combined_billings(
+            page=page, size=size, sort_by=sort_by, sort_order=sort_order,
+            status=status, patient_id=patient_id, q=None,
+            start_date=resolved_start, end_date=resolved_end,
+            bill_type=bill_type,
+            current_user=current_user,
+        )
+
+    async def search(
+        self, q: str, page: int = 1, size: int = 20, status: str | None = None,
+        date_filter: str | None = None,
+        start_date: date | None = None, end_date: date | None = None,
+        bill_type: Any | None = None,
+        current_user: Any | None = None,
+    ):
+        resolved_start, resolved_end = resolve_billing_date_filter(date_filter, start_date, end_date)
+        return await self._paginate_combined_billings(
+            page=page, size=size, sort_by="created_at", sort_order="desc",
+            status=status, patient_id=None, q=q,
+            start_date=resolved_start, end_date=resolved_end,
+            bill_type=bill_type,
+            current_user=current_user,
+        )
+
+    async def get_by_id(self, billing_id: int, current_user = None) -> BillingResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            return self._pharmacy_invoice_to_billing_response(invoice)
+        return self._to_response(billing)
+
+    async def update(self, billing_id: int, data: BillingUpdate, user_id: int, current_user = None) -> BillingResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+
+
+            if invoice.status in ["paid", "refunded", "partially_refunded", "cancelled"]:
+                raise BadRequestException("Cannot modify a billing record in a terminal state")
+
+            dump = data.model_dump(exclude_unset=True)
+
+
+            if "discount_percent" in dump and dump["discount_percent"] is not None:
+                invoice.discount_percentage = float(dump["discount_percent"])
+            elif "discount_percentage" in dump and dump["discount_percentage"] is not None:
+                invoice.discount_percentage = float(dump["discount_percentage"])
+
+            if "gst_rate" in dump and dump["gst_rate"] is not None:
+                invoice.tax_percentage = float(dump["gst_rate"])
+            elif "tax_percentage" in dump and dump["tax_percentage"] is not None:
+                invoice.tax_percentage = float(dump["tax_percentage"])
+
+            subtotal = float(invoice.subtotal or 0.0)
+            discount_amount = round((subtotal * invoice.discount_percentage) / 100, 2)
+            tax_amount = round((subtotal - discount_amount) * invoice.tax_percentage / 100, 2)
+
+            invoice.discount_amount = discount_amount
+            invoice.tax_amount = tax_amount
+            invoice.gst_amount = tax_amount
+            invoice.total_amount = round(subtotal - discount_amount + tax_amount, 2)
+            if invoice.status == "paid":
+                invoice.paid_amount = invoice.total_amount
+
+            await self.db.flush()
+            await self.audit_repo.create("update", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return self._pharmacy_invoice_to_billing_response(invoice)
+
+
+        if billing.status in ["paid", "refunded", "partially_refunded", "cancelled", "Completed", "Refunded"]:
+            raise BadRequestException("Cannot modify a billing record in a terminal state")
+
+        non_nullable_fields = ["discount_percent", "discount_amount", "gst_rate", "tax_amount"]
+
+        for field in non_nullable_fields:
+            if field in data.model_fields_set and getattr(data, field) is None:
+                raise BadRequestException(f"Field '{field}' cannot be null")
+
+        # Ignore and do not validate insurance_id from data
+        dump = data.model_dump(exclude_unset=True)
+        dump.pop("insurance_id", None)  # Ignore insurance_id payload
+
+        if "due_date" in dump and dump["due_date"] is not None:
+            dt = dump["due_date"]
+            if dt.tzinfo is not None:
+                from datetime import timezone as py_timezone
+                dump["due_date"] = dt.astimezone(py_timezone.utc).replace(tzinfo=None)
+
+        from app.models.user_model import User
+        from app.services.settings_service import SettingsService
+        from sqlalchemy import select
+        
+        user = await self.db.scalar(select(User).where(User.id == user_id))
+        hospital_id = user.hospital_id if user and user.hospital_id else 1
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+
+        if "items" in dump:
+            items_data = dump.pop("items")
+            # Remove old items
+            billing.items.clear()
+            if items_data:
+                for item_data in items_data:
+                    desc = item_data.get("description")
+                    qty = item_data.get("quantity", 1)
+                    price = item_data.get("unit_price")
+                    gst_r = item_data.get("gst_rate", billing_settings.get("gst_percentage", 18.0))
+                    item_t = item_data.get("item_type", "service")
+                    _, gst_amt, line_total = calculate_line_total(qty, price, gst_r)
+                    item = BillItem(
+                        billing_id=billing.id,
+                        description=desc,
+                        quantity=qty,
+                        unit_price=price,
+                        gst_rate=gst_r,
+                        gst_amount=gst_amt,
+                        line_total=line_total,
+                        item_type=item_t
+                    )
+                    billing.items.append(item)
+
+        for key, value in dump.items():
+            setattr(billing, key, value)
+
+        # Always set insurance_id to None during billing update
+        billing.insurance_id = None
+
+        billing = await self._recalculate_billing(billing)
+        billing = await self.repo.get_by_id(billing.id)
+        await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))
+        return self._to_response(billing)
+
+    async def cancel(self, billing_id: int, user_id: int, current_user = None) -> BillingResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).with_for_update()
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            
+            # Validate PharmacyInvoice
+            if invoice.status == "cancelled":
+                raise BadRequestException("Billing record is already cancelled")
+            if invoice.status in ["paid", "refunded", "partially_refunded"]:
+                raise BadRequestException(f"Cannot cancel a billing record in '{invoice.status}' state. Process a refund instead.")
+            if (invoice.paid_amount or 0.0) > 0:
+                raise BadRequestException("Cannot cancel a billing record that has received payments. Process a refund instead.")
+            
+            invoice.status = "cancelled"
+            await self.db.flush()
+            await self.audit_repo.create("cancel", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return self._pharmacy_invoice_to_billing_response(invoice)
+
+        # Validate Billing
+        if billing.status == BillingStatus.CANCELLED:
+            raise BadRequestException("Billing record is already cancelled")
+        if billing.status in [BillingStatus.PAID, BillingStatus.REFUNDED, "partially_refunded"]:
+            raise BadRequestException(f"Cannot cancel a billing record in '{billing.status}' state. Process a refund instead.")
+        if (billing.paid_amount or 0.0) > 0:
+            raise BadRequestException("Cannot cancel a billing record that has received payments. Process a refund instead.")
+            
+        billing.status = BillingStatus.CANCELLED
+        await self.db.flush()
+        await self.audit_repo.create("cancel", "billing", user_id=user_id, resource_id=str(billing.id))
+        return self._to_billing_response(billing)
+
+    async def delete(self, billing_id: int, user_id: int, current_user = None) -> None:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(PharmacyInvoice.id == billing_id, PharmacyInvoice.is_deleted == False)
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            from app.services.pharmacy_service import PharmacyService
+            await PharmacyService(self.db).delete_invoice(billing_id)
+            await self.audit_repo.create("delete", "pharmacy_invoice", user_id=user_id, resource_id=str(billing_id))
+            return
+        await self.repo.soft_delete(billing)
+        await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
+
+    async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int, current_user = None) -> PaymentResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).with_for_update()
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+
+            if invoice.status in ["cancelled", "refunded", "partially_refunded"]:
+                raise BadRequestException(f"Cannot collect payment on {invoice.status} bill")
+
+            total_amt = invoice.total_amount or 0.0
+            paid_amt = invoice.paid_amount or 0.0
+            balance_due = round(total_amt - paid_amt, 2)
+            if data.amount > balance_due:
+                raise BadRequestException("Payment amount exceeds balance due")
+
+            method = data.payment_method.strip().lower()
+            if method == "cheques":
+                method = "cheque"
+            data.payment_method = method
+
+            txn_ref = data.transaction_ref.strip() if data.transaction_ref else f"PAY-PHR-{invoice.id}"
+            invoice.paid_amount = round(paid_amt + data.amount, 2)
+            invoice.payment_mode = data.payment_method
+            if invoice.paid_amount >= total_amt:
+                invoice.status = "paid"
+            else:
+                invoice.status = "partially_paid"
+
+            await self.db.flush()
+            await self.audit_repo.create("payment", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+
+            from app.services.transaction_history_service import TransactionHistoryService
+            await TransactionHistoryService(self.db).create_event(
+                event_type="PAYMENT_RECEIVED",
+                reference_no=txn_ref,
+                description=f"Payment Received on pharmacy bill {invoice.invoice_number} via {data.payment_method}",
+                amount=data.amount,
+                source_module="payments",
+                source_id=invoice.id,
+                status="completed",
+                user_id=user_id,
+                hospital_id=invoice.hospital_id,
+            )
+
+            return PaymentResponse(
+                id=invoice.id,
+                billing_id=invoice.id,
+                amount=data.amount,
+                payment_method=data.payment_method,
+                transaction_ref=txn_ref,
+                payment_date=utc_now(),
+                status="completed",
+                is_refund=False,
+                refund_reason=None,
+                created_at=utc_now(),
+            )
+
+
+        if billing.status in [BillingStatus.CANCELLED, BillingStatus.REFUNDED, "partially_refunded"]:
+            raise BadRequestException(f"Cannot collect payment on {billing.status} bill")
+
+        # Defensive normalization
+        method = data.payment_method.strip().lower()
+        if method == "cheques":
+            method = "cheque"
+        data.payment_method = method
+
+        if data.transaction_ref is not None:
+            data.transaction_ref = data.transaction_ref.strip()
+            if not data.transaction_ref:
+                data.transaction_ref = None
+
+        total_amt = billing.total_amount or 0.0
+        paid_amt = billing.paid_amount or 0.0
+
+        b_status = str(billing.status).strip().lower() if billing.status else ""
+        is_fully_paid = b_status == BillingStatus.PAID.lower() or (total_amt > 0 and paid_amt >= total_amt)
+
+        from app.models.billing_model import Payment
+        from sqlalchemy import select
+
+        existing_payments_res = await self.db.scalars(
+            select(Payment).where(
+                Payment.billing_id == billing_id,
+                Payment.is_refund.is_(False),
+                Payment.status == "completed",
+            )
+        )
+        existing_payments = list(existing_payments_res.all())
+
+        is_duplicate = is_fully_paid
+        if not is_duplicate:
+            for p in existing_payments:
+                p_ref = p.transaction_ref.strip() if p.transaction_ref and p.transaction_ref.strip() else None
+                p_method = (p.payment_method or "").strip().lower()
+                if p_method == "cheques":
+                    p_method = "cheque"
+
+                if data.transaction_ref and p_ref and data.transaction_ref.lower() == p_ref.lower():
+                    is_duplicate = True
+                    break
+
+                if (
+                    round(p.amount, 2) == round(data.amount, 2)
+                    and p_method == data.payment_method
+                    and (p_ref == data.transaction_ref or (p_ref is None and data.transaction_ref is None))
+                ):
+                    is_duplicate = True
+                    break
+
+        if is_duplicate:
+            raise BadRequestException("Payment record already exists for this bill")
+
+        balance_due = round(total_amt - paid_amt, 2)
+        if data.amount > balance_due:
+            raise BadRequestException("Payment amount exceeds balance due")
+
+        payment = Payment(
+            billing_id=billing_id,
+            amount=data.amount,
+            payment_method=data.payment_method,
+            transaction_ref=data.transaction_ref,
+            payment_date=utc_now(),
+            received_by=user_id,
+        )
+        payment = await self.repo.add_payment(payment)
+        billing.paid_amount = round(billing.paid_amount + data.amount, 2)
+        await self._recalculate_billing(billing)
+        await self.audit_repo.create("payment", "billing", user_id=user_id, resource_id=str(billing_id))
+
+        if billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
+            from app.models.final_bill_model import IPDFinalBill
+            from sqlalchemy import select
+            fb = await self.db.scalar(select(IPDFinalBill).where(IPDFinalBill.bill_number == billing.bill_number))
+            if fb:
+                fb.balance_amount = max(0.0, billing.balance_amount)
+                if str(billing.status).lower() == "paid":
+                    fb.status = "paid"
+                    fb.payment_mode = data.payment_method
+                    fb.settled_at = utc_now()
+                    fb.settled_by = user_id
+                await self.db.flush()
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="PAYMENT_RECEIVED",
+            reference_no=payment.transaction_ref or f"PAY-{payment.id}",
+            description=f"Payment Received on bill {billing.bill_number} via {payment.payment_method}",
+            amount=payment.amount,
+            source_module="payments",
+            source_id=payment.id,
+            status="completed",
+            user_id=user_id,
+            hospital_id=billing.hospital_id,
+        )
+
+        try:
+            from app.services.notification_service import NotificationService
+            from app.models.patient_model import Patient
+            import logging
+
+            patient = await self.db.get(Patient, billing.patient_id)
+            if patient and patient.user_id:
+                await NotificationService(self.db).dispatch_notification(
+                    user_id=patient.user_id,
+                    title="Payment Received",
+                    message=f"A payment of {payment.amount} has been received for bill {billing.bill_number}.",
+                    notification_type="PAYMENT_RECEIVED",
+                    reference_type="PAYMENT",
+                    reference_id=payment.id,
+                    priority="NORMAL",
+                    email=patient.email,
+                    phone=patient.phone,
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
+
+        return PaymentResponse.model_validate(payment)
+
+    async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int, current_user = None) -> PaymentResponse:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
+            from app.utils.helpers import generate_code
+            from sqlalchemy import select
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).with_for_update()
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+            if data.amount > (invoice.paid_amount or 0.0):
+                raise BadRequestException("Refund amount exceeds paid amount")
+
+            return_number = generate_code("RET")
+            return_record = PharmacyReturn(
+                return_number=return_number,
+                invoice_id=invoice.id,
+                patient_id=invoice.patient_id,
+                total_refund_amount=data.amount,
+                reason=data.refund_reason,
+                status="completed",
+                processed_by=user_id,
+                hospital_id=invoice.hospital_id,
+            )
+            self.db.add(return_record)
+
+            invoice.paid_amount = round(max((invoice.paid_amount or 0.0) - data.amount, 0.0), 2)
+            if invoice.paid_amount == 0 and invoice.total_amount > 0:
+                invoice.status = "refunded"
+            elif invoice.paid_amount < invoice.total_amount:
+                invoice.status = "partially_refunded"
+
+            await self.db.flush()
+            await self.audit_repo.create("refund", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+
+            from app.services.transaction_history_service import TransactionHistoryService
+            await TransactionHistoryService(self.db).create_event(
+                event_type="REFUND_ISSUED",
+                reference_no=return_number,
+                description=f"Refund Issued for pharmacy bill {invoice.invoice_number}: {data.refund_reason or ''}",
+                amount=data.amount,
+                source_module="refunds",
+                source_id=return_record.id,
+                status="completed",
+                user_id=user_id,
+                hospital_id=invoice.hospital_id,
+            )
+
+            return PaymentResponse(
+                id=return_record.id or invoice.id,
+                billing_id=invoice.id,
+                amount=data.amount,
+                payment_method="refund",
+                transaction_ref=return_number,
+                payment_date=utc_now(),
+                status="completed",
+                is_refund=True,
+                refund_reason=data.refund_reason,
+                created_at=utc_now(),
+            )
+
+        if data.amount > billing.paid_amount:
+            raise BadRequestException("Refund amount exceeds paid amount")
+
+        payment = Payment(
+            billing_id=billing_id,
+            amount=data.amount,
+            payment_method="refund",
+            payment_date=utc_now(),
+            is_refund=True,
+            refund_reason=data.refund_reason,
+            received_by=user_id,
+            status="completed",
+        )
+        payment = await self.repo.add_payment(payment)
+        billing.paid_amount = round(billing.paid_amount - data.amount, 2)
+        billing = await self._recalculate_billing(billing)
+        if billing.paid_amount == 0 and billing.balance_amount > 0:
+            billing.status = BillingStatus.REFUNDED
+        await self.audit_repo.create("refund", "billing", user_id=user_id, resource_id=str(billing_id))
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="REFUND_ISSUED",
+            reference_no=payment.transaction_ref or f"REF-{payment.id}",
+            description=f"Refund Issued for bill {billing.bill_number}: {payment.refund_reason or ''}",
+            amount=payment.amount,
+            source_module="refunds",
+            source_id=payment.id,
+            status="completed",
+            user_id=user_id,
+            hospital_id=billing.hospital_id,
+        )
+
+        try:
+            if billing.patient_id:
+                from app.models.patient_model import Patient
+                patient = await self.db.get(Patient, billing.patient_id)
+                if not patient and hasattr(self, "patient_repo") and self.patient_repo:
+                    patient = await self.patient_repo.get_by_id(billing.patient_id)
+                if patient and not getattr(patient, "is_deleted", False) and patient.user_id:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService(self.db).dispatch_notification(
+                        user_id=patient.user_id,
+                        title="Refund Processed",
+                        message=f"A refund of ₹{payment.amount:,.2f} has been processed for bill {billing.bill_number}.",
+                        notification_type="PATIENT_REFUND_PROCESSED",
+                        reference_type="PAYMENT",
+                        reference_id=payment.id,
+                        priority="NORMAL",
+                    )
+        except Exception as notif_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch patient refund processed notification: %s",
+                notif_exc,
+            )
+
+        return PaymentResponse.model_validate(payment)
+
+    async def generate_invoice(self, billing_id: int, user_id: int, current_user = None) -> tuple[str, bytes]:
+        hospital_id = resolve_tenant_id(current_user)
+        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+        if not billing:
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if not invoice:
+                raise NotFoundException("Billing record not found")
+
+            target_hospital_id = hospital_id or getattr(invoice, "hospital_id", None)
+            from app.services.branding_resolver_service import BrandingResolverService
+            branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=target_hospital_id)
+            hospital_name = branding.hospital_name
+            hospital_address = branding.hospital_address or ""
+            hospital_phone = branding.hospital_phone or ""
+            hospital_email = branding.hospital_email or ""
+            hospital_website = branding.hospital_website or ""
+            logo_data_uri = branding.logo_data_uri
+            logo_base64 = branding.logo_base64
+
+            patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
+            patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+            patient_phone = patient.phone if patient else "-"
+            patient_email = patient.email if patient else "-"
+
+            items = [
+                {
+                    "description": (item.medicine.name if item.medicine else f"Medicine #{item.medicine_id}"),
+                    "quantity": item.quantity,
+                    "unit_price": f"{item.unit_price:.2f}",
+                    "gst_rate": f"{invoice.tax_percentage:.1f}",
+                    "line_total": f"{item.line_total:.2f}",
+                }
+                for item in (invoice.items or [])
+            ]
+
+            hospital_name = "NexaCare Hospital"
+            target_hosp_id = invoice.hospital_id or hospital_id
+            if target_hosp_id:
+                from app.models.hospital_model import Hospital
+                hosp = await self.db.get(Hospital, target_hosp_id)
+                if hosp and hosp.name:
+                    hospital_name = hosp.name
+
+            path, pdf_bytes = await generate_invoice_pdf(
+                invoice.invoice_number,
+                {
+                    "hospital_name": hospital_name,
+                    "hospital_address": hospital_address,
+                    "hospital_phone": hospital_phone,
+                    "hospital_email": hospital_email,
+                    "hospital_website": hospital_website,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
+                    "patient_name": patient_name,
+                    "patient_phone": patient_phone,
+                    "patient_email": patient_email,
+                    "date": (invoice.created_at or utc_now()).strftime("%Y-%m-%d"),
+                    "items": items,
+                    "subtotal": f"{invoice.subtotal:.2f}",
+                    "discount_percent": f"{invoice.discount_percentage:.1f}",
+                    "discount_amount": f"{invoice.discount_amount:.2f}",
+                    "gst_rate": f"{invoice.tax_percentage:.1f}",
+                    "gst_amount": f"{invoice.gst_amount:.2f}",
+                    "tax_amount": f"{invoice.tax_amount:.2f}",
+                    "total_amount": f"{invoice.total_amount:.2f}",
+                    "paid_amount": f"{invoice.paid_amount:.2f}",
+                    "balance_amount": f"{max((invoice.total_amount or 0.0) - (invoice.paid_amount or 0.0), 0.0):.2f}",
+                    "status": (invoice.status or "").title(),
+                    "notes": f"Pharmacy Invoice (Prescription #{invoice.prescription_id or '-'})",
+                },
+            )
+            await self.audit_repo.create("export", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
+            return path, pdf_bytes
+
+        target_hospital_id = hospital_id or getattr(billing, "hospital_id", None)
+        from app.services.branding_resolver_service import BrandingResolverService
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=target_hospital_id)
+        hospital_name = branding.hospital_name
+        hospital_address = branding.hospital_address or ""
+        hospital_phone = branding.hospital_phone or ""
+        hospital_email = branding.hospital_email or ""
+        hospital_website = branding.hospital_website or ""
+        logo_data_uri = branding.logo_data_uri
+        logo_base64 = branding.logo_base64
+
+        patient = await self.patient_repo.get_by_id(billing.patient_id)
+        patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+        patient_phone = patient.phone if patient else "-"
+        patient_email = patient.email if patient else "-"
+
+        items = [
+            {
+                "description": i.description,
+                "quantity": i.quantity,
+                "unit_price": f"{i.unit_price:.2f}",
+                "gst_rate": f"{i.gst_rate:.1f}",
+                "line_total": f"{i.line_total:.2f}",
+            }
+            for i in billing.items
+        ]
+
+        hospital_name = "NexaCare Hospital"
+        target_hosp_id = billing.hospital_id or hospital_id
+        if target_hosp_id:
+            from app.models.hospital_model import Hospital
+            hosp = await self.db.get(Hospital, target_hosp_id)
+            if hosp and hosp.name:
+                hospital_name = hosp.name
+
+        path, pdf_bytes = await generate_invoice_pdf(
+            billing.bill_number,
+            {
+                "hospital_name": hospital_name,
+                "hospital_address": hospital_address,
+                "hospital_phone": hospital_phone,
+                "hospital_email": hospital_email,
+                "hospital_website": hospital_website,
+                "logo_data_uri": logo_data_uri,
+                "logo_base64": logo_base64,
+                "patient_name": patient_name,
+                "patient_phone": patient_phone,
+                "patient_email": patient_email,
+                "date": utc_now().strftime("%Y-%m-%d"),
+                "items": items,
+                "subtotal": f"{billing.subtotal:.2f}",
+                "discount_percent": f"{billing.discount_percent:.1f}",
+                "discount_amount": f"{billing.discount_amount:.2f}",
+                "gst_rate": f"{billing.gst_rate:.1f}",
+                "gst_amount": f"{billing.gst_amount:.2f}",
+                "tax_amount": f"{billing.tax_amount:.2f}",
+                "total_amount": f"{billing.total_amount:.2f}",
+                "paid_amount": f"{billing.paid_amount:.2f}",
+                "balance_amount": f"{billing.balance_amount:.2f}",
+                "status": billing.status.title(),
+                "notes": billing.notes or "",
+            },
+        )
+        billing.invoice_path = path
+        await self.repo.update(billing)
+        await self.audit_repo.create("export", "billing", user_id=user_id, resource_id=str(billing.id))
+        return path, pdf_bytes
+
+    async def get_pending_payments(self, page: int = 1, size: int = 20, current_user: Any | None = None):
+        hospital_id = resolve_tenant_id(current_user)
+        skip = (page - 1) * size
+        items = await self.repo.get_pending_payments(skip=skip, limit=size, hospital_id=hospital_id)
+        total = await self.repo.count_pending_payments(hospital_id=hospital_id)
+        return build_paginated_result([self._to_response(b) for b in items], total, page, size)
+
+    async def get_revenue_summary(self, current_user: Any | None = None) -> BillingSummary:
+        hospital_id = resolve_tenant_id(current_user)
+        data = await self.repo.get_revenue_summary(hospital_id=hospital_id)
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0)
+        ).where(
+            PharmacyInvoice.is_deleted == False
+        )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+
+        pharm_billed = float(row[0] if row else 0.0)
+        pharm_collected = float(row[1] if row else 0.0)
+        pharm_pending = max(0.0, pharm_billed - pharm_collected)
+
+        pharm_pending_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.paid_amount < PharmacyInvoice.total_amount
+        )
+        if hospital_id is not None:
+            pharm_pending_count_stmt = pharm_pending_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+        pharm_pending_count = await self.db.scalar(pharm_pending_count_stmt) or 0
+
+        pharm_overdue_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.status == "overdue"
+        )
+        if hospital_id is not None:
+            pharm_overdue_count_stmt = pharm_overdue_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+        pharm_overdue = await self.db.scalar(pharm_overdue_count_stmt) or 0
+
+        data["total_revenue"] = round(data["total_revenue"] + pharm_collected, 2)
+        data["total_paid"] = round(data["total_paid"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["overdue_count"] = data["overdue_count"] + pharm_overdue
+        data["pending_count"] = data["pending_count"] + pharm_pending_count
+
+        return BillingSummary(**data)
+
+    async def get_daily_report(
+        self,
+        target_date: date | None = None,
+        filter_type: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        current_user: Any | None = None,
+    ) -> DailyCollectionSummary:
+        from datetime import date, datetime, timedelta
+        from app.utils.helpers import get_today_ist
+
+        hospital_id = resolve_tenant_id(current_user)
+        today = get_today_ist()
+        raw_filter = (filter_type or "").strip().lower()
+
+        resolved_start: date
+        resolved_end: date
+        normalized_filter: str
+
+        if raw_filter in ("today", "1", "1. today", "1.today"):
+            normalized_filter = "today"
+            resolved_start = today
+            resolved_end = today
+        elif raw_filter in ("yesterday", "2", "2. yesterday", "2.yesterday"):
+            normalized_filter = "yesterday"
+            resolved_start = today - timedelta(days=1)
+            resolved_end = today - timedelta(days=1)
+        elif raw_filter in ("last_30_days", "last 30 days", "30_days", "30days", "3", "3. last 30 days", "3.last 30 days"):
+            normalized_filter = "last_30_days"
+            resolved_start = today - timedelta(days=29)
+            resolved_end = today
+        elif raw_filter in ("last_3_months", "last 3 months", "3_months", "3months", "4", "4. last 3 months", "4.last 3 months"):
+            normalized_filter = "last_3_months"
+            resolved_start = today - timedelta(days=90)
+            resolved_end = today
+        elif raw_filter in ("quarterly", "quarter", "this_quarter", "5", "5. quarterly", "5.quarterly"):
+            normalized_filter = "quarterly"
+            quarter_month = ((today.month - 1) // 3) * 3 + 1
+            resolved_start = date(today.year, quarter_month, 1)
+            resolved_end = today
+        elif raw_filter in ("yearly", "year", "this_year", "6", "6. yearly", "6.yearly"):
+            normalized_filter = "yearly"
+            resolved_start = date(today.year, 1, 1)
+            resolved_end = today
+        elif raw_filter in ("custom", "custom_range", "custom range", "7", "7. custom range", "7.custom range") or (start_date is not None or end_date is not None):
+            normalized_filter = "custom"
+            resolved_start = start_date or today
+            resolved_end = end_date or today
+            if resolved_start > resolved_end:
+                raise BadRequestException("start_date cannot be after end_date")
+        elif target_date is not None:
+            normalized_filter = "custom"
+            resolved_start = target_date
+            resolved_end = target_date
+        else:
+            normalized_filter = "today"
+            resolved_start = today
+            resolved_end = today
+
+        data = await self.repo.get_daily_collection(resolved_start, resolved_end, hospital_id=hospital_id)
+
+        start = datetime.combine(resolved_start, datetime.min.time())
+        end = datetime.combine(resolved_end, datetime.max.time())
+
+        # 1. Reception Billing & Payment Stats
+        reception_total_bill = round(float(data.get("today_total_bill", 0.0)), 2)
+        reception_paid_bill = round(float(data.get("today_paid_bill", 0.0)), 2)
+        reception_pending_bill = round(float(data.get("today_pending_bill", 0.0)), 2)
+        reception_collected = round(float(data.get("today_collected_revenue", 0.0)), 2)
+        reception_bills_count = int(data.get("bills_count", 0))
+        reception_payment_count = int(data.get("payment_count", 0))
+        reception_refunds_issued = round(
+            float(data.get("refunds_issued", data.get("by_method", {}).get("refund", 0.0))),
+            2,
+        )
+        reception_refund_count = int(data.get("refund_count", 0))
+        reception_by_method = {
+            str(k): round(abs(float(v)), 2)
+            for k, v in data.get("by_method", {}).items()
+            if k and str(k).lower() != "pharmacy"
+        }
+
+        # 2. Pharmacy Invoices & Collection Stats
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
+        from sqlalchemy import select, func, case, or_
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.total_amount - PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id),
+            func.sum(case((PharmacyInvoice.paid_amount > 0.0, 1), else_=0)),
+        ).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end,
+        )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        res = await self.db.execute(pharmacy_stmt)
+        p_row = res.first()
+        pharm_total_bill = round(float(p_row[0] if (p_row and len(p_row) > 0 and p_row[0] is not None) else 0.0), 2)
+        pharm_paid_bill = round(float(p_row[1] if (p_row and len(p_row) > 1 and p_row[1] is not None) else 0.0), 2)
+        pharm_pending_bill = round(max(0.0, float(p_row[2] if (p_row and len(p_row) > 2 and p_row[2] is not None) else 0.0)), 2)
+        pharm_bills_count = int(p_row[3] if (p_row and len(p_row) > 3 and p_row[3] is not None) else 0)
+        pharm_payment_count = int(p_row[4] if (p_row and len(p_row) > 4 and p_row[4] is not None) else 0)
+        pharm_collected = pharm_paid_bill
+
+        # 3. Pharmacy Returns / Refunds Query
+        pharm_ret_stmt = (
+            select(
+                func.coalesce(func.sum(PharmacyReturn.total_refund_amount), 0.0),
+                func.count(PharmacyReturn.id),
+            )
+            .outerjoin(PharmacyInvoice, PharmacyReturn.invoice_id == PharmacyInvoice.id)
+            .where(
+                PharmacyReturn.is_deleted == False,
+                PharmacyReturn.status == "completed",
+                PharmacyReturn.created_at >= start,
+                PharmacyReturn.created_at <= end,
+            )
+        )
+        if hospital_id is not None:
+            pharm_ret_stmt = pharm_ret_stmt.where(
+                or_(
+                    PharmacyReturn.hospital_id == hospital_id,
+                    PharmacyInvoice.hospital_id == hospital_id,
+                )
+            )
+
+        ret_res = await self.db.execute(pharm_ret_stmt)
+        ret_row = ret_res.first()
+        pharm_refunds_issued = round(float(ret_row[0] if (ret_row and len(ret_row) > 0 and ret_row[0] is not None) else 0.0), 2)
+        pharm_refund_count = int(ret_row[1] if (ret_row and len(ret_row) > 1 and ret_row[1] is not None) else 0)
+
+        date_label = str(resolved_start) if resolved_start == resolved_end else f"{resolved_start} to {resolved_end}"
+
+        reception_summary = ReceptionCollectionSummary(
+            total_bill=reception_total_bill,
+            paid_bill=reception_paid_bill,
+            pending_bill=reception_pending_bill,
+            collected_revenue=reception_collected,
+            bills_count=reception_bills_count,
+            payment_count=reception_payment_count,
+            refunds_issued=reception_refunds_issued,
+            refund_count=reception_refund_count,
+            by_method=reception_by_method,
+        )
+
+        pharmacy_summary = PharmacyCollectionSummary(
+            total_bill=pharm_total_bill,
+            paid_bill=pharm_paid_bill,
+            pending_bill=pharm_pending_bill,
+            collected_revenue=pharm_collected,
+            bills_count=pharm_bills_count,
+            payment_count=pharm_payment_count,
+            refunds_issued=pharm_refunds_issued,
+            refund_count=pharm_refund_count,
+        )
+
+        combined_total_bill = round(reception_total_bill + pharm_total_bill, 2)
+        combined_paid_bill = round(reception_paid_bill + pharm_paid_bill, 2)
+        combined_pending_bill = round(reception_pending_bill + pharm_pending_bill, 2)
+        combined_collected = round(reception_collected + pharm_collected, 2)
+        combined_bills_count = reception_bills_count + pharm_bills_count
+        combined_payment_count = reception_payment_count + pharm_payment_count
+
+        combined_refunds_issued = round(reception_refunds_issued + pharm_refunds_issued, 2)
+        combined_refund_count = reception_refund_count + pharm_refund_count
+
+        combined_by_method = dict(reception_by_method)
+        if pharm_collected > 0.0:
+            combined_by_method["pharmacy"] = pharm_collected
+        if combined_refunds_issued > 0.0:
+            combined_by_method["refund"] = combined_refunds_issued
+
+        return DailyCollectionSummary(
+            date=date_label,
+            filter_type=normalized_filter,
+            start_date=str(resolved_start),
+            end_date=str(resolved_end),
+            # Combined Hospital-wide Daily Summary
+            today_total_bill=combined_total_bill,
+            today_paid_bill=combined_paid_bill,
+            today_pending_bill=combined_pending_bill,
+            today_collected_revenue=combined_collected,
+            bills_count=combined_bills_count,
+            total_collected=combined_collected,
+            payment_count=combined_payment_count,
+            refunds_issued=combined_refunds_issued,
+            refund_count=combined_refund_count,
+            by_method=combined_by_method,
+            # Separate Reception / Appointment Billing & Collection
+            reception_today_total_bill=reception_total_bill,
+            reception_today_paid_bill=reception_paid_bill,
+            reception_today_pending_bill=reception_pending_bill,
+            reception_collected_revenue=reception_collected,
+
+            reception_bills_count=reception_bills_count,
+            reception_payment_count=reception_payment_count,
+            reception_refunds_issued=reception_refunds_issued,
+            reception_refund_count=reception_refund_count,
+
+            reception_today_bills_count=reception_bills_count,
+            reception_today_payment_count=reception_payment_count,
+
+            reception_by_method=reception_by_method,
+            # Separate Pharmacy Billing & Collection
+            pharmacy_total_bill=pharm_total_bill,
+            pharmacy_paid_bill=pharm_paid_bill,
+            pharmacy_pending_bill=pharm_pending_bill,
+            pharmacy_collected_revenue=pharm_collected,
+            pharmacy_bills_count=pharm_bills_count,
+            pharmacy_payment_count=pharm_payment_count,
+            pharmacy_refunds_issued=pharm_refunds_issued,
+            pharmacy_refund_count=pharm_refund_count,
+            # Nested section objects
+            reception_collection=reception_summary,
+            pharmacy_collection=pharmacy_summary,
+        )
+
+    async def get_yearly_report(self, year: int | None = None, current_user: Any | None = None) -> RevenueReport:
+        hospital_id = resolve_tenant_id(current_user)
+        target_year = year or utc_now().year
+        start = datetime.combine(date(target_year, 1, 1), datetime.min.time())
+        end = datetime.combine(date(target_year, 12, 31), datetime.max.time())
+        label = str(target_year)
+
+        data = await self.repo.get_period_report(start, end, hospital_id=hospital_id)
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id)
+        ).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end
+        )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+
+        pharm_billed = float(row[0] if row else 0.0)
+        pharm_collected = float(row[1] if row else 0.0)
+        pharm_bill_count = int(row[2] if row else 0)
+
+        pharm_pending = max(0.0, pharm_billed - pharm_collected)
+
+        pharm_pay_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end,
+            PharmacyInvoice.paid_amount > 0.0
+        )
+        if hospital_id is not None:
+            pharm_pay_count_stmt = pharm_pay_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+        pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
+
+        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
+        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
+        data["bill_count"] = data["bill_count"] + pharm_bill_count
+        data["payment_count"] = data["payment_count"] + pharm_payment_count
+
+        return RevenueReport(period=label, **data)
+
+    async def get_period_report(
+        self,
+        period: str,
+        target_date: date | None = None,
+        year: int | None = None,
+        month: int | None = None,
+        current_user: Any | None = None,
+    ) -> RevenueReport:
+        hospital_id = resolve_tenant_id(current_user)
+        if period == "monthly":
+            import calendar
+            now = utc_now()
+            y = year or (target_date.year if target_date else now.year)
+            m = month or (target_date.month if target_date else now.month)
+            last_day = calendar.monthrange(y, m)[1]
+            start = datetime.combine(date(y, m, 1), datetime.min.time())
+            end = datetime.combine(date(y, m, last_day), datetime.max.time())
+            label = start.strftime("%Y-%m")
+        elif target_date:
+            y, m = target_date.year, target_date.month
+            if period == "daily":
+                start = datetime.combine(target_date, datetime.min.time())
+                end = datetime.combine(target_date, datetime.max.time())
+                label = str(target_date)
+            else: # yearly
+                start = datetime.combine(date(y, 1, 1), datetime.min.time())
+                end = datetime.combine(date(y, 12, 31), datetime.max.time())
+                label = str(y)
+        else:
+            now = utc_now()
+            if period == "daily":
+                start = datetime.combine(now.date(), datetime.min.time())
+                end = now
+                label = str(now.date())
+            else:
+                y = year or now.year
+                start = datetime.combine(date(y, 1, 1), datetime.min.time())
+                end = datetime.combine(date(y, 12, 31), datetime.max.time())
+                label = str(y)
+        data = await self.repo.get_period_report(start, end, hospital_id=hospital_id)
+
+        from app.models.pharmacy_model import PharmacyInvoice
+        from sqlalchemy import select, func
+
+        pharmacy_stmt = select(
+            func.coalesce(func.sum(PharmacyInvoice.total_amount), 0.0),
+            func.coalesce(func.sum(PharmacyInvoice.paid_amount), 0.0),
+            func.count(PharmacyInvoice.id)
+        ).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end
+        )
+        if hospital_id is not None:
+            pharmacy_stmt = pharmacy_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        res = await self.db.execute(pharmacy_stmt)
+        row = res.first()
+
+        pharm_billed = float(row[0] if row else 0.0)
+        pharm_collected = float(row[1] if row else 0.0)
+        pharm_bill_count = int(row[2] if row else 0)
+
+        pharm_pending = max(0.0, pharm_billed - pharm_collected)
+
+        pharm_pay_count_stmt = select(func.count(PharmacyInvoice.id)).where(
+            PharmacyInvoice.is_deleted == False,
+            PharmacyInvoice.created_at >= start,
+            PharmacyInvoice.created_at <= end,
+            PharmacyInvoice.paid_amount > 0.0
+        )
+        if hospital_id is not None:
+            pharm_pay_count_stmt = pharm_pay_count_stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+        pharm_payment_count = await self.db.scalar(pharm_pay_count_stmt) or 0
+
+        data["total_billed"] = round(data["total_billed"] + pharm_billed, 2)
+        data["total_collected"] = round(data["total_collected"] + pharm_collected, 2)
+        data["total_pending"] = round(data["total_pending"] + pharm_pending, 2)
+        data["total_refunded"] = round(float(data.get("total_refunded", 0.0)), 2)
+        data["bill_count"] = data["bill_count"] + pharm_bill_count
+        data["payment_count"] = data["payment_count"] + pharm_payment_count
+
+        return RevenueReport(period=label, **data)
+
+    async def generate_billing_bulk_template(self):
+        from io import BytesIO
+        import openpyxl
+        from sqlalchemy import select
+        from app.models.patient_model import Patient
+        
+        # Try to find an actual active patient name
+        stmt = select(Patient).where(Patient.is_deleted == False).limit(1)
+        res = await self.db.execute(stmt)
+        patient = res.scalar_one_or_none()
+        patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Rahul Sharma"
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Billings Bulk Import"
+        
+        headers = [
+            "group_key", "Patient Name", "discount_percent", "discount_amount", "due_date", "notes",
+            "Appointment Number", "item_description", "item_quantity", "item_unit_price", "item_gst_rate", "item_type"
+        ]
+        ws.append(headers)
+        
+        # One valid sample billing with 2 items sharing group_key=1
+        ws.append([
+            1,
+            patient_name,
+            10.0,
+            0.0,
+            "2026-08-30 12:00:00",
+            "Routine clinic visit",
+            "APT-20260825E57D0B",
+            "Consultation Fee",
+            1,
+            500.00,
+            18.0,
+            "service"
+        ])
+        ws.append([
+            1,
+            patient_name,
+            10.0,
+            0.0,
+            "2026-08-30 12:00:00",
+            "Routine clinic visit",
+            "APT-20260825E57D0B",
+            "Disposable Syringe",
+            2,
+            25.00,
+            12.0,
+            "pharmacy_item"
+        ])
+        
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream
+
+    async def import_billing_from_excel(self, file, user_id: int) -> dict:
+        from io import BytesIO
+        from pydantic import ValidationError
+        import openpyxl
+        
+        contents = await file.read()
+        wb = openpyxl.load_workbook(BytesIO(contents))
+        ws = wb.active
+        
+        header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
+        if not header_row:
+            raise BadRequestException("The uploaded file is empty or has no headers.")
+            
+        headers = [str(h).strip().lower() for h in header_row if h is not None]
+        required_headers = {"group_key", "patient name", "item_description", "item_unit_price"}
+        if not required_headers.issubset(set(headers)):
+            raise BadRequestException("Missing required headers in the upload template.")
+            
+        total_rows = 0
+        created = 0
+        failed = 0
+        errors = []
+        
+        groups = {}
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(cell is None for cell in row):
+                continue
+                
+            total_rows += 1
+            row_dict = {}
+            for header, val in zip(headers, row):
+                if val is None or str(val).strip() == "":
+                    row_dict[header] = None
+                else:
+                    row_dict[header] = val
+                    
+            gk = row_dict.get("group_key")
+            if gk is None or str(gk).strip() == "":
+                errors.append({"group_key": "N/A", "row": row_idx, "error": "Missing group_key in row."})
+                failed += 1
+                continue
+                
+            gk_str = str(gk).strip()
+            if gk_str not in groups:
+                groups[gk_str] = []
+            groups[gk_str].append((row_idx, row_dict))
+            
+        total_bills = len(groups)
+        
+        for gk_str, rows in groups.items():
+            # Check consistency of billing-level parameters
+            first_idx, first_row = rows[0]
+            
+            patient_name_raw = first_row.get("patient name")
+            discount_percent_raw = first_row.get("discount_percent")
+            discount_amount_raw = first_row.get("discount_amount")
+            due_date_raw = first_row.get("due_date")
+            notes_raw = first_row.get("notes")
+            appointment_number_raw = first_row.get("appointment number")
+            
+            def val_to_str(val):
+                if val is None:
+                    return ""
+                return str(val).strip().lower()
+                
+            conflict_found = False
+            for idx, r in rows[1:]:
+                if (val_to_str(r.get("patient name")) != val_to_str(patient_name_raw) or
+                    val_to_str(r.get("discount_percent")) != val_to_str(discount_percent_raw) or
+                    val_to_str(r.get("discount_amount")) != val_to_str(discount_amount_raw) or
+                    val_to_str(r.get("due_date")) != val_to_str(due_date_raw) or
+                    val_to_str(r.get("notes")) != val_to_str(notes_raw) or
+                    val_to_str(r.get("appointment number")) != val_to_str(appointment_number_raw)):
+                    conflict_found = True
+                    conflict_idx = idx
+                    break
+                    
+            if conflict_found:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": conflict_idx,
+                    "error": "Conflict in billing-level fields within the same group_key."
+                })
+                continue
+                
+            try:
+                # 1. patient resolution
+                patient_name_str = str(patient_name_raw).strip() if patient_name_raw is not None else ""
+                if not patient_name_str:
+                    raise BadRequestException("Patient Name is required.")
+                
+                from sqlalchemy import select, or_
+                from app.models.patient_model import Patient
+                
+                parts = [p for p in patient_name_str.split() if p]
+                if not parts:
+                    raise BadRequestException("Patient Name cannot be empty.")
+                
+                stmt = select(Patient).where(Patient.is_deleted == False)
+                filters = []
+                for part in parts:
+                    filters.append(Patient.first_name.ilike(f"%{part}%"))
+                    filters.append(Patient.last_name.ilike(f"%{part}%"))
+                if filters:
+                    stmt = stmt.where(or_(*filters))
+                    
+                result = await self.db.execute(stmt)
+                candidates = result.scalars().all()
+                
+                matching_patients = []
+                normalized_target = " ".join(parts).lower()
+                for p in candidates:
+                    p_full_name = f"{p.first_name} {p.last_name}".strip().lower()
+                    if p_full_name == normalized_target:
+                        matching_patients.append(p)
+                        
+                if not matching_patients:
+                    raise BadRequestException(f"Patient not found: {patient_name_str}")
+                if len(matching_patients) > 1:
+                    raise BadRequestException(f"Multiple patients found with name {patient_name_str}. Use a unique patient.")
+                    
+                patient_id = matching_patients[0].id
+                
+                appointment_id = None
+                if appointment_number_raw is not None:
+                    appt_num_str = str(appointment_number_raw).strip()
+                    if appt_num_str:
+                        from app.models.appointment_model import Appointment
+                        appt_stmt = select(Appointment.id).where(Appointment.appointment_number == appt_num_str)
+                        appt_res = await self.db.execute(appt_stmt)
+                        appointment_id = appt_res.scalar_one_or_none()
+                        if not appointment_id:
+                            raise BadRequestException(f"Appointment with number {appt_num_str} not found")
+                
+                # 2. discount_percent
+                discount_percent = 0.0
+                if discount_percent_raw is not None:
+                    try:
+                        discount_percent = float(discount_percent_raw)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid discount_percent: {discount_percent_raw}")
+                        
+                # 3. discount_amount
+                discount_amount = 0.0
+                if discount_amount_raw is not None:
+                    try:
+                        discount_amount = float(discount_amount_raw)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid discount_amount: {discount_amount_raw}")
+                        
+                # 4. due_date parsing
+                due_date = None
+                if due_date_raw is not None:
+                    if isinstance(due_date_raw, datetime):
+                        due_date = due_date_raw
+                    elif isinstance(due_date_raw, date) and not isinstance(due_date_raw, datetime):
+                        due_date = datetime.combine(due_date_raw, datetime.min.time())
+                    else:
+                        try:
+                            p_str = str(due_date_raw).strip()
+                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+                                try:
+                                    due_date = datetime.strptime(p_str, fmt)
+                                    break
+                                except ValueError:
+                                    continue
+                            if due_date is None:
+                                due_date = datetime.fromisoformat(p_str)
+                        except Exception:
+                            raise BadRequestException(f"Invalid datetime format for due_date: {due_date_raw}")
+                            
+                notes = str(notes_raw).strip() if notes_raw is not None else None
+                
+                # 5. Build nested items
+                items = []
+                for idx, r in rows:
+                    desc_raw = r.get("item_description")
+                    if desc_raw is None:
+                        raise BadRequestException("item_description is required.")
+                    description = str(desc_raw).strip()
+                    
+                    qty_raw = r.get("item_quantity")
+                    quantity = 1
+                    if qty_raw is not None:
+                        try:
+                            f_qty = float(qty_raw)
+                            if not f_qty.is_integer() or f_qty < 1:
+                                raise ValueError()
+                            quantity = int(f_qty)
+                        except (ValueError, TypeError):
+                            raise BadRequestException(f"Invalid quantity: {qty_raw} at row {idx}")
+                            
+                    up_raw = r.get("item_unit_price")
+                    if up_raw is None:
+                        raise BadRequestException("item_unit_price is required.")
+                    try:
+                        unit_price = float(up_raw)
+                    except (ValueError, TypeError):
+                        raise BadRequestException(f"Invalid unit_price: {up_raw} at row {idx}")
+                        
+                    gst_raw = r.get("item_gst_rate")
+                    gst_rate = 18.0
+                    if gst_raw is not None:
+                        try:
+                            gst_rate = float(gst_raw)
+                        except (ValueError, TypeError):
+                            raise BadRequestException(f"Invalid gst_rate: {gst_raw} at row {idx}")
+                            
+                    type_raw = r.get("item_type")
+                    item_type = str(type_raw).strip() if type_raw is not None else "service"
+                    
+                    from app.schemas.billing_schema import BillItemCreate
+                    items.append(
+                        BillItemCreate(
+                            description=description,
+                            quantity=quantity,
+                            unit_price=unit_price,
+                            gst_rate=gst_rate,
+                            item_type=item_type
+                        )
+                    )
+                    
+                # Validate the entire BillingCreate object before creation
+                from app.schemas.billing_schema import BillingCreate
+                bill_create = BillingCreate(
+                    patient_id=patient_id,
+                    discount_percent=discount_percent,
+                    discount_amount=discount_amount,
+                    due_date=due_date,
+                    notes=notes,
+                    appointment_id=appointment_id,
+                    items=items
+                )
+                
+                # Call billing create service method
+                await self.create(bill_create, user_id)
+                created += 1
+                
+            except ValidationError as e:
+                failed += 1
+                err_msg = "; ".join([f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in e.errors()])
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": err_msg
+                })
+            except BadRequestException as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e.detail)
+                })
+            except NotFoundException as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e.detail)
+                })
+            except ConflictException as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e.detail)
+                })
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "group_key": gk_str,
+                    "row": first_idx,
+                    "error": str(e)
+                })
+                
+        await self.db.flush()
+        return {
+            "total_rows": total_rows,
+            "total_bills": total_bills,
+            "created": created,
+            "failed": failed,
+            "errors": errors
+        }
+
+    async def export_billings(
+        self,
+        format_type: str,
+        status: str | None = None,
+        patient_id: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        q: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        current_user: Any | None = None,
+    ):
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+
+        hospital_id = resolve_tenant_id(current_user)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
+        from app.models.billing_model import Billing
+        from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        from sqlalchemy import select, or_, func, union_all
+        from sqlalchemy.sql.expression import literal
+        from sqlalchemy.orm import selectinload
+        from datetime import datetime, date
+        from io import BytesIO
+
+        sort_field_b = None
+        sort_field_p = None
+        
+        if sort_by in ["created_at", "status", "total_amount"]:
+            sort_field_b = getattr(Billing, sort_by)
+            sort_field_p = getattr(PharmacyInvoice, sort_by)
+        elif sort_by == "bill_number":
+            sort_field_b = Billing.bill_number
+            sort_field_p = PharmacyInvoice.invoice_number
+        else:
+            sort_field_b = Billing.created_at
+            sort_field_p = PharmacyInvoice.created_at
+
+        b_query = select(
+            Billing.id.label("id"),
+            literal("billing").label("source"),
+            sort_field_b.label("sort_val"),
+            Billing.id.label("tie_breaker")
+        ).where(Billing.is_deleted == False)
+
+        p_query = select(
+            PharmacyInvoice.id.label("id"),
+            literal("pharmacy").label("source"),
+            sort_field_p.label("sort_val"),
+            PharmacyInvoice.id.label("tie_breaker")
+        ).where(PharmacyInvoice.is_deleted == False)
+
+        if hospital_id is not None:
+            b_query = b_query.where(Billing.hospital_id == hospital_id)
+            p_query = p_query.where(PharmacyInvoice.hospital_id == hospital_id)
+
+        if status:
+            b_query = b_query.where(Billing.status == status)
+            p_query = p_query.where(PharmacyInvoice.status == status)
+        if patient_id:
+            b_query = b_query.where(Billing.patient_id == patient_id)
+            p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
+        if start_date:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            b_query = b_query.where(Billing.created_at >= start_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
+        if end_date:
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            b_query = b_query.where(Billing.created_at <= end_datetime)
+            p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
+        if q:
+            pattern = f"%{q.lower()}%"
+            b_query = b_query.where(
+                or_(
+                    func.lower(Billing.bill_number).like(pattern),
+                    func.lower(Billing.notes).like(pattern),
+                )
+            )
+            p_query = p_query.where(
+                func.lower(PharmacyInvoice.invoice_number).like(pattern)
+            )
+
+        combined_query = union_all(b_query, p_query)
+        subq = combined_query.subquery()
+        
+        order_col = subq.c.sort_val.desc() if sort_order == "desc" else subq.c.sort_val.asc()
+        tie_col = subq.c.tie_breaker.desc() if sort_order == "desc" else subq.c.tie_breaker.asc()
+        
+        non_paginated_query = select(subq.c.id, subq.c.source).order_by(order_col, tie_col)
+        
+        rows = await self.db.execute(non_paginated_query)
+        id_source_list = list(rows.all())
+        
+        billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
+        pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
+
+        billing_map = {}
+        if billing_ids:
+            b_full = await self.db.execute(
+                select(Billing).where(Billing.id.in_(billing_ids)).options(
+                    selectinload(Billing.items), selectinload(Billing.payments)
+                )
+            )
+            for b in b_full.scalars().unique().all():
+                billing_map[b.id] = self._to_response(b)
+
+        pharmacy_map = {}
+        if pharmacy_ids:
+            p_full = await self.db.execute(
+                select(PharmacyInvoice).where(PharmacyInvoice.id.in_(pharmacy_ids)).options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+            )
+            for p in p_full.scalars().unique().all():
+                pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
+
+        ordered_items = []
+        for r_id, r_source in id_source_list:
+            if r_source == "billing" and r_id in billing_map:
+                ordered_items.append(billing_map[r_id])
+            elif r_source == "pharmacy" and r_id in pharmacy_map:
+                ordered_items.append(pharmacy_map[r_id])
+                
+        # Map patient details
+        from app.models.patient_model import Patient
+        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
+        p_res = await self.db.execute(p_stmt)
+        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
+
+        # Map appointment numbers
+        from app.models.appointment_model import Appointment
+        a_stmt = select(Appointment.id, Appointment.appointment_number)
+        a_res = await self.db.execute(a_stmt)
+        appointments_map = {row[0]: row[1] for row in a_res.all()}
+
+        if format_type == "excel":
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Billings Report"
+            
+            headers = [
+                "Sr. No.", "Patient Name", "bill_number", "subtotal", "discount_percent",
+                "discount_amount", "gst_rate", "gst_amount", "tax_amount", "total_amount",
+                "paid_amount", "balance_amount", "status", "due_date", "notes", "invoice_path",
+                "Appointment Number", "created_at", "updated_at", "source",
+                "item_id", "item_description", "item_quantity", "item_unit_price",
+                "item_gst_rate", "item_gst_amount", "item_line_total", "item_type"
+            ]
+            hdr_row = apply_excel_hospital_header(ws, branding, "Billings & Invoices Report", total_records=len(ordered_items))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
+            
+            for sr_no, b in enumerate(ordered_items, start=1):
+                p_name = patients_map.get(b.patient_id, "")
+                appt_num_str = appointments_map.get(b.appointment_id, "") if b.appointment_id else ""
+                
+                # Check if there are items to export. If not, output one row with empty item columns
+                if not b.items:
+                    row = [
+                        sanitize_excel_cell(sr_no), sanitize_excel_cell(p_name), sanitize_excel_cell(b.bill_number),
+                        sanitize_excel_cell(f"₹{b.subtotal:.2f}"), sanitize_excel_cell(b.discount_percent),
+                        sanitize_excel_cell(f"₹{b.discount_amount:.2f}"), sanitize_excel_cell(b.gst_rate),
+                        sanitize_excel_cell(f"₹{b.gst_amount:.2f}"), sanitize_excel_cell(f"₹{b.tax_amount:.2f}"),
+                        sanitize_excel_cell(f"₹{b.total_amount:.2f}"), sanitize_excel_cell(f"₹{b.paid_amount:.2f}"),
+                        sanitize_excel_cell(f"₹{b.balance_amount:.2f}"), sanitize_excel_cell(b.status),
+                        sanitize_excel_cell(b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else "")),
+                        sanitize_excel_cell(b.notes or ""), sanitize_excel_cell(b.invoice_path or ""), sanitize_excel_cell(appt_num_str),
+                        sanitize_excel_cell(b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at)),
+                        sanitize_excel_cell(b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at)),
+                        sanitize_excel_cell(b.source),
+                        "", "", "", "", "", "", "", ""
+                    ]
+                    ws.append(row)
+                else:
+                    for item in b.items:
+                        row = [
+                            sanitize_excel_cell(sr_no), sanitize_excel_cell(p_name), sanitize_excel_cell(b.bill_number),
+                            sanitize_excel_cell(f"₹{b.subtotal:.2f}"), sanitize_excel_cell(b.discount_percent),
+                            sanitize_excel_cell(f"₹{b.discount_amount:.2f}"), sanitize_excel_cell(b.gst_rate),
+                            sanitize_excel_cell(f"₹{b.gst_amount:.2f}"), sanitize_excel_cell(f"₹{b.tax_amount:.2f}"),
+                            sanitize_excel_cell(f"₹{b.total_amount:.2f}"), sanitize_excel_cell(f"₹{b.paid_amount:.2f}"),
+                            sanitize_excel_cell(f"₹{b.balance_amount:.2f}"), sanitize_excel_cell(b.status),
+                            sanitize_excel_cell(b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else "")),
+                            sanitize_excel_cell(b.notes or ""), sanitize_excel_cell(b.invoice_path or ""), sanitize_excel_cell(appt_num_str),
+                            sanitize_excel_cell(b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at)),
+                            sanitize_excel_cell(b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at)),
+                            sanitize_excel_cell(b.source),
+                            sanitize_excel_cell(item.id),
+                            sanitize_excel_cell(item.description),
+                            sanitize_excel_cell(item.quantity),
+                            sanitize_excel_cell(f"₹{item.unit_price:.2f}"),
+                            sanitize_excel_cell(item.gst_rate),
+                            sanitize_excel_cell(f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else ""),
+                            sanitize_excel_cell(f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else ""),
+                            sanitize_excel_cell(item.item_type)
+                        ]
+                        ws.append(row)
+
+            auto_fit_columns(ws)
+                        
+            stream = BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+        elif format_type == "pdf":
+            from jinja2 import Environment, FileSystemLoader
+            from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from xhtml2pdf import default
+            import os
+            
+            font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                
+            default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
+            default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
+            
+            env = Environment(loader=FileSystemLoader("app/templates"))
+            template = env.get_template("billings_export_template.html")
+            
+            formatted_billings = []
+            for b in ordered_items:
+                p_name = patients_map.get(b.patient_id, "")
+                
+                formatted_billings.append({
+                    "id": b.id,
+                    "patient_id": b.patient_id,
+                    "patient_name": p_name,
+                    "bill_number": b.bill_number,
+                    "subtotal": b.subtotal,
+                    "discount_percent": b.discount_percent,
+                    "discount_amount": b.discount_amount,
+                    "gst_rate": b.gst_rate,
+                    "gst_amount": b.gst_amount,
+                    "tax_amount": b.tax_amount,
+                    "total_amount": b.total_amount,
+                    "paid_amount": b.paid_amount,
+                    "balance_amount": b.balance_amount,
+                    "status": b.status,
+                    "due_date": b.due_date.strftime("%Y-%m-%d") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
+                    "notes": b.notes,
+                    "appointment_id": b.appointment_id,
+                    "source": b.source,
+                    "created_at": b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
+                    "bill_items": [
+                        {
+                            "id": item.id,
+                            "description": item.description,
+                            "quantity": item.quantity,
+                            "unit_price": item.unit_price,
+                            "gst_rate": item.gst_rate,
+                            "gst_amount": getattr(item, "gst_amount", 0.0),
+                            "line_total": getattr(item, "line_total", 0.0),
+                            "item_type": item.item_type
+                        }
+                        for item in b.items
+                    ]
+                })
+                
+            html_content = template.render(
+                billings=formatted_billings,
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Billings & Invoices Report",
+                total_records=len(ordered_items),
+            )
+            
+            pdf_data = html_to_pdf(html_content)
+            return pdf_data, "application/pdf"
+        else:
+            raise BadRequestException("Invalid format specified for export")
+
+
+class InsuranceService:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.repo = InsuranceRepository(db)
+        self.claim_repo = InsuranceClaimRepository(db)
+        self.audit_repo = AuditRepository(db)
+
+    async def create_insurance(self, data: InsuranceCreate, user_id: int) -> InsuranceResponse:
+        insurance = Insurance(**data.model_dump())
+        insurance = await self.repo.create(insurance)
+        await self.audit_repo.create("create", "billing_insurance", user_id=user_id, resource_id=str(insurance.id))
+        return InsuranceResponse.model_validate(insurance)
+
+    async def submit_claim(self, data: InsuranceClaimCreate, user_id: int) -> InsuranceClaimResponse:
+        claim = InsuranceClaim(
+            claim_number=generate_claim_number(),
+            submitted_at=utc_now(),
+            **data.model_dump(),
+        )
+        claim = await self.claim_repo.create(claim)
+        await self.audit_repo.create("create", "billing_claim", user_id=user_id, resource_id=str(claim.id))
+
+        billing = await self.repo.get_by_id(claim.billing_id)
+        hospital_id = billing.hospital_id if billing else None
+
+        from app.services.transaction_history_service import TransactionHistoryService
+        await TransactionHistoryService(self.db).create_event(
+            event_type="INSURANCE_CLAIM",
+            reference_no=claim.claim_number,
+            description=f"Insurance Claim Submitted: {claim.notes or ''}",
+            amount=claim.claimed_amount,
+            source_module="insurance",
+            source_id=claim.id,
+            status="completed",
+            user_id=user_id,
+            hospital_id=hospital_id,
+        )
+
+        return InsuranceClaimResponse.model_validate(claim)

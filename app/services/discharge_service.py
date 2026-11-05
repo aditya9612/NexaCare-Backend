@@ -1555,39 +1555,26 @@ class DischargeService:
         if discharge.discharge_status != "DISCHARGED":
             raise BadRequestException("Gate pass is only available after final doctor approval and discharge completion.")
 
-        # Fetch dynamic Hospital details
+        # Fetch dynamic Hospital details via BrandingResolverService
+        from app.services.branding_resolver_service import BrandingResolverService
         resolved_hospital_id = hospital_id or discharge.hospital_id
-        hospital = None
-        if resolved_hospital_id:
-            from app.repositories.hospital_repository import HospitalRepository
-            hospital = await HospitalRepository(self.db).get_by_id(resolved_hospital_id)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=resolved_hospital_id)
 
-        hospital_name = hospital.name if hospital and hospital.name else "NexaCare Multispeciality Hospital"
-
+        hospital_name = branding.hospital_name
         sub_parts = []
-        if hospital and hospital.address:
-            sub_parts.append(hospital.address)
-        if hospital and hospital.phone:
-            sub_parts.append(f"Ph: {hospital.phone}")
-        if hospital and hospital.email:
-            sub_parts.append(f"Email: {hospital.email}")
-
-        hospital_sub = " • ".join(sub_parts) if sub_parts else "123 Healthcare Boulevard, Medical Enclave, Pune, MH - 411001 • Ph: +91 20 6789 0000 • Web: www.nexacare.com"
+        if branding.hospital_address:
+            sub_parts.append(branding.hospital_address)
+        if branding.hospital_phone:
+            sub_parts.append(f"Ph: {branding.hospital_phone}")
+        if branding.hospital_email:
+            sub_parts.append(f"Email: {branding.hospital_email}")
+        if branding.hospital_website:
+            sub_parts.append(f"Web: {branding.hospital_website}")
+        hospital_sub = " • ".join(sub_parts) if sub_parts else "NexaCare Healthcare System"
 
         # Resolve Hospital Logo
         logo_img_flowable = None
-        logo_path = None
-        if hospital:
-            logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
-            if logo_attr and os.path.exists(str(logo_attr)):
-                logo_path = str(logo_attr)
-
-        if not logo_path:
-            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
-                if os.path.exists(candidate):
-                    logo_path = candidate
-                    break
-
+        logo_path = branding.logo_file_path
         if logo_path and os.path.exists(logo_path):
             try:
                 from PIL import Image as PILImage

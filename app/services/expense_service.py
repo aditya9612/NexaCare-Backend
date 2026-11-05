@@ -1162,7 +1162,11 @@ class ExpenseService:
 
     async def export_expenses(self, format_type: str, current_user: Any | None = None) -> tuple[BytesIO | bytes, str]:
         from datetime import date, datetime
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
         
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user)
         expenses = await self._get_all_combined_expenses(current_user=current_user)
         
         if format_type == "excel":
@@ -1175,68 +1179,29 @@ class ExpenseService:
                 "Sr. No.", "Category Name", "Vendor Name", "amount", "description",
                 "expense_date", "status", "created_at", "updated_at", "source"
             ]
-            ws.append(headers)
             
-            # Configure Header Row Height
-            ws.row_dimensions[1].height = 32
-            
-            # Header Style definition
-            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
-            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            thin_side = Side(style="thin", color="D3D3D3")
-            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = header_border
+            hdr_row = apply_excel_hospital_header(ws, branding, "Expenses Report", total_records=len(expenses))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
             
             for sr_no, exp in enumerate(expenses, start=1):
                 cat_name = exp.category.name if exp.category else ""
                 vendor_name = exp.vendor.name if exp.vendor else ""
                 
                 row = [
-                    sr_no,
-                    cat_name,
-                    vendor_name,
-                    f"₹{exp.amount:.2f}",
-                    exp.description or "",
-                    exp.expense_date.strftime("%Y-%m-%d") if isinstance(exp.expense_date, (date, datetime)) else str(exp.expense_date),
-                    exp.status,
-                    exp.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.created_at, datetime) else str(exp.created_at),
-                    exp.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.updated_at, datetime) else str(exp.updated_at),
-                    exp.source
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(cat_name),
+                    sanitize_excel_cell(vendor_name),
+                    sanitize_excel_cell(f"₹{exp.amount:.2f}"),
+                    sanitize_excel_cell(exp.description or ""),
+                    sanitize_excel_cell(exp.expense_date.strftime("%Y-%m-%d") if isinstance(exp.expense_date, (date, datetime)) else str(exp.expense_date)),
+                    sanitize_excel_cell(exp.status),
+                    sanitize_excel_cell(exp.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.created_at, datetime) else str(exp.created_at)),
+                    sanitize_excel_cell(exp.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(exp.updated_at, datetime) else str(exp.updated_at)),
+                    sanitize_excel_cell(exp.source)
                 ]
                 ws.append(row)
                 
-            # Freeze panes at A2
-            ws.freeze_panes = "A2"
-            
-            # AutoFilter
-            total_rows = len(expenses) + 1
-            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
-            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-            
-            # Set custom column widths
-            col_widths = {
-                1: 8,   # Sr. No.
-                2: 25,  # Category Name
-                3: 25,  # Vendor Name
-                4: 15,  # amount
-                5: 35,  # description
-                6: 15,  # expense_date
-                7: 15,  # status
-                8: 22,  # created_at
-                9: 22,  # updated_at
-                10: 15  # source
-            }
-            for col_idx, width in col_widths.items():
-                col_letter = openpyxl.utils.get_column_letter(col_idx)
-                ws.column_dimensions[col_letter].width = width
+            auto_fit_columns(ws)
 
             stream = BytesIO()
             wb.save(stream)
@@ -1256,7 +1221,6 @@ class ExpenseService:
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
             
-            # Map dejavusans variants in xhtml2pdf fontList registry
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
@@ -1291,7 +1255,16 @@ class ExpenseService:
                 
             html = template.render(
                 expenses=formatted_expenses,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Expenses Report",
+                total_records=len(expenses),
             )
             
             pdf_bytes = html_to_pdf(html)

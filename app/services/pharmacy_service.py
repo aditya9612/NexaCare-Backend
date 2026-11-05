@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import math
 from typing import Any, Optional
@@ -1680,6 +1680,16 @@ class PharmacyService:
         tax_amount = float(invoice.tax_amount or 0.0)
         total_amount = float(invoice.total_amount or 0.0)
 
+        from app.services.branding_resolver_service import BrandingResolverService
+        branding = await BrandingResolverService.resolve_branding(
+            self.db,
+            current_user,
+            hospital_id=invoice.hospital_id or hospital_id,
+        )
+        logo_html = f'<img src="{branding.logo_data_uri}" style="max-height: 52px; max-width: 150px; object-fit: contain; vertical-align: middle; margin-right: 12px;" />' if branding.logo_data_uri else ""
+        hosp_name = branding.hospital_name or "NexaCare Hospital"
+        contact_line = branding.contact_line or "Advanced Healthcare & Pharmacy Billing"
+
         html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1699,10 +1709,19 @@ class PharmacyService:
 </head>
 <body>
     <div class="header">
-        <h1>NexaCare Pharmacy</h1>
-        <p style="margin:0;">Advanced Healthcare & Pharmacy Billing</p>
-        <h3 style="margin-top:10px;">INVOICE #{invoice.invoice_number}</h3>
-        <p style="margin:0;">Date: {created_str}</p>
+        <table style="width: 100%; border: none;">
+            <tr>
+                <td style="border: none; padding: 0; vertical-align: middle;">
+                    {logo_html}
+                    <span style="font-size: 20pt; font-weight: bold; color: #2563eb; vertical-align: middle;">{hosp_name}</span>
+                    <p style="margin: 4px 0 0 0; color: #4b5563; font-size: 9pt;">{contact_line}</p>
+                </td>
+                <td style="border: none; padding: 0; text-align: right; vertical-align: middle;">
+                    <h3 style="margin: 0; color: #1e293b;">INVOICE #{invoice.invoice_number}</h3>
+                    <p style="margin: 4px 0 0 0; color: #64748b; font-size: 9pt;">Date: {created_str}</p>
+                </td>
+            </tr>
+        </table>
     </div>
 
     <table class="meta-table">
@@ -1753,7 +1772,7 @@ class PharmacyService:
     </table>
 
     <div style="clear: both; padding-top: 40px; text-align: center; color: #777;">
-        <p>Thank you for choosing NexaCare Pharmacy! Wish you good health.</p>
+        <p>Thank you for choosing {hosp_name}! Wish you good health.</p>
     </div>
 </body>
 </html>"""
@@ -3068,9 +3087,14 @@ class PharmacyService:
 
     async def export_medicines(self, format_type: str, current_user=None) -> tuple[BytesIO | bytes, str]:
         from io import BytesIO
+        from datetime import datetime, date
         from app.utils.helpers import utc_now
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
 
         hospital_id = resolve_tenant_id(current_user)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
         medicines = await self.medicine_repo.get_all_active(hospital_id=hospital_id)
 
         if format_type == "excel":
@@ -3089,20 +3113,20 @@ class PharmacyService:
 
             for idx, item in enumerate(medicines, 1):
                 row = [
-                    idx,
-                    item.sku,
-                    item.name,
-                    item.generic_name or "",
-                    item.category,
-                    item.barcode or "",
-                    item.batch_number or "",
-                    item.expiry_date.strftime("%d-%m-%Y") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
-                    item.manufacturer or "",
-                    item.unit,
-                    float(item.unit_price) if item.unit_price is not None else 0.0,
-                    int(item.stock_quantity) if item.stock_quantity is not None else 0,
-                    int(item.reorder_level) if item.reorder_level is not None else 0,
-                    item.description or ""
+                    sanitize_excel_cell(idx),
+                    sanitize_excel_cell(item.sku),
+                    sanitize_excel_cell(item.name),
+                    sanitize_excel_cell(item.generic_name or ""),
+                    sanitize_excel_cell(item.category),
+                    sanitize_excel_cell(item.barcode or ""),
+                    sanitize_excel_cell(item.batch_number or ""),
+                    sanitize_excel_cell(item.expiry_date.strftime("%d-%m-%Y") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or "")),
+                    sanitize_excel_cell(item.manufacturer or ""),
+                    sanitize_excel_cell(item.unit),
+                    sanitize_excel_cell(float(item.unit_price) if item.unit_price is not None else 0.0),
+                    sanitize_excel_cell(int(item.stock_quantity) if item.stock_quantity is not None else 0),
+                    sanitize_excel_cell(int(item.reorder_level) if item.reorder_level is not None else 0),
+                    sanitize_excel_cell(item.description or "")
                 ]
                 ws.append(row)
 
@@ -3125,16 +3149,8 @@ class PharmacyService:
             # Enable auto-filter
             ws.auto_filter.ref = f"A1:N{len(medicines) + 1}"
 
-            # Set header row height to 32 for padding
-            ws.row_dimensions[1].height = 32
-
-            # Apply header styling
-            for col_idx in range(1, 15):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = thin_border
+            hdr_row = apply_excel_hospital_header(ws, branding, "Medicine Inventory Export", total_records=len(medicines))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
 
             # Set custom column widths
             column_widths = {
@@ -3238,7 +3254,16 @@ class PharmacyService:
 
             html = template.render(
                 medicines=formatted_medicines,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Medicine Inventory Report",
+                total_records=len(medicines),
             )
 
             pdf_bytes = html_to_pdf(html)
@@ -3405,8 +3430,12 @@ class PharmacyService:
     async def export_suppliers(self, format_type: str, current_user=None):
         from io import BytesIO
         from datetime import datetime, date
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
 
         hospital_id = resolve_tenant_id(current_user)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
         suppliers = await self.supplier_repo.get_all_active(hospital_id=hospital_id)
 
         if format_type == "excel":
@@ -3421,25 +3450,20 @@ class PharmacyService:
                 "Sr. No.", "name", "contact_person", "phone", "email",
                 "address", "gst_number", "is_active", "created_at"
             ]
-            ws.append(headers)
-
-
-            # Apply styling to the header row (Bold, Size 12)
-            header_font = Font(name="Calibri", size=12, bold=True)
-            for col_idx in range(1, len(headers) + 1):
-                ws.cell(row=1, column=col_idx).font = header_font
+            hdr_row = apply_excel_hospital_header(ws, branding, "Suppliers Export", total_records=len(suppliers))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
 
             for sr_no, s in enumerate(suppliers, start=1):
                 row = [
-                    sr_no,
-                    s.name,
-                    s.contact_person or "",
-                    s.phone or "",
-                    s.email or "",
-                    s.address or "",
-                    s.gst_number or "",
-                    "Active" if s.is_active else "Inactive",
-                    s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at)
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(s.name),
+                    sanitize_excel_cell(s.contact_person or ""),
+                    sanitize_excel_cell(s.phone or ""),
+                    sanitize_excel_cell(s.email or ""),
+                    sanitize_excel_cell(s.address or ""),
+                    sanitize_excel_cell(s.gst_number or ""),
+                    sanitize_excel_cell("Active" if s.is_active else "Inactive"),
+                    sanitize_excel_cell(s.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(s.created_at, datetime) else str(s.created_at))
                 ]
                 ws.append(row)
 
@@ -3485,7 +3509,16 @@ class PharmacyService:
 
             html_content = template.render(
                 suppliers=formatted_suppliers,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Suppliers Report",
+                total_records=len(suppliers),
             )
 
             pdf_data = html_to_pdf(html_content)

@@ -152,7 +152,7 @@ class LabService:
         existing_test = await self.test_repo.get_by_name(normalized_name, hospital_id=hospital_id)
         if existing_test:
             raise BadRequestException("Lab test with this name already exists.")
-        
+
         from app.models.doctor_model import Doctor
         from sqlalchemy import select
 
@@ -444,7 +444,7 @@ class LabService:
                 nurse = res.scalar_one_or_none()
                 if not nurse:
                     return TestOrderListResponse(items=[], total=0, page=page, size=size, pages=0, status_counts=TestOrderStatusCounts())
-                
+
                 # Fetch active assigned patient IDs
                 assignment_res = await self.db.execute(
                     select(NursePatientAssignment.patient_id)
@@ -456,7 +456,7 @@ class LabService:
                 assigned_patient_ids = [row[0] for row in assignment_res.all()]
                 if not assigned_patient_ids:
                     return TestOrderListResponse(items=[], total=0, page=page, size=size, pages=0, status_counts=TestOrderStatusCounts())
-                
+
                 if patient_id is not None:
                     if patient_id not in assigned_patient_ids:
                         return TestOrderListResponse(items=[], total=0, page=page, size=size, pages=0, status_counts=TestOrderStatusCounts())
@@ -839,7 +839,7 @@ class LabService:
             if order.department_id != staff.department_id:
                 raise BadRequestException(
                     "You can enter test results only for test orders of your department"
-                )     
+                )
 
         existing_result = await self.result_repo.get_by_test_order(sample.test_order_id, hospital_id=hospital_id)
         if existing_result:
@@ -882,7 +882,7 @@ class LabService:
             logging.getLogger(__name__).warning(f"Failed to send critical value alert: {e}")
 
         return TestResultResponse.model_validate(result)
-        
+
     async def list_results(
         self, page: int = 1, size: int = 20, test_order_id: int | None = None, is_critical: bool | None = None, current_user=None):
         skip = (page - 1) * size
@@ -916,7 +916,7 @@ class LabService:
             hospital_id=hospital_id,
         )
         return build_paginated_result([TestResultResponse.model_validate(r) for r in items], total, page, size)
- 
+
     async def get_result(self, result_id: int, current_user=None) -> TestResultResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -967,11 +967,11 @@ class LabService:
             import logging
             logging.getLogger(__name__).warning(f"Failed to send critical value alert on update: {e}")
 
-        return TestResultResponse.model_validate(result)    
+        return TestResultResponse.model_validate(result)
 
     async def get_critical_alerts(self, current_user) -> list[CriticalAlert]:
         department_id = None
-        role_name = current_user.role.name.lower() if current_user and current_user.role else "" 
+        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
             result = await self.db.execute(
@@ -982,14 +982,14 @@ class LabService:
             if not staff or not staff.department_id:
                 raise BadRequestException("Lab technician department is not assigned")
 
-            department_id = staff.department_id  
+            department_id = staff.department_id
 
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
 
-        results = await self.result_repo.get_critical_alerts(  
+        results = await self.result_repo.get_critical_alerts(
             current_user_id=current_user.id,
-            department_id=department_id, 
+            department_id=department_id,
             hospital_id=hospital_id,
         )
 
@@ -1005,8 +1005,8 @@ class LabService:
                 result_value=r.result_value,
                 entered_at=r.entered_at,
             ))
-        return alerts        
-    
+        return alerts
+
     # --- Reports ---
     async def _generate_report_pdf(self, report: LabReport, order) -> str:
         from app.models.patient_model import Patient
@@ -1042,58 +1042,16 @@ class LabService:
         else:
             generated_at_str = utc_now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Hospital branding (Multi-tenant isolated)
-        hospital = None
-        hospital_name = None
-        hospital_address = None
-        hospital_phone = None
-        hospital_email = None
-        hospital_website = None
-        hospital_logo = None
-
+        # Hospital branding (Multi-tenant isolated via centralized BrandingResolverService)
         effective_hosp_id = getattr(order, "hospital_id", None) or (patient.hospital_id if patient else None)
-        if effective_hosp_id:
-            from app.repositories.hospital_repository import HospitalRepository
-            import os
-            hospital = await HospitalRepository(self.db).get_by_id(effective_hosp_id)
-            if hospital:
-                hospital_name = hospital.name
-                hospital_address = hospital.address
-                hospital_phone = hospital.phone
-                hospital_email = hospital.email
-                hospital_website = getattr(hospital, 'website', None)
-                logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
-                if logo_attr:
-                    raw_logo = str(logo_attr).replace("\\", "/").strip()
-                    candidates = [raw_logo]
-                    if raw_logo.startswith("/"):
-                        candidates.append(raw_logo.lstrip("/"))
-                    if raw_logo.startswith("uploads/"):
-                        candidates.append(f"app/{raw_logo}")
-                    for cand in candidates:
-                        if os.path.exists(cand):
-                            hospital_logo = os.path.abspath(cand).replace("\\", "/")
-                            break
-
-        if not hospital_logo:
-            import os
-            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
-                if os.path.exists(candidate):
-                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
-                    break
-
-        pdf_logo_src = None
-        if hospital_logo and os.path.exists(hospital_logo):
-            import mimetypes, base64
-            mime_type, _ = mimetypes.guess_type(hospital_logo)
-            if not mime_type:
-                mime_type = "image/png"
-            try:
-                with open(hospital_logo, "rb") as f:
-                    b64_data = base64.b64encode(f.read()).decode("utf-8")
-                pdf_logo_src = f"data:{mime_type};base64,{b64_data}"
-            except Exception:
-                pdf_logo_src = None
+        from app.services.branding_resolver_service import BrandingResolverService
+        branding = await BrandingResolverService.resolve_branding(self.db, hospital_id=effective_hosp_id)
+        hospital_name = branding.hospital_name
+        hospital_address = branding.hospital_address
+        hospital_phone = branding.hospital_phone
+        hospital_email = branding.hospital_email
+        hospital_website = branding.hospital_website
+        pdf_logo_src = branding.logo_data_uri
 
         doc_display_name = ""
         if doctor:
@@ -1222,8 +1180,8 @@ class LabService:
             if order.department_id != staff.department_id:
                 raise BadRequestException(
                     "You can create lab reports only for test orders of your department"
-                )        
-               
+                )
+
         remarks = getattr(data, "remarks", None) or data.summary or (result.remark if result else None)
         summary = data.summary or (result.remark if result else None)
 
@@ -1367,7 +1325,7 @@ class LabService:
             critical_rejected=critical_rejected_count,
             total_reports=total_reports_count,
         )
-    
+
     async def get_report(self, report_id: int, current_user) -> LabReportResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -1422,8 +1380,8 @@ class LabService:
         if not generated_by_him and not same_department:
             raise BadRequestException(
                 f"You can {action} only reports generated by you or reports of your department"
-            )     
-    
+            )
+
     async def verify_by_technician(
         self,
         report_id: int,
@@ -1740,7 +1698,7 @@ class LabService:
             content = await file.read()
             file_size = len(content)
             await file.seek(0)
-        
+
         max_size_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
         if file_size > max_size_bytes:
             raise BadRequestException(f"File size exceeds limit of {settings.MAX_UPLOAD_SIZE_MB}MB")
@@ -1752,10 +1710,10 @@ class LabService:
         # 4. Save uploaded file to disk
         import time
         t_start = time.time()
-        
+
         upload_dir = os.path.join(settings.UPLOAD_DIR, "lab_reports")
         os.makedirs(upload_dir, exist_ok=True)
-        
+
         file_uuid = str(uuid4())
         file_name = f"{file_uuid}{file_ext}"
         disk_path = os.path.join(settings.UPLOAD_DIR, "lab_reports", file_name)
@@ -1773,7 +1731,7 @@ class LabService:
         # Try to upload to AWS S3
         from io import BytesIO
         from app.utils.s3 import upload_file_to_s3
-        
+
         s3_url = upload_file_to_s3(
             BytesIO(file_bytes),
             f"lab_reports/{file_name}",
@@ -1796,7 +1754,7 @@ class LabService:
         except Exception as e:
             logger.error(f"OCR processing failed: {e}")
             raise BadRequestException(f"OCR processing failed: {str(e)}")
-            
+
         if not raw_text.strip():
             raise BadRequestException("OCR result is empty. No readable text found in the document.")
 
@@ -1826,14 +1784,14 @@ class LabService:
         api_key = (settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY") or "").strip()
         if not api_key:
             raise BadRequestException("GEMINI_API_KEY environment variable is not set.")
-        
+
         from app.models.lab_model import LabReport, TestResult, LabTest, LabOcrExtraction
         from app.models.patient_model import Patient
 
         try:
             client = genai.Client(api_key=api_key)
             model = settings.GEMINI_MODEL or "gemini-2.5-flash"
-            
+
             system_prompt = (
                 "You are an expert AI clinical data extractor.\n"
                 "Analyze the provided document file and raw OCR text from a laboratory report and extract both the patient details and test results into the required structured JSON format.\n\n"
@@ -1852,7 +1810,7 @@ class LabService:
                 "3. Do not provide any medical diagnosis or interpretation. Only extract structured data.\n"
                 "4. Extract multiple test results/parameters from the same report if present."
             )
-            
+
             # Determine mime type based on file extension
             mime_type = "image/jpeg"
             if file_ext == ".pdf":
@@ -1863,12 +1821,12 @@ class LabService:
                 mime_type = "image/webp"
             elif file_ext == ".gif":
                 mime_type = "image/gif"
-                
+
             contents = [
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
                 f"Raw OCR Text:\n{raw_text}\n\nAnalyze both the provided document file and the raw OCR text above to extract patient details and all parameters accurately."
             ]
-            
+
             # List of models to try in case of 503 High Demand or transient unavailability
             models_to_try = [model]
             for fallback in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
@@ -1914,7 +1872,7 @@ class LabService:
         # 7. Map results to DB entities and run matching validation
         created_results = []
         unmatched_params = []
-        
+
         from app.models.lab_model import LabReport, TestResult, LabTest, LabOcrExtraction, LabOcrExtractionItem
         from app.models.patient_model import Patient
 
@@ -2666,12 +2624,18 @@ class LabService:
         a_res = await self.db.execute(a_stmt)
         appointments_map = {row[0]: row[1] for row in a_res.all()}
 
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
+
         if format_type == "excel":
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Lab Test Orders"
-            
+
             headers = [
                 "Sr. No.", "order_number", "Patient Name", "Doctor Name",
                 "Lab Test Name", "department_id", "Appointment Number", "status", "priority", "notes",
@@ -2681,114 +2645,51 @@ class LabService:
                 "lab_test_turnaround_hours", "lab_test_normal_range",
                 "lab_test_is_active", "lab_test_department_id", "lab_test_doctor_id"
             ]
-            ws.append(headers)
-            
+
+            hdr_row = apply_excel_hospital_header(ws, branding, "Lab Test Orders Export", total_records=len(orders))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
+
             for sr_no, o in enumerate(orders, start=1):
                 med = o.lab_test
                 p_name_formatted = patients_map.get(o.patient_id, "") if o.patient_id in patients_map else ""
                 d_name_formatted = doctors_map.get(o.doctor_id, "") if o.doctor_id and o.doctor_id in doctors_map else ""
                 t_name_formatted = f"{med.test_name} [{med.test_code}]" if med else ""
                 appt_num_val = appointments_map.get(o.appointment_id, "") if o.appointment_id else ""
-                
+
                 row = [
-                    sr_no,
-                    o.order_number,
-                    p_name_formatted,
-                    d_name_formatted,
-                    t_name_formatted,
-                    o.department_id,
-                    appt_num_val,
-                    o.status,
-                    o.priority,
-                    o.notes or "",
-                    o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at),
-                    o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else ""),
-                    o.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.created_at, datetime) else str(o.created_at),
-                    med.test_code if med else "",
-                    med.category if med else "",
-                    med.description or "" if med else "",
-                    f"₹{med.price:.2f}" if med and med.price is not None else "",
-                    med.sample_type if med else "",
-                    med.turnaround_hours if med else "",
-                    med.normal_range or "" if med else "",
-                    "Active" if med and med.is_active else "Inactive" if med else "",
-                    med.department_id if med else "",
-                    med.doctor_id if med else ""
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(o.order_number),
+                    sanitize_excel_cell(p_name_formatted),
+                    sanitize_excel_cell(d_name_formatted),
+                    sanitize_excel_cell(t_name_formatted),
+                    sanitize_excel_cell(o.department_id),
+                    sanitize_excel_cell(appt_num_val),
+                    sanitize_excel_cell(o.status),
+                    sanitize_excel_cell(o.priority),
+                    sanitize_excel_cell(o.notes or ""),
+                    sanitize_excel_cell(o.ordered_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.ordered_at, datetime) else str(o.ordered_at)),
+                    sanitize_excel_cell(o.completed_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.completed_at, datetime) else (str(o.completed_at) if o.completed_at else "")),
+                    sanitize_excel_cell(o.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(o.created_at, datetime) else str(o.created_at)),
+                    sanitize_excel_cell(med.test_code if med else ""),
+                    sanitize_excel_cell(med.category if med else ""),
+                    sanitize_excel_cell(med.description or "" if med else ""),
+                    sanitize_excel_cell(f"₹{med.price:.2f}" if med and med.price is not None else ""),
+                    sanitize_excel_cell(med.sample_type if med else ""),
+                    sanitize_excel_cell(med.turnaround_hours if med else ""),
+                    sanitize_excel_cell(med.normal_range or "" if med else ""),
+                    sanitize_excel_cell("Active" if med and med.is_active else "Inactive" if med else ""),
+                    sanitize_excel_cell(med.department_id if med else ""),
+                    sanitize_excel_cell(med.doctor_id if med else "")
                 ]
                 ws.append(row)
 
-            # Apply advanced styling & layout improvements
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            from openpyxl.utils import get_column_letter
-            
-            center_alignment = Alignment(horizontal="center", vertical="center")
-            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            
-            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
-            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid") # White background
-            
-            thin_side = Side(style='thin', color='DDDDDD')
-            thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            
-            # 1. Format Header Row (Row 1)
-            ws.row_dimensions[1].height = 32
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = thin_border
-                
-            # 2. Format Data Rows (Row 2 onwards)
-            for row_idx in range(2, len(orders) + 2):
-                ws.row_dimensions[row_idx].height = 22
-                for col_idx in range(1, len(headers) + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    cell.alignment = Alignment(vertical="center")
-                    cell.border = thin_border
-                        
-            # 3. Apply Column Widths
-            column_widths = {
-                1: 8,    # Sr. No.
-                2: 20,   # order_number
-                3: 30,   # Patient Name
-                4: 30,   # Doctor Name
-                5: 30,   # Lab Test Name
-                6: 15,   # department_id
-                7: 22,   # Appointment Number
-                8: 12,   # status
-                9: 10,   # priority
-                10: 25,  # notes
-                11: 20,  # ordered_at
-                12: 20,  # completed_at
-                13: 20,  # created_at
-                14: 20,  # lab_test_test_code
-                15: 18,  # lab_test_category
-                16: 25,  # lab_test_description
-                17: 15,  # lab_test_price
-                18: 18,  # lab_test_sample_type
-                19: 20,  # lab_test_turnaround_hours
-                20: 20,  # lab_test_normal_range
-                21: 15,  # lab_test_is_active
-                22: 22,  # lab_test_department_id
-                23: 18   # lab_test_doctor_id
-            }
-            for col_idx, width in column_widths.items():
-                col_letter = get_column_letter(col_idx)
-                ws.column_dimensions[col_letter].width = width
-                
-            # 4. Freeze top header row
-            ws.freeze_panes = "A2"
-            
-            # 5. Enable AutoFilter
-            last_col_letter = get_column_letter(len(headers))
-            ws.auto_filter.ref = f"A1:{last_col_letter}{len(orders) + 1}"
-                
+            auto_fit_columns(ws)
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
             return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
+
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
@@ -2797,19 +2698,19 @@ class LabService:
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
             import os
-            
+
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                
+
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
-            
+
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("lab_orders_export_template.html")
-            
+
             def wrap_unbroken_text(text: str, max_chars: int = 12) -> str:
                 if not text:
                     return ""
@@ -2847,14 +2748,22 @@ class LabService:
                     "lab_test_sample_type": med.sample_type if med else "",
                     "lab_test_price": med.price if med else 0.0
                 })
-                
+
             html_content = template.render(
                 orders=formatted_orders,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Lab Orders Report",
+                total_records=len(orders),
             )
-            
+
             pdf_data = html_to_pdf(html_content)
             return pdf_data, "application/pdf"
         else:
             raise BadRequestException("Invalid format specified for export")
-

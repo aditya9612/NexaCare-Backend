@@ -25,11 +25,6 @@ class Subscription(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
 
-    hospital_id: Mapped[int] = mapped_column(
-        ForeignKey("hospitals.id", ondelete="CASCADE"),
-        index=True
-    )
-
     plan_id: Mapped[int] = mapped_column(
         ForeignKey("subscription_plans.id", ondelete="CASCADE"),
         index=True
@@ -60,10 +55,5 @@ class Subscription(Base, TimestampMixin):
 
     plan = relationship(
         "SubscriptionPlan",
-        back_populates="subscriptions"
-    )
-
-    hospital = relationship(
-        "Hospital",
         back_populates="subscriptions"
     )

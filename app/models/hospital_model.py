@@ -17,4 +17,5 @@ class Hospital(Base, TimestampMixin, SoftDeleteMixin):
 
     users = relationship("User", back_populates="hospital")
     appointment_settings = relationship("AppointmentSetting", back_populates="hospital", uselist=False, cascade="all, delete-orphan")
-    subscriptions = relationship("Subscription", back_populates="hospital", cascade="all, delete-orphan")
+    # subscriptions = relationship("Subscription", back_populates="hospital", cascade="all, delete-orphan")
+

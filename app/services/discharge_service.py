@@ -1045,7 +1045,7 @@ class DischargeService:
         if pharm_ref_ids:
             pharm_conds.append(PharmacyInvoice.id.in_(list(pharm_ref_ids)))
         if discharge.admission_date:
-            admission_end = discharge.discharge_date or now_dt
+            admission_end = discharge.discharge_date or utc_now()
             pharm_conds.append(
                 (PharmacyInvoice.patient_id == discharge.patient_id)
                 & (PharmacyInvoice.created_at >= discharge.admission_date)
@@ -1125,17 +1125,6 @@ class DischargeService:
         if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before billing clearance.")
 
-        # Strict Multi-Bill Payment Validation Before Setting billing_cleared = True
-        all_settled, outstanding = await self.validate_applicable_ipd_bills_settled(discharge, hospital_id=hospital_id)
-        if not all_settled:
-            details = [
-                f"{b['bill_type']} #{b['bill_number']} (Status: {b['status']}, Balance: ₹{b['outstanding_balance']:,.2f})"
-                for b in outstanding
-            ]
-            raise ConflictException(
-                f"Cannot approve billing clearance. Outstanding unpaid bills remain for this admission: {'; '.join(details)}"
-            )
-
         discharge.billing_cleared = True
         discharge.billing_cleared_by = user_id
         discharge.billing_cleared_at = utc_now()
@@ -1159,6 +1148,14 @@ class DischargeService:
 
         if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before payment settlement.")
+
+        if not discharge.billing_cleared:
+            raise BadRequestException("Billing Clearance must be completed before payment clearance.")
+
+        if discharge.payment_cleared:
+            raise ConflictException(
+                "Payment clearance has already been completed for this discharge."
+            )
 
         from app.services.transaction_history_service import TransactionHistoryService
         tx_service = TransactionHistoryService(self.db)
@@ -1274,7 +1271,7 @@ class DischargeService:
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
         if discharge.admission_date:
-            admission_end = discharge.discharge_date or now_dt
+            admission_end = discharge.discharge_date or utc_now()
             pharm_conditions.append(
                 (PharmacyInvoice.patient_id == discharge.patient_id)
                 & (PharmacyInvoice.created_at >= discharge.admission_date)

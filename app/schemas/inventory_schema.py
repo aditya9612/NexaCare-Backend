@@ -454,6 +454,7 @@ class InventorySummaryResponse(BaseSchema):
     inward_restocks: int = 0
     outward_issued: int = 0
     reorder_alerts: int = 0
+    expired_items: int = 0
 
 
 class InventoryPaginatedWithSummaryResponse(BaseSchema):

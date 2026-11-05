@@ -286,6 +286,7 @@ class InventoryRepository:
             "inward_restocks": int(inward_restocks),
             "outward_issued": int(outward_issued),
             "reorder_alerts": stock_summary["low_stock_count"],
+            "expired_items": stock_summary["expired_count"],
         }
 
 

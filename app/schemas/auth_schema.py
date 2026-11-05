@@ -265,6 +265,13 @@ class OTPVerifyRequest(EmailOrPhoneRequest):
     otp: str
 
 
+class OTPVerifyResponse(MessageResponse):
+    message: str = "OTP verified successfully"
+    setup_token: str | None = None
+    is_active: bool = True
+    is_verified: bool = True
+
+
 class ActivateAccountRequest(EmailOrPhoneRequest):
     otp: str
 

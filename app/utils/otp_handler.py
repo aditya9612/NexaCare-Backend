@@ -12,7 +12,20 @@ from app.utils.redis_service import cache_delete, cache_get, cache_set, get_redi
 
 # In-memory store fallback: key -> (otp_code, expires_at, attempts, purpose)
 _otp_store: dict[str, tuple[str, datetime, int, str | None]] = {}
-_mem_lock = asyncio.Lock()
+_mem_lock: asyncio.Lock | None = None
+_mem_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_mem_lock() -> asyncio.Lock:
+    global _mem_lock, _mem_lock_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _mem_lock is None or _mem_lock_loop != loop:
+        _mem_lock = asyncio.Lock()
+        _mem_lock_loop = loop
+    return _mem_lock
 
 _VERIFY_AND_CONSUME_LUA = """
 local raw = redis.call('GET', KEYS[1])
@@ -104,7 +117,7 @@ async def store_otp(
         except Exception as exc:
             logger.warning("Redis store_otp failed for %s: %s", key, exc)
 
-        async with _mem_lock:
+        async with _get_mem_lock():
             _otp_store[key] = (otp, expires, 0, purpose)
 
 
@@ -161,7 +174,7 @@ async def verify_otp(
                     for k in keys:
                         if k != key:
                             await cache_delete(k)
-                    async with _mem_lock:
+                    async with _get_mem_lock():
                         for k in keys:
                             _otp_store.pop(k, None)
                     return True
@@ -169,7 +182,7 @@ async def verify_otp(
                     logger.warning("OTP maximum verification attempts exceeded for key: %s", key)
                     for k in keys:
                         await cache_delete(k)
-                    async with _mem_lock:
+                    async with _get_mem_lock():
                         for k in keys:
                             _otp_store.pop(k, None)
                     return False
@@ -184,7 +197,7 @@ async def verify_otp(
                 logger.warning("Redis Lua verify_otp failed: %s, checking memory fallback", exc)
 
         # 2. In-memory store fallback with atomic lock
-        async with _mem_lock:
+        async with _get_mem_lock():
             mem_data = _otp_store.get(key)
             if mem_data:
                 stored_otp = mem_data[0]

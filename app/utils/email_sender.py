@@ -16,6 +16,7 @@ def _send_sync_email(to: str, subject: str, html_body: str, plain_body: str | No
 
     from_addr = settings.SMTP_FROM or settings.SMTP_USER
     sender_name = settings.APP_NAME or "NexaCare"
+    smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
 
     try:
         msg = MIMEMultipart("alternative")
@@ -40,19 +41,36 @@ def _send_sync_email(to: str, subject: str, html_body: str, plain_body: str | No
         # Attach HTML content
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
-            server.starttls()
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.send_message(msg)
-
-        logger.info("Email delivered successfully to %s (subject: %s)", to, subject)
-        return True
-    except smtplib.SMTPAuthenticationError:
-        logger.error("SMTP authentication failed for user %s", settings.SMTP_USER)
-        return False
-    except smtplib.SMTPException as exc:
-        logger.error("SMTP error sending email to %s: %s", to, type(exc).__name__)
-        return False
+        # 1. Attempt STARTTLS on configured port (e.g. 587)
+        try:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(settings.SMTP_USER, smtp_password)
+                server.send_message(msg)
+            logger.info("Email delivered successfully to %s (subject: %s)", to, subject)
+            return True
+        except (smtplib.SMTPException, OSError) as port_err:
+            logger.warning(
+                "SMTP via port %s failed (%s: %s). Attempting SSL port 465 fallback...",
+                settings.SMTP_PORT,
+                type(port_err).__name__,
+                port_err,
+            )
+            try:
+                with smtplib.SMTP_SSL(settings.SMTP_HOST, 465, timeout=10) as server:
+                    server.login(settings.SMTP_USER, smtp_password)
+                    server.send_message(msg)
+                logger.info("Email delivered successfully to %s via fallback SSL port 465", to)
+                return True
+            except Exception as ssl_err:
+                logger.error(
+                    "SMTP error sending email to %s: %s (Please check Google App Password in .env)",
+                    to,
+                    type(ssl_err).__name__,
+                )
+                return False
     except Exception as exc:
         logger.error("Unexpected error sending email to %s: %s", to, type(exc).__name__)
         return False

@@ -5,8 +5,8 @@ from app.core.logger import logger
 
 
 @celery_app.task(name="app.tasks.analytics_tasks.generate_export", bind=True, max_retries=2)
-def generate_export(self, export_id: int):
-    run_celery_async(_generate_export(export_id))
+def generate_export(self, export_id: int, hospital_id: int | None = None):
+    run_celery_async(_generate_export(export_id, hospital_id=hospital_id))
 
 
 @celery_app.task(name="app.tasks.analytics_tasks.refresh_dashboard_cache")
@@ -14,12 +14,12 @@ def refresh_dashboard_cache():
     run_celery_async(_refresh_cache())
 
 
-async def _generate_export(export_id: int) -> None:
+async def _generate_export(export_id: int, hospital_id: int | None = None) -> None:
     from app.services.analytics_service import AnalyticsService
 
     async with AsyncSessionLocal() as db:
         try:
-            await AnalyticsService(db).process_export(export_id)
+            await AnalyticsService(db).process_export(export_id, hospital_id=hospital_id)
             await db.commit()
         except Exception as exc:
             await db.rollback()

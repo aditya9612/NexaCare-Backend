@@ -114,11 +114,14 @@ def resolve_logo_as_data_uri(logo_path: str | None) -> str | None:
     import mimetypes
     import os
 
+    norm_path = stripped_path.lstrip("/\\")
     candidates = [
         stripped_path,
-        os.path.join("app", stripped_path),
+        norm_path,
+        os.path.join("app", norm_path),
         os.path.abspath(stripped_path),
-        os.path.abspath(os.path.join("app", stripped_path)),
+        os.path.abspath(norm_path),
+        os.path.abspath(os.path.join("app", norm_path)),
     ]
     resolved = None
     for c in candidates:
@@ -247,6 +250,142 @@ async def generate_lab_report_html(report_number: str, data: dict) -> str:
         logger.info("Report HTML generated: %s", file_path)
 
     # Return web-relative path with forward slashes (strip leading 'app' prefix)
+    relative = str(file_path).replace("\\", "/")
+    if relative.startswith("app/"):
+        relative = relative[len("app"):]
+    return relative
+
+
+async def generate_analytics_report_html(report_number: str, data: dict) -> str:
+    template = env.get_template("analytics_export_template.html")
+    report_title = data.get("title", "Analytics Report")
+    report_type = data.get("report_type", "analytics")
+
+    # Process hospital logo if local file path
+    data["hospital_logo"] = resolve_logo_as_data_uri(data.get("hospital_logo"))
+
+    raw_rows = data.get("rows", [])
+    summary_cards = []
+    tables = []
+    generic_columns = []
+    generic_rows = []
+
+    if raw_rows and isinstance(raw_rows[0], dict):
+        first_dict = raw_rows[0]
+        has_analytics_structure = any(isinstance(v, list) for v in first_dict.values())
+        if has_analytics_structure or len(raw_rows) == 1:
+            for k, v in first_dict.items():
+                title_k = k.replace("_", " ").title()
+                if isinstance(v, (int, float, str)) or v is None:
+                    if isinstance(v, float):
+                        if "revenue" in k.lower() or "amount" in k.lower():
+                            val_str = f"₹ {v:,.2f}"
+                        else:
+                            val_str = f"{v:,.2f}".rstrip("0").rstrip(".") if "." in f"{v:,.2f}" else f"{v:,.2f}"
+                    elif isinstance(v, int):
+                        val_str = f"{v:,}"
+                    else:
+                        val_str = str(v) if v is not None else "-"
+                    summary_cards.append({"label": title_k, "value": val_str})
+
+                elif isinstance(v, list) and v:
+                    if isinstance(v[0], dict):
+                        if "label" in v[0] and "value" in v[0]:
+                            col1_name = "Metric / Category"
+                            k_lower = k.lower()
+                            if "gender" in k_lower:
+                                col1_name = "Gender"
+                            elif "trend" in k_lower or "daily" in k_lower or "date" in k_lower:
+                                col1_name = "Date / Period"
+                            elif "payment" in k_lower or "method" in k_lower:
+                                col1_name = "Payment Method"
+                            elif "department" in k_lower:
+                                col1_name = "Department"
+                            elif "status" in k_lower:
+                                col1_name = "Status"
+                            elif "availability" in k_lower:
+                                col1_name = "Availability"
+
+                            col2_name = "Amount" if ("revenue" in k_lower or "amount" in k_lower) else "Count / Total"
+
+                            tbl_rows = []
+                            for item in v:
+                                lbl = str(item.get("label") or "-")
+                                val = item.get("value")
+                                if isinstance(val, float) and ("revenue" in k_lower or "amount" in k_lower):
+                                    v_str = f"₹ {val:,.2f}"
+                                elif isinstance(val, (int, float)):
+                                    v_str = f"{val:,.0f}" if float(val).is_integer() else f"{val:,.2f}"
+                                else:
+                                    v_str = str(val or "-")
+                                tbl_rows.append([lbl, v_str])
+
+                            tables.append({
+                                "title": title_k,
+                                "columns": [col1_name, col2_name],
+                                "rows": tbl_rows
+                            })
+                        elif "name" in v[0] and "data" in v[0]:
+                            for series in v:
+                                s_name = series.get("name") or title_k
+                                s_data = series.get("data") or []
+                                s_rows = []
+                                for dp in s_data:
+                                    if isinstance(dp, dict):
+                                        s_rows.append([str(dp.get("label", "-")), str(dp.get("value", "-"))])
+                                if s_rows:
+                                    tables.append({
+                                        "title": s_name,
+                                        "columns": ["Period / Label", "Value"],
+                                        "rows": s_rows
+                                    })
+                        else:
+                            cols = [ck.replace("_", " ").title() for ck in v[0].keys()]
+                            tbl_rows = []
+                            for item in v:
+                                tbl_rows.append([format_cell_value(item.get(ck)) for ck in v[0].keys()])
+                            tables.append({
+                                "title": title_k,
+                                "columns": cols,
+                                "rows": tbl_rows
+                            })
+        else:
+            keys = list(first_dict.keys())
+            generic_columns = [k.replace("_", " ").title() for k in keys]
+            for r in raw_rows:
+                generic_rows.append([format_cell_value(r.get(k)) for k in keys])
+    elif raw_rows:
+        for r in raw_rows:
+            if isinstance(r, (list, tuple)):
+                generic_rows.append([format_cell_value(cell) for cell in r])
+            else:
+                generic_rows.append([format_cell_value(r)])
+
+    render_context = dict(data)
+    render_context["report_number"] = report_number
+    render_context["report_type"] = report_type
+    render_context["report_title"] = report_title
+    render_context["summary_cards"] = summary_cards
+    render_context["tables"] = tables
+    render_context["generic_columns"] = generic_columns
+    render_context["generic_rows"] = generic_rows
+
+    html = template.render(**render_context)
+
+    folder_name = "analytics_reports"
+    output_dir = _ensure_output_dir(folder_name)
+
+    try:
+        pdf_bytes = await run_in_threadpool(html_to_pdf, html)
+        file_path = output_dir / f"{report_number}.pdf"
+        file_path.write_bytes(pdf_bytes)
+        logger.info("Analytics Report PDF generated: %s", file_path)
+    except Exception as exc:
+        logger.warning("PDF conversion failed (%s), falling back to HTML", exc)
+        file_path = output_dir / f"{report_number}.html"
+        file_path.write_text(html, encoding="utf-8")
+        logger.info("Analytics Report HTML generated: %s", file_path)
+
     relative = str(file_path).replace("\\", "/")
     if relative.startswith("app/"):
         relative = relative[len("app"):]

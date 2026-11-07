@@ -47,7 +47,7 @@ from app.services.whatsapp_service import WhatsAppService
 from app.utils.excel_generator import generate_excel_report
 from app.utils.helpers import utc_now
 from app.utils.pagination import build_paginated_result
-from app.utils.pdf_generator import generate_lab_report_html
+from app.utils.pdf_generator import generate_analytics_report_html, generate_lab_report_html
 from app.utils.redis_service import cache_get, cache_set
 
 
@@ -573,7 +573,7 @@ class AnalyticsService:
         try:
             from app.tasks.analytics_tasks import generate_export
 
-            generate_export.delay(export.id)
+            generate_export.delay(export.id, hospital_id=hospital_id)
         except Exception:
             await self.process_export(export.id, hospital_id=hospital_id)
         return ExportReportResponse(
@@ -598,7 +598,7 @@ class AnalyticsService:
         try:
             from app.tasks.analytics_tasks import generate_export
 
-            generate_export.delay(export.id)
+            generate_export.delay(export.id, hospital_id=hospital_id)
         except Exception:
             await self.process_export(export.id, hospital_id=hospital_id)
         return ExportReportResponse(
@@ -617,7 +617,18 @@ class AnalyticsService:
             try:
                 filters_data = json.loads(export.filters)
                 if isinstance(filters_data, dict) and "hospital_id" in filters_data:
-                    hospital_id = filters_data["hospital_id"]
+                    raw_hid = filters_data["hospital_id"]
+                    if raw_hid is not None:
+                        hospital_id = int(raw_hid)
+            except Exception:
+                pass
+
+        if hospital_id is None and export.requested_by:
+            try:
+                from app.models.user_model import User
+                user = await self.db.get(User, export.requested_by)
+                if user and user.hospital_id:
+                    hospital_id = user.hospital_id
             except Exception:
                 pass
 
@@ -629,9 +640,38 @@ class AnalyticsService:
             if export.export_format == ReportExportFormat.EXCEL:
                 file_path = generate_excel_report(export.report_type, rows)
             else:
-                file_path = await generate_lab_report_html(
+                hospital = None
+                if hospital_id:
+                    from app.repositories.hospital_repository import HospitalRepository
+                    hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
+
+                hospital_name = (hospital.name or "").strip() if (hospital and hospital.name) else None
+                hospital_address = (hospital.address or "").strip() if (hospital and hospital.address) else None
+                hospital_phone = (hospital.phone or "").strip() if (hospital and hospital.phone) else None
+                hospital_email = (hospital.email or "").strip() if (hospital and hospital.email) else None
+                hospital_website = (hospital.website or "").strip() if (hospital and getattr(hospital, "website", None)) else None
+                hospital_logo = (
+                    getattr(hospital, "logo_path", None)
+                    or getattr(hospital, "logo", None)
+                    or getattr(hospital, "logo_url", None)
+                ) if hospital else None
+
+                report_title = f"{export.report_type.replace('_', ' ').title()} Analytics Report"
+
+                file_path = await generate_analytics_report_html(
                     f"RPT-{export.id}",
-                    {"title": export.report_type, "rows": rows},
+                    {
+                        "title": report_title,
+                        "report_type": export.report_type,
+                        "rows": rows,
+                        "hospital_name": hospital_name,
+                        "hospital_address": hospital_address,
+                        "hospital_phone": hospital_phone,
+                        "hospital_email": hospital_email,
+                        "hospital_website": hospital_website,
+                        "hospital_logo": hospital_logo,
+                        "generated_at": utc_now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    },
                 )
             export.status = ReportExportStatus.COMPLETED
             export.file_path = file_path

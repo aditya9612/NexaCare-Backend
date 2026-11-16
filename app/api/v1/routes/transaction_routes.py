@@ -60,6 +60,8 @@ async def export_transactions(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
     q: str | None = Query(None),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc"),
     _: User = Depends(require_permission("billing", "read")),
 ):
     data, media_type = await TransactionService(db).export_transactions(
@@ -70,6 +72,8 @@ async def export_transactions(
         start_date=start_date,
         end_date=end_date,
         q=q,
+        sort_by=sort_by,
+        sort_order=sort_order,
         current_user=current_user,
     )
     

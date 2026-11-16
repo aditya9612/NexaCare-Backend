@@ -109,7 +109,7 @@ class TransactionService:
             event_type = "REFUND_ISSUED" if is_refund else "PAYMENT_RECEIVED"
             ref_prefix = "REF" if is_refund else "PAY"
             desc_action = "Refund Issued" if is_refund else "Payment Received"
-            
+
             await TransactionHistoryService(self.db).create_event(
                 event_type=event_type,
                 reference_no=payment.transaction_ref or f"{ref_prefix}-{payment.id}",
@@ -184,7 +184,7 @@ class TransactionService:
         # Update corresponding transaction history entry
         from app.models.transaction_history_model import TransactionHistory
         from sqlalchemy import select
-        
+
         source_module = "refunds" if payment.is_refund else "payments"
         hist_res = await self.db.execute(
             select(TransactionHistory).where(
@@ -248,7 +248,7 @@ class TransactionService:
         # Soft delete corresponding transaction history entry
         from app.models.transaction_history_model import TransactionHistory
         from sqlalchemy import update
-        
+
         source_module = "refunds" if payment.is_refund else "payments"
         stmt = update(TransactionHistory).where(
             TransactionHistory.source_module == source_module,
@@ -308,33 +308,33 @@ class TransactionService:
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from sqlalchemy import select
         from app.models.billing_model import Billing
-        
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Transactions Bulk Import"
-        
+
         headers = [
             "Bill Number", "amount", "payment_method", "transaction_ref", "payment_date", "status", "is_refund", "refund_reason"
         ]
         ws.append(headers)
-        
+
         # Apply Header Styling
         ws.row_dimensions[1].height = 32
         ws.freeze_panes = "A2"
-        
+
         header_font = Font(name="Calibri", size=12, bold=True, color="000000")
         header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
         header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         thin_side = Side(style="thin", color="D3D3D3")
         header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-        
+
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_alignment
             cell.border = header_border
-            
+
         # Prefer an actual active/existing bill number from the database.
         # If no bill exists, leave the sample cell blank.
         stmt = select(Billing.bill_number).where(Billing.is_deleted == False)
@@ -343,7 +343,7 @@ class TransactionService:
         stmt = stmt.limit(1)
         res = await self.db.execute(stmt)
         bill_number = res.scalar_one_or_none()
-        
+
         # One valid sample row
         ws.append([
             bill_number if bill_number is not None else "",
@@ -355,7 +355,7 @@ class TransactionService:
             "false",
             ""
         ])
-        
+
         # Set custom column widths
         column_widths = {
             1: 22,  # Bill Number
@@ -370,10 +370,10 @@ class TransactionService:
         for col_idx, width in column_widths.items():
             col_letter = openpyxl.utils.get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = width
-            
+
         # Set AutoFilter covering A1:H2
         ws.auto_filter.ref = "A1:H2"
-        
+
         stream = BytesIO()
         wb.save(stream)
         stream.seek(0)
@@ -384,31 +384,31 @@ class TransactionService:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
-        
+
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
         ws = wb.active
-        
+
         header_row = next(ws.iter_rows(max_row=1, values_only=True), None)
         if not header_row:
             raise BadRequestException("The uploaded file is empty or has no headers.")
-            
+
         headers = [str(h).strip().lower() for h in header_row if h is not None]
         required_headers = {"bill number", "amount", "payment_method"}
         if not required_headers.issubset(set(headers)):
             raise BadRequestException("Missing required headers in the upload template.")
-            
+
         total_rows = 0
         created = 0
         failed = 0
         errors = []
-        
+
         seen_refs = set()
-        
+
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if all(cell is None for cell in row):
                 continue
-                
+
             total_rows += 1
             row_dict = {}
             for header, val in zip(headers, row):
@@ -416,18 +416,18 @@ class TransactionService:
                     row_dict[header] = None
                 else:
                     row_dict[header] = val
-                    
+
             try:
                 # 1. Bill Number parsing & resolution
                 bill_number_raw = row_dict.get("bill number")
                 if bill_number_raw is None:
                     raise BadRequestException("Bill Number is required.")
                 bill_number = str(bill_number_raw).strip()
-                
+
                 from app.models.billing_model import Billing
                 from app.core.constants import BillingStatus
                 from sqlalchemy import select
-                
+
                 stmt = select(Billing).where(Billing.bill_number == bill_number, Billing.is_deleted == False)
                 if hospital_id is not None:
                     stmt = stmt.where(Billing.hospital_id == hospital_id)
@@ -435,11 +435,11 @@ class TransactionService:
                 billing = res.scalar_one_or_none()
                 if not billing:
                     raise BadRequestException(f"Bill '{bill_number}' not found")
-                
+
                 # Allow transaction creation only when billing.status == BillingStatus.PAID
                 if billing.status != BillingStatus.PAID:
                     raise BadRequestException("Transactions can only be added to completed bills")
-                
+
                 billing_id = billing.id
 
                 # 2. amount parsing
@@ -569,7 +569,7 @@ class TransactionService:
                     "row": row_idx,
                     "error": str(e.error if hasattr(e, 'error') else str(e))
                 })
-                
+
         await self.db.flush()
         return {
             "total_rows": total_rows,
@@ -587,13 +587,15 @@ class TransactionService:
         start_date: date | None = None,
         end_date: date | None = None,
         q: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         current_user = None,
     ):
         hospital_id = resolve_tenant_id(current_user)
         from io import BytesIO
         from datetime import datetime, date
         from sqlalchemy import select
-        
+
         # Retrieve all active transactions matching filters
         payments = await self.repo.get_all_active(
             billing_id=billing_id,
@@ -602,72 +604,82 @@ class TransactionService:
             start_date=start_date,
             end_date=end_date,
             q=q,
+            sort_by=sort_by,
+            sort_order=sort_order,
             hospital_id=hospital_id,
         )
-        
-        # Load associated billing records for bill_number/patient lookup
+
+        # Load associated billing records and patients for bill_number/patient lookup
         from app.models.billing_model import Billing
         from app.models.patient_model import Patient
-        
-        b_stmt = select(Billing.id, Billing.bill_number, Billing.patient_id)
-        if hospital_id is not None:
-            b_stmt = b_stmt.where(Billing.hospital_id == hospital_id)
-        b_res = await self.db.execute(b_stmt)
-        billing_map = {row[0]: (row[1], row[2]) for row in b_res.all()}
-        
-        # Fetch patients names
-        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
-        if hospital_id is not None:
-            p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
-        p_res = await self.db.execute(p_stmt)
-        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
-        billing_map = {row[0]: (row[1], row[2]) for row in b_res.all()}
-        
-        # Fetch patients names
-        p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(Patient.is_deleted == False)
-        p_res = await self.db.execute(p_stmt)
-        patients_map = {row[0]: f"{row[1]} {row[2]}" for row in p_res.all()}
+
+        billing_ids = {p.billing_id for p in payments if p.billing_id}
+        billing_map = {}
+        patients_map = {}
+
+        if billing_ids:
+            b_stmt = select(Billing.id, Billing.bill_number, Billing.patient_id).where(
+                Billing.id.in_(billing_ids)
+            )
+            if hospital_id is not None:
+                b_stmt = b_stmt.where(Billing.hospital_id == hospital_id)
+            b_res = await self.db.execute(b_stmt)
+            billing_map = {row[0]: (row[1], row[2]) for row in b_res.all()}
+
+            patient_ids = {p_id for _, p_id in billing_map.values() if p_id}
+            if patient_ids:
+                p_stmt = select(Patient.id, Patient.first_name, Patient.last_name).where(
+                    Patient.id.in_(patient_ids),
+                    Patient.is_deleted == False
+                )
+                if hospital_id is not None:
+                    p_stmt = p_stmt.where(Patient.hospital_id == hospital_id)
+                p_res = await self.db.execute(p_stmt)
+                patients_map = {
+                    row[0]: f"{row[1] or ''} {row[2] or ''}".strip()
+                    for row in p_res.all()
+                }
 
         if format_type == "excel":
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            
+
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Transactions Report"
-            
+
             headers = [
-                "Sr. No.", "Bill Number", "patient_name", "amount", "payment_method",
-                "transaction_ref", "payment_date", "status", "is_refund", "refund_reason",
-                "created_at", "updated_at"
+                "Sr. No.", "Bill Number", "Patient Name", "Amount", "Payment Method",
+                "Transaction Ref", "Payment Date", "Status", "Is Refund", "Refund Reason",
+                "Created At", "Updated At"
             ]
             ws.append(headers)
-            
+
             # Apply Header Styling
             ws.row_dimensions[1].height = 32
             ws.freeze_panes = "A2"
-            
+
             header_font = Font(name="Calibri", size=12, bold=True, color="000000")
             header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
             header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             thin_side = Side(style="thin", color="D3D3D3")
             header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            
+
             for col_idx in range(1, len(headers) + 1):
                 cell = ws.cell(row=1, column=col_idx)
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = header_alignment
                 cell.border = header_border
-                
+
             for sr_no, p in enumerate(payments, start=1):
                 bill_number, p_id = billing_map.get(p.billing_id, ("", None))
                 pat_name = patients_map.get(p_id, "") if p_id else ""
-                
+
                 row = [
                     sr_no,
                     bill_number or "-",
-                    pat_name,
+                    pat_name or "-",
                     f"₹{p.amount:.2f}",
                     p.payment_method,
                     p.transaction_ref or "",
@@ -679,36 +691,36 @@ class TransactionService:
                     p.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.updated_at, datetime) else str(p.updated_at)
                 ]
                 ws.append(row)
-                
+
             # Set custom column widths
             column_widths = {
                 1: 8,   # Sr. No.
                 2: 22,  # Bill Number
-                3: 22,  # patient_name
-                4: 12,  # amount
-                5: 15,  # payment_method
-                6: 20,  # transaction_ref
-                7: 22,  # payment_date
-                8: 12,  # status
-                9: 10,  # is_refund
-                10: 25, # refund_reason
-                11: 22, # created_at
-                12: 22  # updated_at
+                3: 25,  # Patient Name
+                4: 15,  # Amount
+                5: 18,  # Payment Method
+                6: 22,  # Transaction Ref
+                7: 22,  # Payment Date
+                8: 15,  # Status
+                9: 12,  # Is Refund
+                10: 25, # Refund Reason
+                11: 22, # Created At
+                12: 22  # Updated At
             }
             for col_idx, width in column_widths.items():
                 col_letter = openpyxl.utils.get_column_letter(col_idx)
                 ws.column_dimensions[col_letter].width = width
-                
+
             # Set AutoFilter covering the complete header/data range
             last_col_letter = openpyxl.utils.get_column_letter(len(headers))
             total_rows = len(payments) + 1
             ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-            
+
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
             return stream, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            
+
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
@@ -717,24 +729,24 @@ class TransactionService:
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
             import os
-            
+
             font_path = os.path.abspath("app/static/fonts/DejaVuSans.ttf")
             if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames() and os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                
+
             default.DEFAULT_FONT["dejavusans"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-bold"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-oblique"] = "DejaVuSans"
             default.DEFAULT_FONT["dejavusans-boldoblique"] = "DejaVuSans"
-            
+
             env = Environment(loader=FileSystemLoader("app/templates"))
             template = env.get_template("transactions_export_template.html")
-            
+
             formatted_txns = []
             for p in payments:
                 bill_number, p_id = billing_map.get(p.billing_id, ("", None))
                 pat_name = patients_map.get(p_id, "") if p_id else ""
-                
+
                 formatted_txns.append({
                     "id": p.id,
                     "billing_id": p.billing_id,
@@ -750,12 +762,12 @@ class TransactionService:
                     "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at),
                     "updated_at": p.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.updated_at, datetime) else str(p.updated_at)
                 })
-                
+
             html_content = template.render(
                 transactions=formatted_txns,
                 generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
             )
-            
+
             pdf_data = html_to_pdf(html_content)
             return pdf_data, "application/pdf"
         else:

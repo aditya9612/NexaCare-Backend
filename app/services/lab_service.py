@@ -404,6 +404,86 @@ class LabService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch patient lab order notification: %s", notif_exc)
 
+        try:
+            is_urgent = str(order.priority or "").strip().lower() in ["urgent", "stat"]
+            if is_urgent and order.hospital_id is not None:
+                from app.models.role_model import Role
+                from app.models.staff_model import Staff
+                from app.models.user_model import User
+                from app.services.notification_service import NotificationService
+                from sqlalchemy import func, select
+
+                test_name = test.test_name if test and test.test_name else "Lab Test"
+                tech_users = []
+
+                if order.department_id is not None:
+                    # Strictly target active technicians belonging to the specified department
+                    tech_dept_stmt = (
+                        select(User)
+                        .join(Role, User.role_id == Role.id)
+                        .join(Staff, func.lower(Staff.email) == func.lower(User.email))
+                        .where(
+                            User.hospital_id == order.hospital_id,
+                            User.is_active.is_(True),
+                            func.lower(Role.name).in_(["lab technician", "lab_technician", "lab-technician", "labtech"]),
+                            Staff.department_id == order.department_id,
+                            Staff.hospital_id == order.hospital_id,
+                            Staff.status == 1,
+                            Staff.is_deleted.is_(False),
+                        )
+                    )
+                    dept_res = await self.db.execute(tech_dept_stmt)
+                    tech_users = list(dept_res.scalars().all())
+                else:
+                    # Test order without specific department: notify general hospital lab technicians
+                    tech_stmt = (
+                        select(User)
+                        .join(Role, User.role_id == Role.id)
+                        .join(Staff, func.lower(Staff.email) == func.lower(User.email))
+                        .where(
+                            User.hospital_id == order.hospital_id,
+                            User.is_active.is_(True),
+                            func.lower(Role.name).in_(["lab technician", "lab_technician", "lab-technician", "labtech"]),
+                            Staff.hospital_id == order.hospital_id,
+                            Staff.department_id.is_(None),
+                            Staff.status == 1,
+                            Staff.is_deleted.is_(False),
+                        )
+                    )
+                    res = await self.db.execute(tech_stmt)
+                    tech_users = list(res.scalars().all())
+
+                    if not tech_users:
+                        tech_fallback_stmt = (
+                            select(User)
+                            .join(Role, User.role_id == Role.id)
+                            .where(
+                                User.hospital_id == order.hospital_id,
+                                User.is_active.is_(True),
+                                func.lower(Role.name).in_(["lab technician", "lab_technician", "lab-technician", "labtech"]),
+                            )
+                        )
+                        fallback_res = await self.db.execute(tech_fallback_stmt)
+                        tech_users = list(fallback_res.scalars().all())
+
+                unique_techs = {u.id: u for u in tech_users}.values()
+                priority_label = (order.priority or "URGENT").strip().upper()
+                notif_service = NotificationService(self.db)
+                for tech in unique_techs:
+                    await notif_service.dispatch_notification(
+                        user_id=tech.id,
+                        title=f"{priority_label} Lab Order Created",
+                        message=f"{priority_label}: New lab order #{order.order_number} for {test_name} requires immediate processing.",
+                        notification_type="LAB_ORDER_STAT",
+                        reference_type="TEST_ORDER",
+                        reference_id=order.id,
+                        priority="HIGH",
+                        hospital_id=order.hospital_id,
+                    )
+        except Exception as stat_exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch STAT lab order notification: %s", stat_exc)
+
         return await self.get_order(order.id)
 
     async def list_orders(

@@ -851,6 +851,109 @@ class BedAllocationService:
         )
         await self.repo.create_activity_log(log)
 
+        try:
+            from app.models.doctor_model import Doctor
+            from app.models.appointment_model import Appointment
+            from app.models.user_model import User
+            from app.core.constants import AdmissionStatus
+            from app.services.notification_service import NotificationService
+            from sqlalchemy import select, desc
+
+            notif_service = NotificationService(self.db)
+            target_hospital_id = (
+                target_bed.hospital_id
+                or (source_bed.hospital_id if source_bed else None)
+                or getattr(patient, "hospital_id", None)
+            )
+
+            # Fail-closed tenant isolation:
+            # If hospital ownership cannot be established, skip all notifications
+            # and do not execute any unscoped database queries.
+            if target_hospital_id is not None:
+                # 1. Notify Patient if user account exists and belongs to this hospital
+                if patient.user_id:
+                    pat_query = select(User.is_active).where(
+                        User.id == patient.user_id,
+                        User.hospital_id == target_hospital_id,
+                    )
+                    pat_user_active = await self.db.scalar(pat_query)
+                    if pat_user_active:
+                        await notif_service.dispatch_notification(
+                            user_id=patient.user_id,
+                            title="Bed Transfer",
+                            message=f"You have been transferred from Bed {source_bed.name} ({source_room_name}) to Bed {target_bed.name} ({target_room_name}).",
+                            notification_type="PATIENT_BED_TRANSFER",
+                            reference_type="BED_ALLOCATION",
+                            reference_id=target_bed.id,
+                            priority="NORMAL",
+                            email=patient.email,
+                            phone=patient.phone,
+                            hospital_id=target_hospital_id,
+                        )
+
+                # 2. Resolve Attending Doctor strictly within the same hospital tenant (FAIL-CLOSED)
+                doc_user_id = None
+                app_stmt = (
+                    select(Appointment)
+                    .where(
+                        Appointment.patient_id == patient.id,
+                        Appointment.hospital_id == target_hospital_id,
+                        Appointment.admission_status == AdmissionStatus.ADMITTED,
+                    )
+                    .order_by(desc(Appointment.id))
+                    .limit(1)
+                )
+                app_res = await self.db.execute(app_stmt)
+                patient_app = app_res.scalar_one_or_none()
+
+                if not patient_app or not patient_app.doctor_id:
+                    app_stmt2 = (
+                        select(Appointment)
+                        .where(
+                            Appointment.patient_id == patient.id,
+                            Appointment.hospital_id == target_hospital_id,
+                        )
+                        .order_by(
+                            desc(Appointment.appointment_date),
+                            desc(Appointment.appointment_time),
+                            desc(Appointment.id),
+                        )
+                        .limit(1)
+                    )
+                    app_res2 = await self.db.execute(app_stmt2)
+                    patient_app = app_res2.scalar_one_or_none()
+
+                if patient_app and patient_app.doctor_id:
+                    doc_stmt = (
+                        select(Doctor.user_id)
+                        .join(User, Doctor.user_id == User.id)
+                        .where(
+                            Doctor.id == patient_app.doctor_id,
+                            Doctor.is_deleted.is_(False),
+                            User.is_active.is_(True),
+                            Doctor.hospital_id == target_hospital_id,
+                            User.hospital_id == target_hospital_id,
+                        )
+                    )
+                    doc_user_id = await self.db.scalar(doc_stmt)
+
+                if doc_user_id:
+                    await notif_service.dispatch_notification(
+                        user_id=doc_user_id,
+                        title="Patient Bed Transfer",
+                        message=f"Your patient {patient.first_name} {patient.last_name} has been transferred from Bed {source_bed.name} to Bed {target_bed.name} ({target_room_name}).",
+                        notification_type="PATIENT_BED_TRANSFER",
+                        reference_type="BED_ALLOCATION",
+                        reference_id=target_bed.id,
+                        priority="NORMAL",
+                        email=None,
+                        phone=None,
+                        hospital_id=target_hospital_id,
+                    )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch bed transfer notification: %s", exc)
+
         return await self.get_bed(target_bed.id, current_user=current_user)
 
     # Activity Log Services

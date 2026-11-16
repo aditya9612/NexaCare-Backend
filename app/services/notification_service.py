@@ -153,6 +153,33 @@ class NotificationService:
         )
         return {"message": "All notifications marked as read", "updated_count": count}
 
+    async def _get_user_pref(self, user_id: int, key: str, default: Any = True) -> Any:
+        """Read a user preference safely from Redis cache or database without auto-creating or committing."""
+        try:
+            from app.utils.redis_service import cache_get
+            import json
+            cached = await cache_get(f"settings:user:{user_id}")
+            if cached:
+                data = json.loads(cached)
+                val = data.get(key)
+                if val is not None:
+                    return val
+        except Exception:
+            pass
+
+        if self.db:
+            try:
+                from app.models.user_preference import UserPreference
+                col = getattr(UserPreference, key, None)
+                if col is not None:
+                    res = await self.db.scalar(select(col).where(UserPreference.user_id == user_id))
+                    if res is not None:
+                        return res
+            except Exception:
+                pass
+
+        return default
+
     # --- Centralized Multichannel Dispatch Engine ---
     async def dispatch_notification(
         self,
@@ -182,10 +209,8 @@ class NotificationService:
 
         # 1. Preference Check for Critical Emergency Alerts
         if notification_type == "PATIENT_EMERGENCY_ALERT":
-            from app.services.settings_service import SettingsService
-            settings_service = SettingsService(self.db)
-            prefs = await settings_service.get_user_preferences(user_id)
-            if not prefs.get("critical_emergency_alerts", True):
+            crit_pref = await self._get_user_pref(user_id, "critical_emergency_alerts", default=True)
+            if not crit_pref:
                 logger.info(
                     f"Skipping PATIENT_EMERGENCY_ALERT for user {user_id} "
                     f"due to critical_emergency_alerts preference."
@@ -216,7 +241,20 @@ class NotificationService:
             priority=priority,
             is_read=False,
         )
-        created = await self.repo.create(notification)
+
+        created = None
+        try:
+            if self.db and hasattr(self.db, "begin_nested"):
+                async with self.db.begin_nested():
+                    created = await self.repo.create(notification)
+            else:
+                created = await self.repo.create(notification)
+        except Exception as db_exc:
+            logger.warning(f"Failed to persist notification in database for user {user_id}: {db_exc}")
+            return None
+
+        if not created:
+            return None
 
         # 2. WebSocket Channel (Real-time Bell UI Push)
         try:
@@ -250,10 +288,8 @@ class NotificationService:
 
         # 5. Browser Push Channel (Async & Fault-Tolerant via Celery)
         try:
-            from app.services.settings_service import SettingsService
-            settings_service = SettingsService(self.db)
-            prefs = await settings_service.get_user_preferences(user_id)
-            if prefs.get("push_notifications", True):
+            should_push = await self._get_user_pref(user_id, "push_notifications", default=True)
+            if should_push:
                 from app.tasks.notification_tasks import send_browser_push_async
                 send_browser_push_async.apply_async(args=(user_id, title, message), retry=False)
         except Exception as e:

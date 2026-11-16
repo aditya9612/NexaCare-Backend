@@ -1030,10 +1030,41 @@ class BillingService:
                         reference_id=payment.id,
                         priority="NORMAL",
                     )
+
+            if billing.hospital_id is not None:
+                from app.models.role_model import Role
+                from app.models.user_model import User
+                from app.services.notification_service import NotificationService
+                from sqlalchemy import func, select
+
+                staff_query = (
+                    select(User)
+                    .join(Role, User.role_id == Role.id)
+                    .where(
+                        User.hospital_id == billing.hospital_id,
+                        User.is_active.is_(True),
+                        func.lower(Role.name).in_(["accountant", "hospital admin", "hospital_admin"]),
+                    )
+                )
+                res_staff = await self.db.execute(staff_query)
+                finance_admins = res_staff.scalars().all()
+                unique_staff = {u.id: u for u in finance_admins}.values()
+                notif_service = NotificationService(self.db)
+                for staff_user in unique_staff:
+                    await notif_service.dispatch_notification(
+                        user_id=staff_user.id,
+                        title="Refund Processed",
+                        message=f"A refund of ₹{payment.amount:,.2f} has been processed for bill {billing.bill_number}.",
+                        notification_type="REFUND_PROCESSED",
+                        reference_type="PAYMENT",
+                        reference_id=payment.id,
+                        priority="HIGH",
+                        hospital_id=billing.hospital_id,
+                    )
         except Exception as notif_exc:
             import logging
             logging.getLogger(__name__).warning(
-                "Failed to dispatch patient refund processed notification: %s",
+                "Failed to dispatch refund processed notification: %s",
                 notif_exc,
             )
 

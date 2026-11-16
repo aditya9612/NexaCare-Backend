@@ -492,8 +492,10 @@ class PharmacyService:
         try:
             from app.services.notification_service import NotificationService
             import logging
+            notif_service = NotificationService(self.db)
+
             if patient_exists and patient_exists.user_id:
-                await NotificationService(self.db).dispatch_notification(
+                await notif_service.dispatch_notification(
                     user_id=patient_exists.user_id,
                     title="Prescription Issued",
                     message=f"Your prescription {prescription.prescription_number} has been issued and is ready for review.",
@@ -504,6 +506,36 @@ class PharmacyService:
                     email=patient_exists.email,
                     phone=patient_exists.phone,
                 )
+
+            if prescription.hospital_id is not None:
+                from app.models.role_model import Role
+                from app.models.user_model import User
+                from sqlalchemy import func, select
+
+                pharm_stmt = (
+                    select(User)
+                    .join(Role, User.role_id == Role.id)
+                    .where(
+                        User.hospital_id == prescription.hospital_id,
+                        User.is_active.is_(True),
+                        func.lower(Role.name).in_(["pharmacist", "pharmacy"]),
+                    )
+                )
+                pharm_res = await self.db.execute(pharm_stmt)
+                pharmacists = pharm_res.scalars().all()
+                unique_pharmacists = {u.id: u for u in pharmacists}.values()
+                patient_display = f"{patient_exists.first_name} {patient_exists.last_name}".strip() if patient_exists else "Patient"
+                for pharm in unique_pharmacists:
+                    await notif_service.dispatch_notification(
+                        user_id=pharm.id,
+                        title="New Prescription Issued",
+                        message=f"New prescription #{prescription.prescription_number} issued for {patient_display}. Ready for dispensing.",
+                        notification_type="PHARMACY_NEW_PRESCRIPTION",
+                        reference_type="PRESCRIPTION",
+                        reference_id=prescription.id,
+                        priority="NORMAL",
+                        hospital_id=prescription.hospital_id,
+                    )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch prescription issued notification: %s", exc)

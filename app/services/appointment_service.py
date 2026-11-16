@@ -1787,6 +1787,42 @@ class AppointmentService:
             f"Admission recommended for {patient_name} (Admission No: {appointment.admission_number}). Please allocate a bed."
         )
 
+        try:
+            if appointment.hospital_id is not None:
+                from sqlalchemy import select, func
+                from app.models.user_model import User
+                from app.models.role_model import Role
+                from app.services.notification_service import NotificationService
+
+                recp_stmt = (
+                    select(User)
+                    .join(Role, User.role_id == Role.id)
+                    .where(
+                        User.hospital_id == appointment.hospital_id,
+                        User.is_active.is_(True),
+                        func.lower(Role.name).in_(["receptionist", "reception"]),
+                    )
+                )
+                recp_res = await self.db.execute(recp_stmt)
+                receptionists = recp_res.scalars().all()
+                unique_receptionists = {u.id: u for u in receptionists}.values()
+
+                notif_service = NotificationService(self.db)
+                for recp in unique_receptionists:
+                    await notif_service.dispatch_notification(
+                        user_id=recp.id,
+                        title="Admission Recommended",
+                        message=f"Admission recommended for {patient_name} (Admission No: {appointment.admission_number}). Please allocate a bed.",
+                        notification_type="ADMISSION_RECOMMENDED",
+                        reference_type="APPOINTMENT",
+                        reference_id=appointment.id,
+                        priority="HIGH",
+                        hospital_id=appointment.hospital_id,
+                    )
+        except Exception as recp_err:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch admission recommendation notification to receptionists: %s", recp_err)
+
         return AdmitRecommendationResponse(
             appointment_id=appointment.id,
             admission_number=appointment.admission_number,

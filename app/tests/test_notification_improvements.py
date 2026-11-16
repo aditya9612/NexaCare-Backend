@@ -1372,4 +1372,2103 @@ async def test_repeated_appointment_confirmation_suppressed_within_window():
     service.repo.create.assert_not_called()
 
 
+# ============================================================================
+# CANDIDATE 2: APPOINTMENT NO-SHOW NOTIFICATION TESTS
+# ============================================================================
+
+from app.schemas.appointment_schema import AppointmentUpdate
+from app.core.constants import AppointmentStatus
+
+
+@pytest.mark.asyncio
+async def test_confirmed_appointment_transition_to_no_show_notifies_patient():
+    """Verify that transition from Confirmed to NO_SHOW dispatches notification to patient."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", email="john@example.com", phone="12345", patient_code="P1", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=55,
+        appointment_number="APT-55",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=55, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+        assert appointment.queue_status == "SKIPPED"
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["user_id"] == 101
+        assert kwargs["appointment_number"] == "APT-55"
+        assert kwargs["appointment_id"] == 55
+        assert kwargs["hospital_id"] == 10
+        assert kwargs["patient_name"] == "John Doe"
+        assert kwargs["doctor_name"] == "Sarah Connor"
+
+
+@pytest.mark.asyncio
+async def test_no_show_walkin_patient_without_user_id_safely_skipped():
+    """Verify walk-in patient with user_id=None skips notification safely without errors."""
+    db = AsyncMock()
+    service = AppointmentService(db)
+
+    # Walk-in patient: user_id is None
+    patient = Patient(id=1, user_id=None, first_name="Walkin", last_name="Patient", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=56,
+        appointment_number="APT-56",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=56, data=update_req, user_id=1)
+
+        assert res is not None
+        # Notification must NOT be dispatched for walk-in patient
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_cross_tenant_patient_fails_closed():
+    """Verify patient from another hospital is not notified (fail-closed tenant isolation)."""
+    db = AsyncMock()
+    service = AppointmentService(db)
+
+    # Patient hospital (99) mismatches appointment hospital (10)
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=99)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=57,
+        appointment_number="APT-57",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=57, data=update_req, user_id=1)
+
+        assert res is not None
+        # Cross-tenant mismatch -> notification suppressed
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_notes_only_update_on_existing_no_show_does_not_retrigger():
+    """Verify updating notes on an already marked NO_SHOW appointment does not trigger notification."""
+    db = AsyncMock()
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    # Already NO_SHOW before update
+    appointment = Appointment(
+        id=58,
+        appointment_number="APT-58",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.NO_SHOW,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    # Notes-only update
+    update_req = AppointmentUpdate(notes="Patient called to explain absence")
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=58, data=update_req, user_id=1)
+
+        assert res is not None
+        # No status change -> notification must NOT be called
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_repeated_update_duplicate_suppression():
+    """Verify repeated NO_SHOW notification for same appointment within window is suppressed by dispatcher."""
+    db = AsyncMock()
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=None)
+    db.begin_nested = MagicMock(return_value=nested_cm)
+
+    service = NotificationService(db)
+    # Simulate exists_duplicate returning True
+    service.repo.exists_duplicate = AsyncMock(return_value=True)
+    service.repo.create = AsyncMock()
+
+    res = await service.notify_appointment_no_show(
+        user_id=101,
+        appointment_number="APT-59",
+        patient_name="John Doe",
+        doctor_name="Sarah Connor",
+        appointment_date="2026-11-20",
+        appointment_time="10:00:00",
+        hospital_id=10,
+        appointment_id=59,
+    )
+
+    # Must be suppressed (returns None)
+    assert res is None
+    service.repo.exists_duplicate.assert_called_once_with(
+        user_id=101,
+        notification_type="APPOINTMENT_NO_SHOW",
+        reference_type="APPOINTMENT",
+        reference_id=59,
+    )
+    service.repo.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_dispatch_failure_does_not_break_appointment_update():
+    """Verify notification dispatch failure does not abort the appointment update transaction."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=60,
+        appointment_number="APT-60",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch(
+        "app.services.notification_service.NotificationService.notify_appointment_no_show",
+        new_callable=AsyncMock,
+        side_effect=Exception("Redis/Socket connection timeout"),
+    ):
+        # Must not raise Exception
+        res = await service.update(appointment_id=60, data=update_req, user_id=1)
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+
+
+@pytest.mark.asyncio
+async def test_other_appointment_status_transition_does_not_trigger_no_show():
+    """Verify other status transitions (e.g. to CANCELLED) do NOT trigger NO_SHOW notification."""
+    db = AsyncMock()
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=61,
+        appointment_number="APT-61",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.PENDING,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.CANCELLED)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=61, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.CANCELLED
+        # NO_SHOW notification must NOT be called
+        mock_notify.assert_not_called()
+
+
+# ============================================================================
+# CANDIDATE 2 SECURITY: RECIPIENT USER TENANT ISOLATION TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_no_show_patient_user_hospital_mismatch_suppresses_notification():
+    """Verify that if patient.user_id belongs to a User with a different hospital_id, notification is suppressed."""
+    db = AsyncMock()
+    # db.scalar returns None because User.hospital_id != appointment.hospital_id
+    db.scalar = AsyncMock(return_value=None)
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=62,
+        appointment_number="APT-62",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=62, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_user_hospital_id_none_suppresses_notification():
+    """Verify that if User.hospital_id is None, notification is suppressed."""
+    db = AsyncMock()
+    # db.scalar returns None because User.hospital_id is None
+    db.scalar = AsyncMock(return_value=None)
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=63,
+        appointment_number="APT-63",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=63, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_user_inactive_suppresses_notification():
+    """Verify that if User.is_active is False, notification is suppressed."""
+    db = AsyncMock()
+    # User found in correct hospital, but is_active is False
+    db.scalar = AsyncMock(return_value=False)
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=101, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=64,
+        appointment_number="APT-64",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=64, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_user_does_not_exist_suppresses_notification():
+    """Verify that if User record does not exist for patient.user_id, notification is suppressed."""
+    db = AsyncMock()
+    # User does not exist -> db.scalar returns None
+    db.scalar = AsyncMock(return_value=None)
+    service = AppointmentService(db)
+
+    patient = Patient(id=1, user_id=99999, first_name="John", last_name="Doe", hospital_id=10)
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=65,
+        appointment_number="APT-65",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=65, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_valid_active_user_in_correct_hospital_notified():
+    """Verify that a valid active user in the same hospital receives notification."""
+    db = AsyncMock()
+    # User found in correct hospital and is_active is True
+    db.scalar = AsyncMock(return_value=True)
+    service = AppointmentService(db)
+
+    patient = Patient(
+        id=1,
+        user_id=101,
+        first_name="John",
+        last_name="Doe",
+        email="john@example.com",
+        phone="12345",
+        patient_code="P1",
+        hospital_id=10,
+    )
+    doctor = Doctor(id=2, first_name="Sarah", last_name="Connor", hospital_id=10)
+    appointment = Appointment(
+        id=66,
+        appointment_number="APT-66",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=10,
+        appointment_status=AppointmentStatus.CONFIRMED,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="10:00:00",
+        reminder_sent=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=appointment)
+    service.repo.update = AsyncMock(return_value=appointment)
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = AppointmentUpdate(appointment_status=AppointmentStatus.NO_SHOW)
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_no_show", new_callable=AsyncMock) as mock_notify:
+        res = await service.update(appointment_id=66, data=update_req, user_id=1)
+
+        assert res is not None
+        assert appointment.appointment_status == AppointmentStatus.NO_SHOW
+        mock_notify.assert_called_once_with(
+            user_id=101,
+            appointment_number="APT-66",
+            patient_name="John Doe",
+            doctor_name="Sarah Connor",
+            appointment_date="2026-11-20",
+            appointment_time="10:00:00",
+            email="john@example.com",
+            phone="12345",
+            patient_code="P1",
+            hospital_id=10,
+            appointment_id=66,
+        )
+
+
+# ============================================================================
+# WORKFLOW A: DISCHARGE BILLING CLEARED NOTIFICATION TESTS
+# ============================================================================
+
+from app.models.discharge_model import Discharge
+from app.services.discharge_service import DischargeService
+from app.schemas.discharge_schema import ClearBillingRequest
+
+
+@pytest.mark.asyncio
+async def test_discharge_billing_cleared_notifies_attending_doctor():
+    """Verify transition of billing_cleared to True dispatches notification to attending doctor."""
+    db = AsyncMock()
+    # doctor user is active in tenant
+    db.scalar = AsyncMock(return_value=True)
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=101,
+        discharge_number="DIS-101",
+        appointment_id=1,
+        patient_id=201,
+        doctor_id=301,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=501,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=301, user_id=401, first_name="Sarah", last_name="Connor", email="sarah@example.com", phone="12345", hospital_id=10)
+    patient = Patient(id=201, first_name="John", last_name="Doe", hospital_id=10)
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else None))
+
+    req = ClearBillingRequest(notes="All bills settled")
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=101, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        assert discharge.billing_cleared is True
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["user_id"] == 401
+        assert kwargs["discharge_number"] == "DIS-101"
+        assert kwargs["discharge_id"] == 101
+        assert kwargs["hospital_id"] == 10
+        assert kwargs["patient_name"] == "John Doe"
+        assert kwargs["doctor_name"] == "Sarah Connor"
+
+
+@pytest.mark.asyncio
+async def test_discharge_repeated_billing_clearance_does_not_retrigger():
+    """Verify repeated billing clearance call on already-cleared discharge does not re-trigger notification."""
+    db = AsyncMock()
+    service = DischargeService(db)
+
+    # Already billing_cleared = True
+    discharge = Discharge(
+        id=102,
+        discharge_number="DIS-102",
+        appointment_id=2,
+        patient_id=202,
+        doctor_id=302,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=True,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=502,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    req = ClearBillingRequest(notes="Re-check")
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=102, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discharge_missing_doctor_safely_skips():
+    """Verify missing doctor record safely skips notification without error."""
+    db = AsyncMock()
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=103,
+        discharge_number="DIS-103",
+        appointment_id=3,
+        patient_id=203,
+        doctor_id=303,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=503,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    # doctor does not exist
+    db.get = AsyncMock(return_value=None)
+
+    req = ClearBillingRequest(notes="Settled")
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=103, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discharge_cross_hospital_doctor_safely_skips():
+    """Verify doctor from another hospital (hospital mismatch) is suppressed."""
+    db = AsyncMock()
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=104,
+        discharge_number="DIS-104",
+        appointment_id=4,
+        patient_id=204,
+        doctor_id=304,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=504,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    # Doctor in hospital 99 != discharge hospital 10
+    doctor = Doctor(id=304, user_id=404, first_name="Sarah", last_name="Connor", hospital_id=99)
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    db.get = AsyncMock(return_value=doctor)
+
+    req = ClearBillingRequest()
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=104, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discharge_cross_hospital_user_safely_skips():
+    """Verify linked User in different hospital (hospital mismatch) is suppressed."""
+    db = AsyncMock()
+    # db.scalar returns None because User.hospital_id != discharge.hospital_id
+    db.scalar = AsyncMock(return_value=None)
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=105,
+        discharge_number="DIS-105",
+        appointment_id=5,
+        patient_id=205,
+        doctor_id=305,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=505,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=305, user_id=405, first_name="Sarah", last_name="Connor", hospital_id=10)
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    db.get = AsyncMock(return_value=doctor)
+
+    req = ClearBillingRequest()
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=105, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discharge_inactive_user_safely_skips():
+    """Verify inactive User account suppresses notification."""
+    db = AsyncMock()
+    # db.scalar returns False because User.is_active is False
+    db.scalar = AsyncMock(return_value=False)
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=106,
+        discharge_number="DIS-106",
+        appointment_id=6,
+        patient_id=206,
+        doctor_id=306,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=506,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=306, user_id=406, first_name="Sarah", last_name="Connor", hospital_id=10)
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    db.get = AsyncMock(return_value=doctor)
+
+    req = ClearBillingRequest()
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=106, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discharge_missing_user_safely_skips():
+    """Verify missing doctor user_id suppresses notification."""
+    db = AsyncMock()
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=107,
+        discharge_number="DIS-107",
+        appointment_id=7,
+        patient_id=207,
+        doctor_id=307,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=507,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    # Doctor has no portal user_id
+    doctor = Doctor(id=307, user_id=None, first_name="Sarah", last_name="Connor", hospital_id=10)
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    db.get = AsyncMock(return_value=doctor)
+
+    req = ClearBillingRequest()
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=107, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discharge_dispatch_failure_does_not_break_clear_billing():
+    """Verify dispatch exception does not raise or abort successful billing clearance."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=108,
+        discharge_number="DIS-108",
+        appointment_id=8,
+        patient_id=208,
+        doctor_id=308,
+        hospital_id=10,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=508,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=308, user_id=408, first_name="Sarah", last_name="Connor", hospital_id=10)
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    db.get = AsyncMock(return_value=doctor)
+
+    req = ClearBillingRequest()
+
+    with patch(
+        "app.services.notification_service.NotificationService.notify_discharge_billing_cleared",
+        new_callable=AsyncMock,
+        side_effect=Exception("Redis/Socket connection timeout"),
+    ):
+        res = await service.clear_billing(discharge_id=108, user_id=999, data=req, hospital_id=10)
+        assert res is not None
+        assert discharge.billing_cleared is True
+
+
+@pytest.mark.asyncio
+async def test_discharge_null_hospital_id_safely_skips():
+    """Verify discharge with null hospital_id safely skips notification (fail closed)."""
+    db = AsyncMock()
+    service = DischargeService(db)
+
+    discharge = Discharge(
+        id=109,
+        discharge_number="DIS-109",
+        appointment_id=9,
+        patient_id=209,
+        doctor_id=309,
+        hospital_id=None,
+        admission_date=datetime.now(timezone.utc),
+        discharge_date=datetime.now(timezone.utc),
+        diagnosis_at_discharge="Recovered",
+        treatment_summary="Routine care",
+        condition_on_discharge="Stable",
+        pharmacy_cleared=True,
+        billing_cleared=False,
+        payment_cleared=False,
+        doctor_approved=False,
+        discharge_status="PENDING_CLEARANCES",
+        final_bill_id=509,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    service.repo.get_by_id = AsyncMock(return_value=discharge)
+    service.repo.update = AsyncMock(return_value=discharge)
+    service.validate_applicable_ipd_bills_settled = AsyncMock(return_value=(True, []))
+    service._check_and_update_cleared_status = MagicMock()
+
+    req = ClearBillingRequest()
+
+    with patch("app.services.notification_service.NotificationService.notify_discharge_billing_cleared", new_callable=AsyncMock) as mock_notify:
+        res = await service.clear_billing(discharge_id=109, user_id=999, data=req, hospital_id=None)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+# ============================================================================
+# WORKFLOW B: LAB SAMPLE REJECTION NOTIFICATION TESTS
+# ============================================================================
+
+from app.models.lab_model import Sample, TestOrder, LabTest
+from app.services.lab_service import LabService
+from app.schemas.lab_schema import SampleUpdate
+from app.core.constants import SampleStatus
+
+
+@pytest.mark.asyncio
+async def test_sample_transition_to_rejected_notifies_doctor():
+    """Verify transition of sample to REJECTED notifies doctor when doctor is valid and active."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=201,
+        test_order_id=501,
+        sample_code="SMP-201",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        notes="Hemolyzed",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=501,
+        hospital_id=10,
+        order_number="ORD-501",
+        patient_id=301,
+        doctor_id=401,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=401, user_id=601, first_name="Sarah", last_name="Connor", email="sarah@example.com", phone="12345", hospital_id=10)
+    # Patient has no user account
+    patient = Patient(id=301, user_id=None, first_name="John", last_name="Doe", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=201, data=update_req, user_id=999)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["user_id"] == 601
+        assert kwargs["recipient_role"] == "DOCTOR"
+        assert kwargs["sample_code"] == "SMP-201"
+        assert kwargs["order_number"] == "ORD-501"
+        assert kwargs["hospital_id"] == 10
+        assert kwargs["sample_id"] == 201
+
+
+@pytest.mark.asyncio
+async def test_sample_transition_to_rejected_notifies_patient():
+    """Verify transition of sample to REJECTED notifies patient when patient is valid and active."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=202,
+        test_order_id=502,
+        sample_code="SMP-202",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        notes="Insufficient quantity",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    # Order has no doctor_id
+    order = TestOrder(
+        id=502,
+        hospital_id=10,
+        order_number="ORD-502",
+        patient_id=302,
+        doctor_id=None,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    patient = Patient(id=302, user_id=702, first_name="John", last_name="Doe", email="john@example.com", phone="54321", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="Lipid Profile", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: patient if model == Patient else (lab_test if model == LabTest else order))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=202, data=update_req, user_id=999)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["user_id"] == 702
+        assert kwargs["recipient_role"] == "PATIENT"
+        assert kwargs["sample_code"] == "SMP-202"
+        assert kwargs["order_number"] == "ORD-502"
+        assert kwargs["hospital_id"] == 10
+        assert kwargs["sample_id"] == 202
+
+
+@pytest.mark.asyncio
+async def test_sample_transition_to_rejected_both_recipients_notified():
+    """Verify both valid doctor and valid patient receive notification when both pass tenant checks."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=203,
+        test_order_id=503,
+        sample_code="SMP-203",
+        sample_type="blood",
+        status=SampleStatus.PENDING,
+        collected_at=None,
+        collection_date=datetime.now(timezone.utc),
+        notes="Clotted",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=503,
+        hospital_id=10,
+        order_number="ORD-503",
+        patient_id=303,
+        doctor_id=403,
+        lab_test_id=1,
+        status="ordered",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=403, user_id=603, first_name="Sarah", last_name="Connor", email="sarah@example.com", phone="12345", hospital_id=10)
+    patient = Patient(id=303, user_id=703, first_name="John", last_name="Doe", email="john@example.com", phone="54321", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=203, data=update_req, user_id=999)
+        assert res is not None
+
+        assert mock_notify.call_count == 2
+        notified_users = [c.kwargs["user_id"] for c in mock_notify.call_args_list]
+        assert 603 in notified_users
+        assert 703 in notified_users
+
+
+@pytest.mark.asyncio
+async def test_sample_normal_collection_does_not_trigger_rejected_notification():
+    """Verify normal collection (status -> COLLECTED) does NOT trigger rejection notification."""
+    db = AsyncMock()
+    service = LabService(db)
+
+    sample = Sample(
+        id=204,
+        test_order_id=504,
+        sample_code="SMP-204",
+        sample_type="blood",
+        status=SampleStatus.PENDING,
+        collected_at=None,
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = SampleUpdate(status=SampleStatus.COLLECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=204, data=update_req, user_id=999)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sample_already_rejected_notes_update_does_not_retrigger():
+    """Verify updating notes on an already rejected sample does not re-trigger rejection notification."""
+    db = AsyncMock()
+    service = LabService(db)
+
+    # Already REJECTED
+    sample = Sample(
+        id=205,
+        test_order_id=505,
+        sample_code="SMP-205",
+        sample_type="blood",
+        status=SampleStatus.REJECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        notes="Previously rejected",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = SampleUpdate(notes="Additional note added")
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=205, data=update_req, user_id=999)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sample_cross_hospital_doctor_is_suppressed():
+    """Verify cross-hospital doctor is not notified (suppressed by hospital mismatch)."""
+    db = AsyncMock()
+    # patient user active in hospital 10, doctor user in another hospital
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=206,
+        test_order_id=506,
+        sample_code="SMP-206",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=506,
+        hospital_id=10,
+        order_number="ORD-506",
+        patient_id=306,
+        doctor_id=406,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    # Doctor in hospital 99 != order hospital 10
+    doctor = Doctor(id=406, user_id=606, first_name="Sarah", last_name="Connor", hospital_id=99)
+    patient = Patient(id=306, user_id=706, first_name="John", last_name="Doe", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=206, data=update_req, user_id=999)
+        assert res is not None
+
+        # Doctor suppressed, patient still notified
+        assert mock_notify.call_count == 1
+        assert mock_notify.call_args.kwargs["user_id"] == 706
+
+
+@pytest.mark.asyncio
+async def test_sample_cross_hospital_patient_is_suppressed():
+    """Verify cross-hospital patient is not notified (suppressed by hospital mismatch)."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=207,
+        test_order_id=507,
+        sample_code="SMP-207",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=507,
+        hospital_id=10,
+        order_number="ORD-507",
+        patient_id=307,
+        doctor_id=407,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=407, user_id=607, first_name="Sarah", last_name="Connor", hospital_id=10)
+    # Patient in hospital 99 != order hospital 10
+    patient = Patient(id=307, user_id=707, first_name="John", last_name="Doe", hospital_id=99)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=207, data=update_req, user_id=999)
+        assert res is not None
+
+        # Patient suppressed, doctor still notified
+        assert mock_notify.call_count == 1
+        assert mock_notify.call_args.kwargs["user_id"] == 607
+
+
+@pytest.mark.asyncio
+async def test_sample_inactive_user_is_suppressed():
+    """Verify inactive User account suppresses notification for that recipient."""
+    db = AsyncMock()
+    # db.scalar returns False -> user is inactive
+    db.scalar = AsyncMock(return_value=False)
+    service = LabService(db)
+
+    sample = Sample(
+        id=208,
+        test_order_id=508,
+        sample_code="SMP-208",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=508,
+        hospital_id=10,
+        order_number="ORD-508",
+        patient_id=308,
+        doctor_id=408,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=408, user_id=608, first_name="Sarah", last_name="Connor", hospital_id=10)
+    patient = Patient(id=308, user_id=708, first_name="John", last_name="Doe", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=208, data=update_req, user_id=999)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sample_missing_user_safely_skips_only_that_recipient():
+    """Verify missing user account on patient does not suppress notification to valid doctor."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=209,
+        test_order_id=509,
+        sample_code="SMP-209",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=509,
+        hospital_id=10,
+        order_number="ORD-509",
+        patient_id=309,
+        doctor_id=409,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=409, user_id=609, first_name="Sarah", last_name="Connor", hospital_id=10)
+    # Patient user_id is None
+    patient = Patient(id=309, user_id=None, first_name="Walkin", last_name="Patient", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=209, data=update_req, user_id=999)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["user_id"] == 609
+
+
+@pytest.mark.asyncio
+async def test_sample_one_invalid_recipient_does_not_suppress_other_valid_recipient():
+    """Verify that doctor tenant mismatch does not suppress valid patient notification."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=210,
+        test_order_id=510,
+        sample_code="SMP-210",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=510,
+        hospital_id=10,
+        order_number="ORD-510",
+        patient_id=310,
+        doctor_id=410,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    # Doctor in hospital 99 != 10
+    doctor = Doctor(id=410, user_id=610, first_name="Sarah", last_name="Connor", hospital_id=99)
+    # Patient in hospital 10 == 10
+    patient = Patient(id=310, user_id=710, first_name="John", last_name="Doe", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_sample(sample_id=210, data=update_req, user_id=999)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["user_id"] == 710
+
+
+@pytest.mark.asyncio
+async def test_sample_dispatch_failure_one_recipient_does_not_suppress_other():
+    """Verify dispatch exception on doctor notification does not prevent patient notification."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=211,
+        test_order_id=511,
+        sample_code="SMP-211",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=511,
+        hospital_id=10,
+        order_number="ORD-511",
+        patient_id=311,
+        doctor_id=411,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=411, user_id=611, first_name="Sarah", last_name="Connor", hospital_id=10)
+    patient = Patient(id=311, user_id=711, first_name="John", last_name="Doe", hospital_id=10)
+    lab_test = LabTest(id=1, test_name="CBC", is_active=True)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else (patient if model == Patient else (lab_test if model == LabTest else order)))
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    # Doctor fails, patient succeeds
+    async def mock_dispatch_side_effect(*args, **kwargs):
+        if kwargs.get("recipient_role") == "DOCTOR":
+            raise Exception("Doctor socket failed")
+        return None
+
+    with patch("app.services.notification_service.NotificationService.notify_lab_sample_rejected", new_callable=AsyncMock, side_effect=mock_dispatch_side_effect) as mock_notify:
+        res = await service.update_sample(sample_id=211, data=update_req, user_id=999)
+        assert res is not None
+
+        # Both were attempted
+        assert mock_notify.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_sample_rejection_duplicate_suppression():
+    """Verify repeated rejection notification for same sample is suppressed by duplicate window."""
+    db = AsyncMock()
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=None)
+    db.begin_nested = MagicMock(return_value=nested_cm)
+
+    service = NotificationService(db)
+    service.repo.exists_duplicate = AsyncMock(return_value=True)
+    service.repo.create = AsyncMock()
+
+    res = await service.notify_lab_sample_rejected(
+        user_id=612,
+        sample_code="SMP-212",
+        order_number="ORD-512",
+        test_name="CBC",
+        recipient_role="DOCTOR",
+        sample_id=212,
+    )
+
+    assert res is None
+    service.repo.exists_duplicate.assert_called_once_with(
+        user_id=612,
+        notification_type="LAB_SAMPLE_REJECTED",
+        reference_type="SAMPLE",
+        reference_id=212,
+    )
+    service.repo.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sample_dispatch_failure_does_not_break_sample_update():
+    """Verify overall dispatch exception does not abort the sample update."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=True)
+    service = LabService(db)
+
+    sample = Sample(
+        id=213,
+        test_order_id=513,
+        sample_code="SMP-213",
+        sample_type="blood",
+        status=SampleStatus.COLLECTED,
+        collected_at=datetime.now(timezone.utc),
+        collection_date=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    order = TestOrder(
+        id=513,
+        hospital_id=10,
+        order_number="ORD-513",
+        patient_id=313,
+        doctor_id=413,
+        lab_test_id=1,
+        status="sample_collected",
+        priority="normal",
+        ordered_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    doctor = Doctor(id=413, user_id=613, first_name="Sarah", last_name="Connor", hospital_id=10)
+
+    service.sample_repo.get_by_id = AsyncMock(return_value=sample)
+    service.sample_repo.update = AsyncMock(return_value=sample)
+    service.order_repo.get_by_id = AsyncMock(return_value=order)
+    service.audit_repo.create = AsyncMock()
+
+    db.get = AsyncMock(side_effect=lambda model, ident: doctor if model == Doctor else order)
+
+    update_req = SampleUpdate(status=SampleStatus.REJECTED)
+
+    with patch(
+        "app.services.notification_service.NotificationService.notify_lab_sample_rejected",
+        new_callable=AsyncMock,
+        side_effect=Exception("Total connection failure"),
+    ):
+        res = await service.update_sample(sample_id=213, data=update_req, user_id=999)
+        assert res is not None
+        assert sample.status == SampleStatus.REJECTED
+
+
+# ============================================================================
+# WORKFLOW C: STAFF ONBOARDING WELCOME NOTIFICATION TESTS
+# ============================================================================
+
+from app.models.staff_model import Staff
+from app.services.staff_service import StaffService
+from app.schemas.staff_schema import StaffCreate, StaffUpdate
+
+
+@pytest.mark.asyncio
+async def test_staff_creation_triggers_welcome_notification():
+    """Verify creating a new staff member triggers welcome notification to the new staff user."""
+    db = AsyncMock()
+    # User is active in tenant
+    db.scalar = AsyncMock(side_effect=[None, None, True])  # check email, check phone, check user_active
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=MagicMock(name="Pathology"))
+
+    role = MagicMock(id=5, name="Receptionist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=701,
+        hospital_id=10,
+        full_name="Ramesh Sharma",
+        email="ramesh@example.com",
+        phone="9876543210",
+        staff_code="STF-701",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    data = StaffCreate(
+        full_name="Ramesh Sharma",
+        email="ramesh@example.com",
+        phone="9876543210",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-701",
+        department_id=1,
+        role_name="Receptionist",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["full_name"] == "Ramesh Sharma"
+        assert kwargs["staff_code"] == "STF-701"
+        assert kwargs["role_name"] == "Receptionist"
+        assert kwargs["hospital_id"] == 10
+        assert kwargs["staff_id"] == 701
+
+
+@pytest.mark.asyncio
+async def test_staff_creation_correct_new_user_receives_notification():
+    """Verify notification user_id matches the newly created User record."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[None, None, True])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=None)
+    role = MagicMock(id=6, name="Pharmacist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=702,
+        hospital_id=10,
+        full_name="Pooja Verma",
+        email="pooja@example.com",
+        phone="9876543211",
+        staff_code="STF-702",
+        department_id=2,
+        role_name="Pharmacist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    data = StaffCreate(
+        full_name="Pooja Verma",
+        email="pooja@example.com",
+        phone="9876543211",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-702",
+        department_id=2,
+        role_name="Pharmacist",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        # user_id must match newly created user id
+        assert mock_notify.call_args.kwargs["user_id"] == 801
+
+
+@pytest.mark.asyncio
+async def test_staff_creation_payload_details():
+    """Verify staff welcome notification carries correct department name and hospital_id."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[None, None, True])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    dept_mock = MagicMock()
+    dept_mock.name = "Accounts & Finance"
+    service.dept_repo.get_by_id = AsyncMock(return_value=dept_mock)
+    role = MagicMock(id=7, name="Accountant")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=703,
+        hospital_id=10,
+        full_name="Anil Kumar",
+        email="anil@example.com",
+        phone="9876543212",
+        staff_code="STF-703",
+        department_id=3,
+        role_name="Accountant",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    data = StaffCreate(
+        full_name="Anil Kumar",
+        email="anil@example.com",
+        phone="9876543212",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-703",
+        department_id=3,
+        role_name="Accountant",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["department_name"] == "Accounts & Finance"
+        assert kwargs["hospital_id"] == 10
+        assert kwargs["staff_id"] == 703
+
+
+@pytest.mark.asyncio
+async def test_staff_update_does_not_trigger_welcome_notification():
+    """Verify updating staff profile does not trigger welcome notification."""
+    db = AsyncMock()
+    service = StaffService(db)
+
+    staff = Staff(
+        id=704,
+        hospital_id=10,
+        full_name="Old Name",
+        email="staff4@example.com",
+        phone="9876543213",
+        staff_code="STF-704",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.get_by_id = AsyncMock(return_value=staff)
+    service.repo.update = AsyncMock(return_value=staff)
+    service.audit_repo.create = AsyncMock()
+
+    update_req = StaffUpdate(full_name="New Name")
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.update_staff(staff_id=704, data=update_req, current_user_id=999, current_user=current_user)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_staff_inactive_user_is_suppressed():
+    """Verify inactive User suppresses staff welcome notification."""
+    db = AsyncMock()
+    # db.scalar for user_active returns False
+    db.scalar = AsyncMock(side_effect=[None, None, False])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=None)
+    role = MagicMock(id=5, name="Receptionist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=705,
+        hospital_id=10,
+        full_name="Ramesh Sharma",
+        email="ramesh5@example.com",
+        phone="9876543214",
+        staff_code="STF-705",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    data = StaffCreate(
+        full_name="Ramesh Sharma",
+        email="ramesh5@example.com",
+        phone="9876543214",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-705",
+        department_id=1,
+        role_name="Receptionist",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_staff_cross_hospital_user_is_suppressed():
+    """Verify hospital mismatch between User and Staff suppresses notification."""
+    db = AsyncMock()
+    # db.scalar returns None because User.hospital_id != Staff.hospital_id
+    db.scalar = AsyncMock(side_effect=[None, None, None])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=None)
+    role = MagicMock(id=5, name="Receptionist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=706,
+        hospital_id=10,
+        full_name="Ramesh Sharma",
+        email="ramesh6@example.com",
+        phone="9876543215",
+        staff_code="STF-706",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    data = StaffCreate(
+        full_name="Ramesh Sharma",
+        email="ramesh6@example.com",
+        phone="9876543215",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-706",
+        department_id=1,
+        role_name="Receptionist",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_staff_missing_user_safely_skips():
+    """Verify null hospital_id suppresses welcome notification."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[None, None])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=None)
+    role = MagicMock(id=5, name="Receptionist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=707,
+        hospital_id=None,
+        full_name="Ramesh Sharma",
+        email="ramesh7@example.com",
+        phone="9876543216",
+        staff_code="STF-707",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=None, is_active=True)
+
+    data = StaffCreate(
+        full_name="Ramesh Sharma",
+        email="ramesh7@example.com",
+        phone="9876543216",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-707",
+        department_id=1,
+        role_name="Receptionist",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_staff_onboarding_welcome", new_callable=AsyncMock) as mock_notify:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_staff_welcome_notification_contains_zero_passwords_or_credentials():
+    """Verify staff welcome notification dispatcher call and helper payloads contain zero credential data."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[None, None, True])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=None)
+    role = MagicMock(id=5, name="Receptionist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=708,
+        hospital_id=10,
+        full_name="Secret Worker",
+        email="worker@example.com",
+        phone="9876543217",
+        staff_code="STF-708",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    raw_password = "Secret#Pass991!"
+    data = StaffCreate(
+        full_name="Secret Worker",
+        email="worker@example.com",
+        phone="9876543217",
+        password=raw_password,
+        staff_code="STF-708",
+        department_id=1,
+        role_name="Receptionist",
+    )
+
+    with patch("app.services.notification_service.NotificationService.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+
+        mock_dispatch.assert_called_once()
+        kwargs = mock_dispatch.call_args.kwargs
+
+        # CRITICAL CREDENTIAL AUDIT: Verify password is not leaked anywhere in payload
+        assert raw_password not in kwargs.get("title", "")
+        assert raw_password not in kwargs.get("message", "")
+        assert raw_password not in (kwargs.get("email_subject") or "")
+        assert raw_password not in (kwargs.get("email_html") or "")
+        assert "password" not in kwargs.get("message", "").lower()
+        assert "password" not in (kwargs.get("email_html") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_staff_dispatch_failure_does_not_break_staff_creation():
+    """Verify dispatch exception does not abort or raise from staff creation."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[None, None, True])
+    db.flush = AsyncMock()
+    def mock_add(obj):
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = 801
+    db.add = MagicMock(side_effect=mock_add)
+    service = StaffService(db)
+
+    service.repo.get_by_email = AsyncMock(return_value=None)
+    service.repo.get_by_staff_code = AsyncMock(return_value=None)
+    service._validate_department_and_role = AsyncMock()
+    service.dept_repo.get_by_id = AsyncMock(return_value=None)
+    role = MagicMock(id=5, name="Receptionist")
+    service.rbac_repo.get_role_by_name = AsyncMock(return_value=role)
+
+    created_staff = Staff(
+        id=709,
+        hospital_id=10,
+        full_name="Ramesh Sharma",
+        email="ramesh9@example.com",
+        phone="9876543218",
+        staff_code="STF-709",
+        department_id=1,
+        role_name="Receptionist",
+        status=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    service.repo.create = AsyncMock(return_value=created_staff)
+    service.repo.get_by_id = AsyncMock(return_value=created_staff)
+    service.audit_repo.create = AsyncMock()
+
+    current_user = User(id=999, hospital_id=10, is_active=True)
+
+    data = StaffCreate(
+        full_name="Ramesh Sharma",
+        email="ramesh9@example.com",
+        phone="9876543218",
+        password="Nexa#Sec9918!Staff",
+        staff_code="STF-709",
+        department_id=1,
+        role_name="Receptionist",
+    )
+
+    with patch(
+        "app.services.notification_service.NotificationService.notify_staff_onboarding_welcome",
+        new_callable=AsyncMock,
+        side_effect=Exception("Notification service timeout"),
+    ):
+        res = await service.create_staff(data=data, current_user_id=999, current_user=current_user)
+        assert res is not None
+        assert res.staff_code == "STF-709"
 

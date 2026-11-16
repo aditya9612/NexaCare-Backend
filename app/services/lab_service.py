@@ -794,6 +794,9 @@ class LabService:
                 "You cannot change the status of an already collected sample back to pending"
             )
 
+        old_status_norm = str(sample.status or "").strip().lower()
+        was_rejected = old_status_norm in ("rejected",)
+
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(sample, key, value)
 
@@ -809,7 +812,103 @@ class LabService:
             resource_id=str(sample.id),
         )
 
+        new_status_norm = str(sample.status or "").strip().lower()
+        if new_status_norm == "rejected" and not was_rejected:
+            await self._notify_sample_rejected_safely(sample)
+
         return SampleResponse.model_validate(sample)
+
+    async def _notify_sample_rejected_safely(self, sample: Sample):
+        try:
+            order = getattr(sample, "test_order", None)
+            if not order:
+                order = await self.order_repo.get_by_id(sample.test_order_id)
+            if not order:
+                order = await self.db.get(TestOrder, sample.test_order_id)
+            if not order or order.hospital_id is None:
+                return
+
+            from app.models.doctor_model import Doctor
+            from app.models.patient_model import Patient
+            from app.models.user_model import User
+            from app.models.lab_model import LabTest
+            from app.services.notification_service import NotificationService
+
+            notif_service = NotificationService(self.db)
+
+            # Resolve lab test name
+            lab_test = getattr(order, "lab_test", None)
+            if not lab_test and order.lab_test_id:
+                lab_test = await self.db.get(LabTest, order.lab_test_id)
+            test_name = lab_test.test_name if lab_test else "Laboratory Test"
+
+            # Resolve patient
+            patient = getattr(order, "patient", None)
+            if not patient and order.patient_id:
+                patient = await self.db.get(Patient, order.patient_id)
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+
+            # 1. Independent Recipient: Attending Doctor
+            try:
+                if order.doctor_id:
+                    doctor = getattr(order, "doctor", None)
+                    if not doctor:
+                        doctor = await self.db.get(Doctor, order.doctor_id)
+                    if doctor and doctor.user_id and doctor.hospital_id == order.hospital_id:
+                        doc_user_active = await self.db.scalar(
+                            select(User.is_active).where(
+                                User.id == doctor.user_id,
+                                User.hospital_id == order.hospital_id,
+                            )
+                        )
+                        if doc_user_active:
+                            await notif_service.notify_lab_sample_rejected(
+                                user_id=doctor.user_id,
+                                sample_code=sample.sample_code,
+                                order_number=order.order_number,
+                                test_name=test_name,
+                                recipient_role="DOCTOR",
+                                patient_name=patient_name,
+                                notes=sample.notes,
+                                hospital_id=order.hospital_id,
+                                sample_id=sample.id,
+                                email=doctor.email,
+                                phone=doctor.phone,
+                            )
+            except Exception as doc_exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to notify doctor of sample rejection: %s", doc_exc)
+
+            # 2. Independent Recipient: Patient
+            try:
+                if patient and patient.user_id and patient.hospital_id == order.hospital_id:
+                    pat_user_active = await self.db.scalar(
+                        select(User.is_active).where(
+                            User.id == patient.user_id,
+                            User.hospital_id == order.hospital_id,
+                        )
+                    )
+                    if pat_user_active:
+                        await notif_service.notify_lab_sample_rejected(
+                            user_id=patient.user_id,
+                            sample_code=sample.sample_code,
+                            order_number=order.order_number,
+                            test_name=test_name,
+                            recipient_role="PATIENT",
+                            patient_name=patient_name,
+                            notes=sample.notes,
+                            hospital_id=order.hospital_id,
+                            sample_id=sample.id,
+                            email=patient.email,
+                            phone=patient.phone,
+                        )
+            except Exception as pat_exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to notify patient of sample rejection: %s", pat_exc)
+
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch lab sample rejection notification: %s", exc)
 
     async def delete_sample(
         self,

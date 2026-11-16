@@ -148,7 +148,48 @@ class StaffService:
         # Create audit log
         await self.audit_repo.create("create", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
+        await self._notify_staff_onboarding_welcome_safely(staff, user)
+
         return StaffResponse.model_validate(staff)
+
+    async def _notify_staff_onboarding_welcome_safely(self, staff: Staff, user: User):
+        try:
+            if staff.hospital_id is None or user.hospital_id is None:
+                return
+
+            if staff.hospital_id != user.hospital_id:
+                return
+
+            user_active = await self.db.scalar(
+                select(User.is_active).where(
+                    User.id == user.id,
+                    User.hospital_id == staff.hospital_id,
+                )
+            )
+            if not user_active:
+                return
+
+            dept_name = None
+            if staff.department_id:
+                dept = await self.dept_repo.get_by_id(staff.department_id, hospital_id=staff.hospital_id)
+                if dept:
+                    dept_name = dept.name
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_staff_onboarding_welcome(
+                user_id=user.id,
+                full_name=staff.full_name,
+                staff_code=staff.staff_code,
+                role_name=staff.role_name,
+                department_name=dept_name,
+                hospital_id=staff.hospital_id,
+                staff_id=staff.id,
+                email=user.email,
+                phone=user.phone,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch staff welcome notification: %s", exc)
 
     async def list_staff(
         self,

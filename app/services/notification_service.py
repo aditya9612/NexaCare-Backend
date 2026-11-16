@@ -367,6 +367,201 @@ class NotificationService:
             hospital_id=hospital_id,
         )
 
+    # --- Appointment No-Show Notification Helper ---
+    async def notify_appointment_no_show(
+        self,
+        user_id: int,
+        appointment_number: str,
+        patient_name: str,
+        doctor_name: str,
+        appointment_date: str,
+        appointment_time: str,
+        email: str | None = None,
+        phone: str | None = None,
+        patient_code: str | None = None,
+        hospital_id: int | None = None,
+        appointment_id: int | None = None,
+    ) -> Notification | None:
+        title = "Appointment Missed"
+        message = f"Your appointment {appointment_number} with Dr. {doctor_name} on {appointment_date} at {appointment_time} was marked as missed. Please contact the hospital if you wish to reschedule."
+
+        patient_id_li = f"<li><strong>Patient ID:</strong> {patient_code}</li>\n            " if patient_code else ""
+        if patient_code:
+            message += f" Patient ID: {patient_code}"
+
+        email_html = f"""
+        <h3>Appointment Missed Notice</h3>
+        <p>Dear {patient_name},</p>
+        <p>Your appointment <strong>#{appointment_number}</strong> with Dr. {doctor_name} on {appointment_date} at {appointment_time} has been marked as missed (No-Show).</p>
+        <ul>
+            {patient_id_li}<li><strong>Doctor:</strong> Dr. {doctor_name}</li>
+            <li><strong>Date:</strong> {appointment_date}</li>
+            <li><strong>Time:</strong> {appointment_time}</li>
+        </ul>
+        <p>If you would like to reschedule your consultation, please visit the hospital portal or contact reception.</p>
+        <p>Thank you for choosing NexaCare HMS.</p>
+        """
+
+        return await self.dispatch_notification(
+            user_id=user_id,
+            title=title,
+            message=message,
+            notification_type="APPOINTMENT_NO_SHOW",
+            reference_type="APPOINTMENT",
+            reference_id=appointment_id,
+            priority="NORMAL",
+            email=email,
+            email_subject=f"Appointment Missed Notice #{appointment_number}",
+            email_html=email_html,
+            phone=phone,
+            hospital_id=hospital_id,
+        )
+
+    # --- Discharge Billing Cleared Notification Helper ---
+    async def notify_discharge_billing_cleared(
+        self,
+        user_id: int,
+        discharge_number: str,
+        patient_name: str,
+        doctor_name: str,
+        hospital_id: int | None = None,
+        discharge_id: int | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> Notification | None:
+        title = "Billing Clearance Completed"
+        message = f"Billing clearance for patient {patient_name} (Discharge #{discharge_number}) has been completed by the accounts department."
+
+        email_html = f"""
+        <h3>Discharge Billing Clearance Completed</h3>
+        <p>Dear Dr. {doctor_name},</p>
+        <p>This is to notify you that billing clearance for patient <strong>{patient_name}</strong> (Discharge <strong>#{discharge_number}</strong>) has been completed by the accounts department.</p>
+        <ul>
+            <li><strong>Discharge #:</strong> {discharge_number}</li>
+            <li><strong>Patient:</strong> {patient_name}</li>
+            <li><strong>Attending Doctor:</strong> Dr. {doctor_name}</li>
+            <li><strong>Billing Status:</strong> Cleared</li>
+        </ul>
+        <p>You may proceed with final medical discharge review when appropriate.</p>
+        <p>Thank you for choosing NexaCare HMS.</p>
+        """
+
+        return await self.dispatch_notification(
+            user_id=user_id,
+            title=title,
+            message=message,
+            notification_type="DISCHARGE_BILLING_CLEARED",
+            reference_type="DISCHARGE",
+            reference_id=discharge_id,
+            priority="NORMAL",
+            email=email,
+            email_subject=f"Discharge Billing Clearance Completed #{discharge_number}",
+            email_html=email_html,
+            phone=phone,
+            hospital_id=hospital_id,
+        )
+
+    # --- Lab Sample Rejection Notification Helper ---
+    async def notify_lab_sample_rejected(
+        self,
+        user_id: int,
+        sample_code: str,
+        order_number: str,
+        test_name: str,
+        recipient_role: str = "PATIENT",
+        patient_name: str | None = None,
+        notes: str | None = None,
+        hospital_id: int | None = None,
+        sample_id: int | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> Notification | None:
+        title = "Lab Sample Rejected"
+        if recipient_role.upper() == "DOCTOR":
+            pat_str = f" (Patient: {patient_name})" if patient_name else ""
+            message = f"Lab sample {sample_code} for order {order_number}{pat_str} was rejected. Please review or coordinate recollection."
+        else:
+            message = f"Your lab sample {sample_code} for order {order_number} was rejected by the laboratory. Please contact the hospital or lab reception for recollection."
+
+        notes_li = f"<li><strong>Notes/Reason:</strong> {notes}</li>\n            " if notes else ""
+
+        email_html = f"""
+        <h3>Lab Sample Rejection Notice</h3>
+        <p>Dear {"Doctor" if recipient_role.upper() == "DOCTOR" else (patient_name or "Patient")},</p>
+        <p>The laboratory has marked a sample as rejected for order <strong>#{order_number}</strong> ({test_name}).</p>
+        <ul>
+            <li><strong>Order #:</strong> {order_number}</li>
+            <li><strong>Test:</strong> {test_name}</li>
+            <li><strong>Sample Code:</strong> {sample_code}</li>
+            {notes_li}<li><strong>Status:</strong> Rejected</li>
+        </ul>
+        <p>{"Please coordinate recollection or review clinical requirements." if recipient_role.upper() == "DOCTOR" else "Please contact the hospital or laboratory reception to arrange sample recollection."}</p>
+        <p>Thank you for choosing NexaCare HMS.</p>
+        """
+
+        return await self.dispatch_notification(
+            user_id=user_id,
+            title=title,
+            message=message,
+            notification_type="LAB_SAMPLE_REJECTED",
+            reference_type="SAMPLE",
+            reference_id=sample_id,
+            priority="NORMAL",
+            email=email,
+            email_subject=f"Lab Sample Rejected #{order_number} ({sample_code})",
+            email_html=email_html,
+            phone=phone,
+            hospital_id=hospital_id,
+        )
+
+    # --- Staff Onboarding Welcome Notification Helper ---
+    async def notify_staff_onboarding_welcome(
+        self,
+        user_id: int,
+        full_name: str,
+        staff_code: str,
+        role_name: str,
+        department_name: str | None = None,
+        hospital_id: int | None = None,
+        staff_id: int | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> Notification | None:
+        title = "Welcome to NexaCare"
+        dept_str = f" in {department_name}" if department_name else ""
+        message = f"Welcome {full_name}! Your staff profile has been created with role {role_name}{dept_str} and Staff Code {staff_code}."
+
+        dept_li = f"<li><strong>Department:</strong> {department_name}</li>\n            " if department_name else ""
+
+        email_html = f"""
+        <h3>Welcome to NexaCare HMS</h3>
+        <p>Dear {full_name},</p>
+        <p>Welcome to the team! Your staff account has been successfully created in NexaCare HMS.</p>
+        <ul>
+            <li><strong>Full Name:</strong> {full_name}</li>
+            <li><strong>Staff Code:</strong> {staff_code}</li>
+            <li><strong>Role:</strong> {role_name}</li>
+            {dept_li}<li><strong>Account Status:</strong> Active</li>
+        </ul>
+        <p>You may log in to the NexaCare portal using your registered email address.</p>
+        <p>Welcome aboard!</p>
+        """
+
+        return await self.dispatch_notification(
+            user_id=user_id,
+            title=title,
+            message=message,
+            notification_type="STAFF_ONBOARDING_WELCOME",
+            reference_type="STAFF",
+            reference_id=staff_id,
+            priority="NORMAL",
+            email=email,
+            email_subject=f"Welcome to NexaCare — Profile Created ({staff_code})",
+            email_html=email_html,
+            phone=phone,
+            hospital_id=hospital_id,
+        )
+
     # --- Doctor Appointment Reminder Helper ---
     async def notify_doctor_appointment_reminder(
         self,

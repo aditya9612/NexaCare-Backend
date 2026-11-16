@@ -1136,6 +1136,8 @@ class DischargeService:
                 f"Cannot approve billing clearance. Outstanding unpaid bills remain for this admission: {'; '.join(details)}"
             )
 
+        was_billing_cleared = bool(discharge.billing_cleared)
+
         discharge.billing_cleared = True
         discharge.billing_cleared_by = user_id
         discharge.billing_cleared_at = utc_now()
@@ -1144,7 +1146,56 @@ class DischargeService:
 
         self._check_and_update_cleared_status(discharge)
         discharge = await self.repo.update(discharge)
+
+        if not was_billing_cleared and discharge.billing_cleared:
+            await self._notify_discharge_billing_cleared_safely(discharge)
+
         return DischargeResponse.model_validate(discharge)
+
+    async def _notify_discharge_billing_cleared_safely(self, discharge: Discharge):
+        try:
+            if discharge.hospital_id is None:
+                return
+
+            if not discharge.doctor_id:
+                return
+
+            doctor = await self.db.get(Doctor, discharge.doctor_id)
+            if not doctor or not doctor.user_id:
+                return
+
+            if doctor.hospital_id != discharge.hospital_id:
+                return
+
+            doc_user_active = await self.db.scalar(
+                select(User.is_active).where(
+                    User.id == doctor.user_id,
+                    User.hospital_id == discharge.hospital_id,
+                )
+            )
+            if not doc_user_active:
+                return
+
+            patient = await self.db.get(Patient, discharge.patient_id) if discharge.patient_id else None
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_discharge_billing_cleared(
+                user_id=doctor.user_id,
+                discharge_number=discharge.discharge_number,
+                patient_name=patient_name,
+                doctor_name=doctor_name,
+                hospital_id=discharge.hospital_id,
+                discharge_id=discharge.id,
+                email=doctor.email,
+                phone=doctor.phone,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to dispatch discharge billing cleared notification: %s", exc
+            )
 
     # --- STEP 6: PAYMENT ALLOCATION & STRICT OUTSTANDING CHECK ---
     async def clear_payment(

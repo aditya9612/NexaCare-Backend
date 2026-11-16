@@ -459,6 +459,58 @@ class AppointmentService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch appointment notification: %s", exc)
 
+    async def _notify_no_show_safely(self, appointment: Appointment):
+        try:
+            # Strict fail-closed tenant validation
+            if appointment.hospital_id is None:
+                return
+
+            patient = await self.patient_repo.get_by_id(appointment.patient_id)
+            if not patient or not patient.user_id:
+                # Walk-in patient without user portal account -> skip safely
+                return
+
+            if patient.hospital_id != appointment.hospital_id:
+                # Cross-tenant mismatch -> fail closed
+                return
+
+            from app.models.user_model import User
+            from sqlalchemy import select
+
+            pat_user_active = await self.db.scalar(
+                select(User.is_active).where(
+                    User.id == patient.user_id,
+                    User.hospital_id == appointment.hospital_id,
+                )
+            )
+            if not pat_user_active:
+                return
+
+            doctor = await self.doctor_repo.get_by_id(appointment.doctor_id) if appointment.doctor_id else None
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor"
+            email = patient.email if patient else None
+            phone = patient.phone if patient else None
+            patient_code = patient.patient_code if patient else None
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_appointment_no_show(
+                user_id=patient.user_id,
+                appointment_number=appointment.appointment_number,
+                patient_name=patient_name,
+                doctor_name=doctor_name,
+                appointment_date=str(appointment.appointment_date),
+                appointment_time=str(appointment.appointment_time),
+                email=email,
+                phone=phone,
+                patient_code=patient_code,
+                hospital_id=appointment.hospital_id,
+                appointment_id=appointment.id,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch appointment no-show notification: %s", exc)
+
     async def create(self, data: AppointmentCreate, user_id: int, current_user = None) -> AppointmentResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -540,6 +592,9 @@ class AppointmentService:
                 raise ForbiddenException("You do not have permission to access or update this appointment")
 
         update_data = data.model_dump(exclude_unset=True)
+
+        old_status_norm = str(appointment.appointment_status or "").strip().lower()
+        was_no_show = old_status_norm in ("no show", "no-show", "no_show")
 
         status_str = str(appointment.appointment_status).strip() if appointment.appointment_status else ""
         is_completed = (
@@ -651,6 +706,11 @@ class AppointmentService:
             appointment.queue_status = "SKIPPED"
         appointment = await self.repo.update(appointment)
         await self.audit_repo.create("update", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
+
+        new_status_norm = str(appointment.appointment_status or "").strip().lower()
+        if new_status_norm in ("no show", "no-show", "no_show") and not was_no_show:
+            await self._notify_no_show_safely(appointment)
+
         return AppointmentResponse.model_validate(appointment)
 
     async def delete(self, appointment_id: int, user_id: int, current_user = None) -> None:

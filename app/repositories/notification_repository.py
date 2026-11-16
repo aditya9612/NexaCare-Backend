@@ -1,3 +1,4 @@
+from datetime import timedelta
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -292,6 +293,7 @@ class NotificationRepository:
         notification_type: str,
         reference_type: str | None,
         reference_id: int | None,
+        window_seconds: int | None = 600,
     ) -> bool:
         if reference_type is None or reference_id is None:
             return False
@@ -303,6 +305,11 @@ class NotificationRepository:
             Notification.reference_id == reference_id,
             Notification.is_deleted.is_(False),
         )
+
+        if window_seconds is not None:
+            cutoff = utc_now() - timedelta(seconds=window_seconds)
+            query = query.where(Notification.created_at >= cutoff)
+
         count = await self.db.scalar(query)
         if isinstance(count, (int, float)):
             return count > 0

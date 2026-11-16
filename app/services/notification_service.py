@@ -331,6 +331,7 @@ class NotificationService:
         phone: str | None = None,
         patient_code: str | None = None,
         hospital_id: int | None = None,
+        appointment_id: int | None = None,
     ) -> Notification | None:
         title = "Appointment Confirmed"
         message = f"Your appointment {appointment_number} with Dr. {doctor_name} on {appointment_date} at {appointment_time} has been confirmed."
@@ -357,7 +358,7 @@ class NotificationService:
             message=message,
             notification_type="APPOINTMENT_CONFIRMATION",
             reference_type="APPOINTMENT",
-            reference_id=None,
+            reference_id=appointment_id,
             priority="NORMAL",
             email=email,
             email_subject=f"Appointment Confirmation #{appointment_number}",

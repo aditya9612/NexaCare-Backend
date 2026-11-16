@@ -1097,3 +1097,279 @@ async def test_user_preference_redis_cache_hit_avoids_db():
                 assert db.commit.call_count == 0
 
 
+# ============================================================================
+# CANDIDATE 6: NOTIFICATION DUPLICATE PREVENTION & WINDOW TESTS
+# ============================================================================
+
+from app.repositories.notification_repository import NotificationRepository
+from app.models.notification_model import Notification
+
+
+@pytest.mark.asyncio
+async def test_exists_duplicate_within_window_suppressed():
+    """Verify that a duplicate notification within the 600-second window is detected (suppressed)."""
+    db = AsyncMock()
+    # Mock count > 0 returned by database scalar
+    db.scalar = AsyncMock(return_value=1)
+
+    repo = NotificationRepository(db)
+    is_dup = await repo.exists_duplicate(
+        user_id=10,
+        notification_type="APPOINTMENT_CONFIRMATION",
+        reference_type="APPOINTMENT",
+        reference_id=50,
+        window_seconds=600,
+    )
+
+    assert is_dup is True
+    # Verify the query was executed against db.scalar
+    assert db.scalar.call_count == 1
+    query_arg = db.scalar.call_args[0][0]
+    compiled_sql = str(query_arg)
+    assert "notifications.created_at >=" in compiled_sql
+
+
+@pytest.mark.asyncio
+async def test_exists_duplicate_older_than_window_allowed():
+    """Verify that an existing notification older than 600 seconds is excluded by the actual cutoff."""
+    from datetime import timedelta
+
+    fixed_now = datetime(2026, 11, 16, 12, 0, 0)
+    expected_cutoff = fixed_now - timedelta(seconds=600)
+
+    # Notification created 650 seconds ago (older than the 600-second window)
+    existing_notification = Notification(
+        id=1,
+        user_id=10,
+        notification_type="APPOINTMENT_CONFIRMATION",
+        reference_type="APPOINTMENT",
+        reference_id=50,
+        created_at=fixed_now - timedelta(seconds=650),
+        is_deleted=False,
+    )
+
+    db = AsyncMock()
+
+    def evaluate_query(query):
+        compiled = query.compile()
+        params = compiled.params
+        cutoff_param = next(v for k, v in params.items() if k.startswith("created_at"))
+
+        # Verify the cutoff matches fixed_now - 600s exactly
+        assert cutoff_param == expected_cutoff
+        assert params["user_id_1"] == 10
+        assert params["notification_type_1"] == "APPOINTMENT_CONFIRMATION"
+        assert params["reference_type_1"] == "APPOINTMENT"
+        assert params["reference_id_1"] == 50
+
+        # Evaluate the filter condition: Notification.created_at >= cutoff
+        if (
+            existing_notification.user_id == params["user_id_1"]
+            and existing_notification.notification_type == params["notification_type_1"]
+            and existing_notification.reference_type == params["reference_type_1"]
+            and existing_notification.reference_id == params["reference_id_1"]
+            and not existing_notification.is_deleted
+            and existing_notification.created_at >= cutoff_param
+        ):
+            return 1
+        return 0
+
+    db.scalar = AsyncMock(side_effect=evaluate_query)
+    repo = NotificationRepository(db)
+
+    with patch("app.repositories.notification_repository.utc_now", return_value=fixed_now):
+        # 1. 650s old record: older than cutoff -> excluded -> allowed (False)
+        is_dup_older = await repo.exists_duplicate(
+            user_id=10,
+            notification_type="APPOINTMENT_CONFIRMATION",
+            reference_type="APPOINTMENT",
+            reference_id=50,
+            window_seconds=600,
+        )
+        assert is_dup_older is False
+        assert db.scalar.call_count == 1
+
+        # 2. 550s old record: within cutoff -> included -> suppressed (True)
+        existing_notification.created_at = fixed_now - timedelta(seconds=550)
+        is_dup_recent = await repo.exists_duplicate(
+            user_id=10,
+            notification_type="APPOINTMENT_CONFIRMATION",
+            reference_type="APPOINTMENT",
+            reference_id=50,
+            window_seconds=600,
+        )
+        assert is_dup_recent is True
+        assert db.scalar.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_exists_duplicate_custom_and_none_window_compatibility():
+    """Verify window_seconds=None evaluates without time filter and custom window applies correct filter."""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=1)
+
+    repo = NotificationRepository(db)
+
+    # 1. window_seconds=None (checks all time)
+    is_dup_all_time = await repo.exists_duplicate(
+        user_id=10,
+        notification_type="APPOINTMENT_CONFIRMATION",
+        reference_type="APPOINTMENT",
+        reference_id=50,
+        window_seconds=None,
+    )
+    assert is_dup_all_time is True
+    query_all_time = db.scalar.call_args[0][0]
+    assert "notifications.created_at >=" not in str(query_all_time)
+
+    # 2. Default parameter (omitted window_seconds defaults to 600)
+    await repo.exists_duplicate(
+        user_id=10,
+        notification_type="APPOINTMENT_CONFIRMATION",
+        reference_type="APPOINTMENT",
+        reference_id=50,
+    )
+    query_default = db.scalar.call_args[0][0]
+    assert "notifications.created_at >=" in str(query_default)
+
+
+@pytest.mark.asyncio
+async def test_exists_duplicate_none_reference_returns_false():
+    """Verify that None reference_type or reference_id immediately returns False without hitting DB."""
+    db = AsyncMock()
+    repo = NotificationRepository(db)
+
+    assert await repo.exists_duplicate(10, "TYPE", None, 50) is False
+    assert await repo.exists_duplicate(10, "TYPE", "REF", None) is False
+    assert await repo.exists_duplicate(10, "TYPE", None, None) is False
+    assert db.scalar.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_notify_appointment_confirmation_passes_appointment_id():
+    """Verify NotificationService.notify_appointment_confirmation forwards appointment_id as reference_id."""
+    db = AsyncMock()
+    service = NotificationService(db)
+
+    with patch.object(service, "dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
+        mock_dispatch.return_value = MagicMock()
+
+        await service.notify_appointment_confirmation(
+            user_id=101,
+            appointment_number="APT-2026-001",
+            patient_name="Alice Smith",
+            doctor_name="Dr. House",
+            appointment_date="2026-11-20",
+            appointment_time="10:00:00",
+            email="alice@example.com",
+            phone="9876543210",
+            patient_code="PAT-001",
+            hospital_id=5,
+            appointment_id=42,
+        )
+
+        mock_dispatch.assert_called_once()
+        kwargs = mock_dispatch.call_args.kwargs
+        assert kwargs["reference_type"] == "APPOINTMENT"
+        assert kwargs["reference_id"] == 42
+        assert kwargs["hospital_id"] == 5
+        assert kwargs["user_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_notify_appointment_confirmation_omitted_appointment_id_defaults_none():
+    """Verify backward compatibility: omitting appointment_id forwards reference_id=None."""
+    db = AsyncMock()
+    service = NotificationService(db)
+
+    with patch.object(service, "dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
+        mock_dispatch.return_value = MagicMock()
+
+        await service.notify_appointment_confirmation(
+            user_id=101,
+            appointment_number="APT-2026-001",
+            patient_name="Alice Smith",
+            doctor_name="Dr. House",
+            appointment_date="2026-11-20",
+            appointment_time="10:00:00",
+        )
+
+        mock_dispatch.assert_called_once()
+        kwargs = mock_dispatch.call_args.kwargs
+        assert kwargs["reference_type"] == "APPOINTMENT"
+        assert kwargs["reference_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_appointment_service_notify_safely_passes_appointment_id():
+    """Verify AppointmentService._notify_confirmation_safely wires appointment.id to notify_appointment_confirmation."""
+    db = AsyncMock()
+    service = AppointmentService(db)
+
+    # Mock repos
+    patient = Patient(id=1, user_id=101, first_name="Alice", last_name="Smith", email="alice@test.com", phone="12345", patient_code="P1")
+    doctor = Doctor(id=2, first_name="Gregory", last_name="House")
+
+    service.patient_repo = AsyncMock()
+    service.patient_repo.get_by_id = AsyncMock(return_value=patient)
+    service.doctor_repo = AsyncMock()
+    service.doctor_repo.get_by_id = AsyncMock(return_value=doctor)
+
+    appointment = Appointment(
+        id=77,
+        appointment_number="APT-77",
+        patient_id=1,
+        doctor_id=2,
+        hospital_id=5,
+        appointment_date=date(2026, 11, 20),
+        appointment_time="14:30:00",
+    )
+
+    with patch("app.services.notification_service.NotificationService.notify_appointment_confirmation", new_callable=AsyncMock) as mock_notify:
+        await service._notify_confirmation_safely(appointment, target_user_id=101)
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["appointment_id"] == 77
+        assert kwargs["user_id"] == 101
+        assert kwargs["hospital_id"] == 5
+        assert kwargs["appointment_number"] == "APT-77"
+
+
+@pytest.mark.asyncio
+async def test_repeated_appointment_confirmation_suppressed_within_window():
+    """Verify that dispatch_notification suppresses repeated appointment confirmations when duplicate exists in window."""
+    db = AsyncMock()
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=None)
+    db.begin_nested = MagicMock(return_value=nested_cm)
+
+    service = NotificationService(db)
+    # Simulate exists_duplicate returning True (i.e. notification sent within past 600s)
+    service.repo.exists_duplicate = AsyncMock(return_value=True)
+    service.repo.create = AsyncMock()
+
+    result = await service.dispatch_notification(
+        user_id=101,
+        title="Appointment Confirmed",
+        message="Your appointment has been confirmed.",
+        notification_type="APPOINTMENT_CONFIRMATION",
+        reference_type="APPOINTMENT",
+        reference_id=88,
+        hospital_id=5,
+    )
+
+    # Must be suppressed (returns None)
+    assert result is None
+    service.repo.exists_duplicate.assert_called_once_with(
+        user_id=101,
+        notification_type="APPOINTMENT_CONFIRMATION",
+        reference_type="APPOINTMENT",
+        reference_id=88,
+    )
+    # Repo create must NOT be called
+    service.repo.create.assert_not_called()
+
+
+

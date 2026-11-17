@@ -96,7 +96,12 @@ async def mark_notification_as_read(
     current_user: CurrentUser,
 ) -> APIResponse[NotificationResponse]:
     """Mark a specific notification as read."""
-    updated = await NotificationService(db).mark_as_read(notification_id, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    updated = await NotificationService(db).mark_as_read(
+        notification_id=notification_id,
+        user_id=current_user.id,
+        hospital_id=hospital_id,
+    )
     return APIResponse(message="Notification marked as read", data=updated)
 
 

@@ -121,7 +121,12 @@ class NotificationService:
             is_hospital_admin=is_hospital_admin,
         )
 
-    async def mark_as_read(self, notification_id: int, user_id: int) -> NotificationResponse:
+    async def mark_as_read(
+        self,
+        notification_id: int,
+        user_id: int,
+        hospital_id: int | None = None,
+    ) -> NotificationResponse:
         if not self.repo:
             raise ValueError("Database session required for NotificationService DB methods")
 
@@ -132,7 +137,14 @@ class NotificationService:
         if notification.user_id != user_id:
             raise ForbiddenException("You can only access and update your own notifications")
 
-        updated = await self.repo.mark_as_read(notification_id, user_id)
+        if (
+            hospital_id is not None
+            and notification.hospital_id is not None
+            and notification.hospital_id != hospital_id
+        ):
+            raise ForbiddenException("Access denied: Notification belongs to another hospital tenant")
+
+        updated = await self.repo.mark_as_read(notification_id, user_id, hospital_id=hospital_id)
         return NotificationResponse.model_validate(updated)
 
     async def mark_all_as_read(

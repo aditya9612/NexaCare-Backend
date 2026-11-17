@@ -172,7 +172,7 @@ class NotificationRepository:
         if category is not None:
             query = self._apply_category_filter(query, category)
 
-        query = query.order_by(Notification.created_at.desc()).offset(skip).limit(limit)
+        query = query.order_by(Notification.created_at.desc(), Notification.id.desc()).offset(skip).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -233,9 +233,21 @@ class NotificationRepository:
         result = await self.db.execute(query)
         return result.scalar() or 0
 
-    async def mark_as_read(self, notification_id: int, user_id: int) -> Notification | None:
+    async def mark_as_read(
+        self,
+        notification_id: int,
+        user_id: int,
+        hospital_id: int | None = None,
+    ) -> Notification | None:
         notification = await self.get_by_id(notification_id)
         if not notification or notification.user_id != user_id:
+            return None
+
+        if (
+            hospital_id is not None
+            and notification.hospital_id is not None
+            and notification.hospital_id != hospital_id
+        ):
             return None
 
         notification.is_read = True
@@ -251,38 +263,21 @@ class NotificationRepository:
         is_super_admin: bool = False,
         is_hospital_admin: bool = False,
     ) -> int:
-        if is_super_admin and hospital_id is not None:
-            stmt = (
-                update(Notification)
-                .where(
+        stmt = (
+            update(Notification)
+            .where(
+                Notification.user_id == user_id,
+                Notification.is_read.is_(False),
+                Notification.is_deleted.is_(False),
+            )
+            .values(is_read=True, updated_at=utc_now())
+        )
+        if hospital_id is not None:
+            stmt = stmt.where(
+                or_(
                     Notification.hospital_id == hospital_id,
-                    Notification.is_read.is_(False),
-                    Notification.is_deleted.is_(False),
+                    Notification.hospital_id.is_(None),
                 )
-                .values(is_read=True, updated_at=utc_now())
-            )
-        elif is_hospital_admin and hospital_id is not None:
-            stmt = (
-                update(Notification)
-                .where(
-                    or_(
-                        Notification.hospital_id == hospital_id,
-                        Notification.user_id == user_id,
-                    ),
-                    Notification.is_read.is_(False),
-                    Notification.is_deleted.is_(False),
-                )
-                .values(is_read=True, updated_at=utc_now())
-            )
-        else:
-            stmt = (
-                update(Notification)
-                .where(
-                    Notification.user_id == user_id,
-                    Notification.is_read.is_(False),
-                    Notification.is_deleted.is_(False),
-                )
-                .values(is_read=True, updated_at=utc_now())
             )
         result = await self.db.execute(stmt)
         return result.rowcount

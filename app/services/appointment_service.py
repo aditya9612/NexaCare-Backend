@@ -178,6 +178,7 @@ class AppointmentService:
         triage_level: int | None = None,
         disposition: str | None = None,
         search: str | None = None,
+        exclude_active_discharges: bool = False,
         current_user = None,
         x_hospital_id: int | None = None,
     ):
@@ -261,6 +262,7 @@ class AppointmentService:
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
             search=search, hospital_id=hospital_id,
+            exclude_active_discharges=exclude_active_discharges,
         )
         total = await self.repo.count_all(
             patient_id=effective_patient_id, doctor_id=doctor_id,
@@ -269,6 +271,7 @@ class AppointmentService:
             appointment_type=appointment_type, booking_source=source,
             admission_status=admission_status, triage_level=triage_level, disposition=disposition,
             search=search, hospital_id=hospital_id,
+            exclude_active_discharges=exclude_active_discharges,
         )
 
         # Determine effective date boundaries for dashboard status counts:

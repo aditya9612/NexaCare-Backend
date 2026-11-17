@@ -950,9 +950,10 @@ class BedAllocationService:
         room_id: Optional[int] = None,
         bed_type: Optional[str] = None,
         current_user: Any | None = None,
+        x_hospital_id: Optional[int] = None,
     ) -> List[BedExportResponse]:
         from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
+        hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
         beds = await self.repo.list_beds(
             status=status,
             bed_type=bed_type,
@@ -1014,9 +1015,11 @@ class BedAllocationService:
         room_id: Optional[int] = None,
         bed_type: Optional[str] = None,
         current_user: Any | None = None,
+        x_hospital_id: Optional[int] = None,
     ) -> str:
         import csv
         import io
+        from app.utils.csv_security import sanitize_csv_cell
 
         items = await self.export_bed_data(
             floor_id=floor_id,
@@ -1024,6 +1027,7 @@ class BedAllocationService:
             room_id=room_id,
             bed_type=bed_type,
             current_user=current_user,
+            x_hospital_id=x_hospital_id,
         )
         output = io.StringIO()
         writer = csv.writer(output)
@@ -1046,17 +1050,17 @@ class BedAllocationService:
         for item in items:
             adm_str = item.admission_date.strftime("%Y-%m-%d %H:%M:%S") if item.admission_date else ""
             writer.writerow([
-                item.floor,
-                item.room_number,
-                item.room_type,
-                item.bed_id,
-                item.bed_name or "",
-                item.bed_type,
-                item.status,
-                item.patient_id or "",
-                item.patient_name or "",
-                item.disease or "",
-                adm_str,
+                sanitize_csv_cell(item.floor),
+                sanitize_csv_cell(item.room_number),
+                sanitize_csv_cell(item.room_type),
+                sanitize_csv_cell(item.bed_id),
+                sanitize_csv_cell(item.bed_name or ""),
+                sanitize_csv_cell(item.bed_type),
+                sanitize_csv_cell(item.status),
+                sanitize_csv_cell(item.patient_id or ""),
+                sanitize_csv_cell(item.patient_name or ""),
+                sanitize_csv_cell(item.disease or ""),
+                sanitize_csv_cell(adm_str),
             ])
 
         return output.getvalue()
@@ -1068,11 +1072,17 @@ class BedAllocationService:
         room_id: Optional[int] = None,
         bed_type: Optional[str] = None,
         current_user: Any | None = None,
+        x_hospital_id: Optional[int] = None,
     ) -> io.BytesIO:
         import io
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+        from app.core.dependencies import resolve_tenant_id
+
+        hosp_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hosp_id)
 
         items = await self.export_bed_data(
             floor_id=floor_id,
@@ -1080,6 +1090,7 @@ class BedAllocationService:
             room_id=room_id,
             bed_type=bed_type,
             current_user=current_user,
+            x_hospital_id=x_hospital_id,
         )
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -1099,52 +1110,26 @@ class BedAllocationService:
             "Admission Date",
         ]
 
-        ws.append(headers)
-
-        header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-        header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-        header_align = Alignment(horizontal="center", vertical="center")
-        thin_border = Border(
-            left=Side(style="thin", color="CBD5E1"),
-            right=Side(style="thin", color="CBD5E1"),
-            top=Side(style="thin", color="CBD5E1"),
-            bottom=Side(style="thin", color="CBD5E1"),
-        )
-
-        for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = header_align
-            cell.border = thin_border
+        hdr_row = apply_excel_hospital_header(ws, branding, "Bed Allocation Report", total_records=len(items))
+        style_excel_header_row(ws, headers, header_row_idx=hdr_row)
 
         for item in items:
             adm_str = item.admission_date.strftime("%Y-%m-%d %H:%M") if item.admission_date else "-"
             ws.append([
-                item.floor,
-                item.room_number,
-                item.room_type,
-                item.bed_id,
-                item.bed_name or "-",
-                item.bed_type,
-                item.status,
-                item.patient_id or "-",
-                item.patient_name or "-",
-                item.disease or "-",
-                adm_str,
+                sanitize_excel_cell(item.floor),
+                sanitize_excel_cell(item.room_number),
+                sanitize_excel_cell(item.room_type),
+                sanitize_excel_cell(item.bed_id),
+                sanitize_excel_cell(item.bed_name or "-"),
+                sanitize_excel_cell(item.bed_type),
+                sanitize_excel_cell(item.status),
+                sanitize_excel_cell(item.patient_id or "-"),
+                sanitize_excel_cell(item.patient_name or "-"),
+                sanitize_excel_cell(item.disease or "-"),
+                sanitize_excel_cell(adm_str),
             ])
 
-        data_font = Font(name="Arial", size=10)
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=len(headers)):
-            for cell in row:
-                cell.font = data_font
-                cell.border = thin_border
-                cell.alignment = Alignment(vertical="center")
-
-        for col_idx in range(1, len(headers) + 1):
-            col_letter = get_column_letter(col_idx)
-            max_len = max(len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(1, ws.max_row + 1))
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+        auto_fit_columns(ws)
 
         output = io.BytesIO()
         wb.save(output)
@@ -1152,3 +1137,66 @@ class BedAllocationService:
         return output
 
 
+    async def export_bed_data_pdf(
+        self,
+        floor_id: Optional[int] = None,
+        status: Optional[str] = None,
+        room_id: Optional[int] = None,
+        bed_type: Optional[str] = None,
+        current_user: Any | None = None,
+        x_hospital_id: Optional[int] = None,
+    ) -> bytes:
+        from jinja2 import Environment, FileSystemLoader
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.core.dependencies import resolve_tenant_id
+        from app.utils.pdf_generator import html_to_pdf
+        from app.utils.helpers import utc_now
+
+        hosp_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hosp_id)
+
+        items = await self.export_bed_data(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+            current_user=current_user,
+            x_hospital_id=x_hospital_id,
+        )
+
+        formatted_items = []
+        for item in items:
+            adm_str = item.admission_date.strftime("%Y-%m-%d %H:%M") if item.admission_date else "-"
+            formatted_items.append({
+                "floor": item.floor or "-",
+                "room_number": item.room_number if item.room_number else "-",
+                "room_type": item.room_type or "-",
+                "bed_id": item.bed_id,
+                "bed_name": item.bed_name or "-",
+                "bed_type": item.bed_type or "-",
+                "status": item.status or "-",
+                "patient_id": item.patient_id if item.patient_id is not None else "-",
+                "patient_code": item.patient_code or "-",
+                "patient_name": item.patient_name or "-",
+                "disease": item.disease or "-",
+                "admission_date": adm_str,
+            })
+
+        env = Environment(loader=FileSystemLoader("app/templates"))
+        template = env.get_template("bed_allocation_export_template.html")
+
+        html_content = template.render(
+            items=formatted_items,
+            generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+            hospital_name=branding.hospital_name,
+            hospital_address=branding.hospital_address,
+            hospital_phone=branding.hospital_phone,
+            hospital_email=branding.hospital_email,
+            hospital_website=branding.hospital_website,
+            logo_data_uri=branding.logo_data_uri,
+            logo_base64=branding.logo_base64,
+            report_title="BED ALLOCATION REPORT",
+            total_records=len(items),
+        )
+
+        return html_to_pdf(html_content)

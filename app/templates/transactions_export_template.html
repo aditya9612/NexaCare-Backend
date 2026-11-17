@@ -34,10 +34,7 @@
   </style>
 </head>
 <body>
-  <h1>Transactions Report</h1>
-  <div class="meta">
-    <strong>Total Records:</strong> {{ transactions|length }} | <strong>Generated At:</strong> {{ generated_at }}
-  </div>
+  {% include "partials/brand_header.html" %}
   
   <table>
     <thead>
@@ -97,5 +94,6 @@
       {% endfor %}
     </tbody>
   </table>
+  {% include "partials/brand_footer.html" %}
 </body>
 </html>

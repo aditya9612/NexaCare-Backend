@@ -1503,11 +1503,11 @@ class AppointmentService:
             ('LINEBELOW', (0,-1), (-1,-1), 2, colors.HexColor('#BDC3C7')),
         ])
 
-        # Header branding
-        branding = Paragraph("<b>NexaCare Hospital</b>", ParagraphStyle('HospBranding', parent=title_style, fontSize=24, leading=28, textColor=colors.HexColor('#16A085')))
-        elements.append(branding)
-        elements.append(Paragraph("Visit Summary & Consultation Report", title_style))
-        elements.append(Spacer(1, 10))
+        # Header branding via centralized BrandingResolverService
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.reportlab_branding import create_reportlab_header_flowables, NumberedCanvas
+        branding_ctx = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=appointment.hospital_id or hospital_id)
+        elements.extend(create_reportlab_header_flowables(branding_ctx, "Visit Summary & Consultation Report", meta_info=f"Appointment: {appointment.appointment_number}"))
 
         # Metadata Table formatting
         p_name = f"{patient.first_name} {patient.last_name}" if patient else "N/A"
@@ -1623,7 +1623,7 @@ class AppointmentService:
         )
         elements.append(disclaimer)
 
-        doc.build(elements)
+        doc.build(elements, canvasmaker=lambda *args, **kwargs: NumberedCanvas(*args, branding_footer_text=branding_ctx.hospital_name, **kwargs))
         pdf_bytes = buffer.getvalue()
         buffer.close()
         return pdf_bytes
@@ -2164,30 +2164,15 @@ class AppointmentService:
             limit=10000,
         )
 
-        # 4. Resolve Hospital Branding (Name, Logo, Address, Phone, Email)
-        hospital_name = None
-        hospital_address = None
-        hospital_phone = None
-        hospital_email = None
-        hospital_logo = None
-
-        if hospital_id:
-            from app.repositories.hospital_repository import HospitalRepository
-            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
-            if hospital:
-                hospital_name = hospital.name
-                hospital_address = hospital.address
-                hospital_phone = hospital.phone
-                hospital_email = hospital.email
-                logo_attr = getattr(hospital, "logo_path", None) or getattr(hospital, "logo", None)
-                if logo_attr and os.path.exists(str(logo_attr)):
-                    hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
-
-        if not hospital_logo:
-            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
-                if os.path.exists(candidate):
-                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
-                    break
+        # 4. Resolve Hospital Branding via centralized BrandingResolverService
+        from app.services.branding_resolver_service import BrandingResolverService
+        branding_ctx = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
+        hospital_name = branding_ctx.hospital_name
+        hospital_address = branding_ctx.hospital_address
+        hospital_phone = branding_ctx.hospital_phone
+        hospital_email = branding_ctx.hospital_email
+        hospital_website = branding_ctx.hospital_website
+        hospital_logo = branding_ctx.logo_file_path
 
         # 5. Export Format Execution
         clean_format = str(format_type).strip().lower()
@@ -2396,11 +2381,13 @@ class AppointmentService:
                 })
 
             html_content = template.render(
-                hospital_name=hospital_name or "NexaCare Hospital",
-                hospital_address=hospital_address,
-                hospital_phone=hospital_phone,
-                hospital_email=hospital_email,
-                logo_base64=pdf_logo_b64,
+                hospital_name=branding_ctx.hospital_name,
+                hospital_address=branding_ctx.hospital_address,
+                hospital_phone=branding_ctx.hospital_phone,
+                hospital_email=branding_ctx.hospital_email,
+                hospital_website=branding_ctx.hospital_website,
+                logo_data_uri=branding_ctx.logo_data_uri,
+                logo_base64=branding_ctx.logo_base64,
                 appointments=formatted_appts,
                 date_range_label=date_range_label,
                 generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),

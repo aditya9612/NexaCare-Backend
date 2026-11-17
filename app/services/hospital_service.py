@@ -96,6 +96,8 @@ class HospitalService:
                 pass
 
         await self.audit_repo.create("upload_logo", "hospitals", user_id=user_id, resource_id=str(hospital.id))
+        from app.services.branding_resolver_service import clear_branding_cache
+        clear_branding_cache(hospital.id)
         return HospitalResponse.model_validate(hospital)
 
     async def delete_hospital(self, id: int, user_id: int) -> None:

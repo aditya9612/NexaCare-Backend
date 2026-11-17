@@ -112,7 +112,7 @@ async def export_inventory_items(
     _: User = Depends(require_permission("inventory", "read")),
 ):
     hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
-    data, media_type = await InventoryService(db).export_items(format.value, hospital_id=hospital_id)
+    data, media_type = await InventoryService(db).export_items(format.value, hospital_id=hospital_id, current_user=current_user)
 
     if format == InventoryExportFormat.EXCEL:
         return StreamingResponse(

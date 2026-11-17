@@ -178,7 +178,11 @@
       <td style="border: none; padding: 0; vertical-align: middle;">
         <table style="border: none; width: auto;">
           <tr>
-            {% if hospital_logo %}
+            {% if logo_data_uri %}
+            <td style="border: none; padding: 0 10px 0 0; vertical-align: middle;">
+              <img src="{{ logo_data_uri }}" class="hospital-logo" alt="Logo" />
+            </td>
+            {% elif hospital_logo %}
             <td style="border: none; padding: 0 10px 0 0; vertical-align: middle;">
               <img src="{{ hospital_logo }}" class="hospital-logo" alt="Logo" />
             </td>

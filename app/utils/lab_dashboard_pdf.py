@@ -29,12 +29,19 @@ async def generate_lab_dashboard_pdf(
     generated_at_str = utc_now().strftime("%Y-%m-%d %H:%M:%S UTC")
     
     pdf_logo_src = None
-    if hospital_logo and os.path.exists(hospital_logo):
-        mime_type, _ = mimetypes.guess_type(hospital_logo)
+    logo_file = hospital_logo
+    if not logo_file or not os.path.exists(logo_file):
+        for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
+            if os.path.exists(candidate):
+                logo_file = candidate
+                break
+
+    if logo_file and os.path.exists(logo_file):
+        mime_type, _ = mimetypes.guess_type(logo_file)
         if not mime_type:
             mime_type = "image/png"
         try:
-            with open(hospital_logo, "rb") as f:
+            with open(logo_file, "rb") as f:
                 b64_data = base64.b64encode(f.read()).decode("utf-8")
             pdf_logo_src = f"data:{mime_type};base64,{b64_data}"
         except Exception:

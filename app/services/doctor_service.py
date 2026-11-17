@@ -161,10 +161,14 @@ class DoctorService:
         from app.core.dependencies import resolve_tenant_id
         import math
 
+        from app.services.branding_resolver_service import BrandingResolverService
+
         if hospital_id is None and current_user is not None:
             role_name = current_user.role.name.lower() if current_user.role and current_user.role.name else ""
             if role_name not in ("super admin", "super_admin"):
                 hospital_id = resolve_tenant_id(current_user)
+
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
         counts = await self.repo.get_doctor_counts(hospital_id=hospital_id)
 
         if current_user.role and current_user.role.name == UserRole.LAB_TECHNICIAN:
@@ -990,11 +994,16 @@ class DoctorService:
         from app.models.user_model import User
         from app.models.department_model import Department
         from app.core.dependencies import resolve_tenant_id
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
         
         if hospital_id is None and current_user is not None:
             role_name = current_user.role.name.lower() if current_user.role and current_user.role.name else ""
             if role_name not in ("super admin", "super_admin"):
                 hospital_id = resolve_tenant_id(current_user)
+
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
 
         from sqlalchemy.orm import joinedload
         query = select(Doctor, User).options(joinedload(Doctor.department)).outerjoin(User, Doctor.user_id == User.id).where(Doctor.is_deleted == False)
@@ -1021,28 +1030,31 @@ class DoctorService:
                 "Experience", "License Number", "Department Name", "Consultation Fee", 
                 "Status", "Created At"
             ]
-            ws.append(headers)
+            hdr_row = apply_excel_hospital_header(ws, branding, "Doctors Roster Export", total_records=len(rows))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
             
             for sr_no, (p, u) in enumerate(rows, start=1):
                 row = [
-                    sr_no,
-                    p.doctor_code,
-                    p.first_name,
-                    p.last_name,
-                    u.gender if u and u.gender else "",
-                    str(u.date_of_birth) if u and u.date_of_birth else "",
-                    p.phone or "",
-                    p.email or "",
-                    p.specialization or "",
-                    p.qualification or "",
-                    p.experience if p.experience is not None else "",
-                    p.license_number or "",
-                    p.department.department_name if p.department else "",
-                    p.consultation_fee if p.consultation_fee is not None else "",
-                    p.availability_status or "",
-                    p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at)
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(p.doctor_code),
+                    sanitize_excel_cell(p.first_name),
+                    sanitize_excel_cell(p.last_name),
+                    sanitize_excel_cell(u.gender if u and u.gender else ""),
+                    sanitize_excel_cell(str(u.date_of_birth) if u and u.date_of_birth else ""),
+                    sanitize_excel_cell(p.phone or ""),
+                    sanitize_excel_cell(p.email or ""),
+                    sanitize_excel_cell(p.specialization or ""),
+                    sanitize_excel_cell(p.qualification or ""),
+                    sanitize_excel_cell(p.experience if p.experience is not None else ""),
+                    sanitize_excel_cell(p.license_number or ""),
+                    sanitize_excel_cell(p.department.department_name if p.department else ""),
+                    sanitize_excel_cell(p.consultation_fee if p.consultation_fee is not None else ""),
+                    sanitize_excel_cell(p.availability_status or ""),
+                    sanitize_excel_cell(p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at))
                 ]
                 ws.append(row)
+
+            auto_fit_columns(ws)
                 
             stream = BytesIO()
             wb.save(stream)
@@ -1088,9 +1100,20 @@ class DoctorService:
                 
             html_content = template.render(
                 doctors=formatted_doctors,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Doctors Report",
+                total_records=len(rows),
             )
             
             pdf_data = html_to_pdf(html_content)
             return pdf_data, "application/pdf"
+        else:
+            raise BadRequestException("Format must be 'excel' or 'pdf'")
 

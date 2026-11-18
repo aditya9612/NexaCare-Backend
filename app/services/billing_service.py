@@ -90,7 +90,10 @@ class BillingService:
         data = BillingResponse.model_validate(billing)
         data.items = [BillItemResponse.model_validate(i) for i in billing.items]
         data.source = "billing"
-        if billing.bill_number and str(billing.bill_number).upper().startswith("REC"):
+        if billing.bill_number and (
+            str(billing.bill_number).upper().startswith("REC")
+            or str(billing.bill_number).upper().startswith("PHR")
+        ):
             data.bill_type = "pharmacy"
         elif billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
             data.bill_type = "ipd"
@@ -332,6 +335,17 @@ class BillingService:
                     email=patient.email,
                     phone=patient.phone,
                 )
+
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="New Bill Generated",
+                message=f"Bill ({billing.bill_number}) of ₹{billing.total_amount:,.2f} generated for {patient_name}.",
+                notification_type="INVOICE_CREATED",
+                reference_type="BILLING",
+                reference_id=billing.id,
+                priority="NORMAL",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
@@ -355,7 +369,7 @@ class BillingService:
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
         from app.core.dependencies import resolve_tenant_id
-        from sqlalchemy import select, or_, func, union_all
+        from sqlalchemy import select, or_, not_, func, union_all
         from sqlalchemy.sql.expression import literal
         from sqlalchemy.orm import selectinload
 
@@ -409,24 +423,23 @@ class BillingService:
         if bill_type:
             bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
             if bt_val == "pharmacy":
-                b_query = b_query.where(func.lower(Billing.bill_number).like("rec%"))
-                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("rec%"))
-            elif bt_val in ("consultation", "consult"):
                 b_query = b_query.where(
                     or_(
-                        func.lower(Billing.bill_number).like("bill%"),
-                        func.lower(Billing.bill_number).like("bil%"),
+                        func.lower(Billing.bill_number).like("rec%"),
+                        func.lower(Billing.bill_number).like("phr%"),
                     )
                 )
-                p_query = p_query.where(
-                    or_(
-                        func.lower(PharmacyInvoice.invoice_number).like("bill%"),
-                        func.lower(PharmacyInvoice.invoice_number).like("bil%"),
-                    )
+                p_query = p_query.where(PharmacyInvoice.id > 0)
+            elif bt_val in ("consultation", "consult"):
+                b_query = b_query.where(
+                    not_(func.lower(Billing.bill_number).like("ipd%")),
+                    not_(func.lower(Billing.bill_number).like("rec%")),
+                    not_(func.lower(Billing.bill_number).like("phr%")),
                 )
+                p_query = p_query.where(PharmacyInvoice.id == -1)
             elif bt_val in ("ipd", "final_bill"):
                 b_query = b_query.where(func.lower(Billing.bill_number).like("ipd%"))
-                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("ipd%"))
+                p_query = p_query.where(PharmacyInvoice.id == -1)
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -699,6 +712,23 @@ class BillingService:
         billing.status = BillingStatus.CANCELLED
         await self.db.flush()
         await self.audit_repo.create("cancel", "billing", user_id=user_id, resource_id=str(billing.id))
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Bill Cancelled",
+                message=f"Bill ({billing.bill_number}) has been cancelled.",
+                notification_type="INVOICE_CANCELLED",
+                reference_type="BILLING",
+                reference_id=billing.id,
+                priority="NORMAL",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch bill cancelled notification: %s", exc)
+
         return self._to_billing_response(billing)
 
     async def delete(self, billing_id: int, user_id: int, current_user = None) -> None:
@@ -906,6 +936,16 @@ class BillingService:
                     email=patient.email,
                     phone=patient.phone,
                 )
+
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Payment Received",
+                message=f"Payment of ₹{payment.amount:,.2f} received for bill {billing.bill_number} via {payment.payment_method}.",
+                notification_type="PAYMENT_RECEIVED",
+                reference_type="PAYMENT",
+                reference_id=payment.id,
+                priority="NORMAL",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
@@ -1030,6 +1070,17 @@ class BillingService:
                         reference_id=payment.id,
                         priority="NORMAL",
                     )
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Refund Processed",
+                message=f"Refund of ₹{payment.amount:,.2f} processed for bill {billing.bill_number}.",
+                notification_type="PATIENT_REFUND_PROCESSED",
+                reference_type="PAYMENT",
+                reference_id=payment.id,
+                priority="NORMAL",
+            )
         except Exception as notif_exc:
             import logging
             logging.getLogger(__name__).warning(

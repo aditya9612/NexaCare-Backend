@@ -379,10 +379,11 @@ class PatientRepository:
         result = await self.db.execute(query)
         row = result.one()
 
-        # 2. IPD: Unique patients currently admitted/inpatient (not discharged/cancelled)
+        # 2. IPD: Unique active patients currently admitted/inpatient (not discharged/cancelled)
         admitted_subq = (
             select(Appointment.patient_id)
             .where(
+                Appointment.patient_id.isnot(None),
                 func.lower(Appointment.admission_status) == "admitted",
                 Appointment.appointment_status.notin_(["Cancelled", "cancelled", "CANCELLED"]),
             )
@@ -407,6 +408,7 @@ class PatientRepository:
             .select_from(Patient)
             .where(
                 Patient.is_deleted.is_(False),
+                Patient.status == "active",
                 or_(
                     Patient.id.in_(admitted_subq),
                     Patient.id.in_(occupied_bed_subq),
@@ -415,6 +417,8 @@ class PatientRepository:
         )
         if hospital_id is not None:
             ipd_query = ipd_query.where(Patient.hospital_id == hospital_id)
+        if allowed_patient_ids is not None:
+            ipd_query = ipd_query.where(Patient.id.in_(allowed_patient_ids))
         if nurse_id is not None:
             from app.models.nurse_model import NursePatientAssignment
             ipd_query = ipd_query.join(
@@ -435,42 +439,9 @@ class PatientRepository:
             )
         ipd_count = await self.db.scalar(ipd_query) or 0
 
-        # 3. OPD: Unique patients having valid OPD appointments (excluding Cancelled and No Show)
-        opd_query = (
-            select(func.count(func.distinct(Appointment.patient_id)))
-            .select_from(Appointment)
-            .join(Patient, Appointment.patient_id == Patient.id)
-            .where(
-                Patient.is_deleted.is_(False),
-                func.upper(Appointment.appointment_type) == "OPD",
-                or_(
-                    Appointment.appointment_status.is_(None),
-                    Appointment.appointment_status.notin_([
-                        "Cancelled", "cancelled", "CANCELLED", "Canceled", "canceled",
-                        "No Show", "no show", "NO SHOW", "No-Show", "no-show",
-                    ]),
-                ),
-            )
-        )
-        if hospital_id is not None:
-            opd_query = opd_query.where(
-                Patient.hospital_id == hospital_id,
-                Appointment.hospital_id == hospital_id,
-            )
-        if allowed_patient_ids is not None:
-            opd_query = opd_query.where(Patient.id.in_(allowed_patient_ids))
-        if nurse_id is not None:
-            from app.models.nurse_model import NursePatientAssignment
-            opd_query = opd_query.join(
-                NursePatientAssignment,
-                NursePatientAssignment.patient_id == Patient.id,
-            ).where(
-                NursePatientAssignment.nurse_id == nurse_id,
-                NursePatientAssignment.status == "Active",
-            )
-        if doctor_id is not None:
-            opd_query = opd_query.where(Appointment.doctor_id == doctor_id)
-        opd_count = await self.db.scalar(opd_query) or 0
+        # 3. OPD: Registered active patients not currently admitted in IPD
+        active_total = row.active_count or 0
+        opd_count = max(0, active_total - ipd_count)
 
         # 4. today_discharge: Unique patients actually discharged today
         today_discharge_count = await DischargeRepository(self.db).count_today_discharged(

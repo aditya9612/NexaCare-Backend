@@ -268,6 +268,7 @@ class InventoryService:
                 notes=f"Transfer IN from {source_wh_name}. {data.notes or ''}".strip(),
                 performed_by=user_id,
             )
+            source_tx = await self.transaction_repo.get_by_id(source_tx.id) or source_tx
             return self._to_transaction_response(source_tx)
 
         # Standard physical mutations (INWARD, OUTWARD, CONSUMPTION, RETURN, or single-sided TRANSFER)
@@ -289,6 +290,7 @@ class InventoryService:
             notes=data.notes,
             performed_by=user_id,
         )
+        transaction = await self.transaction_repo.get_by_id(transaction.id) or transaction
         return self._to_transaction_response(transaction)
 
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:

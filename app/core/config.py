@@ -16,9 +16,30 @@ def _resolve_env_files() -> tuple[str, ...]:
     Determine which environment files to load in priority order:
     1. .env.<environment> (if exists)
     2. .env (if exists)
-    Environment is resolved from ENVIRONMENT or APP_ENV in os.environ (default: 'development').
+    Environment is resolved from ENVIRONMENT or APP_ENV in os.environ, or pre-scanned from .env (default: 'development').
     """
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("APP_ENV") or "development").strip().lower()
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("APP_ENV") or "").strip().lower()
+    if not env:
+        dot_env_path = _PROJECT_ROOT / ".env"
+        if dot_env_path.is_file():
+            try:
+                with open(dot_env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip().upper()
+                        if k in ("ENVIRONMENT", "APP_ENV"):
+                            cleaned_val = v.strip().strip("'\"").lower()
+                            if cleaned_val:
+                                env = cleaned_val
+                                break
+            except Exception:
+                pass
+    if not env:
+        env = "development"
+
     candidates = [
         _PROJECT_ROOT / f".env.{env}",
         _PROJECT_ROOT / ".env",

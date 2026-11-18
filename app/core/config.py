@@ -1,26 +1,50 @@
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env relative to the project root (NexaCare-Backend/), not process cwd.
-# Relative env_file=".env" silently misses the file when uvicorn is started from a parent dir.
+# Supports .env.<environment> overrides (e.g. .env.development, .env.testing, .env.production)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_ENV_FILE = _PROJECT_ROOT / ".env"
+
+
+def _resolve_env_files() -> tuple[str, ...]:
+    """
+    Determine which environment files to load in priority order:
+    1. .env.<environment> (if exists)
+    2. .env (if exists)
+    Environment is resolved from ENVIRONMENT or APP_ENV in os.environ (default: 'development').
+    """
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("APP_ENV") or "development").strip().lower()
+    candidates = [
+        _PROJECT_ROOT / f".env.{env}",
+        _PROJECT_ROOT / ".env",
+    ]
+    resolved = [str(p) for p in candidates if p.is_file()]
+    return tuple(resolved) if resolved else (str(_PROJECT_ROOT / ".env"),)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_ENV_FILE),
+        env_file=_resolve_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     APP_NAME: str = "NexaCare HMS"
+    ENVIRONMENT: str = "development"
     APP_ENV: str = "development"
     DEBUG: bool = True
+
+    # Environment-based OTP & PIN settings
+    TESTING_OTP: str = "123456"
+    TESTING_PIN: str = "1234"
+    PIN_MAX_ATTEMPTS: int = 5
+    PIN_LOCKOUT_MINUTES: int = 15
+    ENABLE_EMAIL_OTP: bool = False
     SQLALCHEMY_ECHO: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
@@ -49,11 +73,11 @@ class Settings(BaseSettings):
 
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_HOST: str = ""
     SMTP_PORT: int = 587
-    SMTP_USER: str = ""
+    SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = "nexacareshekrulab@gmail.com"
+    SMTP_FROM_EMAIL: str = ""
 
     SMS_API_KEY: str = ""
     WHATSAPP_API_KEY: str = ""
@@ -253,6 +277,62 @@ class Settings(BaseSettings):
     HIPAA_ENFORCED: bool | None = None
 
 
+
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_legacy_env_fields(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            env_val = values.get("ENVIRONMENT")
+            app_env_val = values.get("APP_ENV")
+            resolved_env = None
+            if env_val and str(env_val).lower() != "development":
+                resolved_env = str(env_val)
+            elif app_env_val and str(app_env_val).lower() != "development":
+                resolved_env = str(app_env_val)
+            elif env_val:
+                resolved_env = str(env_val)
+            elif app_env_val:
+                resolved_env = str(app_env_val)
+
+            if resolved_env:
+                values["ENVIRONMENT"] = resolved_env
+                values["APP_ENV"] = resolved_env
+            user = values.get("SMTP_USERNAME") or values.get("SMTP_USER")
+            if user is not None:
+                values["SMTP_USERNAME"] = str(user)
+            from_mail = values.get("SMTP_FROM_EMAIL") or values.get("SMTP_FROM")
+            if from_mail is not None:
+                values["SMTP_FROM_EMAIL"] = str(from_mail)
+        return values
+
+    @model_validator(mode="after")
+    def _sync_environment_after(self) -> "Settings":
+        if self.ENVIRONMENT != "development" and self.APP_ENV == "development":
+            object.__setattr__(self, "APP_ENV", self.ENVIRONMENT)
+        elif self.APP_ENV != "development" and self.ENVIRONMENT == "development":
+            object.__setattr__(self, "ENVIRONMENT", self.APP_ENV)
+        return self
+
+    @property
+    def SMTP_USER(self) -> str:
+        return self.SMTP_USERNAME
+
+    @property
+    def SMTP_FROM(self) -> str:
+        return self.SMTP_FROM_EMAIL
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() in ("production", "prod")
+
+    @property
+    def is_testing(self) -> bool:
+        return self.ENVIRONMENT.lower() in ("testing", "test")
+
+    @property
+    def is_development(self) -> bool:
+        return self.ENVIRONMENT.lower() in ("development", "dev", "local")
 
 
 @lru_cache

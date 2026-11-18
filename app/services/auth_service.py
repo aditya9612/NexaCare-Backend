@@ -106,6 +106,11 @@ async def consume_challenge_jti(jti: str) -> bool:
 
 
 def validate_non_trivial_pin(pin: str) -> None:
+    allow_testing_pin = getattr(settings, "is_testing", False) or (
+        getattr(settings, "is_development", False) and getattr(settings, "DEBUG", False)
+    )
+    if allow_testing_pin and pin == getattr(settings, "TESTING_PIN", "1234"):
+        return
     if len(set(pin)) == 1:
         raise BadRequestException("PIN cannot consist of identical digits (e.g., 0000 or 1111)")
     sequences = {
@@ -142,7 +147,11 @@ class AuthService:
         email_sent = delivery_res.get("email_sent", False)
         sms_sent = delivery_res.get("sms_sent", False)
 
-        if settings.DEBUG:
+        if settings.is_testing:
+            logger.info("[TESTING] OTP issued for user %s (%s): %s", user.email, user.phone, otp)
+            return otp
+
+        if settings.is_development and settings.DEBUG:
             logger.info(
                 "[DEV MODE] Generated OTP for user %s (%s): %s (email_sent=%s, sms_sent=%s)",
                 user.email,
@@ -153,7 +162,12 @@ class AuthService:
             )
             return otp
 
-        if not email_sent and not sms_sent:
+        # In production: Fail safely if both email and SMS delivery failed. Never log raw OTP.
+        if user.email and not email_sent and not sms_sent:
+            raise ServiceUnavailableException(
+                "Failed to deliver OTP to registered email. Please check SMTP configuration or try again later."
+            )
+        elif not email_sent and not sms_sent:
             raise ServiceUnavailableException(
                 "Failed to deliver OTP to your registered email or phone. Please check configuration or try again later."
             )
@@ -505,8 +519,10 @@ class AuthService:
 
                 if not verify_pin(data.pin, user.hashed_pin):
                     user.pin_failed_attempts = (user.pin_failed_attempts or 0) + 1
-                    if user.pin_failed_attempts >= 5:
-                        user.pin_locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+                    max_attempts = getattr(settings, "PIN_MAX_ATTEMPTS", 5)
+                    lockout_minutes = getattr(settings, "PIN_LOCKOUT_MINUTES", 15)
+                    if user.pin_failed_attempts >= max_attempts:
+                        user.pin_locked_until = datetime.now(timezone.utc) + timedelta(minutes=lockout_minutes)
                     await self.repo.update(user)
                     raise UnauthorizedException("Invalid PIN")
 

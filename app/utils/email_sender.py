@@ -10,11 +10,16 @@ from app.core.logger import logger
 
 
 def _send_sync_email(to: str, subject: str, html_body: str, plain_body: str | None = None) -> bool:
-    if not settings.SMTP_USER or not settings.SMTP_HOST:
-        logger.warning("SMTP not configured; skipping email delivery to %s", to)
+    if not getattr(settings, "ENABLE_EMAIL_OTP", False) and not getattr(settings, "is_production", False):
+        logger.info("ENABLE_EMAIL_OTP is False; skipping email delivery to %s", to)
+        return True
+
+    smtp_user = settings.SMTP_USERNAME or settings.SMTP_USER
+    if not smtp_user or not settings.SMTP_HOST:
+        logger.warning("SMTP not configured (SMTP_HOST or SMTP_USERNAME missing); skipping email delivery to %s", to)
         return False
 
-    from_addr = settings.SMTP_FROM or settings.SMTP_USER
+    from_addr = settings.SMTP_FROM_EMAIL or settings.SMTP_FROM or smtp_user
     sender_name = settings.APP_NAME or "NexaCare"
     smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
 

@@ -335,6 +335,17 @@ class BillingService:
                     email=patient.email,
                     phone=patient.phone,
                 )
+
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="New Bill Generated",
+                message=f"Bill ({billing.bill_number}) of ₹{billing.total_amount:,.2f} generated for {patient_name}.",
+                notification_type="INVOICE_CREATED",
+                reference_type="BILLING",
+                reference_id=billing.id,
+                priority="NORMAL",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
@@ -701,6 +712,23 @@ class BillingService:
         billing.status = BillingStatus.CANCELLED
         await self.db.flush()
         await self.audit_repo.create("cancel", "billing", user_id=user_id, resource_id=str(billing.id))
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Bill Cancelled",
+                message=f"Bill ({billing.bill_number}) has been cancelled.",
+                notification_type="INVOICE_CANCELLED",
+                reference_type="BILLING",
+                reference_id=billing.id,
+                priority="NORMAL",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch bill cancelled notification: %s", exc)
+
         return self._to_billing_response(billing)
 
     async def delete(self, billing_id: int, user_id: int, current_user = None) -> None:
@@ -908,6 +936,16 @@ class BillingService:
                     email=patient.email,
                     phone=patient.phone,
                 )
+
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Payment Received",
+                message=f"Payment of ₹{payment.amount:,.2f} received for bill {billing.bill_number} via {payment.payment_method}.",
+                notification_type="PAYMENT_RECEIVED",
+                reference_type="PAYMENT",
+                reference_id=payment.id,
+                priority="NORMAL",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
@@ -1032,6 +1070,17 @@ class BillingService:
                         reference_id=payment.id,
                         priority="NORMAL",
                     )
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Refund Processed",
+                message=f"Refund of ₹{payment.amount:,.2f} processed for bill {billing.bill_number}.",
+                notification_type="PATIENT_REFUND_PROCESSED",
+                reference_type="PAYMENT",
+                reference_id=payment.id,
+                priority="NORMAL",
+            )
         except Exception as notif_exc:
             import logging
             logging.getLogger(__name__).warning(

@@ -12,6 +12,7 @@ from app.core.exceptions import BadRequestException, NotFoundException, Conflict
 from app.services.stock_movement_service import StockMovementService
 from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Warehouse
 from app.models.vendor_model import Vendor
+from app.models.pharmacy_model import Medicine
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.inventory_repository import (
@@ -87,11 +88,22 @@ class InventoryService:
         if existing:
             raise ConflictException("Inventory item with this SKU already exists")
 
+        existing_med_sku = await self.db.scalar(
+            select(Medicine.id).where(Medicine.sku == sku, Medicine.is_deleted.is_(False))
+        )
+        if existing_med_sku:
+            raise ConflictException("Medicine with this SKU already exists")
+
         barcode = data.barcode
         if barcode:
             existing_barcode = await self.item_repo.get_by_barcode(barcode)
             if existing_barcode:
                 raise ConflictException("Inventory item with this barcode already exists")
+            existing_med_barcode = await self.db.scalar(
+                select(Medicine.id).where(Medicine.barcode == barcode, Medicine.is_deleted.is_(False))
+            )
+            if existing_med_barcode:
+                raise ConflictException("Medicine with this barcode already exists")
 
         item_hospital_id = hospital_id
         if item_hospital_id is None and data.warehouse_id:
@@ -113,6 +125,29 @@ class InventoryService:
             )
             self.db.add(ws)
             await self.db.flush()
+
+        # Synchronize newly created InventoryItem to Pharmacy Medicine table
+        medicine = Medicine(
+            name=item.name,
+            generic_name=item.name,
+            sku=item.sku,
+            barcode=item.barcode,
+            category=item.category,
+            unit=item.unit,
+            unit_price=item.unit_cost or 0.0,
+            average_unit_cost=item.unit_cost or 0.0,
+            stock_quantity=item.quantity or 0,
+            reserved_quantity=0,
+            reorder_level=item.reorder_level or 10,
+            expiry_date=item.expiry_date,
+            description=item.description,
+            is_active=item.is_active,
+            hospital_id=item_hospital_id,
+            inventory_item_id=item.id,
+        )
+        self.db.add(medicine)
+        await self.db.flush()
+
         await self._check_reorder_alert(item)
         await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
         return InventoryItemResponse.model_validate(item)
@@ -178,6 +213,34 @@ class InventoryService:
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(item, key, value)
         item = await self.item_repo.update(item)
+
+        # Synchronize updates to linked Medicine if it exists
+        med = await self.db.scalar(
+            select(Medicine).where(Medicine.inventory_item_id == item.id, Medicine.is_deleted.is_(False))
+        )
+        if med:
+            update_dict = data.model_dump(exclude_unset=True)
+            if "name" in update_dict:
+                med.name = update_dict["name"]
+            if "category" in update_dict:
+                med.category = update_dict["category"]
+            if "unit" in update_dict:
+                med.unit = update_dict["unit"]
+            if "unit_cost" in update_dict:
+                med.unit_price = update_dict["unit_cost"]
+                med.average_unit_cost = update_dict["unit_cost"]
+            if "quantity" in update_dict:
+                med.stock_quantity = update_dict["quantity"]
+            if "reorder_level" in update_dict:
+                med.reorder_level = update_dict["reorder_level"]
+            if "expiry_date" in update_dict:
+                med.expiry_date = update_dict["expiry_date"]
+            if "barcode" in update_dict:
+                med.barcode = update_dict["barcode"]
+            if "description" in update_dict:
+                med.description = update_dict["description"]
+            await self.db.flush()
+
         await self._check_reorder_alert(item)
         await self.audit_repo.create("update", "inventory", user_id=user_id, resource_id=str(item.id))
         return InventoryItemResponse.model_validate(item)
@@ -187,6 +250,16 @@ class InventoryService:
         if not item:
             raise NotFoundException("Inventory item not found")
         await self.item_repo.soft_delete(item)
+
+        # Soft-delete linked Medicine if it exists
+        med = await self.db.scalar(
+            select(Medicine).where(Medicine.inventory_item_id == item.id, Medicine.is_deleted.is_(False))
+        )
+        if med:
+            med.is_deleted = True
+            med.deleted_at = utc_now()
+            await self.db.flush()
+
         await self.audit_repo.create("delete", "inventory", user_id=user_id, resource_id=str(item.id))
 
     async def _check_reorder_alert(self, item: InventoryItem) -> None:
@@ -275,6 +348,15 @@ class InventoryService:
                 notes=f"Transfer IN from {source_wh_name}. {data.notes or ''}".strip(),
                 performed_by=user_id,
             )
+            # Sync updated stock quantity to linked Medicine if exists
+            med = await self.db.scalar(
+                select(Medicine).where(Medicine.inventory_item_id == data.item_id, Medicine.is_deleted.is_(False))
+            )
+            if med:
+                refreshed_item = await self.item_repo.get_by_id(data.item_id)
+                if refreshed_item:
+                    med.stock_quantity = refreshed_item.quantity
+                    await self.db.flush()
             return self._to_transaction_response(source_tx)
 
         # Standard physical mutations (INWARD, OUTWARD, CONSUMPTION, RETURN, or single-sided TRANSFER)
@@ -296,6 +378,17 @@ class InventoryService:
             notes=data.notes,
             performed_by=user_id,
         )
+
+        # Sync updated stock quantity to linked Medicine if exists
+        med = await self.db.scalar(
+            select(Medicine).where(Medicine.inventory_item_id == data.item_id, Medicine.is_deleted.is_(False))
+        )
+        if med:
+            refreshed_item = await self.item_repo.get_by_id(data.item_id)
+            if refreshed_item:
+                med.stock_quantity = refreshed_item.quantity
+                await self.db.flush()
+
         return self._to_transaction_response(transaction)
 
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:
@@ -561,14 +654,20 @@ class InventoryService:
                     if sku_key in batch_skus:
                         raise ConflictException("Duplicate SKU in the uploaded file")
                     existing_sku = await self.item_repo.get_by_sku(sku)
-                    if existing_sku:
-                        raise ConflictException("Inventory item with this SKU already exists")
+                    existing_med_sku = await self.db.scalar(
+                        select(Medicine.id).where(Medicine.sku == sku, Medicine.is_deleted.is_(False))
+                    )
+                    if existing_sku or existing_med_sku:
+                        raise ConflictException("Inventory item or Medicine with this SKU already exists")
                     batch_skus.add(sku_key)
                 else:
                     while True:
                         sku = generate_code("SKU")
                         existing_sku = await self.item_repo.get_by_sku(sku)
-                        if not existing_sku and sku.strip().lower() not in batch_skus:
+                        existing_med = await self.db.scalar(
+                            select(Medicine.id).where(Medicine.sku == sku)
+                        )
+                        if not existing_sku and not existing_med and sku.strip().lower() not in batch_skus:
                             break
                     batch_skus.add(sku.strip().lower())
 
@@ -596,6 +695,28 @@ class InventoryService:
                 # Insert item
                 item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **validated_data.model_dump(exclude={"sku"}))
                 item = await self.item_repo.create(item)
+
+                # Synchronize to Pharmacy Medicine table
+                medicine = Medicine(
+                    name=item.name,
+                    generic_name=item.name,
+                    sku=item.sku,
+                    barcode=item.barcode,
+                    category=item.category,
+                    unit=item.unit,
+                    unit_price=item.unit_cost or 0.0,
+                    average_unit_cost=item.unit_cost or 0.0,
+                    stock_quantity=item.quantity or 0,
+                    reserved_quantity=0,
+                    reorder_level=item.reorder_level or 10,
+                    expiry_date=item.expiry_date,
+                    description=item.description,
+                    is_active=item.is_active,
+                    hospital_id=item_hospital_id,
+                    inventory_item_id=item.id,
+                )
+                self.db.add(medicine)
+
                 await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
                 created += 1
 

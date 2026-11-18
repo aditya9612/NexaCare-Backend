@@ -1336,6 +1336,21 @@ class PharmacyService:
                 hospital_id=invoice.hospital_id,
             )
 
+        try:
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=invoice.hospital_id,
+                title="New Pharmacy Bill Generated",
+                message=f"Pharmacy invoice ({invoice.invoice_number}) of ₹{invoice.total_amount:,.2f} generated.",
+                notification_type="INVOICE_CREATED",
+                reference_type="PHARMACY_INVOICE",
+                reference_id=invoice.id,
+                priority="NORMAL",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch pharmacy invoice notification to accountants: %s", exc)
+
         return self._invoice_response(invoice)
 
     # --- Returns ---

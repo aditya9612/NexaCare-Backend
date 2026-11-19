@@ -763,6 +763,7 @@ class NurseTaskRepository:
         patient_id: int | None = None,
         status: str | None = None,
         priority: str | None = None,
+        search: str | None = None,
     ):
         query = query.where(
             NurseTask.nurse_id == nurse_id,
@@ -774,6 +775,18 @@ class NurseTaskRepository:
             query = query.where(NurseTask.status == status)
         if priority is not None:
             query = query.where(NurseTask.priority == priority)
+        if search and str(search).strip():
+            term = f"%{str(search).strip().lower()}%"
+            query = query.outerjoin(Patient, NurseTask.patient_id == Patient.id).where(
+                or_(
+                    func.lower(NurseTask.title).like(term),
+                    func.lower(NurseTask.description).like(term),
+                    func.lower(Patient.first_name).like(term),
+                    func.lower(Patient.last_name).like(term),
+                    func.lower(Patient.patient_code).like(term),
+                    func.lower(func.concat(Patient.first_name, " ", Patient.last_name)).like(term),
+                )
+            )
         return query
 
     async def list_by_nurse(
@@ -787,6 +800,7 @@ class NurseTaskRepository:
         priority: str | None = None,
         sort_by: str = "due_date",
         sort_order: str = "asc",
+        search: str | None = None,
     ) -> list[NurseTask]:
         query = select(NurseTask)
         query = self._apply_filters(
@@ -796,6 +810,7 @@ class NurseTaskRepository:
             patient_id=patient_id,
             status=status,
             priority=priority,
+            search=search,
         )
         column = getattr(NurseTask, sort_by, NurseTask.due_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -809,6 +824,7 @@ class NurseTaskRepository:
         patient_id: int | None = None,
         status: str | None = None,
         priority: str | None = None,
+        search: str | None = None,
     ) -> int:
         query = select(func.count(NurseTask.id))
         query = self._apply_filters(
@@ -818,6 +834,7 @@ class NurseTaskRepository:
             patient_id=patient_id,
             status=status,
             priority=priority,
+            search=search,
         )
         return await self.db.scalar(query) or 0
 

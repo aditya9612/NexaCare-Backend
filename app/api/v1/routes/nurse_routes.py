@@ -426,6 +426,7 @@ async def get_nurse_daily_tasks(
     priority: str | None = None,
     sort_by: str = "priority",
     sort_order: str = "desc",
+    search: str | None = Query(None, description="Search daily tasks by title, description or patient"),
     hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
@@ -448,6 +449,7 @@ async def get_nurse_daily_tasks(
         sort_by=sort_by,
         sort_order=sort_order,
         hospital_id=target_hospital_id,
+        search=search,
     )
     return APIResponse(message="Daily nursing tasks retrieved", data=result)
 
@@ -511,6 +513,7 @@ async def list_nurse_daily_tasks(
     priority: str | None = None,
     sort_by: str = "priority",
     sort_order: str = "desc",
+    search: str | None = Query(None, description="Search daily tasks by title, description or patient"),
     hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
@@ -533,6 +536,7 @@ async def list_nurse_daily_tasks(
         sort_by=sort_by,
         sort_order=sort_order,
         hospital_id=target_hospital_id,
+        search=search,
     )
     return APIResponse(message="Daily nursing tasks retrieved", data=result)
 

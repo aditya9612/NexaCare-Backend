@@ -1476,6 +1476,7 @@ class NurseService:
         sort_by: str = "priority",
         sort_order: str = "desc",
         hospital_id: int | None = None,
+        search: str | None = None,
     ):
         from app.models.nurse_model import Nurse
         from app.core.constants import UserRole
@@ -1520,6 +1521,7 @@ class NurseService:
             priority=priority,
             sort_by=sort_by,
             sort_order=sort_order,
+            search=search,
         )
         total = await self.task_repo.count_by_nurse(
             nurse_id=nurse.id,
@@ -1527,6 +1529,7 @@ class NurseService:
             patient_id=patient_id,
             status=status,
             priority=priority,
+            search=search,
         )
 
         # Calculate overall daily counts for the nurse/patient

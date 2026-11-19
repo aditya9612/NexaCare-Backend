@@ -2217,7 +2217,7 @@ class BillingService:
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
-            from app.utils.helpers import utc_now
+            from app.utils.helpers import get_now_ist
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
@@ -2276,7 +2276,7 @@ class BillingService:
                 
             html_content = template.render(
                 billings=formatted_billings,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                generated_at=get_now_ist().strftime("%Y-%m-%d %H:%M:%S"),
                 hospital_name=branding.hospital_name,
                 hospital_address=branding.hospital_address,
                 hospital_phone=branding.hospital_phone,

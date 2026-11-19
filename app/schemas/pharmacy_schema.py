@@ -317,6 +317,7 @@ class PrescriptionResponse(BaseSchema):
     appointment_id: int | None
     prescription_number: str
     status: str
+    prescription_status: str = "active"
     start_date: Optional[date] = None
     instructions: str | None
     items: List[PrescriptionItemResponse] = []

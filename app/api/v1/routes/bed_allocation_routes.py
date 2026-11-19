@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import CurrentUser, DbSession, require_permission
@@ -303,24 +303,31 @@ async def mark_cleaning_complete(
 
 
 # 8. Export Bed Allocation Data Routes
-@export_router.get("/export", response_model=APIResponse[List[BedExportResponse]])
+@export_router.get("/export")
 async def export_bed_allocation(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_permission("bed_allocation", "read")),
-    format: Optional[str] = Query("json", description="Export format: 'json', 'csv', or 'excel'"),
+    format: Optional[str] = Query("json", description="Export format: 'json', 'csv', 'excel', or 'pdf'"),
     floor_id: Optional[int] = Query(None, description="Filter by Floor ID"),
     status: Optional[str] = Query(None, description="Filter by Bed Status (Available, Occupied, Cleaning, Maintenance, Reserved)"),
     room_id: Optional[int] = Query(None, description="Filter by Room ID"),
     bed_type: Optional[str] = Query(None, description="Filter by Bed Type"),
+    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
 ):
     """
     Export Bed Allocation Management data including Floor, Room Number, Room Type,
     Bed ID, Bed Type, Status, Patient ID, Patient Name, Disease, and Admission Date.
-    Supports JSON, CSV, and Excel formats.
+    Supports JSON, CSV, Excel, and PDF formats.
     """
     service = BedAllocationService(db)
     fmt_lower = (format or "json").strip().lower()
+
+    if fmt_lower not in ("json", "csv", "excel", "pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid export format. Supported formats are: 'json', 'csv', 'excel', 'pdf'.",
+        )
 
     if fmt_lower == "csv":
         csv_data = await service.export_bed_data_csv(
@@ -329,6 +336,7 @@ async def export_bed_allocation(
             room_id=room_id,
             bed_type=bed_type,
             current_user=current_user,
+            x_hospital_id=x_hospital_id,
         )
         return Response(
             content=csv_data,
@@ -342,11 +350,26 @@ async def export_bed_allocation(
             room_id=room_id,
             bed_type=bed_type,
             current_user=current_user,
+            x_hospital_id=x_hospital_id,
         )
         return StreamingResponse(
             excel_io,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=bed_allocation_export.xlsx"},
+        )
+    elif fmt_lower == "pdf":
+        pdf_bytes = await service.export_bed_data_pdf(
+            floor_id=floor_id,
+            status=status,
+            room_id=room_id,
+            bed_type=bed_type,
+            current_user=current_user,
+            x_hospital_id=x_hospital_id,
+        )
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=bed_allocation_export.pdf"},
         )
     elif fmt_lower == "json":
         items = await service.export_bed_data(
@@ -355,6 +378,7 @@ async def export_bed_allocation(
             room_id=room_id,
             bed_type=bed_type,
             current_user=current_user,
+            x_hospital_id=x_hospital_id,
         )
         import json
         from fastapi.encoders import jsonable_encoder
@@ -371,14 +395,5 @@ async def export_bed_allocation(
             media_type="application/json",
             headers={"Content-Disposition": "attachment; filename=bed_allocation_export.json"},
         )
-    else:
-        items = await service.export_bed_data(
-            floor_id=floor_id,
-            status=status,
-            room_id=room_id,
-            bed_type=bed_type,
-            current_user=current_user,
-        )
-        return APIResponse(message="Bed allocation export data retrieved successfully", data=items)
 
 

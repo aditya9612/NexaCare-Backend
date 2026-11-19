@@ -180,6 +180,7 @@ async def test_get_daily_collection_date_filtering():
 @pytest.mark.asyncio
 async def test_daily_report_service_schema_mapping_with_refunds():
     mock_db = AsyncMock()
+    mock_db.add = MagicMock()
     service = BillingService(mock_db)
 
     mock_res_pharm = MagicMock()
@@ -225,6 +226,7 @@ async def test_daily_report_service_schema_mapping_with_refunds():
 @pytest.mark.asyncio
 async def test_daily_report_service_schema_mapping_zero_refunds():
     mock_db = AsyncMock()
+    mock_db.add = MagicMock()
     service = BillingService(mock_db)
 
     mock_res_pharm = MagicMock()

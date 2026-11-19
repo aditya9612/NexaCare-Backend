@@ -35,19 +35,21 @@ class ReportExportService:
 
     @staticmethod
     def resolve_hospital_logo(logo_path_attr: str | None) -> str | None:
-        if not logo_path_attr:
-            return None
-        raw_path = str(logo_path_attr).strip()
-        candidates = [
-            raw_path,
-            os.path.abspath(raw_path),
-            os.path.join(os.getcwd(), raw_path),
-            os.path.join("app", raw_path),
-            os.path.abspath(os.path.join("app", raw_path)),
-        ]
-        for cand in candidates:
-            if os.path.isfile(cand):
-                return os.path.abspath(cand).replace("\\", "/")
+        if logo_path_attr:
+            raw_path = str(logo_path_attr).strip()
+            candidates = [
+                raw_path,
+                os.path.abspath(raw_path),
+                os.path.join(os.getcwd(), raw_path),
+                os.path.join("app", raw_path),
+                os.path.abspath(os.path.join("app", raw_path)),
+            ]
+            for cand in candidates:
+                if os.path.isfile(cand):
+                    return os.path.abspath(cand).replace("\\", "/")
+        for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
+            if os.path.isfile(fb):
+                return os.path.abspath(fb).replace("\\", "/")
         return None
 
     @staticmethod
@@ -77,12 +79,8 @@ class ReportExportService:
 
     @staticmethod
     def _sanitize_csv_value(val: Any) -> str:
-        if val is None:
-            return ""
-        s = str(val)
-        if s and s[0] in ('=', '+', '-', '@'):
-            return f"'{s}"
-        return s
+        from app.utils.csv_security import sanitize_csv_cell
+        return sanitize_csv_cell(val)
 
     HEADER_LABELS = {
         "invoice_number": "Invoice No.",
@@ -1088,7 +1086,7 @@ class ReportExportService:
         
         # Header (with optional Hospital Logo)
         hospital_name = payload.hospital_name or HOSPITAL_BRANDING_NAME
-        logo_path = payload.hospital_logo
+        logo_path = ReportExportService.resolve_hospital_logo(payload.hospital_logo)
         logo_img_flowable = None
         if logo_path and os.path.isfile(logo_path):
             try:

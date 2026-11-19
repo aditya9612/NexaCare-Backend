@@ -1,0 +1,15 @@
+<div class="brand-footer" style="margin-top: 25px; border-top: 1px solid #e2e8f0; padding-top: 10px; font-size: 8pt; color: #64748b; width: 100%;">
+  <table style="width: 100%; border: none; border-collapse: collapse;">
+    <tr>
+      <td style="border: none; padding: 0; text-align: left; vertical-align: middle; width: 50%;">
+        <strong>{{ hospital_name | default('NexaCare Hospital', true) }}</strong> &bull; Confidential Medical Record
+      </td>
+      <td style="border: none; padding: 0; text-align: right; vertical-align: middle; width: 50%;">
+        Generated on {{ generated_at }}
+      </td>
+    </tr>
+  </table>
+  <div style="margin-top: 4px; font-size: 7.5pt; color: #94a3b8; text-align: center;">
+    {{ disclaimer | default('This is an official computer-generated document and does not require a physical signature.', true) }}
+  </div>
+</div>

@@ -29,6 +29,14 @@ def hospital_other_admin():
     user.role = Role(name="hospital_admin")
     return user
 
+def _extract_headers_and_rows(ws):
+    all_rows = list(ws.iter_rows(values_only=True))
+    for idx, r in enumerate(all_rows):
+        if r and r[0] == "Sr. No.":
+            return list(r), all_rows[idx + 1:]
+    return [], []
+
+
 
 @pytest.mark.asyncio
 async def test_transaction_export_excel_populates_bill_number_and_patient_name(db_session: AsyncSession, hospital_6_admin):
@@ -47,14 +55,12 @@ async def test_transaction_export_excel_populates_bill_number_and_patient_name(d
     ws = wb.active
     assert ws.title == "Transactions Report"
 
-    headers = [cell.value for cell in ws[1]]
+    headers, rows = _extract_headers_and_rows(ws)
     assert headers == [
         "Sr. No.", "Bill Number", "Patient Name", "Amount", "Payment Method",
         "Transaction Ref", "Payment Date", "Status", "Is Refund", "Refund Reason",
         "Created At", "Updated At"
     ]
-
-    rows = list(ws.iter_rows(values_only=True))[1:]
     assert len(rows) == 46, f"Expected 46 records, found {len(rows)}"
 
     # Locate transaction 76
@@ -123,7 +129,7 @@ async def test_transaction_export_refund_and_payment_types(db_session: AsyncSess
     )
 
     wb = openpyxl.load_workbook(stream)
-    rows = list(wb.active.iter_rows(values_only=True))[1:]
+    _, rows = _extract_headers_and_rows(wb.active)
 
     refund_rows = [r for r in rows if r[8] == "Yes"]
     payment_rows = [r for r in rows if r[8] == "No"]
@@ -146,7 +152,7 @@ async def test_transaction_export_tenant_isolation(db_session: AsyncSession, hos
     )
 
     wb = openpyxl.load_workbook(stream)
-    rows = list(wb.active.iter_rows(values_only=True))[1:]
+    _, rows = _extract_headers_and_rows(wb.active)
     assert len(rows) == 0, "Hospital 9999 should not receive Hospital 6 transactions"
 
 
@@ -164,7 +170,7 @@ async def test_transaction_export_sorting_support(db_session: AsyncSession, hosp
         sort_order="asc",
         current_user=hospital_6_admin,
     )
-    rows_asc = list(openpyxl.load_workbook(stream_asc).active.iter_rows(values_only=True))[1:]
+    _, rows_asc = _extract_headers_and_rows(openpyxl.load_workbook(stream_asc).active)
 
     # Export sorted by amount descending
     stream_desc, _ = await service.export_transactions(
@@ -173,7 +179,7 @@ async def test_transaction_export_sorting_support(db_session: AsyncSession, hosp
         sort_order="desc",
         current_user=hospital_6_admin,
     )
-    rows_desc = list(openpyxl.load_workbook(stream_desc).active.iter_rows(values_only=True))[1:]
+    _, rows_desc = _extract_headers_and_rows(openpyxl.load_workbook(stream_desc).active)
 
     assert len(rows_asc) == len(rows_desc) == 46
     first_amount_str = rows_asc[0][3].replace("₹", "").replace(",", "")
@@ -191,11 +197,11 @@ async def test_regression_duplicate_result_consumption(db_session: AsyncSession,
 
     # First call
     stream1, _ = await service.export_transactions(format_type="excel", current_user=hospital_6_admin)
-    rows1 = list(openpyxl.load_workbook(stream1).active.iter_rows(values_only=True))[1:]
+    _, rows1 = _extract_headers_and_rows(openpyxl.load_workbook(stream1).active)
 
     # Second call immediately after on same service instance
     stream2, _ = await service.export_transactions(format_type="excel", current_user=hospital_6_admin)
-    rows2 = list(openpyxl.load_workbook(stream2).active.iter_rows(values_only=True))[1:]
+    _, rows2 = _extract_headers_and_rows(openpyxl.load_workbook(stream2).active)
 
     txn_first = next((r for r in rows1 if r[5] == "TEST-IPD-20261105-0002"), None)
     txn_second = next((r for r in rows2 if r[5] == "TEST-IPD-20261105-0002"), None)

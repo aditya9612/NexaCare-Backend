@@ -16,11 +16,14 @@ def generate_excel_report(report_type: str, rows: List[Dict[str, Any]]) -> str:
     if not rows:
         rows = [{"message": "No data available"}]
 
+    from app.utils.csv_security import sanitize_csv_dict
+
     fieldnames = list(rows[0].keys())
     with open(file_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        sanitized_rows = [sanitize_csv_dict(r) for r in rows]
+        writer.writerows(sanitized_rows)
 
     logger.info("Excel/CSV report generated: %s", file_path)
     # Return web-relative path with forward slashes (strip leading 'app' prefix)

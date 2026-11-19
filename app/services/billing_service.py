@@ -90,7 +90,10 @@ class BillingService:
         data = BillingResponse.model_validate(billing)
         data.items = [BillItemResponse.model_validate(i) for i in billing.items]
         data.source = "billing"
-        if billing.bill_number and str(billing.bill_number).upper().startswith("REC"):
+        if billing.bill_number and (
+            str(billing.bill_number).upper().startswith("REC")
+            or str(billing.bill_number).upper().startswith("PHR")
+        ):
             data.bill_type = "pharmacy"
         elif billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
             data.bill_type = "ipd"
@@ -332,6 +335,17 @@ class BillingService:
                     email=patient.email,
                     phone=patient.phone,
                 )
+
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient"
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="New Bill Generated",
+                message=f"Bill ({billing.bill_number}) of ₹{billing.total_amount:,.2f} generated for {patient_name}.",
+                notification_type="INVOICE_CREATED",
+                reference_type="BILLING",
+                reference_id=billing.id,
+                priority="NORMAL",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch invoice generated notification: %s", exc)
@@ -355,7 +369,7 @@ class BillingService:
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
         from app.core.dependencies import resolve_tenant_id
-        from sqlalchemy import select, or_, func, union_all
+        from sqlalchemy import select, or_, not_, func, union_all
         from sqlalchemy.sql.expression import literal
         from sqlalchemy.orm import selectinload
 
@@ -409,24 +423,23 @@ class BillingService:
         if bill_type:
             bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
             if bt_val == "pharmacy":
-                b_query = b_query.where(func.lower(Billing.bill_number).like("rec%"))
-                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("rec%"))
-            elif bt_val in ("consultation", "consult"):
                 b_query = b_query.where(
                     or_(
-                        func.lower(Billing.bill_number).like("bill%"),
-                        func.lower(Billing.bill_number).like("bil%"),
+                        func.lower(Billing.bill_number).like("rec%"),
+                        func.lower(Billing.bill_number).like("phr%"),
                     )
                 )
-                p_query = p_query.where(
-                    or_(
-                        func.lower(PharmacyInvoice.invoice_number).like("bill%"),
-                        func.lower(PharmacyInvoice.invoice_number).like("bil%"),
-                    )
+                p_query = p_query.where(PharmacyInvoice.id > 0)
+            elif bt_val in ("consultation", "consult"):
+                b_query = b_query.where(
+                    not_(func.lower(Billing.bill_number).like("ipd%")),
+                    not_(func.lower(Billing.bill_number).like("rec%")),
+                    not_(func.lower(Billing.bill_number).like("phr%")),
                 )
+                p_query = p_query.where(PharmacyInvoice.id == -1)
             elif bt_val in ("ipd", "final_bill"):
                 b_query = b_query.where(func.lower(Billing.bill_number).like("ipd%"))
-                p_query = p_query.where(func.lower(PharmacyInvoice.invoice_number).like("ipd%"))
+                p_query = p_query.where(PharmacyInvoice.id == -1)
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -699,6 +712,23 @@ class BillingService:
         billing.status = BillingStatus.CANCELLED
         await self.db.flush()
         await self.audit_repo.create("cancel", "billing", user_id=user_id, resource_id=str(billing.id))
+
+        try:
+            from app.services.notification_service import NotificationService
+            import logging
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Bill Cancelled",
+                message=f"Bill ({billing.bill_number}) has been cancelled.",
+                notification_type="INVOICE_CANCELLED",
+                reference_type="BILLING",
+                reference_id=billing.id,
+                priority="NORMAL",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch bill cancelled notification: %s", exc)
+
         return self._to_billing_response(billing)
 
     async def delete(self, billing_id: int, user_id: int, current_user = None) -> None:
@@ -906,6 +936,16 @@ class BillingService:
                     email=patient.email,
                     phone=patient.phone,
                 )
+
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Payment Received",
+                message=f"Payment of ₹{payment.amount:,.2f} received for bill {billing.bill_number} via {payment.payment_method}.",
+                notification_type="PAYMENT_RECEIVED",
+                reference_type="PAYMENT",
+                reference_id=payment.id,
+                priority="NORMAL",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch payment received notification: %s", exc)
@@ -1030,6 +1070,17 @@ class BillingService:
                         reference_id=payment.id,
                         priority="NORMAL",
                     )
+
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=billing.hospital_id,
+                title="Refund Processed",
+                message=f"Refund of ₹{payment.amount:,.2f} processed for bill {billing.bill_number}.",
+                notification_type="PATIENT_REFUND_PROCESSED",
+                reference_type="PAYMENT",
+                reference_id=payment.id,
+                priority="NORMAL",
+            )
         except Exception as notif_exc:
             import logging
             logging.getLogger(__name__).warning(
@@ -1062,12 +1113,25 @@ class BillingService:
             issuing_hospital_id = getattr(invoice, "hospital_id", None) or hospital_id
             hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
 
-            hospital_name = (hospital.name or "").strip() if (hospital and hospital.name) else ""
-            hospital_address = (hospital.address or "").strip() if (hospital and hospital.address) else ""
-            hospital_phone = (hospital.phone or "").strip() if (hospital and hospital.phone) else ""
-            hospital_email = (hospital.email or "").strip() if (hospital and hospital.email) else ""
-            hospital_website = (hospital.website or "").strip() if (hospital and getattr(hospital, "website", None)) else ""
-            hospital_logo = getattr(hospital, "logo_path", None) if hospital else None
+            if hospital and hasattr(hospital, "name") and hospital.name:
+                hospital_name = (hospital.name or "").strip()
+                hospital_address = (hospital.address or "").strip() if hospital.address else ""
+                hospital_phone = (hospital.phone or "").strip() if hospital.phone else ""
+                hospital_email = (hospital.email or "").strip() if hospital.email else ""
+                hospital_website = (hospital.website or "").strip() if getattr(hospital, "website", None) else ""
+                hospital_logo = getattr(hospital, "logo_path", None)
+                from app.utils.pdf_generator import resolve_logo_as_data_uri
+                logo_data_uri = resolve_logo_as_data_uri(hospital_logo)
+                logo_base64 = logo_data_uri.split(",", 1)[1] if (logo_data_uri and "," in logo_data_uri) else None
+            else:
+                hospital_name = ""
+                hospital_address = ""
+                hospital_phone = ""
+                hospital_email = ""
+                hospital_website = ""
+                hospital_logo = None
+                logo_data_uri = None
+                logo_base64 = None
 
             patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
             patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1093,7 +1157,9 @@ class BillingService:
                     "hospital_phone": hospital_phone,
                     "hospital_email": hospital_email,
                     "hospital_website": hospital_website,
-                    "hospital_logo": hospital_logo,
+                    "hospital_logo": hospital_logo or logo_data_uri,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
                     "patient_name": patient_name,
                     "patient_phone": patient_phone,
                     "patient_email": patient_email,
@@ -1118,12 +1184,25 @@ class BillingService:
         issuing_hospital_id = getattr(billing, "hospital_id", None) or hospital_id
         hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
 
-        hospital_name = (hospital.name or "").strip() if (hospital and hospital.name) else ""
-        hospital_address = (hospital.address or "").strip() if (hospital and hospital.address) else ""
-        hospital_phone = (hospital.phone or "").strip() if (hospital and hospital.phone) else ""
-        hospital_email = (hospital.email or "").strip() if (hospital and hospital.email) else ""
-        hospital_website = (hospital.website or "").strip() if (hospital and getattr(hospital, "website", None)) else ""
-        hospital_logo = getattr(hospital, "logo_path", None) if hospital else None
+        if hospital and hasattr(hospital, "name") and hospital.name:
+            hospital_name = (hospital.name or "").strip()
+            hospital_address = (hospital.address or "").strip() if hospital.address else ""
+            hospital_phone = (hospital.phone or "").strip() if hospital.phone else ""
+            hospital_email = (hospital.email or "").strip() if hospital.email else ""
+            hospital_website = (hospital.website or "").strip() if getattr(hospital, "website", None) else ""
+            hospital_logo = getattr(hospital, "logo_path", None)
+            from app.utils.pdf_generator import resolve_logo_as_data_uri
+            logo_data_uri = resolve_logo_as_data_uri(hospital_logo)
+            logo_base64 = logo_data_uri.split(",", 1)[1] if (logo_data_uri and "," in logo_data_uri) else None
+        else:
+            hospital_name = ""
+            hospital_address = ""
+            hospital_phone = ""
+            hospital_email = ""
+            hospital_website = ""
+            hospital_logo = None
+            logo_data_uri = None
+            logo_base64 = None
 
         patient = await self.patient_repo.get_by_id(billing.patient_id)
         patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1149,7 +1228,9 @@ class BillingService:
                 "hospital_phone": hospital_phone,
                 "hospital_email": hospital_email,
                 "hospital_website": hospital_website,
-                "hospital_logo": hospital_logo,
+                    "hospital_logo": hospital_logo or logo_data_uri,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,
@@ -1939,7 +2020,12 @@ class BillingService:
         sort_order: str = "desc",
         current_user: Any | None = None,
     ):
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+
         hospital_id = resolve_tenant_id(current_user)
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
         from sqlalchemy import select, or_, func, union_all
@@ -2072,7 +2158,8 @@ class BillingService:
                 "item_id", "item_description", "item_quantity", "item_unit_price",
                 "item_gst_rate", "item_gst_amount", "item_line_total", "item_type"
             ]
-            ws.append(headers)
+            hdr_row = apply_excel_hospital_header(ws, branding, "Billings & Invoices Report", total_records=len(ordered_items))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
             
             for sr_no, b in enumerate(ordered_items, start=1):
                 p_name = patients_map.get(b.patient_id, "")
@@ -2081,38 +2168,46 @@ class BillingService:
                 # Check if there are items to export. If not, output one row with empty item columns
                 if not b.items:
                     row = [
-                        sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
-                        f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
-                        f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
-                        b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                        b.notes or "", b.invoice_path or "", appt_num_str,
-                        b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                        b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
-                        b.source,
+                        sanitize_excel_cell(sr_no), sanitize_excel_cell(p_name), sanitize_excel_cell(b.bill_number),
+                        sanitize_excel_cell(f"₹{b.subtotal:.2f}"), sanitize_excel_cell(b.discount_percent),
+                        sanitize_excel_cell(f"₹{b.discount_amount:.2f}"), sanitize_excel_cell(b.gst_rate),
+                        sanitize_excel_cell(f"₹{b.gst_amount:.2f}"), sanitize_excel_cell(f"₹{b.tax_amount:.2f}"),
+                        sanitize_excel_cell(f"₹{b.total_amount:.2f}"), sanitize_excel_cell(f"₹{b.paid_amount:.2f}"),
+                        sanitize_excel_cell(f"₹{b.balance_amount:.2f}"), sanitize_excel_cell(b.status),
+                        sanitize_excel_cell(b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else "")),
+                        sanitize_excel_cell(b.notes or ""), sanitize_excel_cell(b.invoice_path or ""), sanitize_excel_cell(appt_num_str),
+                        sanitize_excel_cell(b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at)),
+                        sanitize_excel_cell(b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at)),
+                        sanitize_excel_cell(b.source),
                         "", "", "", "", "", "", "", ""
                     ]
                     ws.append(row)
                 else:
                     for item in b.items:
                         row = [
-                            sr_no, p_name, b.bill_number, f"₹{b.subtotal:.2f}", b.discount_percent,
-                            f"₹{b.discount_amount:.2f}", b.gst_rate, f"₹{b.gst_amount:.2f}", f"₹{b.tax_amount:.2f}",
-                            f"₹{b.total_amount:.2f}", f"₹{b.paid_amount:.2f}", f"₹{b.balance_amount:.2f}",
-                            b.status, b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else ""),
-                            b.notes or "", b.invoice_path or "", appt_num_str,
-                            b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at),
-                            b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at),
-                            b.source,
-                            item.id,
-                            item.description,
-                            item.quantity,
-                            f"₹{item.unit_price:.2f}",
-                            item.gst_rate,
-                            f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else "",
-                            f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else "",
-                            item.item_type
+                            sanitize_excel_cell(sr_no), sanitize_excel_cell(p_name), sanitize_excel_cell(b.bill_number),
+                            sanitize_excel_cell(f"₹{b.subtotal:.2f}"), sanitize_excel_cell(b.discount_percent),
+                            sanitize_excel_cell(f"₹{b.discount_amount:.2f}"), sanitize_excel_cell(b.gst_rate),
+                            sanitize_excel_cell(f"₹{b.gst_amount:.2f}"), sanitize_excel_cell(f"₹{b.tax_amount:.2f}"),
+                            sanitize_excel_cell(f"₹{b.total_amount:.2f}"), sanitize_excel_cell(f"₹{b.paid_amount:.2f}"),
+                            sanitize_excel_cell(f"₹{b.balance_amount:.2f}"), sanitize_excel_cell(b.status),
+                            sanitize_excel_cell(b.due_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.due_date, datetime) else (str(b.due_date) if b.due_date else "")),
+                            sanitize_excel_cell(b.notes or ""), sanitize_excel_cell(b.invoice_path or ""), sanitize_excel_cell(appt_num_str),
+                            sanitize_excel_cell(b.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.created_at, datetime) else str(b.created_at)),
+                            sanitize_excel_cell(b.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(b.updated_at, datetime) else str(b.updated_at)),
+                            sanitize_excel_cell(b.source),
+                            sanitize_excel_cell(item.id),
+                            sanitize_excel_cell(item.description),
+                            sanitize_excel_cell(item.quantity),
+                            sanitize_excel_cell(f"₹{item.unit_price:.2f}"),
+                            sanitize_excel_cell(item.gst_rate),
+                            sanitize_excel_cell(f"₹{item.gst_amount:.2f}" if getattr(item, "gst_amount", None) is not None else ""),
+                            sanitize_excel_cell(f"₹{item.line_total:.2f}" if getattr(item, "line_total", None) is not None else ""),
+                            sanitize_excel_cell(item.item_type)
                         ]
                         ws.append(row)
+
+            auto_fit_columns(ws)
                         
             stream = BytesIO()
             wb.save(stream)
@@ -2181,7 +2276,16 @@ class BillingService:
                 
             html_content = template.render(
                 billings=formatted_billings,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Billings & Invoices Report",
+                total_records=len(ordered_items),
             )
             
             pdf_data = html_to_pdf(html_content)

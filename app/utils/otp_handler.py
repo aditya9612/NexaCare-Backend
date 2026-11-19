@@ -87,12 +87,25 @@ def _otp_keys(email: str | None = None, phone: str | None = None) -> list[str]:
 
 def generate_otp(length: int = 6) -> str:
     """
-    Generate an unpredictable, cryptographically secure numeric OTP string of given length,
-    preserving leading zeros (e.g., '004291', '839201').
+    Generate numeric OTP string.
+    - In testing (ENVIRONMENT=testing): returns configured fixed TESTING_OTP (default: '123456').
+    - In production (ENVIRONMENT=production): returns cryptographically secure random 6-digit OTP
+      and guarantees the fixed testing OTP is never used.
+    - In development: returns cryptographically secure random 6-digit OTP.
     """
+    if getattr(settings, "is_testing", False):
+        testing_otp = getattr(settings, "TESTING_OTP", "123456")
+        if testing_otp and str(testing_otp).strip():
+            return str(testing_otp).strip()
+
     max_val = 10 ** length
-    code_int = secrets.randbelow(max_val)
-    return f"{code_int:0{length}d}"
+    testing_otp_str = str(getattr(settings, "TESTING_OTP", "123456")).strip()
+    while True:
+        code_int = secrets.randbelow(max_val)
+        otp = f"{code_int:0{length}d}"
+        if getattr(settings, "is_production", False) and otp == testing_otp_str:
+            continue
+        return otp
 
 
 async def store_otp(
@@ -148,9 +161,34 @@ async def verify_otp(
         return False
 
     otp_clean = str(otp).strip()
+
+    # In production: Never accept fixed testing OTP
+    if getattr(settings, "is_production", False):
+        testing_otp_str = str(getattr(settings, "TESTING_OTP", "123456")).strip()
+        if otp_clean == testing_otp_str:
+            logger.warning("Fixed testing OTP rejected in production environment for email=%s, phone=%s", email, phone)
+            return False
+
     keys = _otp_keys(email=email, phone=phone)
     if not keys:
         return False
+
+    # In development mode with DEBUG=True: allow direct login with TESTING_OTP without calling send-otp
+    if getattr(settings, "is_development", False) and getattr(settings, "DEBUG", False):
+        dev_otp = str(getattr(settings, "TESTING_OTP", "123456")).strip()
+        static_otp = str(getattr(settings, "STATIC_OTP_CODE", "")).strip()
+        if (dev_otp and otp_clean == dev_otp) or (static_otp and otp_clean == static_otp):
+            logger.info("[DEV MODE] Direct login accepted with dev OTP (%s) for email=%s, phone=%s", otp_clean, email, phone)
+            for k in keys:
+                client = await get_redis()
+                if client:
+                    try:
+                        await client.delete(k)
+                    except Exception:
+                        pass
+                async with _get_mem_lock():
+                    _otp_store.pop(k, None)
+            return True
 
     max_attempts = getattr(settings, "OTP_MAX_ATTEMPTS", 5)
     expected_purpose = purpose or ""
@@ -249,7 +287,23 @@ def verify_otp_sync(
     if not otp or not str(otp).strip():
         return False
     otp_clean = str(otp).strip()
+
+    if getattr(settings, "is_production", False):
+        testing_otp_str = str(getattr(settings, "TESTING_OTP", "123456")).strip()
+        if otp_clean == testing_otp_str:
+            return False
+
     keys = _otp_keys(email=email, phone=phone)
+
+    # In development mode with DEBUG=True: allow direct login with TESTING_OTP without calling send-otp
+    if getattr(settings, "is_development", False) and getattr(settings, "DEBUG", False):
+        dev_otp = str(getattr(settings, "TESTING_OTP", "123456")).strip()
+        static_otp = str(getattr(settings, "STATIC_OTP_CODE", "")).strip()
+        if (dev_otp and otp_clean == dev_otp) or (static_otp and otp_clean == static_otp):
+            for k in keys:
+                _otp_store.pop(k, None)
+            return True
+
     max_attempts = getattr(settings, "OTP_MAX_ATTEMPTS", 5)
     expected_purpose = purpose or ""
 

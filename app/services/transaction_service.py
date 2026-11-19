@@ -640,10 +640,14 @@ class TransactionService:
                     for row in p_res.all()
                 }
 
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
+
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
+
         if format_type == "excel":
             import openpyxl
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Transactions Report"
@@ -653,69 +657,30 @@ class TransactionService:
                 "Transaction Ref", "Payment Date", "Status", "Is Refund", "Refund Reason",
                 "Created At", "Updated At"
             ]
-            ws.append(headers)
 
-            # Apply Header Styling
-            ws.row_dimensions[1].height = 32
-            ws.freeze_panes = "A2"
-
-            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
-            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            thin_side = Side(style="thin", color="D3D3D3")
-            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = header_border
-
+            hdr_row = apply_excel_hospital_header(ws, branding, "Transactions Report", total_records=len(payments))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
             for sr_no, p in enumerate(payments, start=1):
                 bill_number, p_id = billing_map.get(p.billing_id, ("", None))
                 pat_name = patients_map.get(p_id, "") if p_id else ""
 
                 row = [
-                    sr_no,
-                    bill_number or "-",
-                    pat_name or "-",
-                    f"₹{p.amount:.2f}",
-                    p.payment_method,
-                    p.transaction_ref or "",
-                    p.payment_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.payment_date, datetime) else str(p.payment_date),
-                    p.status,
-                    "Yes" if p.is_refund else "No",
-                    p.refund_reason or "",
-                    p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at),
-                    p.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.updated_at, datetime) else str(p.updated_at)
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(bill_number or "-"),
+                    sanitize_excel_cell(pat_name or "-"),
+                    sanitize_excel_cell(f"₹{p.amount:.2f}"),
+                    sanitize_excel_cell(p.payment_method),
+                    sanitize_excel_cell(p.transaction_ref or ""),
+                    sanitize_excel_cell(p.payment_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.payment_date, datetime) else str(p.payment_date)),
+                    sanitize_excel_cell(p.status),
+                    sanitize_excel_cell("Yes" if p.is_refund else "No"),
+                    sanitize_excel_cell(p.refund_reason or ""),
+                    sanitize_excel_cell(p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at)),
+                    sanitize_excel_cell(p.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.updated_at, datetime) else str(p.updated_at))
                 ]
                 ws.append(row)
 
-            # Set custom column widths
-            column_widths = {
-                1: 8,   # Sr. No.
-                2: 22,  # Bill Number
-                3: 25,  # Patient Name
-                4: 15,  # Amount
-                5: 18,  # Payment Method
-                6: 22,  # Transaction Ref
-                7: 22,  # Payment Date
-                8: 15,  # Status
-                9: 12,  # Is Refund
-                10: 25, # Refund Reason
-                11: 22, # Created At
-                12: 22  # Updated At
-            }
-            for col_idx, width in column_widths.items():
-                col_letter = openpyxl.utils.get_column_letter(col_idx)
-                ws.column_dimensions[col_letter].width = width
-
-            # Set AutoFilter covering the complete header/data range
-            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
-            total_rows = len(payments) + 1
-            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-
+            auto_fit_columns(ws)
             stream = BytesIO()
             wb.save(stream)
             stream.seek(0)
@@ -765,7 +730,16 @@ class TransactionService:
 
             html_content = template.render(
                 transactions=formatted_txns,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Transactions Report",
+                total_records=len(payments),
             )
 
             pdf_data = html_to_pdf(html_content)

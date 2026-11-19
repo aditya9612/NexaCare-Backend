@@ -31,11 +31,21 @@ class StockMovementService:
 
         from app.models.user_model import User
         from app.models.inventory_model import Warehouse
+        from app.models.role_model import Role
         u_hosp_id = await db.scalar(select(User.hospital_id).where(User.id == performed_by))
         w_hosp_id = await db.scalar(select(Warehouse.hospital_id).where(Warehouse.id == warehouse_id))
 
-        if not u_hosp_id or not w_hosp_id or u_hosp_id != w_hosp_id:
-            raise HTTPException(status_code=403, detail="User or warehouse not found or tenant mismatch")
+        is_super_admin = False
+        if not u_hosp_id:
+            user_role = await db.scalar(
+                select(Role.name).select_from(User).join(Role, User.role_id == Role.id).where(User.id == performed_by)
+            )
+            if user_role and user_role.lower() in ("super admin", "super_admin"):
+                is_super_admin = True
+
+        if not is_super_admin:
+            if u_hosp_id != w_hosp_id:
+                raise HTTPException(status_code=403, detail="User or warehouse not found or tenant mismatch")
 
         # 1. Lock WarehouseStock for safety
         ws_query = select(WarehouseStock).where(

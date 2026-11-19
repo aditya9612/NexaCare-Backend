@@ -98,11 +98,26 @@ async def deliver_otp(
     email_sent = False
     sms_sent = False
 
+    # Email delivery handling
     if email:
-        email_sent = await send_email(email, subject, html_body, plain_body=plain_body)
+        if getattr(settings, "is_testing", False):
+            if not getattr(settings, "ENABLE_EMAIL_OTP", False):
+                logger.info("[TESTING] Skipping SMTP delivery for %s (ENABLE_EMAIL_OTP=False)", email)
+                email_sent = True
+            else:
+                email_sent = await send_email(email, subject, html_body, plain_body=plain_body)
+        elif not getattr(settings, "ENABLE_EMAIL_OTP", False) and not getattr(settings, "is_production", False):
+            logger.info("Email OTP disabled (ENABLE_EMAIL_OTP=False); skipping SMTP dispatch to %s", email)
+            email_sent = True
+        else:
+            email_sent = await send_email(email, subject, html_body, plain_body=plain_body)
 
+    # SMS delivery handling
     if phone:
-        sms_sent = await send_sms(normalize_phone(phone), sms_body)
+        if getattr(settings, "is_testing", False):
+            sms_sent = True
+        else:
+            sms_sent = await send_sms(normalize_phone(phone), sms_body)
 
     logger.info(
         "OTP delivery dispatched (%s) email=%s phone=%s | email_sent=%s sms_sent=%s",

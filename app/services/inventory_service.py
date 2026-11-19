@@ -1,3 +1,4 @@
+from typing import Any, Optional, List, Dict
 import math
 from datetime import timedelta
 from sqlalchemy import select, func, inspect
@@ -11,6 +12,7 @@ from app.core.exceptions import BadRequestException, NotFoundException, Conflict
 from app.services.stock_movement_service import StockMovementService
 from app.models.inventory_model import InventoryItem, ReorderAlert, StockTransaction, Warehouse
 from app.models.vendor_model import Vendor
+from app.models.pharmacy_model import Medicine
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.department_repository import DepartmentRepository
 from app.repositories.inventory_repository import (
@@ -86,11 +88,22 @@ class InventoryService:
         if existing:
             raise ConflictException("Inventory item with this SKU already exists")
 
+        existing_med_sku = await self.db.scalar(
+            select(Medicine.id).where(Medicine.sku == sku, Medicine.is_deleted.is_(False))
+        )
+        if existing_med_sku:
+            raise ConflictException("Medicine with this SKU already exists")
+
         barcode = data.barcode
         if barcode:
             existing_barcode = await self.item_repo.get_by_barcode(barcode)
             if existing_barcode:
                 raise ConflictException("Inventory item with this barcode already exists")
+            existing_med_barcode = await self.db.scalar(
+                select(Medicine.id).where(Medicine.barcode == barcode, Medicine.is_deleted.is_(False))
+            )
+            if existing_med_barcode:
+                raise ConflictException("Medicine with this barcode already exists")
 
         item_hospital_id = hospital_id
         if item_hospital_id is None and data.warehouse_id:
@@ -112,6 +125,29 @@ class InventoryService:
             )
             self.db.add(ws)
             await self.db.flush()
+
+        # Synchronize newly created InventoryItem to Pharmacy Medicine table
+        medicine = Medicine(
+            name=item.name,
+            generic_name=item.name,
+            sku=item.sku,
+            barcode=item.barcode,
+            category=item.category,
+            unit=item.unit,
+            unit_price=item.unit_cost or 0.0,
+            average_unit_cost=item.unit_cost or 0.0,
+            stock_quantity=item.quantity or 0,
+            reserved_quantity=0,
+            reorder_level=item.reorder_level or 10,
+            expiry_date=item.expiry_date,
+            description=item.description,
+            is_active=item.is_active,
+            hospital_id=item_hospital_id,
+            inventory_item_id=item.id,
+        )
+        self.db.add(medicine)
+        await self.db.flush()
+
         await self._check_reorder_alert(item)
         await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
         return InventoryItemResponse.model_validate(item)
@@ -177,6 +213,34 @@ class InventoryService:
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(item, key, value)
         item = await self.item_repo.update(item)
+
+        # Synchronize updates to linked Medicine if it exists
+        med = await self.db.scalar(
+            select(Medicine).where(Medicine.inventory_item_id == item.id, Medicine.is_deleted.is_(False))
+        )
+        if med:
+            update_dict = data.model_dump(exclude_unset=True)
+            if "name" in update_dict:
+                med.name = update_dict["name"]
+            if "category" in update_dict:
+                med.category = update_dict["category"]
+            if "unit" in update_dict:
+                med.unit = update_dict["unit"]
+            if "unit_cost" in update_dict:
+                med.unit_price = update_dict["unit_cost"]
+                med.average_unit_cost = update_dict["unit_cost"]
+            if "quantity" in update_dict:
+                med.stock_quantity = update_dict["quantity"]
+            if "reorder_level" in update_dict:
+                med.reorder_level = update_dict["reorder_level"]
+            if "expiry_date" in update_dict:
+                med.expiry_date = update_dict["expiry_date"]
+            if "barcode" in update_dict:
+                med.barcode = update_dict["barcode"]
+            if "description" in update_dict:
+                med.description = update_dict["description"]
+            await self.db.flush()
+
         await self._check_reorder_alert(item)
         await self.audit_repo.create("update", "inventory", user_id=user_id, resource_id=str(item.id))
         return InventoryItemResponse.model_validate(item)
@@ -186,6 +250,16 @@ class InventoryService:
         if not item:
             raise NotFoundException("Inventory item not found")
         await self.item_repo.soft_delete(item)
+
+        # Soft-delete linked Medicine if it exists
+        med = await self.db.scalar(
+            select(Medicine).where(Medicine.inventory_item_id == item.id, Medicine.is_deleted.is_(False))
+        )
+        if med:
+            med.is_deleted = True
+            med.deleted_at = utc_now()
+            await self.db.flush()
+
         await self.audit_repo.create("delete", "inventory", user_id=user_id, resource_id=str(item.id))
 
     async def _check_reorder_alert(self, item: InventoryItem) -> None:
@@ -200,7 +274,9 @@ class InventoryService:
         else:
             await self.alert_repo.resolve_for_item(item.id)
 
-    async def create_transaction(self, data: StockTransactionCreate, user_id: int) -> StockTransactionResponse:
+    async def create_transaction(
+        self, data: StockTransactionCreate, user_id: int, hospital_id: int | None = None
+    ) -> StockTransactionResponse:
         item = await self.item_repo.get_by_id(data.item_id)
         if not item:
             raise NotFoundException("Inventory item not found")
@@ -219,6 +295,10 @@ class InventoryService:
             warehouse_id = available_wh or item.warehouse_id
             if not warehouse_id:
                 raise BadRequestException("Warehouse ID is required for stock transaction")
+
+        wh = await self.warehouse_repo.get_by_id(warehouse_id)
+        if not wh:
+            raise NotFoundException("Warehouse not found")
 
         quantity = data.quantity
         if tx_type == StockTransactionType.ADJUSTMENT:
@@ -268,6 +348,16 @@ class InventoryService:
                 notes=f"Transfer IN from {source_wh_name}. {data.notes or ''}".strip(),
                 performed_by=user_id,
             )
+            # Sync updated stock quantity to linked Medicine if exists
+            med = await self.db.scalar(
+                select(Medicine).where(Medicine.inventory_item_id == data.item_id, Medicine.is_deleted.is_(False))
+            )
+            if med:
+                refreshed_item = await self.item_repo.get_by_id(data.item_id)
+                if refreshed_item:
+                    med.stock_quantity = refreshed_item.quantity
+                    await self.db.flush()
+
             source_tx = await self.transaction_repo.get_by_id(source_tx.id) or source_tx
             return self._to_transaction_response(source_tx)
 
@@ -290,6 +380,16 @@ class InventoryService:
             notes=data.notes,
             performed_by=user_id,
         )
+        # Sync updated stock quantity to linked Medicine if exists
+        med = await self.db.scalar(
+            select(Medicine).where(Medicine.inventory_item_id == data.item_id, Medicine.is_deleted.is_(False))
+        )
+        if med:
+            refreshed_item = await self.item_repo.get_by_id(data.item_id)
+            if refreshed_item:
+                med.stock_quantity = refreshed_item.quantity
+                await self.db.flush()
+
         transaction = await self.transaction_repo.get_by_id(transaction.id) or transaction
         return self._to_transaction_response(transaction)
 
@@ -556,14 +656,20 @@ class InventoryService:
                     if sku_key in batch_skus:
                         raise ConflictException("Duplicate SKU in the uploaded file")
                     existing_sku = await self.item_repo.get_by_sku(sku)
-                    if existing_sku:
-                        raise ConflictException("Inventory item with this SKU already exists")
+                    existing_med_sku = await self.db.scalar(
+                        select(Medicine.id).where(Medicine.sku == sku, Medicine.is_deleted.is_(False))
+                    )
+                    if existing_sku or existing_med_sku:
+                        raise ConflictException("Inventory item or Medicine with this SKU already exists")
                     batch_skus.add(sku_key)
                 else:
                     while True:
                         sku = generate_code("SKU")
                         existing_sku = await self.item_repo.get_by_sku(sku)
-                        if not existing_sku and sku.strip().lower() not in batch_skus:
+                        existing_med = await self.db.scalar(
+                            select(Medicine.id).where(Medicine.sku == sku)
+                        )
+                        if not existing_sku and not existing_med and sku.strip().lower() not in batch_skus:
                             break
                     batch_skus.add(sku.strip().lower())
 
@@ -591,6 +697,28 @@ class InventoryService:
                 # Insert item
                 item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **validated_data.model_dump(exclude={"sku"}))
                 item = await self.item_repo.create(item)
+
+                # Synchronize to Pharmacy Medicine table
+                medicine = Medicine(
+                    name=item.name,
+                    generic_name=item.name,
+                    sku=item.sku,
+                    barcode=item.barcode,
+                    category=item.category,
+                    unit=item.unit,
+                    unit_price=item.unit_cost or 0.0,
+                    average_unit_cost=item.unit_cost or 0.0,
+                    stock_quantity=item.quantity or 0,
+                    reserved_quantity=0,
+                    reorder_level=item.reorder_level or 10,
+                    expiry_date=item.expiry_date,
+                    description=item.description,
+                    is_active=item.is_active,
+                    hospital_id=item_hospital_id,
+                    inventory_item_id=item.id,
+                )
+                self.db.add(medicine)
+
                 await self.audit_repo.create("create", "inventory", user_id=user_id, resource_id=str(item.id))
                 created += 1
 
@@ -616,9 +744,13 @@ class InventoryService:
             "errors": errors,
         }
 
-    async def export_items(self, format_type: str, hospital_id: int | None = None) -> tuple[BytesIO | bytes, str]:
+    async def export_items(self, format_type: str, hospital_id: int | None = None, current_user: Any | None = None) -> tuple[BytesIO | bytes, str]:
         from datetime import date, datetime
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
+        from app.utils.excel_branding import apply_excel_hospital_header, style_excel_header_row, auto_fit_columns
 
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
         items = await self.item_repo.get_all_active(hospital_id=hospital_id)
 
         if format_type == "excel":
@@ -632,77 +764,31 @@ class InventoryService:
                 "unit_cost", "reorder_level", "expiry_date", "warehouse_id",
                 "vendor_id", "department_id", "created_at", "updated_at"
             ]
-            ws.append(headers)
 
-
-            # Configure Header Row Height
-            ws.row_dimensions[1].height = 32
-
-            # Header Style definition
-            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-            header_font = Font(name="Calibri", size=12, bold=True, color="000000")
-            header_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            thin_side = Side(style="thin", color="D3D3D3")
-            header_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = header_border
+            hdr_row = apply_excel_hospital_header(ws, branding, "Inventory Items Export", total_records=len(items))
+            style_excel_header_row(ws, headers, header_row_idx=hdr_row)
 
             for sr_no, item in enumerate(items, start=1):
                 row = [
-                    sr_no,
-                    item.name,
-                    item.sku,
-                    item.barcode or "",
-                    item.category,
-                    int(item.quantity) if item.quantity is not None else 0,
-                    item.unit,
-                    float(item.unit_cost) if item.unit_cost is not None else 0.0,
-                    int(item.reorder_level) if item.reorder_level is not None else 0,
-                    item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or ""),
-                    int(item.warehouse_id) if item.warehouse_id is not None else "",
-                    int(item.vendor_id) if item.vendor_id is not None else "",
-                    int(item.department_id) if item.department_id is not None else "",
-                    item.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.created_at, datetime) else str(item.created_at),
-                    item.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.updated_at, datetime) else (str(item.updated_at) if item.updated_at else "")
+                    sanitize_excel_cell(sr_no),
+                    sanitize_excel_cell(item.name),
+                    sanitize_excel_cell(item.sku),
+                    sanitize_excel_cell(item.barcode or ""),
+                    sanitize_excel_cell(item.category),
+                    sanitize_excel_cell(int(item.quantity) if item.quantity is not None else 0),
+                    sanitize_excel_cell(item.unit),
+                    sanitize_excel_cell(float(item.unit_cost) if item.unit_cost is not None else 0.0),
+                    sanitize_excel_cell(int(item.reorder_level) if item.reorder_level is not None else 0),
+                    sanitize_excel_cell(item.expiry_date.strftime("%Y-%m-%d") if isinstance(item.expiry_date, (date, datetime)) else (item.expiry_date or "")),
+                    sanitize_excel_cell(int(item.warehouse_id) if item.warehouse_id is not None else ""),
+                    sanitize_excel_cell(int(item.vendor_id) if item.vendor_id is not None else ""),
+                    sanitize_excel_cell(int(item.department_id) if item.department_id is not None else ""),
+                    sanitize_excel_cell(item.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.created_at, datetime) else str(item.created_at)),
+                    sanitize_excel_cell(item.updated_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(item.updated_at, datetime) else (str(item.updated_at) if item.updated_at else ""))
                 ]
                 ws.append(row)
 
-
-            # Freeze panes at A2
-            ws.freeze_panes = "A2"
-
-            # AutoFilter (using openpyxl get_column_letter dynamically based on actual header length)
-            total_rows = len(items) + 1
-            last_col_letter = openpyxl.utils.get_column_letter(len(headers))
-            ws.auto_filter.ref = f"A1:{last_col_letter}{total_rows}"
-
-            # Set custom column widths
-            col_widths = {
-                1: 8,   # Sr. No.
-                2: 25,  # name
-                3: 20,  # sku
-                4: 18,  # barcode
-                5: 15,  # category
-                6: 12,  # quantity
-                7: 12,  # unit
-                8: 12,  # unit_cost
-                9: 15,  # reorder_level
-                10: 15, # expiry_date
-                11: 15, # warehouse_id
-                12: 15, # vendor_id
-                13: 15, # department_id
-                14: 22, # created_at
-                15: 22  # updated_at
-            }
-            for col_idx, width in col_widths.items():
-                col_letter = openpyxl.utils.get_column_letter(col_idx)
-                ws.column_dimensions[col_letter].width = width
+            auto_fit_columns(ws)
 
             stream = BytesIO()
             wb.save(stream)
@@ -712,6 +798,7 @@ class InventoryService:
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
+            from app.utils.helpers import utc_now
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
@@ -777,7 +864,16 @@ class InventoryService:
 
             html = template.render(
                 items=formatted_items,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S")
+                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                hospital_name=branding.hospital_name,
+                hospital_address=branding.hospital_address,
+                hospital_phone=branding.hospital_phone,
+                hospital_email=branding.hospital_email,
+                hospital_website=branding.hospital_website,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Inventory Items Report",
+                total_records=len(items),
             )
 
             pdf_bytes = html_to_pdf(html)
@@ -785,8 +881,6 @@ class InventoryService:
 
         else:
             raise BadRequestException("Invalid format specified for export")
-
-
 
     async def create_warehouse(self, data: WarehouseCreate, hospital_id: int | None) -> WarehouseResponse:
         code = data.code.strip() if hasattr(data, 'code') and data.code else generate_code('WH')

@@ -24,36 +24,7 @@
   </style>
 </head>
 <body>
-  <!-- Header Section with Hospital Branding -->
-  <table style="width: 810pt; border-bottom: 2px solid #1e40af; padding-bottom: 8px; margin-bottom: 10px;">
-    <tr>
-      <td style="border: none; padding: 0; vertical-align: middle;">
-        <table style="border: none; width: auto;">
-          <tr>
-            {% if hospital_logo %}
-            <td style="border: none; padding: 0 10px 0 0; vertical-align: middle;">
-              <img src="{{ hospital_logo }}" style="max-height: 48px; max-width: 140px; height: auto; width: auto; object-fit: contain;" alt="Logo" />
-            </td>
-            {% endif %}
-            <td style="border: none; padding: 0; vertical-align: middle;">
-              <div style="font-size: 13pt; font-weight: bold; color: #1e40af; text-transform: uppercase;">{{ hospital_name | default('NEXACARE HOSPITAL', true) }}</div>
-              <div style="font-size: 8pt; color: #475569; margin-top: 2px;">
-                {% if hospital_address %}{{ hospital_address }}{% endif %}
-                {% if hospital_phone %}{% if hospital_address %} &bull; {% endif %}Phone: {{ hospital_phone }}{% endif %}
-                {% if hospital_email %}{% if hospital_address or hospital_phone %} &bull; {% endif %}Contact: {{ hospital_email }}{% endif %}
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-      <td style="text-align: right; vertical-align: middle; border: none; padding: 0;">
-        <div style="font-size: 14pt; font-weight: bold; color: #1e293b;">VENDORS REPORT</div>
-        <div style="font-size: 8pt; color: #64748b; margin-top: 3px;">
-          <strong>Total Records:</strong> {{ vendors|length }} &nbsp;|&nbsp; <strong>Generated At:</strong> {{ generated_at }}
-        </div>
-      </td>
-    </tr>
-  </table>
+  {% include "partials/brand_header.html" %}
   
   <table style="width: 810pt; table-layout: fixed; border-collapse: collapse; margin-top: 5px;">
     <thead>
@@ -103,5 +74,6 @@
       {% endfor %}
     </tbody>
   </table>
+  {% include "partials/brand_footer.html" %}
 </body>
 </html>

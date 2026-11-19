@@ -16,9 +16,8 @@ _WEAK_SECRETS = {
 
 
 def validate_production_settings() -> None:
-    """Raise RuntimeError if APP_ENV is production and critical settings are unsafe."""
-    env = (settings.APP_ENV or "").lower()
-    if env not in ("production", "prod"):
+    """Raise RuntimeError if APP_ENV / ENVIRONMENT is production and critical settings are unsafe."""
+    if not getattr(settings, "is_production", False):
         return
 
     errors: list[str] = []
@@ -67,6 +66,16 @@ def validate_production_settings() -> None:
 
     if settings.ALLOW_ADMIN_SELF_REGISTER:
         errors.append("ALLOW_ADMIN_SELF_REGISTER must be false in production")
+
+    # Email OTP & SMTP checks in production
+    if getattr(settings, "ENABLE_EMAIL_OTP", False):
+        smtp_user = getattr(settings, "SMTP_USERNAME", "") or getattr(settings, "SMTP_USER", "")
+        smtp_host = getattr(settings, "SMTP_HOST", "")
+        smtp_pass = getattr(settings, "SMTP_PASSWORD", "")
+        if not smtp_host or not smtp_user or not smtp_pass:
+            errors.append(
+                "SMTP configuration (SMTP_HOST, SMTP_USERNAME/SMTP_USER, SMTP_PASSWORD) is required when ENABLE_EMAIL_OTP is true in production"
+            )
 
     for w in warnings:
         logger.warning("Production config warning: %s", w)

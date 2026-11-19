@@ -80,6 +80,22 @@ class Prescription(Base, TimestampMixin, SoftDeleteMixin):
         back_populates="prescription", cascade="all, delete-orphan"
     )
 
+    @property
+    def prescription_status(self) -> str:
+        from datetime import date, timedelta
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        start = self.start_date or (self.created_at.date() if self.created_at else today)
+        durations = []
+        try:
+            if "items" in self.__dict__ and self.__dict__["items"]:
+                durations = [item.duration_days for item in self.__dict__["items"] if getattr(item, "duration_days", None)]
+        except Exception:
+            pass
+        max_duration = max(durations) if durations else 1
+        end_date = start + timedelta(days=max_duration)
+        return "active" if today <= end_date else "completed" 
+
 
 class PrescriptionItem(Base, TimestampMixin):
     __tablename__ = "prescription_items"

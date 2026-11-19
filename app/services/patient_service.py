@@ -817,29 +817,15 @@ class PatientService:
             if hospital_id is None and current_user is not None:
                 hospital_id = self._resolve_tenant_hospital_id(current_user)
 
-        hospital_name = None
-        hospital_address = None
-        hospital_phone = None
-        hospital_email = None
-        hospital_logo = None
+        from app.services.branding_resolver_service import BrandingResolverService
+        from app.utils.excel_security import sanitize_excel_cell
 
-        if hospital_id:
-            from app.repositories.hospital_repository import HospitalRepository
-            hospital = await HospitalRepository(self.db).get_by_id(hospital_id)
-            if hospital:
-                hospital_name = hospital.name
-                hospital_address = hospital.address
-                hospital_phone = hospital.phone
-                hospital_email = hospital.email
-                logo_attr = getattr(hospital, 'logo', None) or getattr(hospital, 'logo_path', None) or getattr(hospital, 'logo_url', None)
-                if logo_attr and os.path.exists(str(logo_attr)):
-                    hospital_logo = os.path.abspath(str(logo_attr)).replace("\\", "/")
-
-        if not hospital_logo:
-            for candidate in ["app/static/images/logo.png", "app/static/logo.png"]:
-                if os.path.exists(candidate):
-                    hospital_logo = os.path.abspath(candidate).replace("\\", "/")
-                    break
+        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=hospital_id)
+        hospital_name = branding.hospital_name
+        hospital_address = branding.hospital_address
+        hospital_phone = branding.hospital_phone
+        hospital_email = branding.hospital_email
+        hospital_logo = branding.logo_path
 
         def format_full_address(address: str | None, city: str | None, state: str | None, pincode: str | None) -> str:
             parts = []
@@ -924,7 +910,7 @@ class PatientService:
             ws.row_dimensions[4].height = 12
 
             # Row 1: Hospital Name
-            ws.cell(row=1, column=1, value=hospital_name or "NexaCare Hospital").font = Font(size=14, bold=True, color="2563EB")
+            ws.cell(row=1, column=1, value=sanitize_excel_cell(hospital_name or "NexaCare Hospital")).font = Font(size=14, bold=True, color="2563EB")
 
             # Row 2: Hospital Address + Phone + Email
             sub_info = []
@@ -1001,7 +987,7 @@ class PatientService:
                     p.created_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(p.created_at, datetime) else str(p.created_at)
                 ]
                 for col_idx, val in enumerate(row, start=1):
-                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                    cell = ws.cell(row=row_idx, column=col_idx, value=sanitize_excel_cell(val))
                     if col_idx in (1, 4, 6, 7, 8):
                         cell.alignment = Alignment(horizontal="center", vertical="top")
                     else:
@@ -1087,7 +1073,12 @@ class PatientService:
                 hospital_address=hospital_address,
                 hospital_phone=hospital_phone,
                 hospital_email=hospital_email,
-                hospital_logo=pdf_logo_src,
+                hospital_website=branding.hospital_website,
+                hospital_logo=branding.logo_data_uri or pdf_logo_src,
+                logo_data_uri=branding.logo_data_uri,
+                logo_base64=branding.logo_base64,
+                report_title="Patients Report",
+                total_records=len(patients),
             )
 
             pdf_data = html_to_pdf(html_content)

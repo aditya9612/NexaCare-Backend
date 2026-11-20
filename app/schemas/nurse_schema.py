@@ -708,6 +708,25 @@ class NurseMedicationLogDetailResponse(NurseMedicationLogResponse):
     special_instructions: str | None = None
 
 
+class NurseMedicationLogsWithSummaryResponse(BaseSchema):
+    items: list[NurseMedicationLogDetailResponse] = []
+    total: int = 0
+    total_prescription: int = 0
+    given_today: int = 0
+    pending_due: int = 0
+    missed_dose: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_aliases(cls, data: any) -> any:
+        if isinstance(data, dict):
+            tp = data.get("total_prescription", data.get("total_prescriptions", 0))
+            data["total_prescription"] = tp
+            md = data.get("missed_dose", data.get("misses_dose", 0))
+            data["missed_dose"] = md
+        return data
+
+
 class UpcomingMedicationResponse(BaseSchema):
     patient_id: int
     patient_name: str

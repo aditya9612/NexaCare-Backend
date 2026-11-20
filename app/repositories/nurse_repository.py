@@ -759,16 +759,15 @@ class NurseTaskRepository:
         self,
         query,
         nurse_id: int,
-        due_date: date,
+        due_date: date | None = None,
         patient_id: int | None = None,
         status: str | None = None,
         priority: str | None = None,
         search: str | None = None,
     ):
-        query = query.where(
-            NurseTask.nurse_id == nurse_id,
-            NurseTask.due_date == due_date,
-        )
+        query = query.where(NurseTask.nurse_id == nurse_id)
+        if due_date is not None:
+            query = query.where(NurseTask.due_date == due_date)
         if patient_id is not None:
             query = query.where(NurseTask.patient_id == patient_id)
         if status is not None:
@@ -792,7 +791,7 @@ class NurseTaskRepository:
     async def list_by_nurse(
         self,
         nurse_id: int,
-        due_date: date,
+        due_date: date | None = None,
         skip: int = 0,
         limit: int = 20,
         patient_id: int | None = None,
@@ -820,7 +819,7 @@ class NurseTaskRepository:
     async def count_by_nurse(
         self,
         nurse_id: int,
-        due_date: date,
+        due_date: date | None = None,
         patient_id: int | None = None,
         status: str | None = None,
         priority: str | None = None,

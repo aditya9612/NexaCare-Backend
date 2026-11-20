@@ -212,6 +212,73 @@ async def today_appointments(
     return APIResponse(message="Today's appointments", data=appointments)
 
 
+@router.get(
+    "/today/download",
+    summary="Download Today's Appointments List",
+    description="Download today's appointments in Excel (.xlsx) or PDF (.pdf) format with hospital branding.",
+)
+@router.get(
+    "/today/export",
+    summary="Export Today's Appointments List",
+    include_in_schema=False,
+)
+async def download_today_appointments(
+    db: DbSession,
+    current_user: CurrentUser,
+    format: AppointmentExportFormat = Query(AppointmentExportFormat.EXCEL, description="Export format: excel or pdf"),
+    doctor_id: int | None = None,
+    department_id: int | None = None,
+    patient_id: int | None = None,
+    status: str | None = None,
+    admission_status: str | None = None,
+    appointment_type: str | None = None,
+    booking_source: BookingSource | None = None,
+    triage_level: int | None = None,
+    disposition: str | None = None,
+    search: str | None = None,
+    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    _: User = Depends(require_permission("appointments", "read")),
+):
+    """
+    Download today's appointments list as Excel (.xlsx) or PDF (.pdf).
+    Scoped to the current IST date and tenant isolation.
+    """
+    from app.utils.helpers import get_today_ist, utc_now
+
+    today = get_today_ist()
+
+    if appointment_type:
+        from app.schemas.appointment_schema import normalize_and_validate_appointment_type
+        appointment_type = normalize_and_validate_appointment_type(appointment_type)
+
+    data, media_type = await AppointmentService(db).export_appointments(
+        format_type=format.value if hasattr(format, "value") else str(format),
+        doctor_id=doctor_id,
+        department_id=department_id,
+        patient_id=patient_id,
+        status=status,
+        admission_status=admission_status,
+        appointment_date=today,
+        appointment_type=appointment_type,
+        booking_source=booking_source,
+        triage_level=triage_level,
+        disposition=disposition,
+        search=search,
+        current_user=current_user,
+        x_hospital_id=x_hospital_id,
+    )
+
+    timestamp_str = utc_now().strftime("%Y%m%d_%H%M%S")
+    ext = "xlsx" if (format == AppointmentExportFormat.EXCEL or str(format).lower() == "excel") else "pdf"
+    filename = f"today_appointments_{today.strftime('%Y%m%d')}_{timestamp_str}.{ext}"
+
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.get("/upcoming", response_model=APIResponse[List[AppointmentResponse]])
 async def upcoming_appointments(
     db: DbSession,

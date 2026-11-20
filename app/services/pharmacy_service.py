@@ -1701,8 +1701,13 @@ class PharmacyService:
             current_user,
             hospital_id=invoice.hospital_id or hospital_id,
         )
-        logo_html = f'<img src="{branding.logo_data_uri}" style="max-height: 52px; max-width: 150px; object-fit: contain; vertical-align: middle; margin-right: 12px;" />' if branding.logo_data_uri else ""
-        hosp_name = branding.hospital_name or "NexaCare Hospital"
+        has_custom_logo = (
+            branding.logo_data_uri
+            and not branding.is_platform_branding
+            and not (branding.logo_path and ("app/static" in str(branding.logo_path) or "static/images" in str(branding.logo_path)))
+        )
+        logo_html = f'<img src="{branding.logo_data_uri}" style="max-height: 52px; max-width: 150px; object-fit: contain; vertical-align: middle; margin-right: 12px;" />' if has_custom_logo else ""
+        hosp_name = (branding.hospital_name if not branding.is_platform_branding else None) or "Hospital"
         contact_line = branding.contact_line or "Advanced Healthcare & Pharmacy Billing"
 
         html_content = f"""<!DOCTYPE html>

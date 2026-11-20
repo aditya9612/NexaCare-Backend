@@ -343,3 +343,118 @@ async def test_pharmacy_invoice_fallback_uses_correct_hospital_branding():
         assert data_arg["hospital_email"] == "viveksm228@gmail.com"
         assert data_arg["hospital_website"] == "https://chetan-hospital.com"
         assert data_arg["hospital_logo"] == "uploads/hospitals/chetan_logo.png"
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Hospital with own name but no logo renders name and no logo img
+# ---------------------------------------------------------------------------
+def test_hospital_with_name_but_no_logo_renders_no_image_and_no_nexacare():
+    template = Environment(loader=FileSystemLoader("app/templates")).get_template("invoice_template.html")
+    html = template.render(
+        hospital_name="Apex Care Hospital",
+        hospital_logo=None,
+        logo_data_uri=None,
+        logo_base64=None,
+        hospital_address="Sector 12, Navi Mumbai",
+        hospital_phone="+919876500000",
+        hospital_email="info@apexcare.com",
+        invoice_number="INV-NO-LOGO-001",
+        patient_name="Rahul Varma",
+        patient_phone="-",
+        patient_email="-",
+        date="2026-11-20",
+        status="Paid",
+        items=[],
+        subtotal="500.00",
+        discount_percent="0.0",
+        discount_amount="0.00",
+        gst_rate="0.0",
+        gst_amount="0.00",
+        tax_amount="0.00",
+        total_amount="500.00",
+        paid_amount="500.00",
+        balance_amount="0.00",
+        notes="",
+    )
+    assert "Apex Care Hospital" in html
+    assert "<img" not in html
+    assert "NexaCare" not in html
+
+
+# ---------------------------------------------------------------------------
+# Test 10: Hospital with empty/missing name renders generic fallback 'Hospital'
+# ---------------------------------------------------------------------------
+def test_hospital_with_empty_or_missing_name_renders_generic_fallback():
+    template = Environment(loader=FileSystemLoader("app/templates")).get_template("invoice_template.html")
+    for empty_val in [None, ""]:
+        html = template.render(
+            hospital_name=empty_val,
+            hospital_logo=None,
+            logo_data_uri=None,
+            logo_base64=None,
+            invoice_number="INV-EMPTY-001",
+            patient_name="Anonymous Patient",
+            patient_phone="-",
+            patient_email="-",
+            date="2026-11-20",
+            status="Paid",
+            items=[],
+            subtotal="100.00",
+            discount_percent="0.0",
+            discount_amount="0.00",
+            gst_rate="0.0",
+            gst_amount="0.00",
+            tax_amount="0.00",
+            total_amount="100.00",
+            paid_amount="100.00",
+            balance_amount="0.00",
+            notes="",
+        )
+        assert '<div class="brand-title">Hospital</div>' in html
+        assert "NexaCare" not in html
+        assert "<img" not in html
+
+
+# ---------------------------------------------------------------------------
+# Test 11: End-to-end PDF generation without NexaCare branding
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_end_to_end_invoice_pdf_generation_hospital_branding():
+    from app.utils.pdf_generator import generate_invoice_pdf
+
+    data = {
+        "hospital_name": "Chetan Multispeciality Hospital",
+        "hospital_address": "Main Road, Bhusawal",
+        "hospital_phone": "+919876543232",
+        "hospital_email": "info@chetan.com",
+        "hospital_website": "https://chetan-hospital.com",
+        "hospital_logo": None,
+        "patient_name": "Pooja Deshmukh",
+        "patient_phone": "+919999988888",
+        "patient_email": "pooja@gmail.com",
+        "date": "2026-11-20",
+        "items": [
+            {
+                "description": "General Consultation",
+                "quantity": 1,
+                "unit_price": "500.00",
+                "gst_rate": "0.0",
+                "line_total": "500.00",
+            }
+        ],
+        "subtotal": "500.00",
+        "discount_percent": "0.0",
+        "discount_amount": "0.00",
+        "gst_rate": "0.0",
+        "gst_amount": "0.00",
+        "tax_amount": "0.00",
+        "total_amount": "500.00",
+        "paid_amount": "500.00",
+        "balance_amount": "0.00",
+        "status": "Paid",
+        "notes": "Thank you for visiting",
+    }
+    path, pdf_bytes = await generate_invoice_pdf("BILL-E2E-TEST-001", data)
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 0
+    assert pdf_bytes.startswith(b"%PDF")

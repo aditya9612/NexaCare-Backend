@@ -1230,7 +1230,12 @@ class NurseService:
             oxygen_saturation=vital.oxygen_saturation,
         )
 
-        return PatientVitalResponse.model_validate(vital)
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        res = PatientVitalResponse.model_validate(vital)
+        if patient:
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+        return res
 
     async def _check_vital_thresholds_and_notify(
         self,
@@ -1338,7 +1343,12 @@ class NurseService:
         vital = await self.vital_repo.get_by_id(vital_id)
         if not vital:
             raise NotFoundException("Vital record not found")
-        return PatientVitalResponse.model_validate(vital)
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        res = PatientVitalResponse.model_validate(vital)
+        if patient:
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+        return res
 
     async def update_patient_vital(
         self, vital_id: int, data: PatientVitalUpdate, user_id: int
@@ -1384,7 +1394,12 @@ class NurseService:
             oxygen_saturation=vital.oxygen_saturation,
         )
 
-        return PatientVitalResponse.model_validate(vital)
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        res = PatientVitalResponse.model_validate(vital)
+        if patient:
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+        return res
 
     def _nurse_lab_test_status(self, order_status: str) -> str:
         if order_status == LabOrderStatus.COMPLETED:

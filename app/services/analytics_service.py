@@ -629,9 +629,25 @@ class AnalyticsService:
             if export.export_format == ReportExportFormat.EXCEL:
                 file_path = generate_excel_report(export.report_type, rows)
             else:
+                from app.services.branding_resolver_service import BrandingResolverService
+                branding = await BrandingResolverService.resolve_branding(self.db, hospital_id=hospital_id)
+
+                hosp_name = branding.hospital_name if (branding and not branding.is_platform_branding) else ""
+                hosp_logo = (branding.logo_data_uri or branding.logo_path) if (branding and not branding.is_platform_branding) else None
+
+                report_data = {
+                    "title": export.report_type,
+                    "rows": rows,
+                    "hospital_name": hosp_name,
+                    "hospital_logo": hosp_logo,
+                    "hospital_address": branding.hospital_address if (branding and not branding.is_platform_branding) else None,
+                    "hospital_phone": branding.hospital_phone if (branding and not branding.is_platform_branding) else None,
+                    "hospital_email": branding.hospital_email if (branding and not branding.is_platform_branding) else None,
+                    "hospital_website": branding.hospital_website if (branding and not branding.is_platform_branding) else None,
+                }
                 file_path = await generate_lab_report_html(
                     f"RPT-{export.id}",
-                    {"title": export.report_type, "rows": rows},
+                    report_data,
                 )
             export.status = ReportExportStatus.COMPLETED
             export.file_path = file_path

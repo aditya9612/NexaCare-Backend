@@ -324,7 +324,9 @@
             </td>
             {% endif %}
             <td style="border: none; padding: 0; vertical-align: middle;">
-              <div class="hospital-name">{{ hospital_name or "NexaCare Healthcare" }}</div>
+              {% if hospital_name %}
+              <div class="hospital-name">{{ hospital_name }}</div>
+              {% endif %}
               <div class="hospital-sub">
                 {% if hospital_address %}{{ hospital_address }}<br>{% endif %}
                 {% if hospital_phone %}<span>Phone: {{ hospital_phone }}</span>{% endif %}
@@ -460,7 +462,7 @@
     <div class="disclaimer-box">
       <strong>Confidential Medical Document:</strong> This laboratory report is electronically signed and authenticated for diagnostic assistance.
       Test results relate only to the specimen tested and should be clinically correlated by the consulting physician.<br>
-      Report ID: {{ report_number }} | Generated on: {{ generated_at }} | {{ hospital_name or "NexaCare Healthcare" }}
+      Report ID: {{ report_number }} | Generated on: {{ generated_at }}{% if hospital_name %} | {{ hospital_name }}{% endif %}
     </div>
   </div>
 

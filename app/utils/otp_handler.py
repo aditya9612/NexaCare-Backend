@@ -88,12 +88,11 @@ def _otp_keys(email: str | None = None, phone: str | None = None) -> list[str]:
 def generate_otp(length: int = 6) -> str:
     """
     Generate numeric OTP string.
-    - In testing (ENVIRONMENT=testing): returns configured fixed TESTING_OTP (default: '123456').
-    - In production (ENVIRONMENT=production): returns cryptographically secure random 6-digit OTP
+    - In development or testing (non-production): returns configured hardcoded TESTING_OTP (default: '123456').
+    - In production (ENVIRONMENT=production): returns cryptographically secure random 6-digit dynamic OTP
       and guarantees the fixed testing OTP is never used.
-    - In development: returns cryptographically secure random 6-digit OTP.
     """
-    if getattr(settings, "is_testing", False):
+    if not getattr(settings, "is_production", False):
         testing_otp = getattr(settings, "TESTING_OTP", "123456")
         if testing_otp and str(testing_otp).strip():
             return str(testing_otp).strip()
@@ -103,7 +102,7 @@ def generate_otp(length: int = 6) -> str:
     while True:
         code_int = secrets.randbelow(max_val)
         otp = f"{code_int:0{length}d}"
-        if getattr(settings, "is_production", False) and otp == testing_otp_str:
+        if otp == testing_otp_str:
             continue
         return otp
 

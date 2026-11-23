@@ -405,7 +405,18 @@ class AppointmentService:
             allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
             if not allowed_ids or appointment.patient_id not in allowed_ids:
                 raise ForbiddenException("You do not have permission to view this appointment")
-        return AppointmentResponse.model_validate(appointment)
+        resp = AppointmentResponse.model_validate(appointment)
+        if appointment.patient_id and (appointment.appointment_type == "IPD" or appointment.admission_recommended):
+            from app.models.bed_allocation_model import Bed
+            from sqlalchemy import select
+            bed_res = await self.db.execute(
+                select(Bed).where(Bed.patient_id == appointment.patient_id, Bed.status == "Occupied").limit(1)
+            )
+            bed_obj = bed_res.scalar_one_or_none()
+            if bed_obj:
+                resp.allocated_bed_id = bed_obj.id
+                resp.allocated_bed_name = bed_obj.name
+        return resp
 
     async def get_token(self, appointment_id: int, current_user = None) -> TokenResponse:
         from app.core.dependencies import resolve_tenant_id
@@ -467,7 +478,8 @@ class AppointmentService:
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
         queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
-        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
+        requested_bed_id = getattr(data, "bed_id", None)
+        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number", "bed_id"})
         if not appointment_data.get("booking_source"):
             appointment_data["booking_source"] = BookingSource.STAFF
         if not appointment_data.get("hospital_id"):
@@ -475,6 +487,10 @@ class AppointmentService:
             appointment_data["hospital_id"] = hospital_id or (patient.hospital_id if patient else None)
 
         appt_type_str = (appointment_data.get("appointment_type") or "").strip().upper()
+        if requested_bed_id and appt_type_str != "IPD":
+            appt_type_str = "IPD"
+            appointment_data["appointment_type"] = "IPD"
+
         if appt_type_str == "IPD":
             from app.core.constants import AdmissionStatus, AppointmentType
             from app.utils.helpers import generate_admission_number
@@ -500,6 +516,26 @@ class AppointmentService:
         await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         await self._notify_confirmation_safely(appointment, user_id)
 
+        allocated_bed = None
+        if requested_bed_id:
+            from app.services.bed_allocation_service import BedAllocationService
+            from app.schemas.bed_allocation_schema import BedAllocationRequest
+            from datetime import timezone
+
+            bed_alloc_service = BedAllocationService(self.db)
+            admission_time = appointment.appointment_time if isinstance(appointment.appointment_time, time) else time(0, 0)
+            admission_dt = datetime.combine(appointment.appointment_date, admission_time, tzinfo=timezone.utc)
+            allocated_bed = await bed_alloc_service.allocate_bed(
+                bed_id=requested_bed_id,
+                data=BedAllocationRequest(
+                    patientId=appointment.patient_id,
+                    appointmentId=appointment.id,
+                    admissionDate=admission_dt,
+                    notes=f"Auto-allocated during IPD appointment creation #{appointment.appointment_number}",
+                ),
+                current_user=current_user,
+            )
+
         try:
             doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
             if doctor and doctor.user_id:
@@ -519,7 +555,11 @@ class AppointmentService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch doctor new appointment notification: %s", notif_exc)
 
-        return AppointmentResponse.model_validate(appointment)
+        resp = AppointmentResponse.model_validate(appointment)
+        if allocated_bed:
+            resp.allocated_bed_id = allocated_bed.id
+            resp.allocated_bed_name = allocated_bed.name
+        return resp
 
 
     async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int, current_user = None) -> AppointmentResponse:
@@ -1781,6 +1821,24 @@ class AppointmentService:
 
         await self.db.flush()
 
+        allocated_bed = None
+        if getattr(data, "bed_id", None):
+            from app.services.bed_allocation_service import BedAllocationService
+            from app.schemas.bed_allocation_schema import BedAllocationRequest
+            from app.utils.helpers import utc_now
+
+            bed_alloc_service = BedAllocationService(self.db)
+            allocated_bed = await bed_alloc_service.allocate_bed(
+                bed_id=data.bed_id,
+                data=BedAllocationRequest(
+                    patientId=appointment.patient_id,
+                    appointmentId=appointment.id,
+                    admissionDate=utc_now(),
+                    notes=data.notes or f"Allocated upon admission recommendation for appointment #{appointment.appointment_number}",
+                ),
+                current_user=current_user,
+            )
+
         patient_name = appointment.patient_name or f"Patient ID {appointment.patient_id}"
         await self._create_queue_notification(
             appointment,
@@ -1801,6 +1859,8 @@ class AppointmentService:
             diagnosis=diagnosis_val or (appointment.patient.diagnosis if appointment.patient else None),
             notes=data.notes,
             disposition=appointment.disposition,
+            allocated_bed_id=allocated_bed.id if allocated_bed else None,
+            allocated_bed_name=allocated_bed.name if allocated_bed else None,
         )
 
     async def update_triage(

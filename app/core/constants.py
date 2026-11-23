@@ -399,3 +399,40 @@ class DayOfWeek:
         if 0 <= day_of_week <= 6:
             return cls.NAMES[day_of_week]
         raise ValueError(f"day_of_week must be 0-6, got {day_of_week}")
+
+
+class EmailDeliveryStatus(str, Enum):
+    PENDING = "PENDING"
+    QUEUED = "QUEUED"
+    SENT = "SENT"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+    DELIVERED = "DELIVERED"
+
+
+class EmailCampaignStatus(str, Enum):
+    DRAFT = "DRAFT"
+    SCHEDULED = "SCHEDULED"
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class EmailSourceType(str, Enum):
+    APPOINTMENT = "APPOINTMENT"
+    DISCHARGE = "DISCHARGE"
+    GENERAL = "GENERAL"
+    CAMPAIGN = "CAMPAIGN"
+    AUTH = "AUTH"
+
+
+class EmailMessageType(str, Enum):
+    TEXT = "TEXT"
+    HTML = "HTML"
+    TEMPLATE = "TEMPLATE"
+    PDF = "PDF"
+    IMAGE = "IMAGE"
+    ATTACHMENT = "ATTACHMENT"
+

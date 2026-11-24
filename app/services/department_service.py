@@ -15,9 +15,15 @@ class DepartmentService:
         res.staff_linked = staff_count
         return res
 
-    async def create(self, data: DepartmentCreate, current_user = None) -> DepartmentResponse:
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
+    async def create(self, data: DepartmentCreate, current_user = None, hospital_id: int | None = None) -> DepartmentResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        from app.core.exceptions import BadRequestException
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for department creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
 
         existing = await self.repo.get_by_name(data.department_name, hospital_id=hospital_id)
         if existing:

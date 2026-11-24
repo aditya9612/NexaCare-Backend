@@ -70,6 +70,9 @@ class PatientDocument(Base, TimestampMixin):
     __tablename__ = "patient_documents"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
     document_name: Mapped[str] = mapped_column(String(255))
     document_type: Mapped[str] = mapped_column(String(50))
@@ -77,6 +80,7 @@ class PatientDocument(Base, TimestampMixin):
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     patient = relationship("Patient", back_populates="documents")
+    hospital = relationship("Hospital")
 
 
 class FamilyMember(Base, TimestampMixin):

@@ -683,6 +683,7 @@ class PatientDocumentCreate(BaseSchema):
 
 class PatientDocumentResponse(BaseSchema):
     id: int
+    hospital_id: int | None = None
     patient_id: int
     document_name: str
     document_type: str

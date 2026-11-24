@@ -17,10 +17,27 @@ def broadcast_campaign(self, campaign_id: int, phone_numbers: list[str]):
 
 
 async def _send_message(message_id: int) -> None:
+    from app.models.patient_model import Patient
+    from app.models.whatsapp_model import WhatsAppMessage
+    from app.services.module_service import ModuleService
     from app.services.whatsapp_service import WhatsAppService
 
     async with AsyncSessionLocal() as db:
         try:
+            msg = await db.get(WhatsAppMessage, message_id)
+            if msg and msg.patient_id:
+                patient = await db.get(Patient, msg.patient_id)
+                if patient and patient.hospital_id:
+                    module_service = ModuleService(db)
+                    if not await module_service.is_module_active(patient.hospital_id, "WHATSAPP"):
+                        logger.warning(
+                            "WhatsApp send aborted: Hospital %s does not have active WHATSAPP module.",
+                            patient.hospital_id,
+                        )
+                        msg.delivery_status = "CANCELLED_NOT_ENTITLED"
+                        await db.commit()
+                        return
+
             await WhatsAppService(db).dispatch_message(message_id)
             await db.commit()
         except Exception as exc:

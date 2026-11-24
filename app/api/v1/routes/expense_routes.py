@@ -7,7 +7,13 @@ class ExpenseExportFormat(str, Enum):
     EXCEL = "excel"
     PDF = "pdf"
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.expense_schema import (
@@ -29,9 +35,10 @@ async def create_expense_category(
     data: ExpenseCategoryCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("expense", "create")),
 ):
-    category = await ExpenseService(db).create_category(data, current_user.id, current_user=current_user)
+    category = await ExpenseService(db).create_category(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Expense category created", data=category)
 
 
@@ -182,6 +189,7 @@ async def upload_expenses_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("expense", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -190,7 +198,9 @@ async def upload_expenses_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await ExpenseService(db).import_expenses_from_excel(file, current_user.id)
+    result = await ExpenseService(db).import_expenses_from_excel(
+        file, current_user.id, current_user=current_user, hospital_id=hospital_id
+    )
     return APIResponse(message="Expenses bulk upload processed", data=result)
 
 
@@ -224,9 +234,11 @@ async def create_expense(
     data: ExpenseCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("expense", "create")),
 ):
-    expense = await ExpenseService(db).create_expense(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    expense = await ExpenseService(db).create_expense(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Expense recorded", data=expense)
 
 

@@ -206,8 +206,14 @@ class DoctorMedicalRecordService:
         file: UploadFile | None,
         user_id: int,
         hospital_id: int | None = None,
+        current_user: Any | None = None,
     ) -> MedicalRecordResponse:
-        record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
+
+        record = await self.repo.get_record_by_id(record_id, hospital_id=target_hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 
@@ -264,8 +270,19 @@ class DoctorMedicalRecordService:
 
         return response_data
 
-    async def delete_report(self, record_id: int, user_id: int, hospital_id: int | None = None) -> None:
-        record = await self.repo.get_record_by_id(record_id, hospital_id=hospital_id)
+    async def delete_report(
+        self,
+        record_id: int,
+        user_id: int,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
+    ) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
+
+        record = await self.repo.get_record_by_id(record_id, hospital_id=target_hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 
@@ -348,6 +365,11 @@ class DoctorMedicalRecordService:
         if not patient:
             raise NotFoundException("Patient not found")
 
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = resolve_tenant_id(effective_user) if effective_user else None
+        if target_hospital_id is not None and patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
+
         diagnosis = await self.repo.get_diagnosis(patient_id)
 
         if not diagnosis:
@@ -360,11 +382,20 @@ class DoctorMedicalRecordService:
         patient_id: int,
         data: DiagnosisUpdate,
         user_id: int,
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
     ) -> DiagnosisResponse:
         patient = await self.patient_repo.get_by_id(patient_id)
 
         if not patient:
             raise NotFoundException("Patient not found")
+
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
+        if patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
 
         doctor_id = await self._get_doctor_id(user_id)
         diagnosis = await self.repo.get_diagnosis(patient_id)
@@ -409,11 +440,18 @@ class DoctorMedicalRecordService:
         patient_id: int,
         page: int = 1,
         size: int = 20,
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
     ):
         patient = await self.patient_repo.get_by_id(patient_id)
 
         if not patient:
             raise NotFoundException("Patient not found")
+
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is not None and patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
 
         skip = (page - 1) * size
 
@@ -436,11 +474,20 @@ class DoctorMedicalRecordService:
         patient_id: int,
         data: TreatmentNoteCreate,
         user_id: int,
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
     ) -> TreatmentNoteResponse:
         patient = await self.patient_repo.get_by_id(patient_id)
 
         if not patient:
             raise NotFoundException("Patient not found")
+
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
+        if patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
 
         doctor_id = await self._get_doctor_id(user_id)
 

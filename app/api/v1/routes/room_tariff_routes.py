@@ -2,7 +2,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, status
 
-from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    get_tenant_hospital_id,
+    require_permission,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.room_tariff_schema import (
@@ -66,19 +73,13 @@ async def create_room_tariff(
     data: RoomTariffCreate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "create")),
 ):
     """
     Create a new room tariff configuration for the tenant hospital.
     """
-    target_hospital_id = (
-        x_hospital_id
-        if x_hospital_id is not None
-        else (hospital_id_param if hospital_id_param is not None else data.hospital_id)
-    )
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     tariff = await RoomTariffService(db).create(data, hospital_id=hospital_id)
     return APIResponse(
         success=True,
@@ -93,15 +94,13 @@ async def update_room_tariff(
     data: RoomTariffUpdate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
     """
     Update an existing room tariff (adjust daily rates, nursing, or doctor visit charges).
     """
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     tariff = await RoomTariffService(db).update(tariff_id, data, hospital_id=hospital_id)
     return APIResponse(
         success=True,
@@ -115,15 +114,12 @@ async def delete_room_tariff(
     tariff_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "delete")),
 ):
     """
     Delete a room tariff scoped to tenant.
     """
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     await RoomTariffService(db).delete(tariff_id, hospital_id=hospital_id)
     return APIResponse(
         success=True,

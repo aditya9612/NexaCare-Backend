@@ -81,6 +81,7 @@ class DischargeService:
             raise BadRequestException("Cannot initiate discharge for a cancelled appointment.")
 
         # 3. Verify doctor
+        target_hospital_id = hospital_id or appointment.hospital_id
         doctor = await self.db.scalar(
             select(Doctor).where(Doctor.user_id == doctor_user_id)
         )
@@ -88,9 +89,11 @@ class DischargeService:
             doctor = await self.db.get(Doctor, appointment.doctor_id)
         if not doctor:
             raise NotFoundException("Doctor record not found")
+        if target_hospital_id and doctor.hospital_id and doctor.hospital_id != target_hospital_id:
+            raise BadRequestException("Doctor does not belong to the authorized hospital context.")
 
         # 4. Check if already initiated
-        existing = await self.repo.get_by_appointment_id(data.appointment_id)
+        existing = await self.repo.get_by_appointment_id(data.appointment_id, hospital_id=target_hospital_id)
         if existing and existing.discharge_status in ("PENDING_CLEARANCES", "CLEARED"):
             raise ConflictException(f"Discharge already initiated for appointment {data.appointment_id}")
 
@@ -100,12 +103,13 @@ class DischargeService:
             bed = await self.db.get(Bed, data.bed_id)
             if not bed:
                 raise NotFoundException(f"Bed with id {data.bed_id} not found. Please provide a valid bed ID.")
+            if target_hospital_id and getattr(bed, "hospital_id", None) and bed.hospital_id != target_hospital_id:
+                raise BadRequestException("Bed does not belong to the authorized hospital context.")
         if not bed:
-            bed = await self.db.scalar(
-                select(Bed).where(
-                    Bed.patient_id == appointment.patient_id,
-                ).order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1)
-            )
+            bed_query = select(Bed).where(Bed.patient_id == appointment.patient_id)
+            if target_hospital_id:
+                bed_query = bed_query.where(Bed.hospital_id == target_hospital_id)
+            bed = await self.db.scalar(bed_query.order_by(Bed.updated_at.desc(), Bed.id.desc()).limit(1))
         if not bed:
             recent_bed_id = await self.db.scalar(
                 select(BedActivityLog.bed_id)
@@ -117,18 +121,21 @@ class DischargeService:
                 .limit(1)
             )
             if recent_bed_id:
-                bed = await self.db.get(Bed, recent_bed_id)
+                cand_bed = await self.db.get(Bed, recent_bed_id)
+                if cand_bed and (not target_hospital_id or cand_bed.hospital_id == target_hospital_id):
+                    bed = cand_bed
         if not bed and getattr(appointment, "recommended_ward", None):
             from app.models.bed_allocation_model import Room
-            bed = await self.db.scalar(
+            ward_query = (
                 select(Bed)
                 .join(Bed.room)
                 .where(Room.type.ilike(f"%{appointment.recommended_ward}%") | Bed.type.ilike(f"%{appointment.recommended_ward}%"))
-                .order_by(Bed.id.asc())
-                .limit(1)
             )
-        if not bed:
-            bed = await self.db.scalar(select(Bed).order_by(Bed.id.asc()).limit(1))
+            if target_hospital_id:
+                ward_query = ward_query.where(Bed.hospital_id == target_hospital_id)
+            bed = await self.db.scalar(ward_query.order_by(Bed.id.asc()).limit(1))
+        if not bed and target_hospital_id:
+            bed = await self.db.scalar(select(Bed).where(Bed.hospital_id == target_hospital_id).order_by(Bed.id.asc()).limit(1))
 
         admission_time = appointment.check_in_time or (
             datetime.combine(appointment.appointment_date, appointment.appointment_time)

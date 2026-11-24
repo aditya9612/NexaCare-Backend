@@ -73,6 +73,7 @@ class ExpenseCreate(BaseModel):
     description: str = Field(..., min_length=1, max_length=500)
     expense_date: date
     status: str = Field("Pending", pattern="^(Paid|Pending)$")
+    hospital_id: Optional[int] = None
 
     @field_validator("expense_date")
     @classmethod

@@ -148,9 +148,6 @@ async def init_db():
 
             print("Running default super admin seed...")
             await _seed_default_super_admin(session)
-            await _seed_nurse_adesh(session)
-
-
 
             await session.commit()
         except Exception as e:
@@ -676,11 +673,10 @@ async def _seed_nurse_adesh(session: AsyncSession) -> None:
         await session.flush()
         logger.info("Nurse user created for %s", email)
     else:
-        # Ensure user is active, verified, has the right role, and password
+        # Ensure user is active, verified, and has the right role (do NOT reset existing password)
         user.is_active = True
         user.is_verified = True
         user.role_id = role.id
-        user.hashed_password = get_password_hash("123456")
         await session.flush()
 
     # 2. Ensure Nurse profile exists

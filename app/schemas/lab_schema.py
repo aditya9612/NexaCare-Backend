@@ -55,6 +55,7 @@ class TestOrderCreate(BaseSchema):
     appointment_id: int | None = None
     priority: str = "normal"
     notes: str | None = None
+    hospital_id: int | None = None
 
 class TestOrderUpdate(BaseSchema):
     lab_test_id: int | None = None

@@ -1,3 +1,4 @@
+from datetime import datetime
 from pydantic import BaseModel
 from app.schemas.common_schema import BaseSchema
 
@@ -64,3 +65,36 @@ class RecentAdminItem(BaseSchema):
 class UsersDashboardResponse(BaseSchema):
     user_distribution: UserDistribution
     recent_admins: list[RecentAdminItem]
+
+
+class ModuleCatalogItem(BaseSchema):
+    code: str
+    name: str
+    tier: str
+    description: str | None = None
+    is_active: bool = True
+
+
+class HospitalModuleItem(BaseSchema):
+    module_code: str
+    module_name: str
+    tier: str
+    is_active: bool
+    status: str
+    activated_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class HospitalModulesResponse(BaseSchema):
+    hospital_id: int
+    modules: list[HospitalModuleItem]
+
+
+class HospitalModuleToggleRequest(BaseSchema):
+    module_code: str
+    is_active: bool
+    status: str = "ACTIVE"
+
+
+class HospitalModulesBulkUpdateRequest(BaseSchema):
+    modules: list[HospitalModuleToggleRequest]

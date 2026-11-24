@@ -51,6 +51,7 @@ class BillingCreate(BaseSchema):
     due_date: datetime | None = None
     notes: str | None = None
     appointment_id: Optional[int] = None
+    hospital_id: Optional[int] = None
     items: List[BillItemCreate] = Field(..., min_length=1)
 
 

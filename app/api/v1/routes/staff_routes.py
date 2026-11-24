@@ -2,7 +2,13 @@ from typing import List
 
 from fastapi import APIRouter, Depends, status
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.staff_schema import (
@@ -26,9 +32,11 @@ async def create_staff(
     data: StaffCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "create")),
 ):
-    staff = await StaffService(db).create_staff(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    staff = await StaffService(db).create_staff(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Staff created successfully", data=staff)
 
 
@@ -91,9 +99,11 @@ async def update_staff(
     data: StaffUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    staff = await StaffService(db).update_staff(staff_id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    staff = await StaffService(db).update_staff(staff_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Staff updated successfully", data=staff)
 
 
@@ -103,9 +113,10 @@ async def update_staff_status(
     data: StaffStatusUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    staff = await StaffService(db).update_staff_status(staff_id, data.status.value, current_user.id, current_user=current_user)
+    staff = await StaffService(db).update_staff_status(staff_id, data.status.value, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Staff status updated successfully", data=staff)
 
 
@@ -114,9 +125,10 @@ async def delete_staff(
     staff_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "delete")),
 ):
-    await StaffService(db).delete_staff(staff_id, current_user.id, current_user=current_user)
+    await StaffService(db).delete_staff(staff_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Staff soft deleted successfully", data=MessageResponse(message="Soft deleted"))
 
 
@@ -137,9 +149,10 @@ async def add_staff_schedule(
     data: StaffScheduleCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    schedule = await StaffService(db).add_schedule(staff_id, data, current_user.id, current_user=current_user)
+    schedule = await StaffService(db).add_schedule(staff_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Schedule added", data=schedule)
 
 
@@ -148,9 +161,10 @@ async def delete_all_staff_schedules(
     staff_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "delete")),
 ):
-    await StaffService(db).delete_all_schedules(staff_id, current_user.id, current_user=current_user)
+    await StaffService(db).delete_all_schedules(staff_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(
         message="All schedule slots removed successfully",
         data=MessageResponse(message="All schedule slots removed"),
@@ -163,9 +177,10 @@ async def delete_staff_schedule_slot(
     slot_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "delete")),
 ):
-    await StaffService(db).delete_schedule_slot(staff_id, slot_id, current_user.id, current_user=current_user)
+    await StaffService(db).delete_schedule_slot(staff_id, slot_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(
         message="Schedule slot removed successfully",
         data=MessageResponse(message="Schedule slot removed"),
@@ -180,7 +195,8 @@ async def update_staff_schedule_slot(
     data: StaffScheduleUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("staff", "update")),
 ):
-    schedule = await StaffService(db).update_schedule_slot(staff_id, slot_id, data, current_user.id, current_user=current_user)
+    schedule = await StaffService(db).update_schedule_slot(staff_id, slot_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Schedule slot updated successfully", data=schedule)

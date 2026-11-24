@@ -51,7 +51,12 @@ class RoomTariffService:
         return tariff
 
     async def create(self, data: RoomTariffCreate, hospital_id: Optional[int] = None) -> RoomTariffResponse:
+        from app.core.dependencies import validate_tenant_body_match
         target_hospital_id = hospital_id if hospital_id is not None else data.hospital_id
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for room tariff creation.")
+        if data.hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
         existing = await self.repo.get_by_room_type(data.room_type, hospital_id=target_hospital_id, exact_tenant=True)
         if existing:
             raise ConflictException(f"Tariff for room type '{data.room_type}' already exists for this tenant")

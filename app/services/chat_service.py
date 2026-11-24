@@ -42,9 +42,25 @@ class ChatService:
         self.auth_repo = AuthRepository(db)
         self.chatbot = ChatbotHandler(db)
 
-    async def start_session(self, data: ChatSessionCreate) -> ChatSessionResponse:
-        if not await self.patient_repo.get_by_id(data.patient_id):
+    async def start_session(
+        self,
+        data: ChatSessionCreate,
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
+    ) -> ChatSessionResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+
+        if data.hospital_id is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+
+        patient = await self.patient_repo.get_by_id(data.patient_id)
+        if not patient:
             raise NotFoundException("Patient not found")
+        if target_hospital_id is not None and patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
+
+        effective_hospital_id = target_hospital_id or data.hospital_id
 
         session = ChatSession(
             session_id=generate_chat_session_id(),
@@ -55,9 +71,9 @@ class ChatService:
         )
         session = await self.repo.create_session(session)
         await self.repo.upsert_memory(session.id, "language", data.language)
-        if data.hospital_id:
+        if effective_hospital_id:
             await self.repo.upsert_memory(
-                session.id, "hospital_id", str(data.hospital_id)
+                session.id, "hospital_id", str(effective_hospital_id)
             )
 
         snapshot = ChatSessionResponse.model_validate(session).model_dump(mode="json")

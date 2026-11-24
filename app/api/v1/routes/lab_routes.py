@@ -2,7 +2,15 @@ from enum import Enum
 from fastapi import APIRouter, Depends, File, Form, Header, UploadFile, Query, Response, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    get_tenant_hospital_id,
+    require_permission,
+    resolve_tenant_id,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.lab_schema import (
@@ -44,9 +52,11 @@ async def create_lab_test(
     data: LabTestCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    test = await LabService(db).create_test(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    test = await LabService(db).create_test(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Lab test created", data=test)
 
 
@@ -110,9 +120,11 @@ async def update_lab_test(
     data: LabTestUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    test = await LabService(db).update_test(test_id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    test = await LabService(db).update_test(test_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Lab test updated", data=test)
 
 
@@ -121,9 +133,10 @@ async def delete_lab_test(
     test_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("lab", "delete")),
 ):
-    await LabService(db).delete_test(test_id, current_user.id, current_user=current_user)
+    await LabService(db).delete_test(test_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Lab test deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -201,9 +214,11 @@ async def create_test_order(
     data: TestOrderCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    order = await LabService(db).create_order(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    order = await LabService(db).create_order(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Test order created", data=order)
 
 
@@ -253,9 +268,11 @@ async def update_test_order_legacy(
     data: TestOrderUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    order = await LabService(db).update_order(order_id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    order = await LabService(db).update_order(order_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Test order updated", data=order)
 
 
@@ -264,8 +281,9 @@ async def delete_test_order_legacy(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
 ):
-    await LabService(db).delete_order(order_id, current_user)
+    await LabService(db).delete_order(order_id, current_user, hospital_id=hospital_id)
     return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -275,9 +293,11 @@ async def update_test_order(
     data: TestOrderUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("lab", "update")),
 ):
-    order = await LabService(db).update_order(order_id, data, current_user.id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    order = await LabService(db).update_order(order_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Test order updated", data=order)
 
 
@@ -286,8 +306,9 @@ async def delete_test_order(
     order_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
 ):
-    await LabService(db).delete_order(order_id, current_user)
+    await LabService(db).delete_order(order_id, current_user, hospital_id=hospital_id)
     return APIResponse(message="Test order deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -667,7 +688,8 @@ async def get_ocr_extraction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "read")),
 ):
-    result = await LabService(db).get_ocr_extraction(extraction_id)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await LabService(db).get_ocr_extraction(extraction_id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="OCR extraction details retrieved", data=result)
 
 
@@ -679,7 +701,10 @@ async def approve_ocr_extraction(
     current_user: CurrentUser,
     _: User = Depends(require_permission("lab", "create")),
 ):
-    result = await LabService(db).approve_ocr_extraction(extraction_id, data, current_user)
+    hospital_id = resolve_tenant_id(current_user)
+    result = await LabService(db).approve_ocr_extraction(
+        extraction_id, data, current_user, hospital_id=hospital_id
+    )
     return APIResponse(message="OCR extraction approved and saved to test results", data=result)
 
 

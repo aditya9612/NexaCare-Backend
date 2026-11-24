@@ -4,9 +4,18 @@ from typing import List
 from fastapi import APIRouter, Body, Depends, Header, Request, status
 
 from app.core.config import settings
-from app.core.dependencies import AdminUser, CurrentUser, DbSession, require_permission
-from app.core.exceptions import ForbiddenException
+from app.core.constants import UserRole
+from app.core.dependencies import (
+    AdminUser,
+    CurrentUser,
+    DbSession,
+    bearer_scheme,
+    require_permission,
+    require_role,
+)
+from app.core.exceptions import BadRequestException, ForbiddenException
 from app.core.security import decode_token
+from app.repositories.audit_repository import AuditRepository
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.rbac_schema import (
@@ -15,6 +24,8 @@ from app.schemas.rbac_schema import (
     PermissionUpdate,
     RoleCreate,
     RolePermissionCreate,
+    RolePermissionOverrideRequest,
+    RolePermissionOverrideResponse,
     RolePermissionResponse,
     RoleResponse,
     RoleUpdate,
@@ -33,13 +44,19 @@ async def create_role(
     admin: AdminUser,
     _: User = Depends(require_permission("roles", "create")),
 ):
-    role = await RBACService(db).create_role(data, admin.id)
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else data.hospital_id
+    role = await RBACService(db).create_role(data, admin.id, hospital_id=hospital_id)
     return APIResponse(message="Role created", data=role)
 
 
 @router.get("/roles", response_model=APIResponse[List[RoleResponse]])
-async def list_roles(db: DbSession, _: User = Depends(require_permission("roles", "read"))):
-    roles = await RBACService(db).list_roles()
+async def list_roles(
+    db: DbSession,
+    current_user: CurrentUser,
+    _: User = Depends(require_permission("roles", "read")),
+):
+    hospital_id = current_user.hospital_id if current_user.role and current_user.role.name != UserRole.SUPER_ADMIN else None
+    roles = await RBACService(db).list_roles(hospital_id=hospital_id)
     return APIResponse(message="Roles retrieved", data=roles)
 
 
@@ -47,9 +64,11 @@ async def list_roles(db: DbSession, _: User = Depends(require_permission("roles"
 async def get_role(
     role_id: int,
     db: DbSession,
+    current_user: CurrentUser,
     _: User = Depends(require_permission("roles", "read")),
 ):
-    role = await RBACService(db).get_role(role_id)
+    hospital_id = current_user.hospital_id if current_user.role and current_user.role.name != UserRole.SUPER_ADMIN else None
+    role = await RBACService(db).get_role(role_id, hospital_id=hospital_id)
     return APIResponse(message="Role retrieved", data=role)
 
 
@@ -61,7 +80,8 @@ async def update_role(
     admin: AdminUser,
     _: User = Depends(require_permission("roles", "update")),
 ):
-    role = await RBACService(db).update_role(role_id, data, admin.id)
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else None
+    role = await RBACService(db).update_role(role_id, data, admin.id, hospital_id=hospital_id)
     return APIResponse(message="Role updated", data=role)
 
 
@@ -72,8 +92,52 @@ async def delete_role(
     admin: AdminUser,
     _: User = Depends(require_permission("roles", "delete")),
 ):
-    await RBACService(db).delete_role(role_id, admin.id)
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else None
+    await RBACService(db).delete_role(role_id, admin.id, hospital_id=hospital_id)
     return APIResponse(message="Role deleted", data=MessageResponse(message="Deleted"))
+
+
+@router.post("/roles/{role_id}/overrides", response_model=APIResponse[RolePermissionOverrideResponse], status_code=201)
+async def set_role_override(
+    role_id: int,
+    data: RolePermissionOverrideRequest,
+    db: DbSession,
+    admin: AdminUser,
+    _: User = Depends(require_permission("roles", "update")),
+):
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else admin.hospital_id
+    if not hospital_id:
+        # If Super Admin, retrieve the role's hospital_id
+        target_role = await RBACService(db).get_role(role_id)
+        hospital_id = target_role.hospital_id
+    if not hospital_id:
+        raise BadRequestException("Overrides can only be configured for hospital-specific custom roles.")
+    override = await RBACService(db).set_role_override(
+        hospital_id=hospital_id,
+        role_id=role_id,
+        permission_id=data.permission_id,
+        is_granted=data.is_granted,
+        user_id=admin.id,
+    )
+    return APIResponse(message="Role override saved", data=override)
+
+
+@router.get("/roles/{role_id}/overrides", response_model=APIResponse[List[RolePermissionOverrideResponse]])
+async def list_role_overrides(
+    role_id: int,
+    db: DbSession,
+    admin: AdminUser,
+    _: User = Depends(require_permission("roles", "read")),
+):
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else None
+    if not hospital_id:
+        target_role = await RBACService(db).get_role(role_id)
+        hospital_id = target_role.hospital_id
+    if not hospital_id:
+        return APIResponse(message="Overrides retrieved", data=[])
+    overrides = await RBACService(db).list_role_overrides(hospital_id=hospital_id, role_id=role_id)
+    return APIResponse(message="Overrides retrieved", data=overrides)
+
 
 
 @router.post("/permissions", response_model=APIResponse[PermissionResponse], status_code=201)
@@ -83,6 +147,8 @@ async def create_permission(
     admin: AdminUser,
     _: User = Depends(require_permission("permissions", "create")),
 ):
+    if admin.role and admin.role.name != UserRole.SUPER_ADMIN:
+        raise ForbiddenException("Only Super Admin can manage global permissions.")
     perm = await RBACService(db).create_permission(data, admin.id)
     return APIResponse(message="Permission created", data=perm)
 
@@ -114,6 +180,8 @@ async def update_permission(
     admin: AdminUser,
     _: User = Depends(require_permission("permissions", "update")),
 ):
+    if admin.role and admin.role.name != UserRole.SUPER_ADMIN:
+        raise ForbiddenException("Only Super Admin can manage global permissions.")
     perm = await RBACService(db).update_permission(permission_id, data, admin.id)
     return APIResponse(message="Permission updated", data=perm)
 
@@ -125,6 +193,8 @@ async def delete_permission(
     admin: AdminUser,
     _: User = Depends(require_permission("permissions", "delete")),
 ):
+    if admin.role and admin.role.name != UserRole.SUPER_ADMIN:
+        raise ForbiddenException("Only Super Admin can manage global permissions.")
     await RBACService(db).delete_permission(permission_id, admin.id)
     return APIResponse(message="Permission deleted", data=MessageResponse(message="Deleted"))
 
@@ -136,7 +206,8 @@ async def assign_role_permission(
     admin: AdminUser,
     _: User = Depends(require_permission("permissions", "assign")),
 ):
-    rp = await RBACService(db).assign_permission(data, admin.id)
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else None
+    rp = await RBACService(db).assign_permission(data, admin.id, hospital_id=hospital_id)
     return APIResponse(message="Permission assigned", data=rp)
 
 
@@ -157,7 +228,8 @@ async def assign_role_permission_path(
     admin: AdminUser,
     _: User = Depends(require_permission("permissions", "assign")),
 ):
-    rp = await RBACService(db).assign_permission(data, admin.id)
+    hospital_id = admin.hospital_id if admin.role and admin.role.name == UserRole.HOSPITAL_ADMIN else None
+    rp = await RBACService(db).assign_permission(data, admin.id, hospital_id=hospital_id)
     return APIResponse(message="Permission assigned to role successfully", data=rp)
 
 
@@ -175,59 +247,41 @@ async def get_role_permissions(
     "/rbac/seed-defaults",
     response_model=APIResponse[RBACSeedDefaultsResponse],
     status_code=status.HTTP_200_OK,
-    summary="One-Click Default RBAC & Roles Seeder",
+    summary="One-Click Default RBAC & Roles Seeder (Super Admin Only)",
     description=(
         "Initializes all default roles, module permissions, complete role-permission matrices, "
-        "and bootstrap Super Admin in one click after database reset. Accessible unauthenticated "
-        "in development/testing environments, or via Super Admin auth / X-Seed-Key in production."
+        "and bootstrap Super Admin. Requires Super Admin authentication in all environments."
     ),
+    dependencies=[Depends(bearer_scheme)],
 )
 @router.post(
     "/seed-defaults",
     response_model=APIResponse[RBACSeedDefaultsResponse],
     status_code=status.HTTP_200_OK,
     include_in_schema=False,
+    dependencies=[Depends(bearer_scheme)],
 )
 async def seed_default_rbac(
-    request: Request,
     db: DbSession,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN)),
     data: RBACSeedDefaultsRequest = Body(default_factory=RBACSeedDefaultsRequest),
-    x_seed_key: str | None = Header(None, alias="X-Seed-Key"),
 ):
-    # 1. Feature flag guard
-    if not getattr(settings, "ENABLE_DEV_RBAC_SEED", True):
+    # 1. Feature flag guard (fail-closed by default)
+    if not getattr(settings, "ENABLE_DEV_RBAC_SEED", False):
         raise ForbiddenException("The RBAC seed-defaults endpoint is disabled.")
 
-    # 2. Environment & Authorization check
-    is_dev_or_test = settings.APP_ENV.lower() not in ("production", "prod")
-
-    if not is_dev_or_test:
-        authenticated = False
-        # Secret key check (timing-safe)
-        if x_seed_key and hmac.compare_digest(x_seed_key, settings.SECRET_KEY):
-            authenticated = True
-        else:
-            # Bearer token check for Super Admin
-            auth_header = request.headers.get("Authorization")
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.replace("Bearer ", "").strip()
-                try:
-                    payload = decode_token(token)
-                    role_name = (payload.get("role") or "").lower().replace("_", " ").strip()
-                    if role_name == "super admin":
-                        authenticated = True
-                except Exception:
-                    pass
-
-        if not authenticated:
-            raise ForbiddenException(
-                "Access denied: In production, seed-defaults requires a Super Admin token or valid X-Seed-Key header."
-            )
-
-    # 3. Execute unified seeding service
+    # 2. Execute unified seeding service
     result = await RBACService(db).seed_system_defaults(
         include_test_users=data.include_test_users,
         sync_super_admin=data.sync_super_admin,
+    )
+
+    # 3. Structured audit logging
+    await AuditRepository(db).create(
+        action="seed_rbac_defaults",
+        resource="rbac",
+        user_id=current_user.id,
+        details=f"roles_created={result.roles_created}, perms_created={result.permissions_created}",
     )
 
     return APIResponse(

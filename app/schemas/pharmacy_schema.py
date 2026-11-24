@@ -96,6 +96,7 @@ class MedicineCreate(BaseSchema):
     expiry_date: date
     manufacturer: str | None = None
     description: str | None = None
+    hospital_id: Optional[int] = None
 
     @field_validator("barcode")
     @classmethod
@@ -145,6 +146,7 @@ class MedicineUpdate(BaseSchema):
     expiry_date: date | None = None
     manufacturer: str | None = None
     description: str | None = None
+    hospital_id: Optional[int] = None
     is_active: bool | None = None
 
     @field_validator("barcode")
@@ -270,6 +272,7 @@ class PrescriptionCreate(BaseSchema):
     appointment_id: int
     start_date: Optional[date] = Field(None, description="Date when medication starts")
     instructions: str | None = None
+    hospital_id: Optional[int] = None
     items: List[PrescriptionItemCreate] = Field(..., min_length=1)
 
 

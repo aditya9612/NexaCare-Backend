@@ -5,7 +5,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
-from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    get_tenant_hospital_id,
+    require_permission,
+    resolve_tenant_id,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.appointment_schema import AppointmentResponse, DoctorAppointmentListResponse
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -80,6 +88,7 @@ async def create_doctor(
     bio: Optional[str] = Form(None),
     user_id: Optional[int] = Form(None),
     profile_image: Optional[UploadFile] = File(None),
+    tenant_write_hospital_id: TenantWriteHospitalId = None,
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     hospital_id_param: Optional[int] = Query(None, alias="hospital_id", description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("doctors", "create")),
@@ -132,8 +141,8 @@ async def create_doctor(
             raise RequestValidationError(e.errors())
         image_file = profile_image
 
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    hospital_id = tenant_write_hospital_id
+    validate_tenant_body_match(getattr(doctor_data, "hospital_id", None), hospital_id)
 
     doctor_obj = await DoctorService(db).create(
         doctor_data, current_user.id, image_file=image_file, hospital_id=hospital_id
@@ -555,6 +564,7 @@ async def update_diagnosis(
         patient_id=patient_id,
         data=data,
         user_id=current_user.id,
+        current_user=current_user,
     )
     return APIResponse(message="Diagnosis updated", data=diagnosis)
 
@@ -575,6 +585,7 @@ async def view_treatment_notes(
         patient_id=patient_id,
         page=page,
         size=size,
+        current_user=current_user,
     )
     return APIResponse(message="Treatment notes retrieved", data=result)
 
@@ -595,6 +606,7 @@ async def add_treatment_note(
         patient_id=patient_id,
         data=data,
         user_id=current_user.id,
+        current_user=current_user,
     )
     return APIResponse(message="Treatment note added", data=note)
 

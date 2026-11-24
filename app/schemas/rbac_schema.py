@@ -35,6 +35,8 @@ def validate_role_name(value: str | None, required: bool = True) -> str | None:
 class RoleCreate(BaseSchema):
     name: str = Field(..., min_length=2, max_length=50)
     description: str | None = None
+    hospital_id: int | None = None
+    base_role_type: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -48,6 +50,7 @@ class RoleCreate(BaseSchema):
 class RoleUpdate(BaseSchema):
     name: str | None = Field(None, min_length=2, max_length=50)
     description: str | None = None
+    base_role_type: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -59,6 +62,24 @@ class RoleResponse(BaseSchema):
     id: int
     name: str
     description: str | None
+    hospital_id: int | None = None
+    base_role_type: str | None = None
+    is_system: bool = False
+
+
+class RolePermissionOverrideRequest(BaseSchema):
+    role_id: int
+    permission_id: int
+    is_granted: bool
+
+
+class RolePermissionOverrideResponse(BaseSchema):
+    id: int
+    hospital_id: int
+    role_id: int
+    permission_id: int
+    is_granted: bool
+    created_at: datetime
 
 
 def validate_permission_name(value: str | None, required: bool = True) -> str | None:

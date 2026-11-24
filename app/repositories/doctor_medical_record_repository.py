@@ -67,13 +67,14 @@ class DoctorMedicalRecordRepository:
         record_id: int,
         hospital_id: int | None = None,
     ) -> DoctorMedicalRecord | None:
+        from app.models.patient_model import Patient
         query = select(DoctorMedicalRecord).where(
             DoctorMedicalRecord.id == record_id
         )
         if hospital_id is not None:
-            query = query.join(Doctor, DoctorMedicalRecord.doctor_id == Doctor.id).where(
-                Doctor.hospital_id == hospital_id,
-                Doctor.is_deleted == False,
+            query = query.join(Patient, DoctorMedicalRecord.patient_id == Patient.id).where(
+                Patient.hospital_id == hospital_id,
+                Patient.is_deleted == False,
             )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()

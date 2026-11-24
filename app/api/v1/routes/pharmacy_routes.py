@@ -9,7 +9,13 @@ class MedicineExportFormat(str, Enum):
     EXCEL = "excel"
     PDF = "pdf"
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.core.exceptions import BadRequestException
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -192,9 +198,11 @@ async def create_medicine(
     data: MedicineCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    medicine = await PharmacyService(db).create_medicine(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    medicine = await PharmacyService(db).create_medicine(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Medicine created", data=medicine)
 
 
@@ -217,6 +225,7 @@ async def upload_medicines_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -225,7 +234,9 @@ async def upload_medicines_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
 
-    result = await PharmacyService(db).import_medicines_from_excel(file, current_user.id, current_user=current_user)
+    result = await PharmacyService(db).import_medicines_from_excel(
+        file, current_user.id, current_user=current_user, hospital_id=hospital_id
+    )
     return APIResponse(message="Medicine bulk upload processed", data=result)
 
 
@@ -292,9 +303,11 @@ async def update_medicine(
     data: MedicineUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
-    medicine = await PharmacyService(db).update_medicine(medicine_id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    medicine = await PharmacyService(db).update_medicine(medicine_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Medicine updated", data=medicine)
 
 
@@ -303,9 +316,10 @@ async def delete_medicine(
     medicine_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_medicine(medicine_id, current_user.id, current_user=current_user)
+    await PharmacyService(db).delete_medicine(medicine_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Medicine deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -315,9 +329,11 @@ async def create_prescription(
     data: PrescriptionCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    prescription = await PharmacyService(db).create_prescription(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    prescription = await PharmacyService(db).create_prescription(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Prescription created", data=prescription)
 
 
@@ -454,10 +470,12 @@ async def update_prescription(
     data: PrescriptionUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     from app.repositories.doctor_repository import DoctorRepository
     from app.core.exceptions import ForbiddenException
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     doctor = await DoctorRepository(db).get_by_user_id(current_user.id)
     if not doctor:
         raise ForbiddenException("Only registered doctors can modify prescriptions")
@@ -467,7 +485,8 @@ async def update_prescription(
         data=data,
         doctor_id=doctor.id,
         user_id=current_user.id,
-        current_user=current_user
+        current_user=current_user,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Prescription updated", data=prescription)
 
@@ -478,6 +497,7 @@ async def update_prescription_status(
     data: PrescriptionStatusUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     prescription = await PharmacyService(db).update_prescription_status(
@@ -485,6 +505,7 @@ async def update_prescription_status(
         data=data,
         user_id=current_user.id,
         current_user=current_user,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Prescription status updated", data=prescription)
 
@@ -496,6 +517,7 @@ async def dispense_prescription(
     db: DbSession,
     current_user: CurrentUser,
     data: PrescriptionDispenseRequest,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     result = await PharmacyService(db).dispense_prescription(
@@ -503,6 +525,7 @@ async def dispense_prescription(
         user_id=current_user.id,
         data=data,
         current_user=current_user,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Prescription dispensed and invoice generated successfully", data=result)
 
@@ -512,6 +535,7 @@ async def delete_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
     from app.repositories.doctor_repository import DoctorRepository
@@ -525,6 +549,7 @@ async def delete_prescription(
         doctor_id=doctor.id,
         user_id=current_user.id,
         current_user=current_user,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Prescription deleted", data=MessageResponse(message="Deleted successfully"))
 
@@ -535,9 +560,11 @@ async def create_pharmacy_invoice(
     data: PharmacyInvoiceCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    invoice = await PharmacyService(db).create_invoice(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    invoice = await PharmacyService(db).create_invoice(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Pharmacy invoice created", data=invoice)
 
 
@@ -580,9 +607,11 @@ async def update_pharmacy_invoice(
     data: PharmacyInvoiceUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
-    invoice = await PharmacyService(db).update_invoice(invoice_id, data, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    invoice = await PharmacyService(db).update_invoice(invoice_id, data, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Pharmacy invoice updated", data=invoice)
 
 
@@ -592,6 +621,7 @@ async def return_pharmacy_invoice_items(
     data: PharmacyReturnCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     return_obj = await PharmacyService(db).process_return(
@@ -599,6 +629,7 @@ async def return_pharmacy_invoice_items(
         data=data,
         user_id=current_user.id,
         current_user=current_user,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Medicine return processed and inventory restocked successfully", data=return_obj)
 
@@ -641,9 +672,10 @@ async def delete_pharmacy_invoice(
     invoice_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_invoice(invoice_id, current_user=current_user)
+    await PharmacyService(db).delete_invoice(invoice_id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Pharmacy invoice deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -672,6 +704,7 @@ async def upload_suppliers_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -680,7 +713,9 @@ async def upload_suppliers_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await PharmacyService(db).import_suppliers_from_excel(file, current_user.id, current_user=current_user)
+    result = await PharmacyService(db).import_suppliers_from_excel(
+        file, current_user.id, current_user=current_user, hospital_id=hospital_id
+    )
     return APIResponse(message="Suppliers bulk upload processed", data=result)
 
 
@@ -712,9 +747,11 @@ async def create_supplier(
     data: SupplierCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    supplier = await PharmacyService(db).create_supplier(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    supplier = await PharmacyService(db).create_supplier(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Supplier created", data=supplier)
 
 
@@ -745,9 +782,11 @@ async def update_supplier(
     data: SupplierUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
-    supplier = await PharmacyService(db).update_supplier(supplier_id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    supplier = await PharmacyService(db).update_supplier(supplier_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Supplier updated", data=supplier)
 
 
@@ -756,9 +795,10 @@ async def delete_supplier(
     supplier_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
-    await PharmacyService(db).delete_supplier(supplier_id, current_user.id, current_user=current_user)
+    await PharmacyService(db).delete_supplier(supplier_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Supplier deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -768,9 +808,11 @@ async def create_purchase(
     data: PurchaseCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "create")),
 ):
-    purchase = await PharmacyService(db).create_purchase(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    purchase = await PharmacyService(db).create_purchase(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Purchase created", data=purchase)
 
 
@@ -802,10 +844,12 @@ async def update_purchase(
     data: PurchaseCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     purchase = await PharmacyService(db).update_purchase(
-        purchase_id, data, current_user.id, current_user=current_user
+        purchase_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id
     )
     return APIResponse(message="Purchase updated", data=purchase)
 
@@ -815,10 +859,11 @@ async def delete_purchase(
     purchase_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "delete")),
 ):
     await PharmacyService(db).delete_purchase(
-        purchase_id, current_user.id, current_user=current_user
+        purchase_id, current_user.id, current_user=current_user, hospital_id=hospital_id
     )
     return APIResponse(
         message="Purchase deleted",
@@ -831,10 +876,11 @@ async def receive_purchase_order(
     purchase_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     purchase = await PharmacyService(db).receive_purchase_order(
-        purchase_id, current_user
+        purchase_id, current_user, hospital_id=hospital_id
     )
     return APIResponse(
         message="Purchase order received and stock updated",

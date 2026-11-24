@@ -226,6 +226,7 @@ class FloorCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     type: FloorType
     description: Optional[str] = None
+    hospital_id: Optional[int] = None
     rooms: Optional[List[RoomCreate]] = []
 
     @field_validator("name")

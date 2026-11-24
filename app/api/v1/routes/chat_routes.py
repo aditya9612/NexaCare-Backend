@@ -31,7 +31,7 @@ async def start_session(
     _: User = Depends(require_permission("ai_chat", "create")),
 ):
     verify_chat_hospital_scope(current_user, data.hospital_id)
-    session = await ChatService(db).start_session(data)
+    session = await ChatService(db).start_session(data, current_user=current_user)
     return APIResponse(message="Chat session started", data=session)
 
 

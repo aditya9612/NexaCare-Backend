@@ -3,7 +3,13 @@ from enum import Enum
 from fastapi import APIRouter, Depends, Query, File, UploadFile, Response, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.transaction_schema import TransactionCreate, TransactionUpdate, TransactionResponse
@@ -37,6 +43,7 @@ async def upload_transactions_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -45,7 +52,7 @@ async def upload_transactions_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    result = await TransactionService(db).import_transactions_from_excel(file, current_user.id, current_user=current_user)
+    result = await TransactionService(db).import_transactions_from_excel(file, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Transactions bulk upload processed", data=result)
 
 
@@ -92,9 +99,11 @@ async def create_transaction(
     data: TransactionCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    transaction = await TransactionService(db).create_transaction(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    transaction = await TransactionService(db).create_transaction(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Transaction recorded successfully", data=transaction)
 
 
@@ -147,9 +156,11 @@ async def update_transaction(
     data: TransactionUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
-    transaction = await TransactionService(db).update_transaction(id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    transaction = await TransactionService(db).update_transaction(id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Transaction updated successfully", data=transaction)
 
 
@@ -158,7 +169,8 @@ async def delete_transaction(
     id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "delete")),
 ):
-    await TransactionService(db).delete_transaction(id, current_user.id, current_user=current_user)
+    await TransactionService(db).delete_transaction(id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Transaction deleted successfully", data=MessageResponse(message="Deleted successfully"))

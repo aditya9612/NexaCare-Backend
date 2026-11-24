@@ -142,9 +142,14 @@ class LabService:
                 raise ForbiddenException("Doctors can only create/update lab tests for their own department")
 
     # --- Lab Test Catalog ---
-    async def create_test(self, data: LabTestCreate, user_id: int, current_user = None) -> LabTestResponse:
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
+    async def create_test(self, data: LabTestCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> LabTestResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for lab test creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         normalized_name = (data.test_name or "").strip()
         if not normalized_name:
             raise BadRequestException("Test name cannot be blank.")
@@ -224,12 +229,15 @@ class LabService:
             raise NotFoundException("Lab test not found")
         return LabTestResponse.model_validate(test)
 
-    async def update_test(self, test_id: int, data: LabTestUpdate, user_id: int, current_user = None) -> LabTestResponse:
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
-        test = await self.test_repo.get_by_id(test_id, hospital_id=hospital_id)
+    async def update_test(self, test_id: int, data: LabTestUpdate, user_id: int, current_user = None, hospital_id: int | None = None) -> LabTestResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        test = await self.test_repo.get_by_id(test_id, hospital_id=target_hospital_id)
         if not test:
             raise NotFoundException("Lab test not found")
+
+        if target_hospital_id and getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
 
         from app.models.doctor_model import Doctor
         from sqlalchemy import select
@@ -253,10 +261,10 @@ class LabService:
         await self.audit_repo.create("update", "lab", user_id=user_id, resource_id=str(test.id))
         return LabTestResponse.model_validate(test)
 
-    async def delete_test(self, test_id: int, user_id: int, current_user = None) -> None:
+    async def delete_test(self, test_id: int, user_id: int, current_user = None, hospital_id: int | None = None) -> None:
         from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
-        test = await self.test_repo.get_by_id(test_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        test = await self.test_repo.get_by_id(test_id, hospital_id=target_hospital_id)
         if not test:
             raise NotFoundException("Lab test not found")
 
@@ -276,9 +284,14 @@ class LabService:
         await self.audit_repo.create("delete", "lab", user_id=user_id, resource_id=str(test.id))
 
     # --- Test Orders ---
-    async def create_order(self, data: TestOrderCreate, user_id: int, current_user = None) -> TestOrderResponse:
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
+    async def create_order(self, data: TestOrderCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> TestOrderResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for lab order creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         from sqlalchemy import select
 
         # Validate patient existence
@@ -592,15 +605,18 @@ class LabService:
             raise NotFoundException("Test order not found")
         return self._order_response(order)
 
-    async def update_order(self, order_id: int, data: TestOrderUpdate, user_id: int, current_user = None) -> TestOrderResponse:
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
-        order = await self.order_repo.get_by_id(order_id, hospital_id=hospital_id)
+    async def update_order(self, order_id: int, data: TestOrderUpdate, user_id: int, current_user = None, hospital_id: int | None = None) -> TestOrderResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        order = await self.order_repo.get_by_id(order_id, hospital_id=target_hospital_id)
         if not order:
             raise NotFoundException("Test order not found")
 
+        if target_hospital_id and getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+
         if data.lab_test_id is not None:
-            test = await self.test_repo.get_by_id(data.lab_test_id, hospital_id=hospital_id)
+            test = await self.test_repo.get_by_id(data.lab_test_id, hospital_id=target_hospital_id)
             if not test or not test.is_active:
                 raise NotFoundException("Lab test not found or inactive")
             order.department_id = test.department_id
@@ -612,10 +628,10 @@ class LabService:
         await self.audit_repo.create("update", "lab_order", user_id=user_id, resource_id=str(order.id))
         return self._order_response(order)
 
-    async def delete_order(self, order_id: int, current_user) -> None:
+    async def delete_order(self, order_id: int, current_user, hospital_id: int | None = None) -> None:
         from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
-        order = await self.order_repo.get_by_id(order_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        order = await self.order_repo.get_by_id(order_id, hospital_id=target_hospital_id)
         if not order:
             raise NotFoundException("Test order not found")
 
@@ -2165,11 +2181,19 @@ class LabService:
             ]
         }
 
-    async def get_ocr_extraction(self, extraction_id: int) -> dict:
+    async def get_ocr_extraction(
+        self,
+        extraction_id: int,
+        current_user=None,
+        hospital_id: int | None = None,
+    ) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         from app.models.lab_model import LabOcrExtraction
         from app.core.exceptions import NotFoundException
+        from app.core.dependencies import resolve_tenant_id
+
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
 
         query = (
             select(LabOcrExtraction)
@@ -2180,6 +2204,11 @@ class LabService:
         extraction = res.scalar_one_or_none()
         if not extraction:
             raise NotFoundException("OCR Extraction record not found")
+
+        if target_hospital_id is not None:
+            order = await self.order_repo.get_by_id(extraction.test_order_id, hospital_id=target_hospital_id)
+            if not order:
+                raise NotFoundException("OCR Extraction record not found in this hospital context.")
 
         return {
             "id": extraction.id,
@@ -2215,13 +2244,19 @@ class LabService:
         self,
         extraction_id: int,
         data,
-        current_user
+        current_user,
+        hospital_id: int | None = None,
     ) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         from app.models.lab_model import LabOcrExtraction, LabReport, TestResult
         from app.core.constants import LabReportStatus, LabOrderStatus
         from app.core.exceptions import BadRequestException, NotFoundException
+        from app.core.dependencies import resolve_tenant_id
+
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
 
         query = (
             select(LabOcrExtraction)
@@ -2236,9 +2271,9 @@ class LabService:
         if extraction.status == "approved":
             raise BadRequestException("This OCR extraction has already been approved.")
 
-        order = await self.order_repo.get_by_id(extraction.test_order_id)
+        order = await self.order_repo.get_by_id(extraction.test_order_id, hospital_id=target_hospital_id)
         if not order:
-            raise NotFoundException("Test order not found")
+            raise NotFoundException("Test order not found in this hospital context.")
 
         # 1. Insert approved items into test_results table
         created_results = []

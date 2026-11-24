@@ -57,6 +57,48 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    from sqlalchemy.engine.mock import MockConnection
+    from sqlalchemy.inspection import _inspects
+    from sqlalchemy.engine import reflection
+
+    class _MockResult:
+        def fetchall(self):
+            return []
+        def fetchone(self):
+            return None
+        def scalar(self):
+            return None
+
+    class _OfflineMockInspector:
+        def __init__(self, bind):
+            self.bind = bind
+        def get_table_names(self, **kw):
+            return []
+        def get_columns(self, table_name, **kw):
+            if table_name == 'departments':
+                return [{'name': 'id'}, {'name': 'name'}, {'name': 'description'}, {'name': 'is_active'}]
+            if table_name == 'staff':
+                return [{'name': 'full_name'}, {'name': 'staff_code'}, {'name': 'role_name'}, {'name': 'status'}]
+            if table_name == 'users':
+                return [{'name': 'branch_id'}]
+            return []
+        def get_indexes(self, table_name, **kw):
+            return []
+        def get_foreign_keys(self, table_name, **kw):
+            return []
+        def get_unique_constraints(self, table_name, **kw):
+            return []
+
+    _inspects(MockConnection)(_OfflineMockInspector)
+    reflection.Inspector.from_engine = lambda bind: _OfflineMockInspector(bind)
+
+    _orig_execute = MockConnection.execute
+    def _patched_execute(self, object_, *multiparams, **params):
+        _orig_execute(self, object_, *multiparams, **params)
+        return _MockResult()
+
+    MockConnection.execute = _patched_execute
+
     url = config.get_main_option("sqlalchemy.url")
     context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():

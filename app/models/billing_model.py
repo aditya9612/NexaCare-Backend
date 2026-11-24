@@ -76,6 +76,9 @@ class Insurance(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "insurances"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     provider_name: Mapped[str] = mapped_column(String(255))
     policy_number: Mapped[str] = mapped_column(String(100), index=True)

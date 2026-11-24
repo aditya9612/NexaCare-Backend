@@ -64,6 +64,7 @@ class ClinicalRecordUpdate(BaseSchema):
 
 class ClinicalRecordResponse(BaseSchema):
     id: int
+    hospital_id: Optional[int] = None
     patient_id: int
     doctor_id: int
     appointment_id: Optional[int] = None

@@ -3,7 +3,14 @@ from typing import List
 
 from fastapi import APIRouter, Depends, Header, Query, Response
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission, require_roles
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    require_roles,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.core.constants import BookingSource, UserRole
 from app.schemas.appointment_schema import (
@@ -41,9 +48,11 @@ async def create_appointment(
     data: AppointmentCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("appointments", "create")),
 ):
-    appointment = await AppointmentService(db).create(data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    appointment = await AppointmentService(db).create(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Appointment booked", data=appointment)
 
 
@@ -234,6 +243,7 @@ async def confirmed_visits(
     department_id: int | None = None,
     appointment_date: date | None = None,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.DOCTOR)),
+    __: User = Depends(require_permission("appointments", "read")),
 ):
     if page < 1:
         page = 1
@@ -268,9 +278,10 @@ async def reschedule_appointment(
     data: RescheduleRequest,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("appointments", "update")),
 ):
-    appointment = await AppointmentService(db).reschedule(data, current_user.id, current_user=current_user)
+    appointment = await AppointmentService(db).reschedule(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Appointment rescheduled", data=appointment)
 
 
@@ -279,9 +290,10 @@ async def cancel_appointment(
     data: CancelRequest,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("appointments", "update")),
 ):
-    appointment = await AppointmentService(db).cancel(data, current_user.id, current_user=current_user)
+    appointment = await AppointmentService(db).cancel(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Appointment cancelled", data=appointment)
 
 
@@ -290,9 +302,10 @@ async def confirm_appointment(
     data: ConfirmRequest,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("appointments", "approve")),
 ):
-    appointment = await AppointmentService(db).confirm(data, current_user.id, current_user=current_user)
+    appointment = await AppointmentService(db).confirm(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Appointment confirmed", data=appointment)
 
 @router.patch("/{appointment_id}/check-in", response_model=APIResponse[AppointmentCheckInResponse])
@@ -301,6 +314,7 @@ async def check_in_appointment(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     appointment = await AppointmentService(db).check_in(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
@@ -320,6 +334,7 @@ async def check_out_appointment(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     appointment = await AppointmentService(db).check_out(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
@@ -339,6 +354,7 @@ async def generate_queue_token(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     appointment = await AppointmentService(db).generate_queue_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
@@ -356,6 +372,7 @@ async def get_today_queue(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "read")),
 ):
     appointments = await AppointmentService(db).get_today_queue(current_user=current_user)
     return APIResponse(
@@ -369,6 +386,7 @@ async def get_current_queue(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "read")),
 ):
     appointment = await AppointmentService(db).get_current_queue(current_user=current_user)
     return APIResponse(
@@ -383,6 +401,7 @@ async def call_next_token(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     appointment = await AppointmentService(db).call_next_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
@@ -401,6 +420,7 @@ async def complete_token(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     appointment = await AppointmentService(db).complete_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
@@ -419,6 +439,7 @@ async def skip_token(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     appointment = await AppointmentService(db).skip_token(appointment_id, current_user.id, current_user=current_user)
     return APIResponse(
@@ -436,6 +457,7 @@ async def get_pending_admissions(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.RECEPTIONIST, UserRole.NURSE, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.DOCTOR)),
+    __: User = Depends(require_permission("appointments", "read")),
 ):
     result = await AppointmentService(db).get_pending_admissions(current_user=current_user)
     return APIResponse(message="Pending admissions retrieved successfully", data=result)
@@ -448,6 +470,7 @@ async def recommend_admission(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     result = await AppointmentService(db).recommend_admission(appointment_id, data, current_user.id, current_user=current_user)
     return APIResponse(message="Admission recommended successfully", data=result)
@@ -460,6 +483,7 @@ async def update_appointment_triage(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.NURSE, UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     """
     Nurse or Doctor records/updates ESI Triage Level (1-5) and triage assessment notes.
@@ -475,6 +499,7 @@ async def update_appointment_disposition(
     db: DbSession,
     current_user: CurrentUser,
     _: User = Depends(require_roles(UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN)),
+    __: User = Depends(require_permission("appointments", "update")),
 ):
     """
     Doctor sets final clinical disposition (ADMIT / REFER / DISCHARGE / OBSERVED) with referral details.
@@ -527,9 +552,11 @@ async def update_appointment(
     data: AppointmentUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("appointments", "update")),
 ):
-    appointment = await AppointmentService(db).update(appointment_id, data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    appointment = await AppointmentService(db).update(appointment_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Appointment updated", data=appointment)
 
 
@@ -538,7 +565,8 @@ async def delete_appointment(
     appointment_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("appointments", "delete")),
 ):
-    await AppointmentService(db).delete(appointment_id, current_user.id, current_user=current_user)
+    await AppointmentService(db).delete(appointment_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Appointment deleted", data=MessageResponse(message="Deleted"))

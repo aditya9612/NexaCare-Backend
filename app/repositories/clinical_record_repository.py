@@ -21,9 +21,12 @@ class ClinicalRecordRepository:
         )
         if hospital_id is not None:
             from app.models.doctor_model import Doctor
-            query = query.join(Doctor, ClinicalRecord.doctor_id == Doctor.id).where(
-                Doctor.hospital_id == hospital_id,
-                Doctor.is_deleted == False,
+            from sqlalchemy import or_, and_
+            query = query.outerjoin(Doctor, ClinicalRecord.doctor_id == Doctor.id).where(
+                or_(
+                    ClinicalRecord.hospital_id == hospital_id,
+                    and_(ClinicalRecord.hospital_id.is_(None), Doctor.hospital_id == hospital_id, Doctor.is_deleted == False),
+                )
             )
         return query
 
@@ -74,9 +77,12 @@ class ClinicalRecordRepository:
         query = select(func.count()).select_from(ClinicalRecord).where(ClinicalRecord.is_deleted.is_(False))
         if hospital_id is not None:
             from app.models.doctor_model import Doctor
-            query = query.join(Doctor, ClinicalRecord.doctor_id == Doctor.id).where(
-                Doctor.hospital_id == hospital_id,
-                Doctor.is_deleted == False,
+            from sqlalchemy import or_, and_
+            query = query.outerjoin(Doctor, ClinicalRecord.doctor_id == Doctor.id).where(
+                or_(
+                    ClinicalRecord.hospital_id == hospital_id,
+                    and_(ClinicalRecord.hospital_id.is_(None), Doctor.hospital_id == hospital_id, Doctor.is_deleted == False),
+                )
             )
         if patient_id is not None:
             if isinstance(patient_id, (list, set, tuple)):

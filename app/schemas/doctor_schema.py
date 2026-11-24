@@ -275,6 +275,7 @@ class DoctorCreate(BaseSchema):
     profile_image: str | None = None
     bio: str | None = None
     user_id: int | None = Field(None, gt=0, json_schema_extra={"example": None})
+    hospital_id: int | None = None
 
     @field_validator("specialization")
     @classmethod

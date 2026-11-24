@@ -6,7 +6,14 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from app.core.constants import UserRole
-from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    resolve_tenant_id,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.patient_schema import (
@@ -73,6 +80,7 @@ async def create_patient(
     status: Optional[str] = Form(None),
     preferred_language: Optional[str] = Form(None),
     consent_form: Optional[UploadFile] = File(None),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("patients", "create")),
 ):
     content_type = request.headers.get("content-type", "")
@@ -132,8 +140,9 @@ async def create_patient(
             raise RequestValidationError(e.errors())
         consent_file = consent_form
 
+    validate_tenant_body_match(getattr(patient_data, "hospital_id", None), hospital_id)
     patient = await PatientService(db).create(
-        patient_data, current_user.id, consent_file=consent_file, current_user=current_user
+        patient_data, current_user.id, consent_file=consent_file, current_user=current_user, hospital_id=hospital_id
     )
     return APIResponse(message="Patient created", data=patient)
 
@@ -249,7 +258,7 @@ async def upload_patients_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
-    hospital_id: Optional[int] = Query(None, description="Hospital ID (for Super Admin override)"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("patients", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -258,18 +267,11 @@ async def upload_patients_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
 
-    tenant_hospital_id = resolve_tenant_id(current_user)
-    role_name = current_user.role.name if current_user.role else ""
-    if role_name != UserRole.SUPER_ADMIN:
-        target_hospital_id = tenant_hospital_id
-    else:
-        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
-
     result = await PatientService(db).import_patients_from_excel(
         file,
         current_user.id,
         current_user=current_user,
-        hospital_id=target_hospital_id,
+        hospital_id=hospital_id,
     )
     return APIResponse(message="Patients bulk upload processed", data=result)
 
@@ -402,6 +404,7 @@ async def update_patient(
     status: Optional[str] = Form(None),
     preferred_language: Optional[str] = Form(None),
     consent_form: Optional[UploadFile] = File(None),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("patients", "update")),
 ):
     content_type = request.headers.get("content-type", "")
@@ -449,7 +452,8 @@ async def update_patient(
         except ValidationError as e:
             raise RequestValidationError(e.errors())
 
-    patient = await PatientService(db).update(patient_id, patient_data, current_user.id, current_user=current_user)
+    validate_tenant_body_match(getattr(patient_data, "hospital_id", None), hospital_id)
+    patient = await PatientService(db).update(patient_id, patient_data, current_user.id, current_user=current_user, hospital_id=hospital_id)
 
     if consent_form:
         from app.utils.file_upload import save_upload_file
@@ -460,6 +464,7 @@ async def update_patient(
         file_path = await save_upload_file(consent_form, settings.UPLOAD_DIR)
         doc = PatientDocument(
             patient_id=patient_id,
+            hospital_id=hospital_id,
             document_name=consent_form.filename or "consent_form",
             document_type="Consent Form",
             file_path=file_path,
@@ -475,9 +480,10 @@ async def delete_patient(
     patient_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("patients", "delete")),
 ):
-    await PatientService(db).delete(patient_id, current_user.id, current_user=current_user)
+    await PatientService(db).delete(patient_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Patient deleted", data=MessageResponse(message="Soft deleted"))
 
 
@@ -513,6 +519,7 @@ async def upload_document(
     request: Request,
     file: UploadFile = File(...),
     document_type: str = Form("general"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("patients", "update")),
 ):
     # Extract raw value from form to distinguish between omitted and explicitly empty/whitespace values
@@ -527,7 +534,7 @@ async def upload_document(
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 
-    doc = await PatientService(db).upload_document(patient_id, file, document_type, current_user.id, current_user=current_user)
+    doc = await PatientService(db).upload_document(patient_id, file, document_type, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Document uploaded", data=doc)
 
 
@@ -542,6 +549,22 @@ async def list_documents(
     return APIResponse(message="Documents retrieved", data=docs)
 
 
+def _resolve_document_file_path(stored_path: str) -> str | None:
+    import os
+    from app.core.config import settings
+
+    candidates = [
+        stored_path,
+        os.path.join(settings.UPLOAD_DIR, "secure", os.path.basename(stored_path)),
+        os.path.join(settings.UPLOAD_DIR, "patients", os.path.basename(stored_path)),
+        os.path.join(settings.UPLOAD_DIR, stored_path.lstrip("/\\")),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 @router.get("/documents/download")
 async def download_document(
     db: DbSession,
@@ -550,7 +573,6 @@ async def download_document(
     document_id: Optional[int] = None,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    import os
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
@@ -562,11 +584,12 @@ async def download_document(
         )
         
     doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
-    if not os.path.exists(doc.file_path):
+    resolved_path = _resolve_document_file_path(doc.file_path)
+    if not resolved_path:
         raise NotFoundException("Document file not found on disk")
         
     return FileResponse(
-        path=doc.file_path,
+        path=resolved_path,
         filename=doc.document_name,
         media_type="application/octet-stream"
     )
@@ -580,16 +603,16 @@ async def download_patient_document_by_path(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    import os
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
     doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
-    if not os.path.exists(doc.file_path):
+    resolved_path = _resolve_document_file_path(doc.file_path)
+    if not resolved_path:
         raise NotFoundException("Document file not found on disk")
         
     return FileResponse(
-        path=doc.file_path,
+        path=resolved_path,
         filename=doc.document_name,
         media_type="application/octet-stream"
     )
@@ -603,7 +626,6 @@ async def view_document(
     document_id: Optional[int] = None,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    import os
     import mimetypes
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
@@ -616,15 +638,16 @@ async def view_document(
         )
         
     doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
-    if not os.path.exists(doc.file_path):
+    resolved_path = _resolve_document_file_path(doc.file_path)
+    if not resolved_path:
         raise NotFoundException("Document file not found on disk")
         
-    mime_type, _ = mimetypes.guess_type(doc.file_path)
+    mime_type, _ = mimetypes.guess_type(resolved_path)
     if not mime_type:
         mime_type = "application/octet-stream"
         
     return FileResponse(
-        path=doc.file_path,
+        path=resolved_path,
         media_type=mime_type,
         content_disposition_type="inline"
     )
@@ -638,16 +661,16 @@ async def view_patient_document_by_path(
     current_user: CurrentUser,
     _: User = Depends(require_permission("patients", "read")),
 ):
-    import os
     import mimetypes
     from fastapi.responses import FileResponse
     from app.core.exceptions import NotFoundException
     
     doc = await PatientService(db).get_document(patient_id, document_id, current_user=current_user)
-    if not os.path.exists(doc.file_path):
+    resolved_path = _resolve_document_file_path(doc.file_path)
+    if not resolved_path:
         raise NotFoundException("Document file not found on disk")
         
-    mime_type, _ = mimetypes.guess_type(doc.file_path)
+    mime_type, _ = mimetypes.guess_type(resolved_path)
     if not mime_type:
         mime_type = "application/octet-stream"
         

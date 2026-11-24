@@ -535,16 +535,30 @@ class PatientRepository:
         await self.db.refresh(document)
         return document
 
-    async def list_documents(self, patient_id: int) -> list[PatientDocument]:
-        result = await self.db.execute(
-            select(PatientDocument).where(PatientDocument.patient_id == patient_id)
-        )
+    async def list_documents(self, patient_id: int, hospital_id: int | None = None) -> list[PatientDocument]:
+        query = select(PatientDocument).where(PatientDocument.patient_id == patient_id)
+        if hospital_id is not None:
+            from sqlalchemy import or_, and_
+            query = query.join(Patient, PatientDocument.patient_id == Patient.id).where(
+                or_(
+                    PatientDocument.hospital_id == hospital_id,
+                    and_(PatientDocument.hospital_id.is_(None), Patient.hospital_id == hospital_id),
+                )
+            )
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_document(self, document_id: int) -> PatientDocument | None:
-        result = await self.db.execute(
-            select(PatientDocument).where(PatientDocument.id == document_id)
-        )
+    async def get_document(self, document_id: int, hospital_id: int | None = None) -> PatientDocument | None:
+        query = select(PatientDocument).where(PatientDocument.id == document_id)
+        if hospital_id is not None:
+            from sqlalchemy import or_, and_
+            query = query.join(Patient, PatientDocument.patient_id == Patient.id).where(
+                or_(
+                    PatientDocument.hospital_id == hospital_id,
+                    and_(PatientDocument.hospital_id.is_(None), Patient.hospital_id == hospital_id),
+                )
+            )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def delete_document(self, document: PatientDocument) -> None:

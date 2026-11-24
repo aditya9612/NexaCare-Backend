@@ -149,9 +149,11 @@ class PatientService:
         matched_ids = (await self.db.scalars(stmt)).all()
         return list(set(matched_ids))
 
-    def _resolve_tenant_hospital_id(self, current_user) -> int | None:
+    def _resolve_tenant_hospital_id(self, current_user, hospital_id: int | None = None) -> int | None:
         from app.core.dependencies import resolve_tenant_id
-        return resolve_tenant_id(current_user)
+        if current_user is not None:
+            return resolve_tenant_id(current_user, hospital_id)
+        return hospital_id
 
     async def list_patients(
         self,
@@ -253,13 +255,13 @@ class PatientService:
             **stats
         }
 
-    async def get_by_id(self, patient_id: int, current_user = None) -> PatientResponse:
+    async def get_by_id(self, patient_id: int, current_user = None, hospital_id: int | None = None) -> PatientResponse:
         allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
         if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
             raise NotFoundException("Patient not found")
 
-        hospital_id = self._resolve_tenant_hospital_id(current_user)
-        patient = await self.repo.get_by_id(patient_id, hospital_id=hospital_id)
+        resolved_hospital_id = self._resolve_tenant_hospital_id(current_user, hospital_id)
+        patient = await self.repo.get_by_id(patient_id, hospital_id=resolved_hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
         lab_history = []
@@ -273,14 +275,18 @@ class PatientService:
         self, data: PatientCreate, user_id: int, consent_file: UploadFile | None = None, current_user = None, hospital_id: int | None = None
     ) -> PatientCreateResponse:
         from app.core.constants import UserRole
+        from app.core.dependencies import validate_tenant_body_match
         role_name = current_user.role.name if (current_user and current_user.role) else ""
         if role_name != UserRole.SUPER_ADMIN and current_user is not None:
             resolved_hospital_id = self._resolve_tenant_hospital_id(current_user)
         else:
             resolved_hospital_id = hospital_id if hospital_id is not None else self._resolve_tenant_hospital_id(current_user)
 
-        if resolved_hospital_id is None and getattr(data, "hospital_id", None) is not None:
-            resolved_hospital_id = data.hospital_id
+        if resolved_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for patient creation.")
+
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, resolved_hospital_id)
 
         hospital_id = resolved_hospital_id
 
@@ -313,12 +319,7 @@ class PatientService:
 
         patient_data_dict = data.model_dump()
         patient_data_dict["user_id"] = user_match_id
-        if hospital_id is not None:
-            patient_data_dict["hospital_id"] = hospital_id
-        elif current_user and hasattr(current_user, "hospital_id") and current_user.hospital_id:
-            patient_data_dict["hospital_id"] = current_user.hospital_id
-        elif getattr(data, "hospital_id", None):
-            patient_data_dict["hospital_id"] = data.hospital_id
+        patient_data_dict["hospital_id"] = hospital_id
 
         patient = Patient(patient_code=generate_mrn(), **patient_data_dict)
         patient = await self.repo.create(patient)
@@ -327,6 +328,7 @@ class PatientService:
             file_path = await save_upload_file(consent_file, settings.UPLOAD_DIR)
             doc = PatientDocument(
                 patient_id=patient.id,
+                hospital_id=patient.hospital_id,
                 document_name=consent_file.filename or "consent_form",
                 document_type="Consent Form",
                 file_path=file_path,
@@ -336,23 +338,27 @@ class PatientService:
         await self.audit_repo.create("create", "patients", user_id=user_id, resource_id=str(patient.id))
         return PatientCreateResponse.model_validate(patient)
 
-    async def update(self, patient_id: int, data: PatientUpdate, user_id: int, current_user = None) -> PatientResponse:
+    async def update(self, patient_id: int, data: PatientUpdate, user_id: int, current_user = None, hospital_id: int | None = None) -> PatientResponse:
         allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
         if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
             raise NotFoundException("Patient not found")
 
-        hospital_id = self._resolve_tenant_hospital_id(current_user)
-        patient = await self.repo.get_by_id(patient_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else self._resolve_tenant_hospital_id(current_user)
+        patient = await self.repo.get_by_id(patient_id, hospital_id=target_hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
 
+        if getattr(data, "hospital_id", None) is not None:
+            from app.core.dependencies import validate_tenant_body_match
+            validate_tenant_body_match(data.hospital_id, target_hospital_id or patient.hospital_id)
+
         if data.phone is not None and data.phone != patient.phone:
-            existing_phone = await self.repo.get_by_phone(data.phone, hospital_id=hospital_id)
+            existing_phone = await self.repo.get_by_phone(data.phone, hospital_id=target_hospital_id)
             if existing_phone:
                 raise ConflictException("Patient with this phone number already exists")
 
         if data.email is not None and data.email != patient.email:
-            existing_email = await self.repo.get_by_email(data.email, hospital_id=hospital_id)
+            existing_email = await self.repo.get_by_email(data.email, hospital_id=target_hospital_id)
             if existing_email:
                 raise ConflictException("Patient with this email already exists")
 
@@ -362,13 +368,13 @@ class PatientService:
         await self.audit_repo.create("update", "patients", user_id=user_id, resource_id=str(patient.id))
         return PatientResponse.model_validate(patient)
 
-    async def delete(self, patient_id: int, user_id: int, current_user = None) -> None:
+    async def delete(self, patient_id: int, user_id: int, current_user = None, hospital_id: int | None = None) -> None:
         allowed_patient_ids = await self._resolve_allowed_patient_ids(current_user)
         if allowed_patient_ids is not None and patient_id not in allowed_patient_ids:
             raise NotFoundException("Patient not found")
 
-        hospital_id = self._resolve_tenant_hospital_id(current_user)
-        patient = await self.repo.get_by_id(patient_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else self._resolve_tenant_hospital_id(current_user)
+        patient = await self.repo.get_by_id(patient_id, hospital_id=target_hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
         await self.repo.soft_delete(patient)
@@ -496,12 +502,17 @@ class PatientService:
         return [FamilyMemberResponse.model_validate(m) for m in members]
 
     async def upload_document(
-        self, patient_id: int, file: UploadFile, document_type: str, user_id: int, current_user = None
+        self, patient_id: int, file: UploadFile, document_type: str, user_id: int, current_user = None, hospital_id: int | None = None
     ) -> PatientDocumentResponse:
-        await self.get_by_id(patient_id, current_user=current_user)
+        target_hospital_id = hospital_id if hospital_id is not None else self._resolve_tenant_hospital_id(current_user)
+        patient = await self.get_by_id(patient_id, current_user=current_user, hospital_id=target_hospital_id)
+        effective_hospital_id = target_hospital_id or (patient.hospital_id if hasattr(patient, "hospital_id") else None)
+        if target_hospital_id and getattr(patient, "hospital_id", None) and patient.hospital_id != target_hospital_id:
+            raise ForbiddenException("Access to patient from another hospital is forbidden")
         file_path = await save_upload_file(file, settings.UPLOAD_DIR)
         doc = PatientDocument(
             patient_id=patient_id,
+            hospital_id=effective_hospital_id,
             document_name=file.filename or "document",
             document_type=document_type,
             file_path=file_path,
@@ -513,12 +524,14 @@ class PatientService:
 
     async def list_documents(self, patient_id: int, current_user = None) -> list[PatientDocumentResponse]:
         await self.get_by_id(patient_id, current_user=current_user)
-        docs = await self.repo.list_documents(patient_id)
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        docs = await self.repo.list_documents(patient_id, hospital_id=hospital_id)
         return [PatientDocumentResponse.model_validate(d) for d in docs]
 
     async def get_document(self, patient_id: int, document_id: int, current_user = None) -> PatientDocument:
         await self.get_by_id(patient_id, current_user=current_user)
-        doc = await self.repo.get_document(document_id)
+        hospital_id = self._resolve_tenant_hospital_id(current_user)
+        doc = await self.repo.get_document(document_id, hospital_id=hospital_id)
         if not doc:
             raise NotFoundException("Document not found")
         if doc.patient_id != patient_id:

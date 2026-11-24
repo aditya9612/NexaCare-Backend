@@ -108,7 +108,9 @@ class PharmacyService:
         self.audit_repo = AuditRepository(db)
         self.patient_repo = PatientRepository(db)
 
-    async def _resolve_hospital_id(self, current_user: Any | None = None, user_id: int | None = None) -> int | None:
+    async def _resolve_hospital_id(self, current_user: Any | None = None, user_id: int | None = None, hospital_id: int | None = None) -> int | None:
+        if hospital_id is not None:
+            return hospital_id
         if current_user:
             hid = resolve_tenant_id(current_user)
             if hid is not None:
@@ -180,9 +182,15 @@ class PharmacyService:
 
 
     # --- Medicines ---
-    async def create_medicine(self, data: MedicineCreate, user_id: int, current_user: Any | None = None) -> MedicineResponse:
+    async def create_medicine(self, data: MedicineCreate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> MedicineResponse:
         from app.models.inventory_model import InventoryItem
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+        from app.core.dependencies import validate_tenant_body_match
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for medicine creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
 
         if data.barcode:
             existing = await self.medicine_repo.get_by_barcode(data.barcode, hospital_id=hospital_id)
@@ -292,9 +300,14 @@ class PharmacyService:
             raise NotFoundException("Medicine not found")
         return MedicineResponse.model_validate(medicine)
 
-    async def update_medicine(self, medicine_id: int, data: MedicineUpdate, user_id: int, current_user: Any | None = None) -> MedicineResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=hospital_id)
+    async def update_medicine(self, medicine_id: int, data: MedicineUpdate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> MedicineResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for medicine update.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=target_hospital_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
 
@@ -322,9 +335,12 @@ class PharmacyService:
         await self.audit_repo.create("update", "pharmacy", user_id=user_id, resource_id=str(medicine.id))
         return MedicineResponse.model_validate(medicine)
 
-    async def delete_medicine(self, medicine_id: int, user_id: int, current_user: Any | None = None) -> None:
-        hospital_id = resolve_tenant_id(current_user)
-        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=hospital_id)
+    async def delete_medicine(self, medicine_id: int, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for medicine deletion.")
+        medicine = await self.medicine_repo.get_by_id(medicine_id, hospital_id=target_hospital_id)
         if not medicine:
             raise NotFoundException("Medicine not found")
         await self.medicine_repo.soft_delete(medicine)
@@ -366,11 +382,19 @@ class PharmacyService:
 
     # --- Prescriptions ---
 
-    async def create_prescription(self, data: PrescriptionCreate, user_id: int, current_user: Any | None = None) -> PrescriptionResponse:
+    async def create_prescription(self, data: PrescriptionCreate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> PrescriptionResponse:
         if not data.appointment_id:
             raise BadRequestException("Appointment ID is required to create prescription")
         if not data.items:
             raise BadRequestException("Prescription must contain at least one medicine item")
+
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for prescription creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
 
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
@@ -378,29 +402,27 @@ class PharmacyService:
         from app.models.patient_model import Patient
         from app.models.appointment_model import Appointment
 
-        hospital_id = resolve_tenant_id(current_user)
-        if hospital_id is None:
-            user = await self.db.scalar(select(User).where(User.id == user_id))
-            hospital_id = user.hospital_id if user else None
-
-        # 1. Verify Doctor exists
-        doctor_exists = await self.db.scalar(
-            select(Doctor).where(Doctor.id == data.doctor_id)
-        )
+        # 1. Verify Doctor exists and belongs to active tenant
+        doctor_stmt = select(Doctor).where(Doctor.id == data.doctor_id, Doctor.is_deleted.is_(False))
+        if hospital_id is not None:
+            doctor_stmt = doctor_stmt.where(Doctor.hospital_id == hospital_id)
+        doctor_exists = await self.db.scalar(doctor_stmt)
         if not doctor_exists:
             raise NotFoundException("Doctor not found")
 
-        # 2. Verify Patient exists
-        patient_exists = await self.db.scalar(
-            select(Patient).where(Patient.id == data.patient_id)
-        )
+        # 2. Verify Patient exists and belongs to active tenant
+        patient_stmt = select(Patient).where(Patient.id == data.patient_id, Patient.is_deleted.is_(False))
+        if hospital_id is not None:
+            patient_stmt = patient_stmt.where(Patient.hospital_id == hospital_id)
+        patient_exists = await self.db.scalar(patient_stmt)
         if not patient_exists:
             raise NotFoundException("Patient not found")
 
-        # 3. Verify Appointment exists and matches
-        appointment_result = await self.db.execute(
-            select(Appointment).where(Appointment.id == data.appointment_id)
-        )
+        # 3. Verify Appointment exists and belongs to active tenant
+        appointment_stmt = select(Appointment).where(Appointment.id == data.appointment_id)
+        if hospital_id is not None:
+            appointment_stmt = appointment_stmt.where(Appointment.hospital_id == hospital_id)
+        appointment_result = await self.db.execute(appointment_stmt)
         appointment = appointment_result.scalar_one_or_none()
         if not appointment:
             raise NotFoundException("Appointment not found")
@@ -409,6 +431,8 @@ class PharmacyService:
             raise BadRequestException("Patient ID does not match the appointment")
         if appointment.doctor_id != data.doctor_id:
             raise BadRequestException("Doctor ID does not match the appointment")
+        if doctor_exists.hospital_id and patient_exists.hospital_id and doctor_exists.hospital_id != patient_exists.hospital_id:
+            raise BadRequestException("Doctor and Patient belong to different hospitals")
 
         # 3b. Verify appointment date is not in the future
         from datetime import date
@@ -642,9 +666,14 @@ class PharmacyService:
         data: PrescriptionUpdate,
         doctor_id: int,
         user_id: int,
-        current_user: User
+        current_user: User,
+        hospital_id: int | None = None,
     ) -> PrescriptionResponse:
-        hospital_id = resolve_tenant_id(current_user)
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if getattr(data, "hospital_id", None) is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         prescription = await self.prescription_repo.get_by_id(prescription_id, hospital_id=hospital_id)
         if not prescription:
             raise NotFoundException("Prescription not found")
@@ -742,7 +771,8 @@ class PharmacyService:
         prescription_id: int,
         data: PrescriptionStatusUpdate,
         user_id: int,
-        current_user: Any | None = None
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
     ) -> PrescriptionResponse:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
@@ -751,11 +781,13 @@ class PharmacyService:
         from app.services.stock_movement_service import StockMovementService
         from app.utils.helpers import utc_now
         from app.models.user_model import User
+        from app.core.dependencies import resolve_tenant_id
 
-        hospital_id = resolve_tenant_id(current_user)
-        if hospital_id is None:
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
             user_record = await self.db.scalar(select(User).where(User.id == user_id))
-            hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
+            target_hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else None
+        hospital_id = target_hospital_id
 
         # 1. Lock the prescription row
         prescription = None
@@ -959,8 +991,10 @@ class PharmacyService:
         return self._prescription_response(prescription)
 
 
-    async def delete_prescription(self, prescription_id: int, doctor_id: int, user_id: int, current_user: Any | None = None) -> None:
-        hospital_id = resolve_tenant_id(current_user)
+    async def delete_prescription(self, prescription_id: int, doctor_id: int, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         prescription = await self.prescription_repo.get_by_id(prescription_id, hospital_id=hospital_id)
         if not prescription:
             raise NotFoundException("Prescription not found")
@@ -991,14 +1025,17 @@ class PharmacyService:
         user_id: int,
         data: PrescriptionDispenseRequest | None = None,
         current_user: Any | None = None,
+        hospital_id: int | None = None,
     ) -> dict:
         if not data or not data.payment_mode or not data.payment_mode.strip():
             raise BadRequestException("Payment mode is required")
 
-        hospital_id = resolve_tenant_id(current_user)
-        prescription = await self.prescription_repo.get_by_id(prescription_id, hospital_id=hospital_id)
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        prescription = await self.prescription_repo.get_by_id(prescription_id, hospital_id=target_hospital_id)
         if not prescription:
             raise NotFoundException("Prescription not found")
+        hospital_id = target_hospital_id or prescription.hospital_id
         if (prescription.status or "").lower() in ["completed", "dispensed"]:
             raise BadRequestException("Prescription has already been dispensed")
         if (prescription.status or "").lower() == "cancelled":
@@ -1137,24 +1174,28 @@ class PharmacyService:
         return resp
 
     # --- Invoices ---
-    async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int, current_user: Any | None = None) -> PharmacyInvoiceResponse:
-        return await self._create_invoice_internal(data, user_id, deduct_stock=True, current_user=current_user)
+    async def create_invoice(self, data: PharmacyInvoiceCreate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> PharmacyInvoiceResponse:
+        return await self._create_invoice_internal(data, user_id, deduct_stock=True, current_user=current_user, hospital_id=hospital_id)
 
     async def _create_invoice_internal(
         self,
         data: PharmacyInvoiceCreate,
         user_id: int,
         deduct_stock: bool = True,
-        current_user: Any | None = None
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
     ) -> PharmacyInvoiceResponse:
         from app.models.inventory_model import Warehouse
         from app.services.stock_movement_service import StockMovementService
         from app.services.settings_service import SettingsService
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
 
-        hospital_id = resolve_tenant_id(current_user)
-        if hospital_id is None:
-            user_record = await self.db.scalar(select(User).where(User.id == user_id))
-            hospital_id = user_record.hospital_id if user_record and user_record.hospital_id else 1
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for invoice creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
 
         if data.patient_id is not None:
             patient = await self.patient_repo.get_by_id(data.patient_id)
@@ -1368,8 +1409,11 @@ class PharmacyService:
         data: PharmacyReturnCreate,
         user_id: int,
         current_user: Any | None = None,
+        hospital_id: int | None = None,
     ) -> PharmacyReturnResponse:
-        hospital_id = resolve_tenant_id(current_user)
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         invoice = await self.invoice_repo.get_by_id(invoice_id, hospital_id=hospital_id)
         if not invoice:
             raise NotFoundException("Pharmacy invoice not found")
@@ -1503,8 +1547,12 @@ class PharmacyService:
             raise NotFoundException("Pharmacy invoice not found")
         return self._invoice_response(invoice)
 
-    async def update_invoice(self, invoice_id: int, data: PharmacyInvoiceUpdate, current_user: Any | None = None) -> PharmacyInvoiceResponse:
-        hospital_id = resolve_tenant_id(current_user)
+    async def update_invoice(self, invoice_id: int, data: PharmacyInvoiceUpdate, current_user: Any | None = None, hospital_id: int | None = None) -> PharmacyInvoiceResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if getattr(data, "hospital_id", None) is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         invoice = await self.invoice_repo.get_by_id(invoice_id, hospital_id=hospital_id)
         if not invoice:
             raise NotFoundException("Pharmacy invoice not found")
@@ -1549,8 +1597,10 @@ class PharmacyService:
 
         return self._invoice_response(invoice)
 
-    async def delete_invoice(self, invoice_id: int, current_user: Any | None = None) -> None:
-        hospital_id = resolve_tenant_id(current_user)
+    async def delete_invoice(self, invoice_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         invoice = await self.invoice_repo.get_by_id(invoice_id, hospital_id=hospital_id)
         if not invoice:
             raise NotFoundException("Pharmacy invoice not found")
@@ -2010,8 +2060,12 @@ class PharmacyService:
         )
 
     # --- Suppliers ---
-    async def create_supplier(self, data: SupplierCreate, user_id: int, current_user=None) -> SupplierResponse:
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+    async def create_supplier(self, data: SupplierCreate, user_id: int, current_user=None, hospital_id: int | None = None) -> SupplierResponse:
+        from app.core.dependencies import validate_tenant_body_match
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if getattr(data, "hospital_id", None) is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         if data.phone:
             existing_phone = await self.supplier_repo.get_by_phone(data.phone, hospital_id=hospital_id)
             if existing_phone:
@@ -2049,8 +2103,12 @@ class PharmacyService:
 
         return SupplierResponse.model_validate(supplier)
 
-    async def update_supplier(self, supplier_id: int, data: SupplierUpdate, user_id: int, current_user=None) -> SupplierResponse:
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+    async def update_supplier(self, supplier_id: int, data: SupplierUpdate, user_id: int, current_user=None, hospital_id: int | None = None) -> SupplierResponse:
+        from app.core.dependencies import validate_tenant_body_match
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if getattr(data, "hospital_id", None) is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         supplier = await self.supplier_repo.get_by_id(supplier_id, hospital_id=hospital_id)
 
         if not supplier:
@@ -2069,8 +2127,8 @@ class PharmacyService:
 
         return SupplierResponse.model_validate(supplier)
 
-    async def delete_supplier(self, supplier_id: int, user_id: int, current_user=None) -> None:
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+    async def delete_supplier(self, supplier_id: int, user_id: int, current_user=None, hospital_id: int | None = None) -> None:
+        hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
         supplier = await self.supplier_repo.get_by_id(supplier_id, hospital_id=hospital_id)
 
         if not supplier:
@@ -2084,8 +2142,12 @@ class PharmacyService:
             resource_id=str(supplier.id),
         )
     # --- Purchases ---
-    async def create_purchase(self, data: PurchaseCreate, user_id: int, current_user=None) -> PurchaseResponse:
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+    async def create_purchase(self, data: PurchaseCreate, user_id: int, current_user=None, hospital_id: int | None = None) -> PurchaseResponse:
+        from app.core.dependencies import validate_tenant_body_match
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if getattr(data, "hospital_id", None) is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         # Validate Supplier
         supplier = await self.supplier_repo.get_by_id(data.supplier_id, hospital_id=hospital_id)
         if not supplier:
@@ -2217,8 +2279,13 @@ class PharmacyService:
         data: PurchaseCreate,
         user_id: int,
         current_user=None,
+        hospital_id: int | None = None,
     ) -> PurchaseResponse:
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+        from app.core.dependencies import validate_tenant_body_match
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if getattr(data, "hospital_id", None) is not None and target_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
         purchase = await self.purchase_repo.get_by_id(purchase_id, hospital_id=hospital_id)
 
         if not purchase:
@@ -2264,8 +2331,8 @@ class PharmacyService:
         return self._purchase_response(purchase)
 
 
-    async def delete_purchase(self, purchase_id: int, user_id: int, current_user=None) -> None:
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+    async def delete_purchase(self, purchase_id: int, user_id: int, current_user=None, hospital_id: int | None = None) -> None:
+        hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
         purchase = await self.purchase_repo.get_by_id(purchase_id, hospital_id=hospital_id)
 
         if not purchase:
@@ -2414,12 +2481,15 @@ class PharmacyService:
         self,
         purchase_order_id: int,
         current_user,
+        hospital_id: int | None = None,
     ) -> PurchaseResponse:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         from app.models.pharmacy_model import Purchase
+        from app.core.dependencies import resolve_tenant_id
 
-        hospital_id = resolve_tenant_id(current_user)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
 
         # 1. Lock the purchase for concurrency safety
         purchase = None
@@ -2932,7 +3002,13 @@ class PharmacyService:
         stream.seek(0)
         return stream
 
-    async def import_medicines_from_excel(self, file, user_id: int, current_user=None) -> dict:
+    async def import_medicines_from_excel(
+        self,
+        file,
+        user_id: int,
+        current_user=None,
+        hospital_id: int | None = None,
+    ) -> dict:
         from io import BytesIO
         import openpyxl
         from datetime import date, datetime
@@ -2941,7 +3017,10 @@ class PharmacyService:
         from app.models.pharmacy_model import Medicine
         from app.core.exceptions import ConflictException
 
-        hospital_id = await self._resolve_hospital_id(current_user, user_id)
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required for bulk medicine upload.")
+        hospital_id = target_hospital_id
 
         content = await file.read()
         try:
@@ -3323,10 +3402,20 @@ class PharmacyService:
         stream.seek(0)
         return stream
 
-    async def import_suppliers_from_excel(self, file, user_id: int, current_user=None) -> dict:
+    async def import_suppliers_from_excel(
+        self,
+        file,
+        user_id: int,
+        current_user=None,
+        hospital_id: int | None = None,
+    ) -> dict:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
+
+        target_hospital_id = await self._resolve_hospital_id(current_user, user_id, hospital_id=hospital_id)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required for bulk supplier upload.")
 
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
@@ -3407,7 +3496,7 @@ class PharmacyService:
                     gst_number=gst_raw
                 )
 
-                await self.create_supplier(supplier_create, user_id, current_user=current_user)
+                await self.create_supplier(supplier_create, user_id, current_user=current_user, hospital_id=target_hospital_id)
                 created += 1
 
             except ValidationError as e:

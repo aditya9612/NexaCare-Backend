@@ -28,7 +28,13 @@ class VendorService:
         return user_id, hospital_id
 
     async def create_vendor(self, data: VendorCreate, user_id: int | None = None, hospital_id: int | None = None, current_user: Any = None) -> VendorResponse:
+        from app.core.dependencies import validate_tenant_body_match
+        from app.core.exceptions import BadRequestException
         user_id, hospital_id = self._resolve_context(user_id, hospital_id, current_user)
+        if hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for vendor creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, hospital_id)
         existing = await self.vendor_repo.get_by_name(data.name, hospital_id=hospital_id)
         if existing:
             raise ConflictException(f"Vendor with name '{data.name}' already exists")

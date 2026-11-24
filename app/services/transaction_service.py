@@ -23,11 +23,15 @@ class TransactionService:
         self.billing_repo = BillingRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def create_transaction(self, data: TransactionCreate, user_id: int, current_user = None) -> TransactionResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        billing = await self.billing_repo.get_by_id(data.billing_id, hospital_id=hospital_id)
+    async def create_transaction(self, data: TransactionCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> TransactionResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        billing = await self.billing_repo.get_by_id(data.billing_id, hospital_id=target_hospital_id)
         if not billing:
             raise NotFoundException("Billing record not found")
+
+        if target_hospital_id and getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
 
         if billing.status == BillingStatus.CANCELLED:
             raise BadRequestException("Cannot add transaction to a cancelled bill")
@@ -134,13 +138,17 @@ class TransactionService:
             raise NotFoundException("Transaction not found")
         return TransactionResponse.model_validate(payment)
 
-    async def update_transaction(self, transaction_id: int, data: TransactionUpdate, user_id: int, current_user = None) -> TransactionResponse:
-        hospital_id = resolve_tenant_id(current_user)
-        payment = await self.repo.get_by_id(transaction_id, hospital_id=hospital_id)
+    async def update_transaction(self, transaction_id: int, data: TransactionUpdate, user_id: int, current_user = None, hospital_id: int | None = None) -> TransactionResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        payment = await self.repo.get_by_id(transaction_id, hospital_id=target_hospital_id)
         if not payment:
             raise NotFoundException("Transaction not found")
 
-        billing = await self.billing_repo.get_by_id(payment.billing_id, hospital_id=hospital_id)
+        if target_hospital_id and getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+
+        billing = await self.billing_repo.get_by_id(payment.billing_id, hospital_id=target_hospital_id)
         if not billing:
             raise NotFoundException("Billing record not found")
 
@@ -222,13 +230,14 @@ class TransactionService:
         await self.audit_repo.create("update", "transaction", user_id=user_id, resource_id=str(payment.id))
         return TransactionResponse.model_validate(payment)
 
-    async def delete_transaction(self, transaction_id: int, user_id: int, current_user = None) -> None:
-        hospital_id = resolve_tenant_id(current_user)
-        payment = await self.repo.get_by_id(transaction_id, hospital_id=hospital_id)
+    async def delete_transaction(self, transaction_id: int, user_id: int, current_user = None, hospital_id: int | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        payment = await self.repo.get_by_id(transaction_id, hospital_id=target_hospital_id)
         if not payment:
             raise NotFoundException("Transaction not found")
 
-        billing = await self.billing_repo.get_by_id(payment.billing_id, hospital_id=hospital_id)
+        billing = await self.billing_repo.get_by_id(payment.billing_id, hospital_id=target_hospital_id)
         if not billing:
             raise NotFoundException("Billing record not found")
 
@@ -379,8 +388,10 @@ class TransactionService:
         stream.seek(0)
         return stream
 
-    async def import_transactions_from_excel(self, file, user_id: int, current_user = None) -> dict:
-        hospital_id = resolve_tenant_id(current_user)
+    async def import_transactions_from_excel(self, file, user_id: int, current_user = None, hospital_id: int | None = None) -> dict:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl

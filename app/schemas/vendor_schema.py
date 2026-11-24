@@ -15,6 +15,7 @@ class VendorCreate(BaseModel):
     address: Optional[str] = Field(None)
     gst_number: Optional[str] = Field(None, max_length=50)
     service_type: Optional[str] = Field(None, max_length=100)
+    hospital_id: Optional[int] = None
 
     @field_validator("vendor_type")
     @classmethod
@@ -120,6 +121,7 @@ class VendorUpdate(BaseModel):
     address: Optional[str] = Field(None)
     gst_number: Optional[str] = Field(None, max_length=50)
     service_type: Optional[str] = Field(None, max_length=100)
+    hospital_id: Optional[int] = None
     is_active: Optional[bool] = Field(None)
 
     @field_validator("vendor_type")

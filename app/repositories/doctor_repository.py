@@ -236,11 +236,16 @@ class DoctorRepository:
         await self.db.refresh(schedule)
         return schedule
 
-    async def get_medical_record_by_id(self, record_id: int):
+    async def get_medical_record_by_id(self, record_id: int, hospital_id: int | None = None):
         from app.models.doctor_medical_record_model import DoctorMedicalRecord
-        result = await self.db.execute(
-            select(DoctorMedicalRecord).where(DoctorMedicalRecord.id == record_id)
-        )
+        from app.models.patient_model import Patient
+        query = select(DoctorMedicalRecord).where(DoctorMedicalRecord.id == record_id)
+        if hospital_id is not None:
+            query = query.join(Patient, DoctorMedicalRecord.patient_id == Patient.id).where(
+                Patient.hospital_id == hospital_id,
+                Patient.is_deleted == False,
+            )
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def update_medical_record(self, record) -> None:

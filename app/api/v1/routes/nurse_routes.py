@@ -3,7 +3,14 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 
 from app.core.constants import UserRole
-from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    resolve_tenant_id,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.patient_schema import PatientResponse
@@ -65,9 +72,10 @@ async def create_nurse(
     data: NurseCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("nurses", "create")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     nurse = await NurseService(db).create(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse created", data=nurse)
 
@@ -386,9 +394,10 @@ async def update_nurse(
     data: NurseUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("nurses", "update")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     nurse = await NurseService(db).update(nurse_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse updated", data=nurse)
 
@@ -398,9 +407,9 @@ async def delete_nurse(
     nurse_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("nurses", "delete")),
 ):
-    hospital_id = resolve_tenant_id(current_user)
     await NurseService(db).delete(nurse_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Nurse deleted", data=MessageResponse(message="Deleted successfully"))
 
@@ -635,8 +644,9 @@ async def record_patient_vitals(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "create")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     vital = await NurseService(db).record_patient_vitals(
-        nurse_id, patient_id, data, current_user.id
+        nurse_id, patient_id, data, current_user.id, hospital_id=hospital_id, current_user=current_user
     )
     return APIResponse(message="Patient vitals recorded", data=vital)
 
@@ -655,12 +665,15 @@ async def list_patient_vitals(
     blood_group: str | None = Query(None, description="Filter by blood group (e.g. A+, O+, B-, etc.)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
+    hospital_id = resolve_tenant_id(current_user)
     result = await NurseService(db).list_patient_vitals(
         patient_id=patient_id,
         page=page,
         size=size,
         gender=gender,
         blood_group=blood_group,
+        hospital_id=hospital_id,
+        current_user=current_user,
     )
     return APIResponse(message="Patient vitals retrieved", data=result)
 
@@ -675,7 +688,8 @@ async def get_patient_vital(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    vital = await NurseService(db).get_patient_vital(vital_id)
+    hospital_id = resolve_tenant_id(current_user)
+    vital = await NurseService(db).get_patient_vital(vital_id, hospital_id=hospital_id, current_user=current_user)
     return APIResponse(message="Patient vital record retrieved", data=vital)
 
 
@@ -690,7 +704,10 @@ async def update_patient_vital(
     current_user: CurrentUser,
     _: User = Depends(require_permission("nurses", "update")),
 ):
-    vital = await NurseService(db).update_patient_vital(vital_id, data, current_user.id)
+    hospital_id = resolve_tenant_id(current_user)
+    vital = await NurseService(db).update_patient_vital(
+        vital_id, data, current_user.id, hospital_id=hospital_id, current_user=current_user
+    )
     return APIResponse(message="Patient vital record updated", data=vital)
 
 

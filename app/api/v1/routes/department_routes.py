@@ -1,5 +1,11 @@
 from fastapi import APIRouter, Depends, Query, status
-from app.core.dependencies import CurrentUser, DbSession, require_permission
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.department_schema import DepartmentCreate, DepartmentUpdate, DepartmentResponse
 from app.schemas.common_schema import APIResponse, MessageResponse
@@ -13,9 +19,11 @@ async def create_department(
     data: DepartmentCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("departments", "create")),
 ):
-    department = await DepartmentService(db).create(data, current_user=current_user)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    department = await DepartmentService(db).create(data, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Department created successfully", data=department)
 
 @router.get("", response_model=APIResponse[PaginatedResult[DepartmentResponse]])

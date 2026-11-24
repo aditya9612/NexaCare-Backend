@@ -26,14 +26,21 @@ class ClinicalRecordService:
         self.appointment_repo = AppointmentRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def _validate_related_entities(self, patient_id: int, doctor_id: int, appointment_id: int | None = None, exclude_record_id: int | None = None):
-        patient = await self.patient_repo.get_by_id(patient_id)
+    async def _validate_related_entities(
+        self, patient_id: int, doctor_id: int, appointment_id: int | None = None,
+        exclude_record_id: int | None = None, hospital_id: int | None = None
+    ):
+        patient = await self.patient_repo.get_by_id(patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException(f"Patient with ID {patient_id} not found")
         
-        doctor = await self.doctor_repo.get_by_id(doctor_id)
+        doctor = await self.doctor_repo.get_by_id(doctor_id, hospital_id=hospital_id)
         if not doctor:
             raise NotFoundException(f"Doctor with ID {doctor_id} not found")
+
+        # Reject cross-hospital patient-doctor reference
+        if patient.hospital_id is not None and doctor.hospital_id is not None and patient.hospital_id != doctor.hospital_id:
+            raise BadRequestException("Cross-hospital reference: Patient and Doctor belong to different hospitals")
 
         if appointment_id is not None:
             appointment = await self.appointment_repo.get_by_id(appointment_id)
@@ -56,6 +63,7 @@ class ClinicalRecordService:
                 raise BadRequestException(
                     f"No appointment exists for patient ID {patient_id} and doctor ID {doctor_id}. A clinical record can only be created if an appointment exists."
                 )
+        return patient, doctor
 
     def _to_response_schema(self, record: ClinicalRecord) -> ClinicalRecordResponse:
         resp = ClinicalRecordResponse.model_validate(record)
@@ -65,9 +73,20 @@ class ClinicalRecordService:
             resp.doctor_name = f"{record.doctor.first_name} {record.doctor.last_name}"
         return resp
 
-    async def create_record(self, data: ClinicalRecordCreate, user_id: int, current_user: Any | None = None, **kwargs: Any) -> ClinicalRecordResponse:
-        await self._validate_related_entities(data.patient_id, data.doctor_id, data.appointment_id)
-        record = ClinicalRecord(**data.model_dump())
+    async def create_record(self, data: ClinicalRecordCreate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None, **kwargs: Any) -> ClinicalRecordResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user is not None else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for clinical record creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+
+        patient, doctor = await self._validate_related_entities(
+            data.patient_id, data.doctor_id, data.appointment_id, hospital_id=target_hospital_id
+        )
+        record_dict = data.model_dump()
+        record_dict["hospital_id"] = target_hospital_id
+        record = ClinicalRecord(**record_dict)
         record = await self.record_repo.create(record)
 
         await self.audit_repo.create("create", "clinical_records", user_id=user_id, resource_id=str(record.id))
@@ -159,15 +178,20 @@ class ClinicalRecordService:
         )
 
 
-    async def update_record(self, record_id: int, data: ClinicalRecordUpdate, user_id: int, current_user: Any | None = None, **kwargs: Any) -> ClinicalRecordResponse:
-        record = await self.record_repo.get_by_id(record_id)
+    async def update_record(self, record_id: int, data: ClinicalRecordUpdate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None, **kwargs: Any) -> ClinicalRecordResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user is not None else None)
+        record = await self.record_repo.get_by_id(record_id, hospital_id=target_hospital_id)
         if not record:
             raise NotFoundException(f"Clinical record with ID {record_id} not found")
+
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id or record.hospital_id)
 
         patient_id = data.patient_id if data.patient_id is not None else record.patient_id
         doctor_id = data.doctor_id if data.doctor_id is not None else record.doctor_id
         appointment_id = data.appointment_id if data.appointment_id is not None else record.appointment_id
-        await self._validate_related_entities(patient_id, doctor_id, appointment_id, exclude_record_id=record_id)
+        await self._validate_related_entities(patient_id, doctor_id, appointment_id, exclude_record_id=record_id, hospital_id=target_hospital_id)
 
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(record, key, value)
@@ -204,8 +228,10 @@ class ClinicalRecordService:
 
         return resp
 
-    async def delete_record(self, record_id: int, user_id: int, current_user: Any | None = None, **kwargs: Any) -> None:
-        record = await self.record_repo.get_by_id(record_id)
+    async def delete_record(self, record_id: int, user_id: int, current_user: Any | None = None, hospital_id: int | None = None, **kwargs: Any) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user is not None else None)
+        record = await self.record_repo.get_by_id(record_id, hospital_id=target_hospital_id)
         if not record:
             raise NotFoundException(f"Clinical record with ID {record_id} not found")
 

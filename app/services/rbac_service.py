@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException
 from app.models.permission_model import Permission
 from app.models.role_model import Role, RolePermission
 from app.repositories.audit_repository import AuditRepository
@@ -11,11 +11,24 @@ from app.schemas.rbac_schema import (
     PermissionUpdate,
     RoleCreate,
     RolePermissionCreate,
+    RolePermissionOverrideRequest,
+    RolePermissionOverrideResponse,
     RolePermissionResponse,
     RoleResponse,
     RoleUpdate,
     RBACSeedDefaultsResponse,
 )
+
+VALID_TENANT_ARCHETYPES = {
+    "DOCTOR",
+    "NURSE",
+    "RECEPTIONIST",
+    "PHARMACIST",
+    "LAB_TECHNICIAN",
+    "ACCOUNTANT",
+    "HOSPITAL_ADMIN",
+    "PATIENT",
+}
 
 
 class RBACService:
@@ -23,39 +36,132 @@ class RBACService:
         self.repo = RBACRepository(db)
         self.audit_repo = AuditRepository(db)
 
-    async def create_role(self, data: RoleCreate, user_id: int) -> RoleResponse:
-        if await self.repo.get_role_by_name(data.name):
+    async def create_role(self, data: RoleCreate, user_id: int, hospital_id: int | None = None) -> RoleResponse:
+        target_hosp_id = data.hospital_id or hospital_id
+        if await self.repo.get_role_by_name(data.name, target_hosp_id):
             raise BadRequestException("Role already exists")
-        role = await self.repo.create_role(Role(**data.model_dump()))
+        role_dict = data.model_dump()
+
+        archetype = None
+        if data.base_role_type:
+            raw_archetype = data.base_role_type.upper().strip()
+            if raw_archetype not in VALID_TENANT_ARCHETYPES:
+                raise BadRequestException(
+                    f"Invalid base archetype: '{data.base_role_type}'. Allowed: {', '.join(sorted(VALID_TENANT_ARCHETYPES))}"
+                )
+            if target_hosp_id and raw_archetype == "SUPER_ADMIN":
+                raise BadRequestException("Tenant custom roles cannot be based on the SUPER_ADMIN archetype.")
+            archetype = raw_archetype
+            role_dict["base_role_type"] = archetype
+        else:
+            role_dict["base_role_type"] = None
+
+        if target_hosp_id:
+            role_dict["hospital_id"] = target_hosp_id
+            role_dict["is_system"] = False
+        else:
+            role_dict["is_system"] = True
+
+        role = await self.repo.create_role(Role(**role_dict))
+
+        # Automatically clone baseline permissions from the system archetype role for new custom roles
+        if archetype:
+            sys_role = await self.repo.get_system_role_by_archetype(archetype)
+            if isinstance(sys_role, Role):
+                await self.repo.clone_role_permissions(sys_role.id, role.id)
+
+
         await self.audit_repo.create("create", "roles", user_id=user_id, resource_id=str(role.id))
         return RoleResponse.model_validate(role)
 
-    async def list_roles(self) -> list[RoleResponse]:
-        roles = await self.repo.list_roles()
+    async def list_roles(self, hospital_id: int | None = None) -> list[RoleResponse]:
+        if hospital_id:
+            roles = await self.repo.list_roles_for_tenant(hospital_id)
+        else:
+            roles = await self.repo.list_roles()
         return [RoleResponse.model_validate(r) for r in roles]
 
-    async def get_role(self, role_id: int) -> RoleResponse:
+    async def get_role(self, role_id: int, hospital_id: int | None = None) -> RoleResponse:
         role = await self.repo.get_role_by_id(role_id)
         if not role:
+            raise NotFoundException("Role not found")
+        if hospital_id and role.hospital_id is not None and role.hospital_id != hospital_id:
             raise NotFoundException("Role not found")
         return RoleResponse.model_validate(role)
 
-    async def update_role(self, role_id: int, data: RoleUpdate, user_id: int) -> RoleResponse:
+    async def update_role(
+        self,
+        role_id: int,
+        data: RoleUpdate,
+        user_id: int,
+        hospital_id: int | None = None,
+    ) -> RoleResponse:
         role = await self.repo.get_role_by_id(role_id)
         if not role:
             raise NotFoundException("Role not found")
+        if role.is_system:
+            raise BadRequestException("System roles cannot be modified.")
+        if hospital_id and role.hospital_id != hospital_id:
+            raise ForbiddenException("Cannot modify roles belonging to another hospital.")
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(role, key, value)
         role = await self.repo.update_role(role)
         await self.audit_repo.create("update", "roles", user_id=user_id, resource_id=str(role.id))
         return RoleResponse.model_validate(role)
 
-    async def delete_role(self, role_id: int, user_id: int) -> None:
+    async def delete_role(self, role_id: int, user_id: int, hospital_id: int | None = None) -> None:
         role = await self.repo.get_role_by_id(role_id)
         if not role:
             raise NotFoundException("Role not found")
+        if role.is_system:
+            raise BadRequestException("System roles cannot be deleted.")
+        if hospital_id and role.hospital_id != hospital_id:
+            raise ForbiddenException("Cannot delete roles belonging to another hospital.")
         await self.repo.delete_role(role)
         await self.audit_repo.create("delete", "roles", user_id=user_id, resource_id=str(role_id))
+
+    async def set_role_override(
+        self,
+        hospital_id: int,
+        role_id: int,
+        permission_id: int,
+        is_granted: bool,
+        user_id: int,
+    ) -> RolePermissionOverrideResponse:
+        role = await self.repo.get_role_by_id(role_id)
+        if not role:
+            raise NotFoundException("Role not found")
+        if role.is_system:
+            raise BadRequestException("Cannot set overrides on immutable system roles.")
+        if role.hospital_id != hospital_id:
+            raise ForbiddenException("Cannot set overrides for another hospital's role.")
+        perm = await self.repo.get_permission_by_id(permission_id)
+        if not perm:
+            raise NotFoundException("Permission not found")
+
+        override = await self.repo.set_role_override(
+            hospital_id=hospital_id,
+            role_id=role_id,
+            permission_id=permission_id,
+            is_granted=is_granted,
+        )
+        action = "grant" if is_granted else "revoke"
+        await self.audit_repo.create(
+            f"override_{action}",
+            "role_permissions",
+            user_id=user_id,
+            resource_id=f"{role_id}:{permission_id}",
+        )
+        return RolePermissionOverrideResponse.model_validate(override)
+
+    async def list_role_overrides(
+        self,
+        hospital_id: int,
+        role_id: int | None = None,
+    ) -> list[RolePermissionOverrideResponse]:
+        overrides = await self.repo.get_role_overrides_for_hospital(hospital_id, role_id)
+        return [RolePermissionOverrideResponse.model_validate(o) for o in overrides]
+
 
     async def create_permission(self, data: PermissionCreate, user_id: int) -> PermissionResponse:
         perm = await self.repo.create_permission(Permission(**data.model_dump()))
@@ -89,7 +195,22 @@ class RBACService:
         await self.repo.delete_permission(perm)
         await self.audit_repo.create("delete", "permissions", user_id=user_id, resource_id=str(permission_id))
 
-    async def assign_permission(self, data: RolePermissionCreate, user_id: int) -> RolePermissionResponse:
+    async def assign_permission(
+        self,
+        data: RolePermissionCreate,
+        user_id: int,
+        hospital_id: int | None = None,
+    ) -> RolePermissionResponse:
+        role = await self.repo.get_role_by_id(data.role_id)
+        if not role:
+            raise NotFoundException("Role not found")
+        if role.is_system:
+            raise BadRequestException("Cannot assign permissions directly to immutable system roles. Use role overrides instead.")
+        if hospital_id and role.hospital_id != hospital_id:
+            raise ForbiddenException("Cannot assign permissions to another hospital's role.")
+        perm = await self.repo.get_permission_by_id(data.permission_id)
+        if not perm:
+            raise NotFoundException("Permission not found")
         if await self.repo.role_permission_exists(data.role_id, data.permission_id):
             raise BadRequestException("Permission already assigned to role")
         rp = await self.repo.assign_permission(RolePermission(**data.model_dump()))

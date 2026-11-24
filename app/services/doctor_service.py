@@ -588,8 +588,12 @@ class DoctorService:
         diagnosis: str | None,
         notes: str | None,
         user_id: int,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
     ):
-        record = await self.repo.get_medical_record_by_id(record_id)
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        record = await self.repo.get_medical_record_by_id(record_id, hospital_id=target_hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 
@@ -608,8 +612,16 @@ class DoctorService:
         from app.schemas.doctor_medical_record_schema import MedicalRecordResponse
         return MedicalRecordResponse.model_validate(record)
 
-    async def delete_medical_record(self, record_id: int, user_id: int) -> None:
-        record = await self.repo.get_medical_record_by_id(record_id)
+    async def delete_medical_record(
+        self,
+        record_id: int,
+        user_id: int,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
+    ) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        record = await self.repo.get_medical_record_by_id(record_id, hospital_id=target_hospital_id)
         if not record:
             raise NotFoundException("Medical record not found")
 

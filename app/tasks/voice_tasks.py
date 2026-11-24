@@ -29,10 +29,31 @@ def process_reception_callback_tickets():
 
 
 async def _execute_voice_call(call_id: int) -> None:
+    from app.models.voice_model import VoiceCall
+    from app.services.module_service import ModuleService
     from app.services.voice_service import VoiceService
 
     async with AsyncSessionLocal() as db:
         try:
+            call = await db.get(VoiceCall, call_id)
+            if not call:
+                logger.warning("Voice call %s not found. Skipping.", call_id)
+                return
+
+            # Execution-time entitlement guard
+            if call.hospital_id:
+                module_service = ModuleService(db)
+                is_entitled = await module_service.is_module_active(call.hospital_id, "VOICE_REMIND")
+                if not is_entitled:
+                    logger.warning(
+                        "Voice call %s aborted: Hospital %s does not have active VOICE_REMIND module.",
+                        call_id,
+                        call.hospital_id,
+                    )
+                    call.call_status = "CANCELLED_NOT_ENTITLED"
+                    await db.commit()
+                    return
+
             service = VoiceService(db)
             await service.start_call_internal(call_id)
             await db.commit()

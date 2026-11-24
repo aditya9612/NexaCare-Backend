@@ -46,16 +46,16 @@ class StaffService:
                 raise NotFoundException("Role not found")
 
     async def create_staff(
-        self, data: StaffCreate, current_user_id: int, current_user: Any | None = None
+        self, data: StaffCreate, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> StaffResponse:
-        # Resolve tenant hospital context
+        from app.core.dependencies import validate_tenant_body_match
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        if hospital_id is None and getattr(data, "hospital_id", None) is not None:
-            hospital_id = data.hospital_id
-        elif hospital_id is not None and getattr(data, "hospital_id", None) is not None:
-            if actor and actor.role and actor.role.name != UserRole.SUPER_ADMIN and data.hospital_id != hospital_id:
-                raise ForbiddenException("Cannot create staff for another hospital")
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for staff creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
 
         # Validate duplicates in staff table
         existing_email = await self.repo.get_by_email(data.email)
@@ -255,13 +255,17 @@ class StaffService:
         return StaffResponse.model_validate(staff)
 
     async def update_staff(
-        self, staff_id: int, data: StaffUpdate, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, data: StaffUpdate, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> StaffResponse:
+        from app.core.dependencies import validate_tenant_body_match
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
+        effective_hospital_id = target_hospital_id or staff.hospital_id
+        if getattr(data, "hospital_id", None) is not None and effective_hospital_id is not None:
+            validate_tenant_body_match(data.hospital_id, effective_hospital_id)
         
         # Check duplicate email if it is being changed
         if data.email:
@@ -276,7 +280,6 @@ class StaffService:
                 raise ConflictException("Staff code already exists")
                 
         # Validate department/role if changed within staff's hospital
-        effective_hospital_id = staff.hospital_id or hospital_id
         if data.department_id is not None or data.role_name is not None:
             await self._validate_department_and_role(data.department_id, data.role_name, hospital_id=effective_hospital_id)
         
@@ -313,7 +316,7 @@ class StaffService:
         await self.repo.update(staff)
         
         # Eager-load relations again
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -322,11 +325,11 @@ class StaffService:
         return StaffResponse.model_validate(staff)
 
     async def update_staff_status(
-        self, staff_id: int, status: int, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, status: int, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> StaffResponse:
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -334,7 +337,7 @@ class StaffService:
         await self.repo.update(staff)
         
         # Eager-load relations
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -343,11 +346,11 @@ class StaffService:
         return StaffResponse.model_validate(staff)
 
     async def delete_staff(
-        self, staff_id: int, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> None:
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -375,11 +378,11 @@ class StaffService:
         return [StaffScheduleResponse.model_validate(s) for s in result.all()]
 
     async def add_schedule(
-        self, staff_id: int, data: StaffScheduleCreate, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, data: StaffScheduleCreate, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> StaffScheduleResponse:
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -412,11 +415,11 @@ class StaffService:
         return StaffScheduleResponse.model_validate(new_schedule)
 
     async def delete_all_schedules(
-        self, staff_id: int, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> None:
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -428,11 +431,11 @@ class StaffService:
         await self.audit_repo.create("delete_all_schedules", "staff", user_id=current_user_id, resource_id=str(staff_id))
 
     async def delete_schedule_slot(
-        self, staff_id: int, slot_id: int, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, slot_id: int, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> None:
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
             
@@ -445,11 +448,11 @@ class StaffService:
         await self.audit_repo.create("delete_schedule_slot", "staff", user_id=current_user_id, resource_id=str(staff_id))
 
     async def update_schedule_slot(
-        self, staff_id: int, slot_id: int, data: StaffScheduleUpdate, current_user_id: int, current_user: Any | None = None
+        self, staff_id: int, slot_id: int, data: StaffScheduleUpdate, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> StaffScheduleResponse:
         actor = current_user or await self.db.get(User, current_user_id)
-        hospital_id = resolve_tenant_id(actor)
-        staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(actor)
+        staff = await self.repo.get_by_id(staff_id, hospital_id=target_hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
 

@@ -37,8 +37,9 @@ from app.models.pharmacy_model import (
     PurchaseItem,
     Supplier,
 )
+from app.models.module_model import HospitalModule, Module
 from app.models.refresh_token_model import RefreshToken
-from app.models.role_model import Role, RolePermission
+from app.models.role_model import Role, RolePermission, RolePermissionOverride
 from app.models.user_model import User
 from app.models.staff_model import Staff, StaffSchedule
 from app.models.voice_model import CallAnalytics, CallSchedule, VoiceCall, VoiceCallLog, VoiceResponse
@@ -74,11 +75,13 @@ from app.models.billing_setting import BillingSetting
 from app.models.knowledge_embedding_model import KnowledgeEmbedding
 from app.models.discharge_model import Discharge
 from app.models.room_tariff_model import RoomTariff
+from app.models.transaction_history_model import TransactionHistory
 from app.models.final_bill_model import IPDFinalBill, IPDFinalBillItem
  
 __all__ = [
     "Discharge",
     "RoomTariff",
+    "TransactionHistory",
     "IPDFinalBill",
     "IPDFinalBillItem",
     "Notification",
@@ -175,6 +178,9 @@ __all__ = [
     "Expense",
     "VendorPayment",
     "ClinicalRecord",
+    "Module",
+    "HospitalModule",
+    "RolePermissionOverride",
     "HospitalSetting",
     "AppointmentSetting",
     "UserPreference",

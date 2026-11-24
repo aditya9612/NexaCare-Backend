@@ -12,9 +12,20 @@ from app.schemas.super_admin_schema import (
     SuperAdminAnalyticsResponse,
     DashboardOverviewResponse,
     PatientAnalyticsResponse,
-    UsersDashboardResponse
+    UsersDashboardResponse,
+    ModuleCatalogItem,
+    HospitalModuleItem,
+    HospitalModulesResponse,
+    HospitalModuleToggleRequest,
+    HospitalModulesBulkUpdateRequest,
 )
 from app.services.super_admin_service import SuperAdminService
+from app.services.module_service import (
+    ModuleService,
+    ALL_MODULES,
+    FOUNDATIONAL_MODULES,
+    COMMERCIAL_MODULES,
+)
 
 router = APIRouter(dependencies=[Depends(bearer_scheme)])
 
@@ -202,3 +213,115 @@ async def get_super_admin_dashboard_users(
 ):
     users = await SuperAdminService(db).get_users_dashboard()
     return APIResponse(message="Users dashboard metrics retrieved successfully", data=users)
+
+
+@router.get("/modules", response_model=APIResponse[list[ModuleCatalogItem]])
+async def list_modules_catalog(
+    db: DbSession,
+    current_user: User = Depends(require_super_admin),
+):
+    """
+    List master catalog of all 18 modules (14 foundational + 4 commercial).
+    """
+    service = ModuleService(db)
+    all_db_modules = await service.repo.get_all_modules()
+    db_mod_map = {m.code: m for m in all_db_modules}
+
+    catalog = []
+    for code in ALL_MODULES:
+        db_m = db_mod_map.get(code)
+        tier = "FOUNDATIONAL" if code in FOUNDATIONAL_MODULES else "COMMERCIAL"
+        catalog.append(
+            ModuleCatalogItem(
+                code=code,
+                name=db_m.name if db_m else code.replace("_", " ").title(),
+                tier=tier,
+                description=db_m.description if db_m else f"{code} module",
+                is_active=db_m.is_active if db_m else True,
+            )
+        )
+    return APIResponse(message="Module catalog retrieved successfully", data=catalog)
+
+
+@router.get("/hospitals/{hospital_id}/modules", response_model=APIResponse[HospitalModulesResponse])
+async def get_hospital_modules(
+    hospital_id: int,
+    db: DbSession,
+    current_user: User = Depends(require_super_admin),
+):
+    """
+    Get all module entitlement statuses for a specific hospital.
+    """
+    service = ModuleService(db)
+    active_codes = await service.get_active_modules(hospital_id)
+    hosp_modules = await service.repo.get_hospital_modules(hospital_id)
+    hm_map = {hm.module_code: hm for hm in hosp_modules}
+
+    items = []
+    for code in ALL_MODULES:
+        hm = hm_map.get(code)
+        is_active = code in active_codes
+        tier = "FOUNDATIONAL" if code in FOUNDATIONAL_MODULES else "COMMERCIAL"
+        items.append(
+            HospitalModuleItem(
+                module_code=code,
+                module_name=code.replace("_", " ").title(),
+                tier=tier,
+                is_active=is_active,
+                status=hm.status if hm else ("ACTIVE" if is_active else "INACTIVE"),
+                activated_at=hm.activated_at if hm else None,
+                expires_at=hm.expires_at if hm else None,
+            )
+        )
+    return APIResponse(
+        message="Hospital modules retrieved successfully",
+        data=HospitalModulesResponse(hospital_id=hospital_id, modules=items),
+    )
+
+
+@router.put("/hospitals/{hospital_id}/modules", response_model=APIResponse[HospitalModulesResponse])
+async def bulk_update_hospital_modules(
+    hospital_id: int,
+    payload: HospitalModulesBulkUpdateRequest,
+    db: DbSession,
+    current_user: User = Depends(require_super_admin),
+):
+    """
+    Bulk update module entitlement statuses for a hospital.
+    """
+    service = ModuleService(db)
+    for mod in payload.modules:
+        await service.set_hospital_module_status(
+            hospital_id=hospital_id,
+            module_code=mod.module_code,
+            is_active=mod.is_active,
+            status=mod.status,
+        )
+    await db.commit()
+    return await get_hospital_modules(hospital_id, db, current_user)
+
+
+@router.patch("/hospitals/{hospital_id}/modules/{module_code}", response_model=APIResponse[MessageResponse])
+async def toggle_hospital_module(
+    hospital_id: int,
+    module_code: str,
+    payload: HospitalModuleToggleRequest,
+    db: DbSession,
+    current_user: User = Depends(require_super_admin),
+):
+    """
+    Toggle a single module entitlement status for a hospital.
+    """
+    service = ModuleService(db)
+    await service.set_hospital_module_status(
+        hospital_id=hospital_id,
+        module_code=module_code,
+        is_active=payload.is_active,
+        status=payload.status,
+    )
+    await db.commit()
+    action_str = "activated" if payload.is_active else "deactivated"
+    return APIResponse(
+        message=f"Module '{module_code}' {action_str} successfully for hospital {hospital_id}",
+        data=MessageResponse(message="Success"),
+    )

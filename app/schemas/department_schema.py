@@ -52,6 +52,7 @@ def validate_dept_code(value: str | None, required: bool = False) -> str | None:
 class DepartmentCreate(BaseSchema):
     department_code: Optional[str] = Field(None, max_length=20, description="Unique short code for the department (e.g. CARD, OPD-01)")
     department_name: str = Field(..., min_length=1, max_length=100, description="The name of the department")
+    hospital_id: Optional[int] = None
 
     @field_validator("department_code")
     @classmethod

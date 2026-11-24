@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,6 +170,10 @@ class NurseService:
             raise ConflictException("License number already registered")
         await self._validate_department(data.department_id)
         target_hospital_id = hospital_id if hospital_id is not None else user.hospital_id
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for nurse creation.")
+        if user.hospital_id is not None and target_hospital_id is not None and user.hospital_id != target_hospital_id:
+            raise BadRequestException("User belongs to a different hospital")
         nurse = Nurse(nurse_code=generate_nurse_code(), hospital_id=target_hospital_id, **data.model_dump())
         nurse = await self.repo.create(nurse)
         await self.audit_repo.create("create", "nurses", user_id=user_id, resource_id=str(nurse.id))
@@ -1193,11 +1198,22 @@ class NurseService:
         patient_id: int,
         data: PatientVitalCreate,
         user_id: int,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
     ) -> PatientVitalResponse:
-        await self._get_nurse_or_raise(nurse_id)
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
+
+        nurse = await self._get_nurse_or_raise(nurse_id, hospital_id=target_hospital_id)
         patient = await self.assignment_repo.get_patient_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
+        if patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
+        if nurse.hospital_id != patient.hospital_id:
+            raise BadRequestException("Nurse and patient must belong to the same hospital.")
         assignment = await self.assignment_repo.get_assigned_patient(nurse_id, patient_id)
         if not assignment:
             raise NotFoundException("Patient is not assigned to this nurse")
@@ -1301,10 +1317,16 @@ class NurseService:
         size: int = 20,
         gender: str | None = None,
         blood_group: str | None = None,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
     ):
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
         patient = await self.assignment_repo.get_patient_by_id(patient_id)
         if not patient:
             raise NotFoundException("Patient not found")
+        if target_hospital_id is not None and patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Patient not found in this hospital context.")
 
         if gender is not None and gender.strip():
             patient_gender = (patient.gender or "").strip().lower()
@@ -1333,18 +1355,41 @@ class NurseService:
             size,
         )
 
-    async def get_patient_vital(self, vital_id: int) -> PatientVitalResponse:
+    async def get_patient_vital(
+        self,
+        vital_id: int,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
+    ) -> PatientVitalResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
         vital = await self.vital_repo.get_by_id(vital_id)
         if not vital:
             raise NotFoundException("Vital record not found")
+        if target_hospital_id is not None:
+            patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+            if not patient or patient.hospital_id != target_hospital_id:
+                raise NotFoundException("Vital record not found in this hospital context.")
         return PatientVitalResponse.model_validate(vital)
 
     async def update_patient_vital(
-        self, vital_id: int, data: PatientVitalUpdate, user_id: int
+        self,
+        vital_id: int,
+        data: PatientVitalUpdate,
+        user_id: int,
+        hospital_id: int | None = None,
+        current_user: Any | None = None,
     ) -> PatientVitalResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant context is required.")
         vital = await self.vital_repo.get_by_id(vital_id)
         if not vital:
             raise NotFoundException("Vital record not found")
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        if not patient or patient.hospital_id != target_hospital_id:
+            raise NotFoundException("Vital record not found in this hospital context.")
 
         if data.temperature is not None:
             vital.temperature = data.temperature

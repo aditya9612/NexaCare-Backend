@@ -3,7 +3,15 @@ from enum import Enum
 from fastapi import APIRouter, Depends, Header, Query, UploadFile, File, HTTPException
 from fastapi.responses import Response, StreamingResponse
 
-from app.core.dependencies import CurrentUser, DbSession, get_tenant_hospital_id, require_permission, resolve_tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    get_tenant_hospital_id,
+    require_permission,
+    resolve_tenant_id,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.vendor_schema import VendorCreate, VendorUpdate, VendorResponse
@@ -41,8 +49,7 @@ async def upload_vendors_bulk(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("vendor", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -51,8 +58,6 @@ async def upload_vendors_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     result = await VendorService(db).import_vendors_from_excel(file, current_user.id, hospital_id=hospital_id, current_user=current_user)
     return APIResponse(message="Vendors bulk upload processed", data=result)
 
@@ -89,12 +94,10 @@ async def create_vendor(
     data: VendorCreate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("vendor", "create")),
 ):
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     vendor = await VendorService(db).create_vendor(data, current_user.id, hospital_id=hospital_id, current_user=current_user)
     return APIResponse(message="Vendor created", data=vendor)
 
@@ -145,12 +148,10 @@ async def update_vendor(
     data: VendorUpdate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("vendor", "update")),
 ):
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     vendor = await VendorService(db).update_vendor(vendor_id, data, current_user.id, hospital_id=hospital_id, current_user=current_user)
     return APIResponse(message="Vendor updated", data=vendor)
 
@@ -160,11 +161,8 @@ async def delete_vendor(
     vendor_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
-    hospital_id_param: Optional[int] = Query(None, alias="hospital_id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("vendor", "delete")),
 ):
-    target_hospital_id = x_hospital_id if x_hospital_id is not None else hospital_id_param
-    hospital_id = await get_tenant_hospital_id(current_user, target_hospital_id)
     await VendorService(db).delete_vendor(vendor_id, current_user.id, hospital_id=hospital_id, current_user=current_user)
     return APIResponse(message="Vendor deleted", data=MessageResponse(message="Soft deleted"))

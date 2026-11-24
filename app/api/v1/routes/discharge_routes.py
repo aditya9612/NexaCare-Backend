@@ -5,10 +5,12 @@ from app.core.constants import UserRole
 from app.core.dependencies import (
     CurrentUser,
     DbSession,
+    TenantWriteHospitalId,
     get_tenant_hospital_id,
     require_permission,
     require_roles,
     resolve_tenant_id,
+    validate_tenant_body_match,
 )
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse
@@ -34,15 +36,16 @@ async def initiate_discharge(
     data: DischargeInitiateRequest,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
+    __: User = Depends(require_permission("discharges", "create")),
 ):
     """
     Doctor initiates patient discharge and submits medical discharge summary.
     Discharge status transitions to PENDING_CLEARANCES.
     """
-    tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).initiate_discharge(data, current_user.id, hospital_id=tenant_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    discharge = await DischargeService(db).initiate_discharge(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(
         success=True,
         message="Discharge initiated successfully. Awaiting multi-stage clearances.",
@@ -64,6 +67,7 @@ async def list_active_discharges(
         UserRole.RECEPTIONIST,
         *UserRole.ADMIN_ROLES,
     )),
+    __: User = Depends(require_permission("discharges", "read")),
 ):
     """
     List all active discharge cases currently undergoing clearances.
@@ -168,14 +172,14 @@ async def clear_pharmacy(
     db: DbSession,
     current_user: CurrentUser,
     data: ClearPharmacyRequest | None = None,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     """
     Pharmacist verifies returned/unbilled medications and approves Pharmacy Clearance.
     """
-    tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).clear_pharmacy(discharge_id, current_user.id, data, hospital_id=tenant_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    discharge = await DischargeService(db).clear_pharmacy(discharge_id, current_user.id, data, hospital_id=hospital_id)
     return APIResponse(
         success=True,
         message="Pharmacy clearance approved successfully",
@@ -209,14 +213,14 @@ async def generate_final_bill(
     data: GenerateIPDBillRequest,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "create")),
 ):
     """
     Accountant calculates total stay days and auto-generates final IPD bill based on Room Tariffs, Lab, Radiology, and Pharmacy.
     """
-    tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    result = await DischargeService(db).generate_ipd_final_bill(discharge_id, data, current_user.id, hospital_id=tenant_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    result = await DischargeService(db).generate_ipd_final_bill(discharge_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(
         success=True,
         message="IPD Final Bill generated successfully",
@@ -230,14 +234,14 @@ async def clear_billing(
     data: ClearBillingRequest,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
     """
     Billing department verifies final bill and approves Billing Clearance.
     """
-    tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).clear_billing(discharge_id, current_user.id, data, hospital_id=tenant_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    discharge = await DischargeService(db).clear_billing(discharge_id, current_user.id, data, hospital_id=hospital_id)
     return APIResponse(
         success=True,
         message="Billing clearance approved successfully",
@@ -251,14 +255,14 @@ async def clear_payment(
     data: ClearPaymentRequest,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
     """
     Cashier settles remaining bill balance and approves Payment Clearance.
     """
-    tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).clear_payment(discharge_id, data, current_user.id, hospital_id=tenant_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    discharge = await DischargeService(db).clear_payment(discharge_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(
         success=True,
         message="Payment clearance approved successfully",
@@ -271,15 +275,15 @@ async def approve_discharge(
     discharge_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_roles(UserRole.DOCTOR, *UserRole.ADMIN_ROLES)),
+    __: User = Depends(require_permission("discharges", "approve")),
 ):
     """
     Doctor gives final approval after all 3 clearances are met.
     Patient is marked DISCHARGED, Gate Pass is generated, and Bed transitions to CLEANING.
     """
-    tenant_hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
-    discharge = await DischargeService(db).doctor_approve_discharge(discharge_id, current_user.id, hospital_id=tenant_hospital_id)
+    discharge = await DischargeService(db).doctor_approve_discharge(discharge_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(
         success=True,
         message="Discharge approved successfully. Gate pass generated and bed sent for housekeeping sanitization.",

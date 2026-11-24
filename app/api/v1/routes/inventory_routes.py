@@ -6,7 +6,14 @@ class InventoryExportFormat(str, Enum):
     EXCEL = "excel"
     PDF = "pdf"
 
-from app.core.dependencies import CurrentUser, DbSession, require_permission, resolve_tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
+    resolve_tenant_id,
+    validate_tenant_body_match,
+)
 from app.models.user_model import User
 from app.schemas.common_schema import APIResponse, MessageResponse
 from app.schemas.inventory_schema import (
@@ -36,10 +43,10 @@ async def create_inventory_item(
     data: InventoryItemCreate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     item = await InventoryService(db).create_item(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item created", data=item)
 
@@ -147,10 +154,10 @@ async def update_inventory_item(
     data: InventoryItemUpdate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     item = await InventoryService(db).update_item(item_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item updated", data=item)
 
@@ -160,10 +167,9 @@ async def delete_inventory_item(
     item_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     await InventoryService(db).delete_item(item_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Inventory item deleted", data=MessageResponse(message="Soft deleted"))
 
@@ -174,9 +180,11 @@ async def create_stock_transaction(
     data: StockTransactionCreate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    transaction = await InventoryService(db).create_transaction(data, current_user.id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    transaction = await InventoryService(db).create_transaction(data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Stock transaction created", data=transaction)
 
 
@@ -217,9 +225,11 @@ async def update_stock_transaction(
     data: StockTransactionUpdate,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    transaction = await InventoryService(db).update_transaction(transaction_id, data, current_user.id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    transaction = await InventoryService(db).update_transaction(transaction_id, data, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Stock transaction updated", data=transaction)
 
 
@@ -228,9 +238,10 @@ async def delete_stock_transaction(
     transaction_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    await InventoryService(db).delete_stock_transaction(transaction_id, current_user.id)
+    await InventoryService(db).delete_stock_transaction(transaction_id, current_user.id, hospital_id=hospital_id)
     return APIResponse(message="Stock transaction deleted", data=MessageResponse(message="Deleted successfully"))
 
 
@@ -243,10 +254,10 @@ async def create_warehouse(
     data: WarehouseCreate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "create")),
 ):
-    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     warehouse = await InventoryService(db).create_warehouse(data, hospital_id)
     return APIResponse(message="Warehouse created", data=warehouse)
 
@@ -284,10 +295,10 @@ async def update_warehouse(
     data: WarehouseUpdate,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "update")),
 ):
-    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     warehouse = await InventoryService(db).update_warehouse(warehouse_id, data, hospital_id)
     return APIResponse(message="Warehouse updated", data=warehouse)
 
@@ -297,10 +308,9 @@ async def delete_warehouse(
     warehouse_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("inventory", "delete")),
 ):
-    hospital_id = resolve_tenant_id(current_user, x_hospital_id=x_hospital_id)
     await InventoryService(db).delete_warehouse(warehouse_id, hospital_id)
     return APIResponse(message="Warehouse deleted", data=MessageResponse(message="Soft deleted"))
 

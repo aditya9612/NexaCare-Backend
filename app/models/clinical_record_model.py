@@ -9,6 +9,9 @@ class ClinicalRecord(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "clinical_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    hospital_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hospitals.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("doctors.id", ondelete="CASCADE"), nullable=False, index=True)
     appointment_id: Mapped[int | None] = mapped_column(ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -18,6 +21,7 @@ class ClinicalRecord(Base, TimestampMixin, SoftDeleteMixin):
     treatment_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    hospital = relationship("Hospital")
     patient = relationship("Patient", back_populates="clinical_records")
     doctor = relationship("Doctor", back_populates="clinical_records")
     appointment = relationship("Appointment", back_populates="clinical_record")

@@ -2,6 +2,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.openapi.docs import (
+    get_swagger_ui_html,
+    get_swagger_ui_oauth2_redirect_html,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -78,12 +82,35 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
-    docs_url="/docs",
+    docs_url=None,
     redoc_url="/redoc",
     lifespan=lifespan,
 )
 
 app.state.db_factory = AsyncSessionLocal
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - Swagger UI",
+        oauth2_redirect_url="/docs/oauth2-redirect",
+        swagger_js_url=(
+            "https://cdn.jsdelivr.net/npm/"
+            "swagger-ui-dist@5.32.15/swagger-ui-bundle.js"
+        ),
+        swagger_css_url=(
+            "https://cdn.jsdelivr.net/npm/"
+            "swagger-ui-dist@5.32.15/swagger-ui.css"
+        ),
+    )
+
+
+@app.get("/docs/oauth2-redirect", include_in_schema=False)
+async def swagger_ui_redirect():
+    return get_swagger_ui_oauth2_redirect_html()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -110,7 +137,20 @@ if static_dir.exists():
 
 uploads_dir = Path(settings.UPLOAD_DIR)
 if uploads_dir.exists():
-    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+    # Mount public branding assets only (hospital logos, doctor avatars, branding assets)
+    # Sensitive clinical documents (uploads/patients/, uploads/secure/) are strictly excluded from static serving
+    # and stream exclusively through authenticated API endpoints with tenant isolation.
+    branding_dir = uploads_dir / "branding"
+    branding_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads/branding", StaticFiles(directory=str(branding_dir)), name="branding")
+
+    doctors_dir = uploads_dir / "doctors"
+    doctors_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads/doctors", StaticFiles(directory=str(doctors_dir)), name="doctors")
+
+    hospitals_dir = uploads_dir / "hospitals"
+    hospitals_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads/hospitals", StaticFiles(directory=str(hospitals_dir)), name="hospitals")
 
 
 @app.get("/health", tags=["Health"])

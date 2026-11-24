@@ -32,9 +32,12 @@ class ExpenseService:
         self.audit_repo = AuditRepository(db)
 
     # --- Expense Category Services ---
-    async def create_category(self, data: ExpenseCategoryCreate, user_id: int, current_user: Any | None = None) -> ExpenseCategoryResponse:
+    async def create_category(self, data: ExpenseCategoryCreate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> ExpenseCategoryResponse:
         from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for expense category creation.")
+        hospital_id = target_hospital_id
 
         existing = await self.category_repo.get_by_name(data.name, hospital_id=hospital_id)
         if existing:
@@ -99,13 +102,14 @@ class ExpenseService:
     # --- Vendor Services Removed (Centralized in VendorService) ---
 
     # --- Expense Services ---
-    async def create_expense(self, data: ExpenseCreate, user_id: int, current_user: Any | None = None) -> ExpenseResponse:
-        from app.core.dependencies import resolve_tenant_id
-        hospital_id = resolve_tenant_id(current_user)
-        if hospital_id is None:
-            from app.models.user_model import User
-            user = await self.db.get(User, user_id)
-            hospital_id = user.hospital_id if user else None
+    async def create_expense(self, data: ExpenseCreate, user_id: int, current_user: Any | None = None, hospital_id: int | None = None) -> ExpenseResponse:
+        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for expense creation.")
+        if getattr(data, "hospital_id", None) is not None:
+            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        hospital_id = target_hospital_id
 
         # Validate Category
         category = await self.category_repo.get_by_id(data.category_id, hospital_id=hospital_id)
@@ -902,11 +906,22 @@ class ExpenseService:
         stream.seek(0)
         return stream
 
-    async def import_expenses_from_excel(self, file, user_id: int) -> dict:
+    async def import_expenses_from_excel(
+        self,
+        file,
+        user_id: int,
+        current_user: Any | None = None,
+        hospital_id: int | None = None,
+    ) -> dict:
         from pydantic import ValidationError
         import openpyxl
         from datetime import date, datetime
-        
+        from app.core.dependencies import resolve_tenant_id
+
+        target_hospital_id = hospital_id if hospital_id is not None else (resolve_tenant_id(current_user) if current_user else None)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for expense bulk upload.")
+
         contents = await file.read()
         wb = openpyxl.load_workbook(BytesIO(contents))
         ws = wb.active
@@ -948,7 +963,12 @@ class ExpenseService:
                 
                 from sqlalchemy import select
                 from app.models.expense_model import ExpenseCategory
-                cat_stmt = select(ExpenseCategory.id).where(ExpenseCategory.name == cat_name_str, ExpenseCategory.is_deleted == False)
+                cat_stmt = select(ExpenseCategory.id).where(
+                    ExpenseCategory.name == cat_name_str,
+                    ExpenseCategory.is_deleted == False,
+                )
+                if target_hospital_id is not None:
+                    cat_stmt = cat_stmt.where(ExpenseCategory.hospital_id == target_hospital_id)
                 cat_res = await self.db.execute(cat_stmt)
                 category_id = cat_res.scalar_one_or_none()
                 if not category_id:
@@ -961,6 +981,10 @@ class ExpenseService:
                     if vendor_name_str:
                         from app.models.vendor_model import Vendor
                         v_stmt = select(Vendor.id).where(Vendor.name == vendor_name_str, Vendor.is_deleted == False)
+                        if target_hospital_id is not None:
+                            v_stmt = v_stmt.where(
+                                (Vendor.hospital_id == target_hospital_id) | (Vendor.hospital_id.is_(None))
+                            )
                         v_res = await self.db.execute(v_stmt)
                         vendor_id = v_res.scalars().first()
                         if not vendor_id:
@@ -1010,7 +1034,9 @@ class ExpenseService:
                 )
                 
                 # 3. Call service creation method
-                await self.create_expense(expense_create, user_id)
+                await self.create_expense(
+                    expense_create, user_id, current_user=current_user, hospital_id=target_hospital_id
+                )
                 created += 1
                 
             except ValidationError as e:

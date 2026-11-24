@@ -53,6 +53,7 @@ class AppointmentCreate(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    hospital_id: int | None = None
 
     # Emergency Triage (ESI 1-5) & Disposition
     triage_level: int | None = Field(None, ge=1, le=5, description="ESI 1 (Resuscitation) to 5 (Non-Urgent)")
@@ -110,6 +111,7 @@ class AppointmentUpdate(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    hospital_id: int | None = None
 
     # Emergency Triage (ESI 1-5) & Disposition
     triage_level: int | None = Field(None, ge=1, le=5)
@@ -191,6 +193,7 @@ class AppointmentResponse(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    hospital_id: int | None = None
 
     # Emergency Triage & Disposition fields
     triage_level: int | None = None
@@ -245,6 +248,7 @@ class AdmitRecommendationResponse(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    hospital_id: int | None = None
     diagnosis: str | None = None
     notes: str | None = None
     disposition: str | None = None
@@ -280,6 +284,7 @@ class PendingAdmissionItem(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    hospital_id: int | None = None
     diagnosis: str | None = None
     patient: PendingAdmissionPatientInfo
     doctor: PendingAdmissionDoctorInfo

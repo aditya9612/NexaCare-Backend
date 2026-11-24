@@ -45,6 +45,44 @@ class StaffService:
             if not role:
                 raise NotFoundException("Role not found")
 
+    async def _enrich_nurse_info(self, staff: Staff | None) -> Staff | None:
+        if staff and getattr(staff, "role_name", None) == "Nurse" and staff.email:
+            stmt = (
+                select(Nurse.license_number, Nurse.shift)
+                .join(User, Nurse.user_id == User.id)
+                .where(func.lower(User.email) == staff.email.lower())
+            )
+            if staff.hospital_id is not None:
+                stmt = stmt.where(Nurse.hospital_id == staff.hospital_id)
+            row = (await self.db.execute(stmt)).first()
+            if row:
+                setattr(staff, "license_number", row.license_number)
+                setattr(staff, "shift", row.shift)
+        return staff
+
+    async def _enrich_nurse_info_bulk(self, staff_items: list[Staff]) -> None:
+        nurse_staff = [s for s in staff_items if s and getattr(s, "role_name", None) == "Nurse" and s.email]
+        if not nurse_staff:
+            return
+        emails = [s.email.lower() for s in nurse_staff]
+        stmt = (
+            select(func.lower(User.email).label("email"), Nurse.license_number, Nurse.shift)
+            .join(User, Nurse.user_id == User.id)
+            .where(func.lower(User.email).in_(emails))
+        )
+        h_ids = {s.hospital_id for s in nurse_staff if s.hospital_id is not None}
+        if len(h_ids) == 1:
+            stmt = stmt.where(Nurse.hospital_id == list(h_ids)[0])
+        elif len(h_ids) > 1:
+            stmt = stmt.where(Nurse.hospital_id.in_(list(h_ids)))
+        rows = (await self.db.execute(stmt)).all()
+        nurse_map = {r.email: r for r in rows}
+        for s in nurse_staff:
+            key = s.email.lower()
+            if key in nurse_map:
+                setattr(s, "license_number", nurse_map[key].license_number)
+                setattr(s, "shift", nurse_map[key].shift)
+
     async def create_staff(
         self, data: StaffCreate, current_user_id: int, current_user: Any | None = None, hospital_id: int | None = None
     ) -> StaffResponse:
@@ -149,7 +187,7 @@ class StaffService:
         await self.audit_repo.create("create", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
         await self._notify_staff_onboarding_welcome_safely(staff, user)
-
+        await self._enrich_nurse_info(staff)
         return StaffResponse.model_validate(staff)
 
     async def _notify_staff_onboarding_welcome_safely(self, staff: Staff, user: User):
@@ -216,6 +254,7 @@ class StaffService:
         inactive_staff = await self.repo.count_all(status=0, hospital_id=hospital_id)
         role_counts = await self.repo.get_role_counts(hospital_id=hospital_id)
 
+        await self._enrich_nurse_info_bulk(items)
         paginated = build_paginated_result(
             [StaffResponse.model_validate(item) for item in items],
             total,
@@ -245,6 +284,7 @@ class StaffService:
             if not dept:
                 raise NotFoundException("Department not found")
         items = await self.repo.list_by_department(department_id, hospital_id=hospital_id)
+        await self._enrich_nurse_info_bulk(items)
         return [StaffResponse.model_validate(item) for item in items]
 
     async def get_staff_by_id(self, staff_id: int, current_user: Any | None = None) -> StaffResponse:
@@ -252,6 +292,7 @@ class StaffService:
         staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
+        await self._enrich_nurse_info(staff)
         return StaffResponse.model_validate(staff)
 
     async def update_staff(
@@ -322,6 +363,7 @@ class StaffService:
             
         await self.audit_repo.create("update", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
+        await self._enrich_nurse_info(staff)
         return StaffResponse.model_validate(staff)
 
     async def update_staff_status(
@@ -343,6 +385,7 @@ class StaffService:
             
         await self.audit_repo.create("update_status", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
+        await self._enrich_nurse_info(staff)
         return StaffResponse.model_validate(staff)
 
     async def delete_staff(

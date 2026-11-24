@@ -15,6 +15,10 @@
     th, td { border: 0.5px solid #e5e7eb; padding: 4px 3px; text-align: left; overflow: hidden; }
     th { background: #f3f4f6; font-weight: bold; color: #0f766e; }
     tr:nth-child(even) { background-color: #fafafa; }
+    tbody tr {
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
     .badge { padding: 1px 3px; border-radius: 3px; font-weight: bold; font-size: 7px; text-align: center; }
     .payment { background-color: #d1fae5; color: #065f46; }
     .refund { background-color: #fee2e2; color: #991b1b; }
@@ -39,14 +43,15 @@
   <table>
     <thead>
       <tr>
-        <th class="short-col" style="width: 5%;">Sr. No.</th>
+        <th class="short-col" style="width: 4%;">Sr. No.</th>
         <th class="wrap-col" style="width: 13%;">Bill Number</th>
+        <th class="wrap-col" style="width: 14%;">Patient Name</th>
         <th class="short-col" style="width: 7%;">Type</th>
         <th class="short-col" style="width: 9%;">Amount</th>
-        <th class="short-col" style="width: 8%;">Method</th>
-        <th class="wrap-col" style="width: 28%;">Ref Number / Reason</th>
-        <th class="wrap-col" style="width: 14%;">Date / Status</th>
-        <th class="wrap-col" style="width: 16%;">Timestamps</th>
+        <th class="short-col" style="width: 7%;">Method</th>
+        <th class="wrap-col" style="width: 20%;">Ref Number / Reason</th>
+        <th class="wrap-col" style="width: 12%;">Date / Status</th>
+        <th class="wrap-col" style="width: 14%;">Timestamps</th>
       </tr>
     </thead>
     <tbody>
@@ -55,6 +60,9 @@
         <td class="short-col">{{ loop.index }}</td>
         <td class="wrap-col">
           {{ item.bill_number or "-" }}
+        </td>
+        <td class="wrap-col">
+          {{ item.patient_name or "-" }}
         </td>
         <td class="short-col">
           {% if item.is_refund %}

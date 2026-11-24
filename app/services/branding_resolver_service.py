@@ -223,7 +223,7 @@ class BrandingResolverService:
                     effective_hosp_id = getattr(current_user, "active_hospital_id", None)
             else:
                 user_hosp_id = getattr(current_user, "hospital_id", None)
-                if effective_hosp_id is not None and user_hosp_id is not None and effective_hosp_id != user_hosp_id:
+                if effective_hosp_id is not None and isinstance(user_hosp_id, int) and effective_hosp_id != user_hosp_id:
                     raise ForbiddenException("Access denied: You cannot access branding or data for another hospital")
                 effective_hosp_id = user_hosp_id
 

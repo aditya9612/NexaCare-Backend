@@ -1297,16 +1297,28 @@ class BillingService:
             if not invoice:
                 raise NotFoundException("Billing record not found")
 
-            target_hospital_id = hospital_id or getattr(invoice, "hospital_id", None)
-            from app.services.branding_resolver_service import BrandingResolverService
-            branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=target_hospital_id)
-            hospital_name = branding.hospital_name
-            hospital_address = branding.hospital_address or ""
-            hospital_phone = branding.hospital_phone or ""
-            hospital_email = branding.hospital_email or ""
-            hospital_website = branding.hospital_website or ""
-            logo_data_uri = branding.logo_data_uri
-            logo_base64 = branding.logo_base64
+            issuing_hospital_id = getattr(invoice, "hospital_id", None) or hospital_id
+            hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
+
+            if hospital and hasattr(hospital, "name") and hospital.name:
+                hospital_name = (hospital.name or "").strip()
+                hospital_address = (hospital.address or "").strip() if hospital.address else ""
+                hospital_phone = (hospital.phone or "").strip() if hospital.phone else ""
+                hospital_email = (hospital.email or "").strip() if hospital.email else ""
+                hospital_website = (hospital.website or "").strip() if getattr(hospital, "website", None) else ""
+                hospital_logo = getattr(hospital, "logo_path", None)
+                from app.utils.pdf_generator import resolve_logo_as_data_uri
+                logo_data_uri = resolve_logo_as_data_uri(hospital_logo)
+                logo_base64 = logo_data_uri.split(",", 1)[1] if (logo_data_uri and "," in logo_data_uri) else None
+            else:
+                hospital_name = ""
+                hospital_address = ""
+                hospital_phone = ""
+                hospital_email = ""
+                hospital_website = ""
+                hospital_logo = None
+                logo_data_uri = None
+                logo_base64 = None
 
             patient = await self.patient_repo.get_by_id(invoice.patient_id) if invoice.patient_id else None
             patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1324,14 +1336,6 @@ class BillingService:
                 for item in (invoice.items or [])
             ]
 
-            hospital_name = "NexaCare Hospital"
-            target_hosp_id = invoice.hospital_id or hospital_id
-            if target_hosp_id:
-                from app.models.hospital_model import Hospital
-                hosp = await self.db.get(Hospital, target_hosp_id)
-                if hosp and hosp.name:
-                    hospital_name = hosp.name
-
             path, pdf_bytes = await generate_invoice_pdf(
                 invoice.invoice_number,
                 {
@@ -1340,6 +1344,7 @@ class BillingService:
                     "hospital_phone": hospital_phone,
                     "hospital_email": hospital_email,
                     "hospital_website": hospital_website,
+                    "hospital_logo": hospital_logo or logo_data_uri,
                     "logo_data_uri": logo_data_uri,
                     "logo_base64": logo_base64,
                     "patient_name": patient_name,
@@ -1363,16 +1368,28 @@ class BillingService:
             await self.audit_repo.create("export", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
             return path, pdf_bytes
 
-        target_hospital_id = hospital_id or getattr(billing, "hospital_id", None)
-        from app.services.branding_resolver_service import BrandingResolverService
-        branding = await BrandingResolverService.resolve_branding(self.db, current_user, hospital_id=target_hospital_id)
-        hospital_name = branding.hospital_name
-        hospital_address = branding.hospital_address or ""
-        hospital_phone = branding.hospital_phone or ""
-        hospital_email = branding.hospital_email or ""
-        hospital_website = branding.hospital_website or ""
-        logo_data_uri = branding.logo_data_uri
-        logo_base64 = branding.logo_base64
+        issuing_hospital_id = getattr(billing, "hospital_id", None) or hospital_id
+        hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
+
+        if hospital and hasattr(hospital, "name") and hospital.name:
+            hospital_name = (hospital.name or "").strip()
+            hospital_address = (hospital.address or "").strip() if hospital.address else ""
+            hospital_phone = (hospital.phone or "").strip() if hospital.phone else ""
+            hospital_email = (hospital.email or "").strip() if hospital.email else ""
+            hospital_website = (hospital.website or "").strip() if getattr(hospital, "website", None) else ""
+            hospital_logo = getattr(hospital, "logo_path", None)
+            from app.utils.pdf_generator import resolve_logo_as_data_uri
+            logo_data_uri = resolve_logo_as_data_uri(hospital_logo)
+            logo_base64 = logo_data_uri.split(",", 1)[1] if (logo_data_uri and "," in logo_data_uri) else None
+        else:
+            hospital_name = ""
+            hospital_address = ""
+            hospital_phone = ""
+            hospital_email = ""
+            hospital_website = ""
+            hospital_logo = None
+            logo_data_uri = None
+            logo_base64 = None
 
         patient = await self.patient_repo.get_by_id(billing.patient_id)
         patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
@@ -1390,14 +1407,6 @@ class BillingService:
             for i in billing.items
         ]
 
-        hospital_name = "NexaCare Hospital"
-        target_hosp_id = billing.hospital_id or hospital_id
-        if target_hosp_id:
-            from app.models.hospital_model import Hospital
-            hosp = await self.db.get(Hospital, target_hosp_id)
-            if hosp and hosp.name:
-                hospital_name = hosp.name
-
         path, pdf_bytes = await generate_invoice_pdf(
             billing.bill_number,
             {
@@ -1406,8 +1415,9 @@ class BillingService:
                 "hospital_phone": hospital_phone,
                 "hospital_email": hospital_email,
                 "hospital_website": hospital_website,
-                "logo_data_uri": logo_data_uri,
-                "logo_base64": logo_base64,
+                    "hospital_logo": hospital_logo or logo_data_uri,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,
@@ -2394,7 +2404,7 @@ class BillingService:
         elif format_type == "pdf":
             from jinja2 import Environment, FileSystemLoader
             from app.utils.pdf_generator import html_to_pdf
-            from app.utils.helpers import utc_now
+            from app.utils.helpers import get_now_ist
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             from xhtml2pdf import default
@@ -2453,7 +2463,7 @@ class BillingService:
                 
             html_content = template.render(
                 billings=formatted_billings,
-                generated_at=utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+                generated_at=get_now_ist().strftime("%Y-%m-%d %H:%M:%S"),
                 hospital_name=branding.hospital_name,
                 hospital_address=branding.hospital_address,
                 hospital_phone=branding.hospital_phone,

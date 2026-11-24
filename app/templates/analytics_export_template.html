@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ report_title or "Analytics Report" }} - {{ report_number }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm 15mm 15mm 15mm;
+      @bottom-right {
+        content: counter(page);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      font-size: 9pt;
+      line-height: 1.4;
+      color: #1e293b;
+      background: #ffffff;
+    }
+
+    /* Header & Letterhead */
+    .header-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 2.5px solid #1e40af;
+    }
+
+    .hospital-logo {
+      max-height: 48px;
+      max-width: 130px;
+      height: 48px;
+      width: auto;
+      object-fit: contain;
+      vertical-align: middle;
+      margin-right: 10px;
+    }
+
+    .hospital-name {
+      font-size: 15pt;
+      font-weight: 800;
+      color: #1e3a8a;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      margin: 0;
+      line-height: 1.2;
+    }
+
+    .hospital-sub {
+      font-size: 8pt;
+      color: #64748b;
+      margin-top: 4px;
+      line-height: 1.35;
+    }
+
+    .report-meta-box {
+      text-align: right;
+      vertical-align: top;
+    }
+
+    .report-title-badge {
+      display: inline-block;
+      font-size: 12pt;
+      font-weight: 700;
+      color: #1e40af;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .meta-line {
+      font-size: 8pt;
+      color: #475569;
+      margin: 2px 0;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 7.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #86efac;
+    }
+
+    /* Executive Summary KPI Cards */
+    .section-title {
+      font-size: 10.5pt;
+      font-weight: 700;
+      color: #1e3a8a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 14px 0 8px 0;
+      padding-bottom: 4px;
+      border-bottom: 1.5px solid #3b82f6;
+    }
+
+    .kpi-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 8px;
+      margin-bottom: 12px;
+    }
+
+    .kpi-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-top: 3px solid #2563eb;
+      border-radius: 4px;
+      padding: 8px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .kpi-col-1 { width: 100%; }
+    .kpi-col-2 { width: 50%; }
+    .kpi-col-3 { width: 33.33%; }
+    .kpi-col-4 { width: 25%; }
+
+    .kpi-label {
+      font-size: 7.5pt;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-bottom: 4px;
+    }
+
+    .kpi-value {
+      font-size: 13pt;
+      font-weight: 800;
+      color: #0f172a;
+    }
+
+    /* Data Tables */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      font-size: 8.5pt;
+    }
+
+    .data-table th {
+      background: #f1f5f9;
+      color: #1e293b;
+      font-weight: 700;
+      text-align: left;
+      padding: 6px 10px;
+      border: 1px solid #cbd5e1;
+      letter-spacing: 0.2px;
+    }
+
+    .data-table td {
+      padding: 5px 10px;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+    }
+
+    .data-table tr:nth-child(even) {
+      background: #f8fafc;
+    }
+
+    .text-right {
+      text-align: right;
+    }
+
+    /* Footer */
+    .footer-container {
+      margin-top: 24px;
+      padding-top: 10px;
+      border-top: 1px solid #cbd5e1;
+      font-size: 7.5pt;
+      color: #64748b;
+      text-align: center;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header / Letterhead -->
+  <table class="header-table">
+    <tr>
+      <td style="vertical-align: top; width: 60%;">
+        <table style="border-collapse: collapse; border: none;">
+          <tr>
+            {% if hospital_logo %}
+            <td style="border: none; padding: 0 10px 0 0; vertical-align: middle;">
+              <img src="{{ hospital_logo }}" class="hospital-logo" alt="{{ hospital_name or 'Hospital Logo' }}" height="48" />
+            </td>
+            {% endif %}
+            <td style="border: none; padding: 0; vertical-align: middle;">
+              <div class="hospital-name">{{ hospital_name or "Hospital" }}</div>
+              <div class="hospital-sub">
+                {% if hospital_address %}{{ hospital_address }}<br>{% endif %}
+                {% if hospital_phone %}<span>Phone: {{ hospital_phone }}</span>{% endif %}
+                {% if hospital_phone and hospital_email %} | {% endif %}
+                {% if hospital_email %}<span>Email: {{ hospital_email }}</span>{% endif %}
+                {% if hospital_website %}<br><span>Web: {{ hospital_website }}</span>{% endif %}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+      <td class="report-meta-box">
+        <div class="report-title-badge">{{ report_title or "Analytics Report" }}</div>
+        <div class="meta-line"><strong>Report ID:</strong> {{ report_number }}</div>
+        <div class="meta-line"><strong>Generated At:</strong> {{ generated_at }}</div>
+        <div class="meta-line" style="margin-top: 4px;">
+          <span class="status-badge">COMPLETED</span>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Executive Summary KPI Cards -->
+  {% if summary_cards %}
+  <div class="section-title">Executive Summary & Key Metrics</div>
+  <table class="kpi-table">
+    {% for chunk in summary_cards | batch(4) %}
+    <tr>
+      {% for card in chunk %}
+      <td class="kpi-card kpi-col-{{ chunk | length }}">
+        <div class="kpi-label">{{ card.label }}</div>
+        <div class="kpi-value">{{ card.value }}</div>
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <!-- Detailed Analytics Breakdown Tables -->
+  {% if tables %}
+    {% for tbl in tables %}
+    <div class="section-title">{{ tbl.title }}</div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          {% for col in tbl.columns %}
+          <th {% if loop.index > 1 %}class="text-right"{% endif %}>{{ col }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in tbl.rows %}
+        <tr>
+          {% for cell in row %}
+          <td {% if loop.index > 1 %}class="text-right"{% endif %}>{{ cell }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endfor %}
+  {% endif %}
+
+  <!-- Generic Data Table (if multi-row table is passed) -->
+  {% if generic_rows %}
+  <div class="section-title">Detailed Records</div>
+  <table class="data-table">
+    {% if generic_columns %}
+    <thead>
+      <tr>
+        {% for col in generic_columns %}
+        <th>{{ col }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    {% endif %}
+    <tbody>
+      {% for row in generic_rows %}
+      <tr>
+        {% for cell in row %}
+        <td>{{ cell }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <!-- Clean Footer (No Clinical Laboratory Signatures or Disclaimers) -->
+  <div class="footer-container">
+    Confidential Healthcare Analytics Document &bull; Generated for <strong>{{ hospital_name or 'Hospital' }}</strong><br>
+    Report ID: {{ report_number }} &bull; Generated On: {{ generated_at }} &bull; NexaCare Hospital Management System
+  </div>
+
+</body>
+</html>

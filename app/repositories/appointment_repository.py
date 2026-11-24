@@ -32,6 +32,7 @@ class AppointmentRepository:
         disposition: str | None = None,
         search: str | None = None,
         hospital_id: int | None = None,
+        exclude_active_discharges: bool = False,
     ) -> list[Appointment]:
         query = select(Appointment).options(joinedload(Appointment.patient))
         query = self._apply_filters(
@@ -72,6 +73,7 @@ class AppointmentRepository:
         disposition: str | None = None,
         search: str | None = None,
         hospital_id: int | None = None,
+        exclude_active_discharges: bool = False,
     ) -> int:
         query = select(func.count(func.distinct(Appointment.id))).select_from(Appointment)
         query = self._apply_filters(
@@ -90,6 +92,7 @@ class AppointmentRepository:
             disposition=disposition,
             search=search,
             hospital_id=hospital_id,
+            exclude_active_discharges=exclude_active_discharges,
         )
         return await self.db.scalar(query) or 0
 
@@ -110,6 +113,7 @@ class AppointmentRepository:
         disposition=None,
         search: str | None = None,
         hospital_id: int | None = None,
+        exclude_active_discharges: bool = False,
     ):
         if hospital_id is not None:
             query = query.where(Appointment.hospital_id == hospital_id)
@@ -224,6 +228,18 @@ class AppointmentRepository:
                     )
                 )
             )
+        if exclude_active_discharges:
+            from app.models.discharge_model import Discharge
+            active_discharge_subquery = (
+                select(1)
+                .where(
+                    Discharge.appointment_id == Appointment.id,
+                    Discharge.hospital_id == Appointment.hospital_id,
+                    Discharge.discharge_status.in_(["PENDING_CLEARANCES", "CLEARED"]),
+                )
+                .exists()
+            )
+            query = query.where(~active_discharge_subquery)
         return query
 
     async def get_by_id(self, appointment_id: int, hospital_id: int | None = None) -> Appointment | None:

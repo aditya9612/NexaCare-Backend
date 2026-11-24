@@ -15,7 +15,7 @@
     </td>
     {% endif %}
     <td class="brand-info-cell" style="border: none; padding: 0; vertical-align: middle; text-align: left;">
-      <div style="font-size: 15pt; font-weight: bold; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.2; word-wrap: break-word; overflow-wrap: break-word;">
+      <div style="font-size: 15pt; font-weight: bold; color: #1e40af;  letter-spacing: 0.5px; line-height: 1.2; word-wrap: break-word; overflow-wrap: break-word;">
         {{ hospital_name | default('NexaCare Hospital', true) }}
       </div>
       <div style="font-size: 8.5pt; color: #4b5563; margin-top: 3px; line-height: 1.35;">
@@ -26,11 +26,11 @@
       </div>
     </td>
     <td class="brand-report-cell" style="border: none; padding: 0 0 0 16px; vertical-align: middle; width: 35%; text-align: right;">
-      <div style="font-size: 14pt; font-weight: bold; color: #1f2937; text-transform: uppercase;">{{ report_title | default(title | default('Report', true), true) }}</div>
+      <div style="font-size: 14pt; font-weight: bold; color: #1f2937; ">{{ report_title | default(title | default('Report', true), true) }}</div>
       <div style="font-size: 8.5pt; color: #6b7280; margin-top: 4px; line-height: 1.35;">
         {% if document_number %}<strong>ID:</strong> {{ document_number }}<br/>{% endif %}
         {% if date_range_label %}<strong>Period:</strong> {{ date_range_label }}<br/>{% endif %}
-        {% if total_records is defined and total_records is not none %}<strong>Records:</strong> {{ total_records }}<br/>{% endif %}
+        {% if total_records is defined and total_records is not none %}<strong>Total Records:</strong> {{ total_records }}<br/>{% endif %}
         <strong>Generated:</strong> {{ generated_at }}
       </div>
     </td>

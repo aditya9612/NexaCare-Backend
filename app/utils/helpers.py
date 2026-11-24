@@ -10,6 +10,11 @@ def get_today_ist() -> date:
     return datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
 
 
+def get_now_ist() -> datetime:
+    """Returns current Indian Standard Time (IST, UTC+05:30) as naive datetime."""
+    return datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+
+
 
 def generate_code(prefix: str) -> str:
     return f"{prefix}-{utc_now().strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"

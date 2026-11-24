@@ -96,6 +96,7 @@ async def list_appointments(
     triage_level: int | None = None,
     disposition: str | None = None,
     search: str | None = None,
+    exclude_active_discharges: bool = Query(False, description="Exclude appointments with active discharge in progress"),
     x_hospital_id: int | None = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("appointments", "read")),
 ):
@@ -110,6 +111,7 @@ async def list_appointments(
         appointment_type=appointment_type, booking_source=booking_source,
         admission_status=admission_status, triage_level=triage_level, disposition=disposition,
         search=search,
+        exclude_active_discharges=exclude_active_discharges,
         current_user=current_user,
         x_hospital_id=x_hospital_id,
     )

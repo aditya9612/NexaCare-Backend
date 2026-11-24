@@ -372,6 +372,8 @@ class InventoryService:
                 if refreshed_item:
                     med.stock_quantity = refreshed_item.quantity
                     await self.db.flush()
+
+            source_tx = await self.transaction_repo.get_by_id(source_tx.id) or source_tx
             return self._to_transaction_response(source_tx)
 
         # Standard physical mutations (INWARD, OUTWARD, CONSUMPTION, RETURN, or single-sided TRANSFER)
@@ -393,7 +395,6 @@ class InventoryService:
             notes=data.notes,
             performed_by=user_id,
         )
-
         # Sync updated stock quantity to linked Medicine if exists
         med = await self.db.scalar(
             select(Medicine).where(Medicine.inventory_item_id == data.item_id, Medicine.is_deleted.is_(False))
@@ -404,6 +405,7 @@ class InventoryService:
                 med.stock_quantity = refreshed_item.quantity
                 await self.db.flush()
 
+        transaction = await self.transaction_repo.get_by_id(transaction.id) or transaction
         return self._to_transaction_response(transaction)
 
     def _to_transaction_response(self, transaction: StockTransaction) -> StockTransactionResponse:

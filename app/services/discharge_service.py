@@ -89,7 +89,7 @@ class DischargeService:
             doctor = await self.db.get(Doctor, appointment.doctor_id)
         if not doctor:
             raise NotFoundException("Doctor record not found")
-        if target_hospital_id and doctor.hospital_id and doctor.hospital_id != target_hospital_id:
+        if target_hospital_id and isinstance(getattr(doctor, 'hospital_id', None), int) and doctor.hospital_id != target_hospital_id:
             raise BadRequestException("Doctor does not belong to the authorized hospital context.")
 
         # 4. Check if already initiated
@@ -1158,6 +1158,7 @@ class DischargeService:
         if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before billing clearance.")
 
+        was_billing_cleared = bool(discharge.billing_cleared)
         discharge.billing_cleared = True
         discharge.billing_cleared_by = user_id
         discharge.billing_cleared_at = utc_now()
@@ -1230,6 +1231,14 @@ class DischargeService:
 
         if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before payment settlement.")
+
+        if not discharge.billing_cleared:
+            raise BadRequestException("Billing Clearance must be completed before payment clearance.")
+
+        if discharge.payment_cleared:
+            raise ConflictException(
+                "Payment clearance has already been completed for this discharge."
+            )
 
         from app.services.transaction_history_service import TransactionHistoryService
         tx_service = TransactionHistoryService(self.db)

@@ -5,7 +5,7 @@ from jinja2 import Environment, FileSystemLoader
 from app.core.config import settings
 from app.core.logger import logger
 
-env = Environment(loader=FileSystemLoader("app/templates"))
+env = Environment(loader=FileSystemLoader("app/templates"), autoescape=True)
 
 
 def _ensure_output_dir(subdir: str) -> Path:

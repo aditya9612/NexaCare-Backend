@@ -560,8 +560,10 @@ class AnalyticsService:
 
     async def request_export(self, data: ExportReportRequest, user_id: int, hospital_id: int | None = None) -> ExportReportResponse:
         filters = dict(data.filters or {})
-        if hospital_id:
+        if hospital_id is not None:
             filters["hospital_id"] = hospital_id
+        elif "hospital_id" in filters:
+            del filters["hospital_id"]
         export = ReportExport(
             report_type=data.report_type,
             export_format=ReportExportFormat.PDF,
@@ -585,8 +587,10 @@ class AnalyticsService:
 
     async def request_export_excel(self, data: ExportReportRequest, user_id: int, hospital_id: int | None = None) -> ExportReportResponse:
         filters = dict(data.filters or {})
-        if hospital_id:
+        if hospital_id is not None:
             filters["hospital_id"] = hospital_id
+        elif "hospital_id" in filters:
+            del filters["hospital_id"]
         export = ReportExport(
             report_type=data.report_type,
             export_format=ReportExportFormat.EXCEL,
@@ -625,10 +629,12 @@ class AnalyticsService:
 
         if hospital_id is None and export.requested_by:
             try:
-                from app.models.user_model import User
+                from app.models.user_model import User, UserRole
                 user = await self.db.get(User, export.requested_by)
                 if user and user.hospital_id:
-                    hospital_id = user.hospital_id
+                    role_name = getattr(getattr(user, "role", None), "name", None)
+                    if role_name != UserRole.SUPER_ADMIN:
+                        hospital_id = user.hospital_id
             except Exception:
                 pass
 

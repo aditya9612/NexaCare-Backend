@@ -302,7 +302,7 @@
             </td>
             {% endif %}
             <td style="border: none; padding: 0; vertical-align: middle;">
-              <div class="brand-title">{{ hospital_name | default('Hospital', true) }}</div>
+              <div class="brand-title">{{ (hospital_name | trim) if (hospital_name and (hospital_name | trim)) else 'Hospital' }}</div>
               <div class="brand-sub">
                 {% if hospital_address %}{{ hospital_address }}<br/>{% endif %}
                 {% if hospital_phone %}Phone: {{ hospital_phone }}{% endif %}
@@ -448,7 +448,7 @@
 
   <!-- Footer -->
   <div class="footer">
-    <div class="footer-thankyou">Thank you for choosing {{ hospital_name or 'our hospital' }}! Wish you good health!</div>
+    <div class="footer-thankyou">Thank you for choosing {{ (hospital_name | trim) if (hospital_name and (hospital_name | trim)) else 'our hospital' }}! Wish you good health!</div>
     <div class="footer-disclaimer">This is a computer-generated invoice and does not require a physical signature.</div>
     {% if hospital_phone or hospital_email %}
     <div class="footer-contact">

@@ -709,12 +709,22 @@ class ExpenseService:
         if not expense:
             raise NotFoundException(f"Expense with ID {data.expense_id} not found")
 
+        # Ensure expense belongs to the vendor
+        if expense.vendor_id is not None and expense.vendor_id != data.vendor_id:
+            raise BadRequestException("The selected expense does not belong to this vendor")
+        elif expense.vendor_id is None:
+            expense.vendor_id = data.vendor_id
+            await self.expense_repo.update(expense)
+
         # Fetch all existing active/non-deleted vendor payments for the selected expense
         existing_payments = await self.payment_repo.get_payments_by_expense(expense.id, hospital_id=hospital_id)
 
-        exp_status = str(expense.status).strip().lower() if expense.status else ""
-        if existing_payments or exp_status == "paid":
+        if existing_payments:
             raise BadRequestException("Payment record already exists for this expense")
+
+        exp_status = str(expense.status).strip().lower() if expense.status else ""
+        if exp_status == "paid":
+            raise BadRequestException("This expense is already marked as Paid")
 
         total_paid = sum(p.amount for p in existing_payments)
         remaining_amount = round(expense.amount - total_paid, 2)

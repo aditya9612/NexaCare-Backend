@@ -843,6 +843,8 @@ async def list_patient_vitals(
     current_user: CurrentUser,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None, description="Search vitals by notes, blood pressure, nurse, status, etc."),
+    status: str | None = Query(None, description="Filter by vital status (Normal or Abnormal)"),
     gender: str | None = Query(None, description="Filter by gender (e.g. Male, Female, Other)"),
     blood_group: str | None = Query(None, description="Filter by blood group (e.g. A+, O+, B-, etc.)"),
     _: User = Depends(require_permission("nurses", "read")),
@@ -851,6 +853,8 @@ async def list_patient_vitals(
         patient_id=patient_id,
         page=page,
         size=size,
+        search=search,
+        status=status,
         gender=gender,
         blood_group=blood_group,
     )

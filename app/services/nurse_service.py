@@ -1305,6 +1305,8 @@ class NurseService:
         patient_id: int,
         page: int = 1,
         size: int = 20,
+        search: str | None = None,
+        status: str | None = None,
         gender: str | None = None,
         blood_group: str | None = None,
     ):
@@ -1323,8 +1325,12 @@ class NurseService:
                 return build_paginated_result([], 0, page, size)
 
         skip = (page - 1) * size
-        items = await self.vital_repo.list_by_patient_id(patient_id, skip=skip, limit=size)
-        total = await self.vital_repo.count_by_patient_id(patient_id)
+        items = await self.vital_repo.list_by_patient_id(
+            patient_id, skip=skip, limit=size, search=search, status=status
+        )
+        total = await self.vital_repo.count_by_patient_id(
+            patient_id, search=search, status=status
+        )
         vital_responses = []
         for item in items:
             res = PatientVitalResponse.model_validate(item)

@@ -43,7 +43,7 @@ class BillItem(Base, TimestampMixin):
     __tablename__ = "bill_items"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    billing_id: Mapped[int] = mapped_column(ForeignKey("billings.id"), index=True)
+    billing_id: Mapped[int | None] = mapped_column(ForeignKey("billings.id"), index=True, nullable=True, default=None)
     description: Mapped[str] = mapped_column(String(255))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     unit_price: Mapped[float] = mapped_column(Float)

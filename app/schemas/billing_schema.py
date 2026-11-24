@@ -11,6 +11,7 @@ class BillType(str, Enum):
     PHARMACY = "pharmacy"
     CONSULTATION = "consultation"
     IPD = "ipd"
+    LAB = "lab"
 
 
 class BillingDateFilter(str, Enum):
@@ -88,6 +89,10 @@ class BillingResponse(BaseSchema):
     updated_at: datetime
     source: Optional[str] = "billing"
     bill_type: Optional[str] = "consultation"
+    doctor_charges: Optional[float] = None
+    lab_charges: Optional[float] = None
+    pharmacy_charges: Optional[float] = None
+    bed_charges: Optional[float] = None
 
 
 class PaymentCreate(BaseSchema):

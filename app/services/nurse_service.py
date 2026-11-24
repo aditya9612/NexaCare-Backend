@@ -1245,6 +1245,7 @@ class NurseService:
             oxygen_saturation=vital.oxygen_saturation,
         )
 
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
         res = PatientVitalResponse.model_validate(vital)
         if patient:
             res.gender = patient.gender
@@ -1442,6 +1443,7 @@ class NurseService:
             oxygen_saturation=vital.oxygen_saturation,
         )
 
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
         res = PatientVitalResponse.model_validate(vital)
         if patient:
             res.gender = patient.gender

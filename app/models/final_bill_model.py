@@ -65,7 +65,7 @@ class IPDFinalBillItem(Base):
     __tablename__ = "ipd_final_bill_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    final_bill_id: Mapped[int] = mapped_column(Integer, ForeignKey("ipd_final_bills.id", ondelete="CASCADE"), index=True, nullable=False)
+    final_bill_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("ipd_final_bills.id", ondelete="CASCADE"), index=True, nullable=True, default=None)
     item_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     item_name: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

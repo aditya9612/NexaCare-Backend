@@ -876,7 +876,6 @@ class NurseTaskRepository:
     ):
         from sqlalchemy import func, or_
         from app.models.patient_model import Patient
-
         query = query.where(NurseTask.nurse_id == nurse_id)
         if due_date is not None:
             query = query.where(NurseTask.due_date == due_date)

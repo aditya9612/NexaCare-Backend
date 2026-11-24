@@ -555,6 +555,66 @@ class PatientVitalResponse(BaseSchema):
     updated_at: datetime
     gender: str | None = None
     blood_group: str | None = None
+    status: str = Field(
+        default="Normal",
+        description="Vital status: 'Normal' or 'Abnormal' automatically calculated from hospital reference ranges",
+    )
+
+    @model_validator(mode="after")
+    def set_status(self) -> "PatientVitalResponse":
+        self.status = calculate_vital_status(
+            temperature=self.temperature,
+            blood_pressure=self.blood_pressure,
+            pulse_rate=self.pulse_rate,
+            oxygen_saturation=self.oxygen_saturation,
+        )
+        return self
+
+
+def calculate_vital_status(
+    temperature: float | None = None,
+    blood_pressure: str | None = None,
+    pulse_rate: int | None = None,
+    oxygen_saturation: float | None = None,
+) -> str:
+    """Calculate whether vitals are 'Normal' or 'Abnormal' based on hospital reference ranges.
+
+    Reference Ranges (boundaries inclusive):
+    - Temperature: 36.5–37.5°C
+    - Blood Pressure: 120/80 mmHg (Systolic 90–120 mmHg, Diastolic 60–80 mmHg)
+    - Heart Rate / Pulse: 60–100 bpm
+    - Oxygen Saturation (SpO2): >= 95% (95–100%)
+
+    Returns:
+    - 'Normal': if all recorded vitals are within the defined reference ranges.
+    - 'Abnormal': if any vital reading is outside the defined reference ranges.
+    """
+    if temperature is not None:
+        if temperature < 36.5 or temperature > 37.5:
+            return "Abnormal"
+
+    if pulse_rate is not None:
+        if pulse_rate < 60 or pulse_rate > 100:
+            return "Abnormal"
+
+    if oxygen_saturation is not None:
+        if oxygen_saturation < 95.0 or oxygen_saturation > 100.0:
+            return "Abnormal"
+
+    if blood_pressure:
+        try:
+            parts = str(blood_pressure).strip().split("/")
+            if len(parts) == 2:
+                systolic = float(parts[0].strip())
+                diastolic = float(parts[1].strip())
+                if systolic < 90 or systolic > 120 or diastolic < 60 or diastolic > 80:
+                    return "Abnormal"
+            else:
+                return "Abnormal"
+        except (ValueError, TypeError):
+            return "Abnormal"
+
+    return "Normal"
 
 
 class PatientVitalUpdate(BaseSchema):
@@ -706,6 +766,25 @@ class NurseMedicationLogDetailResponse(NurseMedicationLogResponse):
     doctor_name: str | None = None
     meal_timing: str | None = None
     special_instructions: str | None = None
+
+
+class NurseMedicationLogsWithSummaryResponse(BaseSchema):
+    items: list[NurseMedicationLogDetailResponse] = []
+    total: int = 0
+    total_prescription: int = 0
+    given_today: int = 0
+    pending_due: int = 0
+    missed_dose: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_aliases(cls, data: any) -> any:
+        if isinstance(data, dict):
+            tp = data.get("total_prescription", data.get("total_prescriptions", 0))
+            data["total_prescription"] = tp
+            md = data.get("missed_dose", data.get("misses_dose", 0))
+            data["missed_dose"] = md
+        return data
 
 
 class UpcomingMedicationResponse(BaseSchema):

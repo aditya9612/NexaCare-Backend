@@ -1230,7 +1230,12 @@ class NurseService:
             oxygen_saturation=vital.oxygen_saturation,
         )
 
-        return PatientVitalResponse.model_validate(vital)
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        res = PatientVitalResponse.model_validate(vital)
+        if patient:
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+        return res
 
     async def _check_vital_thresholds_and_notify(
         self,
@@ -1300,6 +1305,8 @@ class NurseService:
         patient_id: int,
         page: int = 1,
         size: int = 20,
+        search: str | None = None,
+        status: str | None = None,
         gender: str | None = None,
         blood_group: str | None = None,
     ):
@@ -1318,8 +1325,12 @@ class NurseService:
                 return build_paginated_result([], 0, page, size)
 
         skip = (page - 1) * size
-        items = await self.vital_repo.list_by_patient_id(patient_id, skip=skip, limit=size)
-        total = await self.vital_repo.count_by_patient_id(patient_id)
+        items = await self.vital_repo.list_by_patient_id(
+            patient_id, skip=skip, limit=size, search=search, status=status
+        )
+        total = await self.vital_repo.count_by_patient_id(
+            patient_id, search=search, status=status
+        )
         vital_responses = []
         for item in items:
             res = PatientVitalResponse.model_validate(item)
@@ -1338,7 +1349,12 @@ class NurseService:
         vital = await self.vital_repo.get_by_id(vital_id)
         if not vital:
             raise NotFoundException("Vital record not found")
-        return PatientVitalResponse.model_validate(vital)
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        res = PatientVitalResponse.model_validate(vital)
+        if patient:
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+        return res
 
     async def update_patient_vital(
         self, vital_id: int, data: PatientVitalUpdate, user_id: int
@@ -1384,7 +1400,12 @@ class NurseService:
             oxygen_saturation=vital.oxygen_saturation,
         )
 
-        return PatientVitalResponse.model_validate(vital)
+        patient = await self.assignment_repo.get_patient_by_id(vital.patient_id)
+        res = PatientVitalResponse.model_validate(vital)
+        if patient:
+            res.gender = patient.gender
+            res.blood_group = patient.blood_group
+        return res
 
     def _nurse_lab_test_status(self, order_status: str) -> str:
         if order_status == LabOrderStatus.COMPLETED:
@@ -1476,6 +1497,7 @@ class NurseService:
         sort_by: str = "priority",
         sort_order: str = "desc",
         hospital_id: int | None = None,
+        search: str | None = None,
     ):
         from app.models.nurse_model import Nurse
         from app.core.constants import UserRole
@@ -1520,6 +1542,7 @@ class NurseService:
             priority=priority,
             sort_by=sort_by,
             sort_order=sort_order,
+            search=search,
         )
         total = await self.task_repo.count_by_nurse(
             nurse_id=nurse.id,
@@ -1527,6 +1550,7 @@ class NurseService:
             patient_id=patient_id,
             status=status,
             priority=priority,
+            search=search,
         )
 
         # Calculate overall daily counts for the nurse/patient
@@ -1550,6 +1574,115 @@ class NurseService:
         delayed_tasks = await self.task_repo.count_by_nurse(
             nurse_id=nurse.id,
             due_date=due_date,
+            patient_id=patient_id,
+            status="Delayed",
+        )
+
+        paginated = build_paginated_result(
+            [NurseTaskResponse.model_validate(item) for item in items],
+            total,
+            page,
+            size,
+        )
+        return {
+            "items": paginated.items,
+            "total": paginated.total,
+            "page": paginated.page,
+            "size": paginated.size,
+            "pages": paginated.pages,
+            "total_tasks": total_tasks,
+            "pending_tasks": pending_tasks,
+            "completed_tasks": completed_tasks,
+            "delayed_tasks": delayed_tasks,
+        }
+
+    async def list_all_tasks(
+        self,
+        current_user: "User",
+        nurse_id: int | None = None,
+        page: int = 1,
+        size: int = 20,
+        patient_id: int | None = None,
+        status: str | None = None,
+        priority: str | None = None,
+        sort_by: str = "due_date",
+        sort_order: str = "desc",
+        hospital_id: int | None = None,
+        search: str | None = None,
+    ):
+        from app.models.nurse_model import Nurse
+        from app.core.constants import UserRole
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        role_name = current_user.role.name if current_user.role else ""
+        if role_name == UserRole.NURSE:
+            res = await self.db.execute(
+                select(Nurse).options(selectinload(Nurse.user)).where(Nurse.user_id == current_user.id)
+            )
+            calling_nurse = res.scalar_one_or_none()
+            if not calling_nurse:
+                res = await self.db.execute(
+                    select(Nurse).options(selectinload(Nurse.user)).where(Nurse.id == current_user.id)
+                )
+                calling_nurse = res.scalar_one_or_none()
+            if not calling_nurse:
+                raise NotFoundException("Nurse profile not found for logged-in user")
+
+            if nurse_id is not None and nurse_id != calling_nurse.id:
+                raise ForbiddenException("Nurses can only view their own tasks")
+            nurse = calling_nurse
+        else:
+            if nurse_id is None:
+                raise BadRequestException("Nurse ID is required for non-nurse users to view tasks")
+            nurse = await self._get_nurse_or_raise(nurse_id)
+
+        if role_name != UserRole.SUPER_ADMIN and hospital_id is not None:
+            if nurse.hospital_id is not None and nurse.hospital_id != hospital_id:
+                raise ForbiddenException("Cross-tenant access is prohibited")
+
+        skip = (page - 1) * size
+        items = await self.task_repo.list_by_nurse(
+            nurse_id=nurse.id,
+            due_date=None,
+            skip=skip,
+            limit=size,
+            patient_id=patient_id,
+            status=status,
+            priority=priority,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            search=search,
+        )
+        total = await self.task_repo.count_by_nurse(
+            nurse_id=nurse.id,
+            due_date=None,
+            patient_id=patient_id,
+            status=status,
+            priority=priority,
+            search=search,
+        )
+
+        total_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse.id,
+            due_date=None,
+            patient_id=patient_id,
+        )
+        pending_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse.id,
+            due_date=None,
+            patient_id=patient_id,
+            status="Pending",
+        )
+        completed_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse.id,
+            due_date=None,
+            patient_id=patient_id,
+            status="Completed",
+        )
+        delayed_tasks = await self.task_repo.count_by_nurse(
+            nurse_id=nurse.id,
+            due_date=None,
             patient_id=patient_id,
             status="Delayed",
         )
@@ -1977,12 +2110,14 @@ class NurseService:
         nurse_id: int | None = None,
         status: str | None = None,
         hospital_id: int | None = None,
+        search: str | None = None,
+        include_summary: bool = False,
     ):
         from app.models.nurse_model import NurseMedicationLog, NursePrescription, Nurse
         from app.models.patient_model import Patient
         from app.models.doctor_model import Doctor
         from app.models.user_model import User
-        from sqlalchemy import func, select
+        from sqlalchemy import func, select, or_
         from sqlalchemy.orm import aliased
         from app.schemas.nurse_schema import NurseMedicationLogDetailResponse
 
@@ -2007,6 +2142,19 @@ class NurseService:
             query = query.where(NurseMedicationLog.nurse_id == nurse_id)
         if status:
             query = query.where(func.lower(NurseMedicationLog.status) == status.strip().lower())
+        if search and str(search).strip():
+            term = f"%{str(search).strip().lower()}%"
+            query = query.where(
+                or_(
+                    func.lower(NursePrescription.medicine_name).like(term),
+                    func.lower(NurseMedicationLog.notes).like(term),
+                    func.lower(NurseMedicationLog.time_of_day_slot).like(term),
+                    func.lower(NurseMedicationLog.status).like(term),
+                    func.lower(User.full_name).like(term),
+                    func.lower(Patient.first_name).like(term),
+                    func.lower(Patient.last_name).like(term),
+                )
+            )
 
         res = await self.db.execute(query)
         rows = res.all()
@@ -2039,6 +2187,73 @@ class NurseService:
                     special_instructions=presc.special_instructions if presc else None,
                 )
             )
+
+        if include_summary:
+            from app.utils.helpers import get_today_ist
+            import json
+            import datetime
+
+            today = get_today_ist()
+            today_start = datetime.datetime.combine(today, datetime.time.min)
+            today_end = datetime.datetime.combine(today, datetime.time.max)
+
+            # Query all logs for this prescription (unfiltered by status/search) to get accurate card counts
+            all_logs_query = select(NurseMedicationLog).where(NurseMedicationLog.prescription_id == prescription_id)
+            all_logs_res = await self.db.execute(all_logs_query)
+            all_logs = all_logs_res.scalars().all()
+
+            given_today = sum(
+                1 for l in all_logs
+                if (l.status or "").lower() == "administered"
+                and l.timestamp
+                and today_start <= l.timestamp <= today_end
+            )
+
+            missed_dose = sum(
+                1 for l in all_logs
+                if (l.status or "").lower() in ("missed", "misses dose", "missed dose")
+            )
+
+            pending_due_logs = sum(
+                1 for l in all_logs
+                if (l.status or "").lower() in ("pending", "due", "pending/due")
+            )
+
+            # Check prescription details
+            presc_obj = await self.db.get(NursePrescription, prescription_id)
+            total_prescriptions = 1
+            if presc_obj and presc_obj.patient_id:
+                patient_presc_count = await self.db.scalar(
+                    select(func.count(NursePrescription.id)).where(NursePrescription.patient_id == presc_obj.patient_id)
+                )
+                if patient_presc_count:
+                    total_prescriptions = patient_presc_count
+
+            # If pending_due_logs > 0, use that; otherwise calculate from scheduled daily slots if active today
+            pending_due = pending_due_logs
+            if pending_due == 0 and presc_obj:
+                try:
+                    slots = json.loads(presc_obj.time_of_day) if presc_obj.time_of_day else []
+                    if isinstance(slots, list) and len(slots) > 0:
+                        is_active_today = True
+                        if presc_obj.start_date and today < presc_obj.start_date:
+                            is_active_today = False
+                        if presc_obj.end_date and today > presc_obj.end_date:
+                            is_active_today = False
+                        if is_active_today:
+                            pending_due = max(0, len(slots) - given_today - missed_dose)
+                except Exception:
+                    pass
+
+            return {
+                "items": results,
+                "total": len(results),
+                "total_prescription": total_prescriptions,
+                "given_today": given_today,
+                "pending_due": pending_due,
+                "missed_dose": missed_dose,
+            }
+
         return results
 
     async def cancel_medication_log(

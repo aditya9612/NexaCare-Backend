@@ -93,3 +93,47 @@ async def test_vendor_payment_duplicate_validation():
         with pytest.raises(BadRequestException) as exc_over:
             await expense_service.create_payment(over_payment_data, user_id=1)
         assert exc_over.value.detail == "Payment amount exceeds remaining expense amount"
+
+        # 4. Mismatched vendor for an expense -> MUST fail with "The selected expense does not belong to this vendor"
+        other_vendor = Vendor(
+            name=f"Other Vendor {uid}",
+            vendor_type="supplier",
+            is_active=True,
+        )
+        session.add(other_vendor)
+        await session.commit()
+        await session.refresh(other_vendor)
+
+        mismatched_payment = VendorPaymentCreate(
+            vendor_id=other_vendor.id,
+            expense_id=expense_over.id,
+            amount=100.0,
+            payment_method="cash",
+        )
+        with pytest.raises(BadRequestException) as exc_mismatch:
+            await expense_service.create_payment(mismatched_payment, user_id=1)
+        assert exc_mismatch.value.detail == "The selected expense does not belong to this vendor"
+
+        # 5. Payment on an already Paid expense without existing payment records -> MUST fail with "This expense is already marked as Paid"
+        paid_expense = Expense(
+            category_id=category.id,
+            vendor_id=vendor.id,
+            amount=300.0,
+            description="Pre-paid Vendor Expense",
+            expense_date=date.today(),
+            status="Paid",
+            is_deleted=False,
+        )
+        session.add(paid_expense)
+        await session.commit()
+        await session.refresh(paid_expense)
+
+        paid_payment = VendorPaymentCreate(
+            vendor_id=vendor.id,
+            expense_id=paid_expense.id,
+            amount=300.0,
+            payment_method="cash",
+        )
+        with pytest.raises(BadRequestException) as exc_paid:
+            await expense_service.create_payment(paid_payment, user_id=1)
+        assert exc_paid.value.detail == "This expense is already marked as Paid"

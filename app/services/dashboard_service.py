@@ -211,20 +211,9 @@ class DashboardService:
         ]
 
         # Prescription summary metrics
-        from datetime import datetime, time
-        from app.utils.helpers import get_today_ist
-
-        today_ist = get_today_ist()
-        start_ist = datetime.combine(today_ist, time.min)
-        end_ist = datetime.combine(today_ist, time.max)
-        start_utc = start_ist - timedelta(hours=5, minutes=30)
-        end_utc = end_ist - timedelta(hours=5, minutes=30)
-
         total_prescriptions = await self.db.scalar(
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
-                Prescription.created_at >= start_utc,
-                Prescription.created_at <= end_utc,
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -232,9 +221,7 @@ class DashboardService:
         pending_prescriptions = await self.db.scalar(
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
-                Prescription.status == "pending",
-                Prescription.created_at >= start_utc,
-                Prescription.created_at <= end_utc,
+                func.lower(Prescription.status) == "pending",
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -242,9 +229,10 @@ class DashboardService:
         dispensed_prescriptions = await self.db.scalar(
             select(func.count(Prescription.id)).where(
                 Prescription.doctor_id == doctor.id,
-                Prescription.status == "dispensed",
-                Prescription.created_at >= start_utc,
-                Prescription.created_at <= end_utc,
+                or_(
+                    func.lower(Prescription.status).in_(["dispensed", "completed"]),
+                    Prescription.dispensed_at.isnot(None)
+                ),
                 Prescription.is_deleted.is_(False)
             )
         ) or 0
@@ -254,8 +242,6 @@ class DashboardService:
             .options(selectinload(Prescription.items))
             .where(
                 Prescription.doctor_id == doctor.id,
-                Prescription.created_at >= start_utc,
-                Prescription.created_at <= end_utc,
                 Prescription.is_deleted.is_(False)
             )
             .order_by(Prescription.created_at.desc())

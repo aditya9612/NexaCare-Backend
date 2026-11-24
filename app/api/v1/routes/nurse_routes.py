@@ -38,6 +38,7 @@ from app.schemas.nurse_schema import (
     NurseMedicationLogUpdate,
     NurseMedicationLogResponse,
     NurseMedicationLogDetailResponse,
+    NurseMedicationLogsWithSummaryResponse,
     NurseMedicationLogCancelRequest,
     NurseDashboardResponse,
     NurseTaskCreate,
@@ -262,22 +263,29 @@ async def update_medication_log(
 
 @router.get(
     "/prescriptions/{prescription_id}/logs",
-    response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
+    response_model=APIResponse[NurseMedicationLogsWithSummaryResponse],
     summary="List Medication Logs for Prescription",
 )
 @singular_router.get(
     "/prescriptions/{prescription_id}/logs",
-    response_model=APIResponse[List[NurseMedicationLogDetailResponse]],
+    response_model=APIResponse[NurseMedicationLogsWithSummaryResponse],
     include_in_schema=False,
 )
 async def list_medication_logs(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    status: Optional[str] = Query(None, description="Filter by status (e.g. Administered, Missed, Pending, Cancelled)"),
+    search: Optional[str] = Query(None, description="Search logs by medicine name, slot, notes, or nurse name"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
-    logs = await NurseService(db).list_medication_logs(prescription_id=prescription_id)
-    return APIResponse(message="Medication logs retrieved successfully", data=logs)
+    data = await NurseService(db).list_medication_logs(
+        prescription_id=prescription_id,
+        status=status,
+        search=search,
+        include_summary=True,
+    )
+    return APIResponse(message="Medication logs retrieved successfully", data=data)
 
 
 @router.get(
@@ -426,6 +434,7 @@ async def get_nurse_daily_tasks(
     priority: str | None = None,
     sort_by: str = "priority",
     sort_order: str = "desc",
+    search: str | None = Query(None, description="Search daily tasks by title, description or patient"),
     hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
@@ -448,8 +457,57 @@ async def get_nurse_daily_tasks(
         sort_by=sort_by,
         sort_order=sort_order,
         hospital_id=target_hospital_id,
+        search=search,
     )
     return APIResponse(message="Daily nursing tasks retrieved", data=result)
+
+
+@router.get(
+    "/all-tasks",
+    response_model=APIResponse[NurseTaskListWithCountsResponse],
+    summary="List All Assigned Tasks",
+)
+@singular_router.get(
+    "/all-tasks",
+    response_model=APIResponse[NurseTaskListWithCountsResponse],
+    include_in_schema=False,
+)
+async def get_all_nurse_tasks(
+    db: DbSession,
+    current_user: CurrentUser,
+    nurse_id: int | None = Query(None, description="Nurse ID to fetch tasks for (defaults to logged-in nurse)"),
+    page: int = 1,
+    size: int = 20,
+    patient_id: int | None = None,
+    status: str | None = Query(None, description="Filter by status (e.g. Pending, Completed, Delayed)"),
+    priority: str | None = Query(None, description="Filter by priority (e.g. Low, Medium, High, Urgent)"),
+    sort_by: str = "due_date",
+    sort_order: str = "desc",
+    search: str | None = Query(None, description="Search tasks by title, description or patient"),
+    hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    result = await NurseService(db).list_all_tasks(
+        current_user=current_user,
+        nurse_id=nurse_id,
+        page=page,
+        size=size,
+        patient_id=patient_id,
+        status=status,
+        priority=priority,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        hospital_id=target_hospital_id,
+        search=search,
+    )
+    return APIResponse(message="All nursing tasks retrieved successfully", data=result)
 
 
 @router.get("/{nurse_id}", response_model=APIResponse[NurseDetailResponse])
@@ -511,6 +569,7 @@ async def list_nurse_daily_tasks(
     priority: str | None = None,
     sort_by: str = "priority",
     sort_order: str = "desc",
+    search: str | None = Query(None, description="Search daily tasks by title, description or patient"),
     hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
     _: User = Depends(require_permission("nurses", "read")),
 ):
@@ -533,8 +592,57 @@ async def list_nurse_daily_tasks(
         sort_by=sort_by,
         sort_order=sort_order,
         hospital_id=target_hospital_id,
+        search=search,
     )
     return APIResponse(message="Daily nursing tasks retrieved", data=result)
+
+
+@router.get(
+    "/{nurse_id}/all-tasks",
+    response_model=APIResponse[NurseTaskListWithCountsResponse],
+    summary="List of All Assigned Tasks for Nurse",
+)
+@singular_router.get(
+    "/{nurse_id}/all-tasks",
+    response_model=APIResponse[NurseTaskListWithCountsResponse],
+    include_in_schema=False,
+)
+async def list_nurse_all_tasks(
+    nurse_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    page: int = 1,
+    size: int = 20,
+    patient_id: int | None = None,
+    status: str | None = Query(None, description="Filter by status (e.g. Pending, Completed, Delayed)"),
+    priority: str | None = Query(None, description="Filter by priority (e.g. Low, Medium, High, Urgent)"),
+    sort_by: str = "due_date",
+    sort_order: str = "desc",
+    search: str | None = Query(None, description="Search tasks by title, description or patient"),
+    hospital_id: int | None = Query(None, description="Hospital ID (for Super Admin override)"),
+    _: User = Depends(require_permission("nurses", "read")),
+):
+    tenant_hospital_id = resolve_tenant_id(current_user)
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name != UserRole.SUPER_ADMIN:
+        target_hospital_id = tenant_hospital_id
+    else:
+        target_hospital_id = hospital_id if hospital_id is not None else tenant_hospital_id
+
+    result = await NurseService(db).list_all_tasks(
+        current_user=current_user,
+        nurse_id=nurse_id,
+        page=page,
+        size=size,
+        patient_id=patient_id,
+        status=status,
+        priority=priority,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        hospital_id=target_hospital_id,
+        search=search,
+    )
+    return APIResponse(message="All nursing tasks retrieved successfully", data=result)
 
 
 @router.post(
@@ -735,6 +843,8 @@ async def list_patient_vitals(
     current_user: CurrentUser,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None, description="Search vitals by notes, blood pressure, nurse, status, etc."),
+    status: str | None = Query(None, description="Filter by vital status (Normal or Abnormal)"),
     gender: str | None = Query(None, description="Filter by gender (e.g. Male, Female, Other)"),
     blood_group: str | None = Query(None, description="Filter by blood group (e.g. A+, O+, B-, etc.)"),
     _: User = Depends(require_permission("nurses", "read")),
@@ -743,6 +853,8 @@ async def list_patient_vitals(
         patient_id=patient_id,
         page=page,
         size=size,
+        search=search,
+        status=status,
         gender=gender,
         blood_group=blood_group,
     )

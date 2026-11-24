@@ -21,6 +21,7 @@ class InventoryItemCreate(BaseSchema):
     vendor_id: Optional[int] = Field(None, gt=0)
     department_id: Optional[int] = Field(None, gt=0)
     description: Optional[str] = None
+    status: Optional[str] = Field("Active", description="Status (Active or Inactive)")
 
     @field_validator("name")
     @classmethod
@@ -92,6 +93,7 @@ class InventoryItemUpdate(BaseSchema):
     vendor_id: Optional[int] = Field(None, gt=0)
     department_id: Optional[int] = Field(None, gt=0)
     description: Optional[str] = None
+    status: Optional[str] = Field(None, description="Status (Active or Inactive)")
     is_active: Optional[bool] = None
 
     @field_validator("name", "category", "unit")
@@ -141,8 +143,15 @@ class InventoryItemResponse(BaseSchema):
     department_id: Optional[int]
     description: Optional[str] = None
     is_active: bool
+    status: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def populate_status(self) -> "InventoryItemResponse":
+        if self.status is None:
+            self.status = "Active" if self.is_active else "Inactive"
+        return self
 
 
 class StockTransactionCreate(BaseSchema):

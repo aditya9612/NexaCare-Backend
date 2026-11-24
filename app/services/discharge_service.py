@@ -14,7 +14,7 @@ from app.models.discharge_model import Discharge
 from app.models.doctor_model import Doctor
 from app.models.lab_model import LabTest, TestOrder
 from app.models.patient_model import Patient
-from app.models.pharmacy_model import PharmacyInvoice, Prescription
+from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem, Prescription
 from app.models.user_model import User
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.discharge_repository import DischargeRepository
@@ -64,7 +64,7 @@ class DischargeService:
         if data.patient_id and appointment.patient_id and data.patient_id != appointment.patient_id:
             raise BadRequestException("Provided patient_id does not match the patient linked to this appointment.")
 
-        # 2. Check IPD eligibility: appointment_type == "IPD" and admission_status in ("Admitted", "Admit Recommended")
+        # 2. Check IPD/Emergency eligibility: appointment_type in ("IPD", "EMERGENCY") and admission_status in ("Admitted", "Admit Recommended")
         appt_type = (appointment.appointment_type or "").strip().upper()
         adm_status = (appointment.admission_status or "").strip().lower()
         is_admitted = (
@@ -72,7 +72,7 @@ class DischargeService:
             or bool(appointment.admission_recommended)
         )
 
-        if appt_type != "IPD" and not is_admitted:
+        if appt_type not in ("IPD", "EMERGENCY") and not is_admitted:
             raise BadRequestException("Discharge can only be initiated for admitted IPD appointments.")
 
         if appointment.admission_status == "Discharged":
@@ -526,6 +526,8 @@ class DischargeService:
                 ),
             )
         )
+        if getattr(discharge, "hospital_id", None) is not None:
+            lab_stmt = lab_stmt.where(TestOrder.hospital_id == discharge.hospital_id)
         lab_orders = (await self.db.scalars(lab_stmt)).all()
         seen_test_orders = set()
         for order in (lab_orders or []):
@@ -544,8 +546,7 @@ class DischargeService:
                 test = await self.db.get(LabTest, order.lab_test_id)
 
             test_price = getattr(test, "price", 0) if test else 0
-            if not isinstance(test_price, (int, float)) or test_price <= 0:
-                continue
+            test_price_val = float(test_price) if isinstance(test_price, (int, float)) else 0.0
             cat = str(getattr(test, "category", "") or "").lower()
             is_radiology = any(r in cat for r in ["radiology", "imaging", "x-ray", "xray", "mri", "ct", "ultrasound", "usg", "scan"])
             item_type = "radiology_order" if is_radiology else "lab_test"
@@ -557,8 +558,9 @@ class DischargeService:
                     item_type=item_type,
                     description=f"{prefix}: {test_name} (Order #{order_num})",
                     quantity=1,
-                    unit_price=float(test_price),
+                    unit_price=test_price_val,
                     gst_rate=0.0,
+                    reference_id=order.id,
                 )
             )
 
@@ -576,7 +578,7 @@ class DischargeService:
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
         if discharge.admission_date:
-            admission_end = discharge.discharge_date or now_dt
+            admission_end = discharge.discharge_date or utc_now()
             pharm_conditions.append(
                 (PharmacyInvoice.patient_id == discharge.patient_id)
                 & (PharmacyInvoice.created_at >= discharge.admission_date)
@@ -585,9 +587,15 @@ class DischargeService:
 
         applicable_pharm = []
         if pharm_conditions:
-            pharm_stmt = select(PharmacyInvoice).where(
-                PharmacyInvoice.is_deleted == False,
-                or_(*pharm_conditions),
+            pharm_stmt = (
+                select(PharmacyInvoice)
+                .options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+                .where(
+                    PharmacyInvoice.is_deleted == False,
+                    or_(*pharm_conditions),
+                )
             )
             if getattr(discharge, "hospital_id", None) is not None:
                 pharm_stmt = pharm_stmt.where(PharmacyInvoice.hospital_id == discharge.hospital_id)
@@ -621,7 +629,23 @@ class DischargeService:
                 total_pharmacy_paid += inv_paid
                 status_desc = f"Partially Paid (Paid: ₹{inv_paid:,.2f}, Due: ₹{inv_balance:,.2f})" if inv_paid > 0 else "Unpaid"
 
-            if inv_tot > 0:
+            if getattr(inv, "items", None):
+                for p_item in inv.items:
+                    med_name = p_item.medicine.name if (hasattr(p_item, "medicine") and p_item.medicine) else f"Medicine #{p_item.medicine_id}"
+                    batch_str = f" [Batch: {p_item.batch_number}]" if getattr(p_item, "batch_number", None) else ""
+                    item_desc = f"Pharmacy: {med_name} (Qty: {p_item.quantity}{batch_str}) [Inv #{getattr(inv, 'invoice_number', inv.id)}]"
+                    unit_pr = float(p_item.unit_price or 0.0)
+                    bill_items.append(
+                        BillItemCreate(
+                            item_type="pharmacy_item",
+                            description=item_desc,
+                            quantity=p_item.quantity,
+                            unit_price=unit_pr,
+                            gst_rate=0.0,
+                            reference_id=inv.id,
+                        )
+                    )
+            elif inv_tot > 0:
                 bill_items.append(
                     BillItemCreate(
                         item_type="pharmacy_invoice",
@@ -681,7 +705,7 @@ class DischargeService:
         doctor_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "doctor_round"), 2)
         lab_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "lab_test"), 2)
         radiology_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "radiology_order"), 2)
-        pharmacy_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "pharmacy_invoice"), 2)
+        pharmacy_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type in ["pharmacy_invoice", "pharmacy_item"]), 2)
         procedure_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "procedure_charge"), 2)
         prior_opd_charges = round(sum(it.unit_price * it.quantity for it in bill_items if it.item_type == "opd_consultation"), 2)
 
@@ -759,11 +783,12 @@ class DischargeService:
             for it in bill_items:
                 existing_final_bill.items.append(
                     IPDFinalBillItem(
+                        final_bill_id=existing_final_bill.id,
                         item_type=it.item_type,
                         item_name=it.description,
                         quantity=it.quantity,
                         unit_price=it.unit_price,
-                        tax_rate=it.gst_rate,
+                        tax_rate=it.gst_rate or 0.0,
                         total_price=round(it.quantity * it.unit_price, 2),
                         reference_id=getattr(it, "reference_id", None),
                     )
@@ -799,11 +824,12 @@ class DischargeService:
             for it in bill_items:
                 final_bill.items.append(
                     IPDFinalBillItem(
+                        final_bill_id=None,
                         item_type=it.item_type,
                         item_name=it.description,
                         quantity=it.quantity,
                         unit_price=it.unit_price,
-                        tax_rate=it.gst_rate,
+                        tax_rate=it.gst_rate or 0.0,
                         total_price=round(it.quantity * it.unit_price, 2),
                         reference_id=getattr(it, "reference_id", None),
                     )
@@ -1036,7 +1062,7 @@ class DischargeService:
         pharm_ref_ids = set()
         if final_bill and getattr(final_bill, "items", None):
             for it in final_bill.items:
-                if getattr(it, "item_type", "") == "pharmacy_invoice" and getattr(it, "reference_id", None):
+                if getattr(it, "item_type", "") in ("pharmacy_invoice", "pharmacy_item") and getattr(it, "reference_id", None):
                     pharm_ref_ids.add(it.reference_id)
 
         pharm_conds = []
@@ -1045,7 +1071,7 @@ class DischargeService:
         if pharm_ref_ids:
             pharm_conds.append(PharmacyInvoice.id.in_(list(pharm_ref_ids)))
         if discharge.admission_date:
-            admission_end = discharge.discharge_date or now_dt
+            admission_end = discharge.discharge_date or utc_now()
             pharm_conds.append(
                 (PharmacyInvoice.patient_id == discharge.patient_id)
                 & (PharmacyInvoice.created_at >= discharge.admission_date)
@@ -1124,17 +1150,6 @@ class DischargeService:
 
         if not discharge.final_bill_id and not discharge.billing_id:
             raise BadRequestException("IPD final bill must be generated before billing clearance.")
-
-        # Strict Multi-Bill Payment Validation Before Setting billing_cleared = True
-        all_settled, outstanding = await self.validate_applicable_ipd_bills_settled(discharge, hospital_id=hospital_id)
-        if not all_settled:
-            details = [
-                f"{b['bill_type']} #{b['bill_number']} (Status: {b['status']}, Balance: ₹{b['outstanding_balance']:,.2f})"
-                for b in outstanding
-            ]
-            raise ConflictException(
-                f"Cannot approve billing clearance. Outstanding unpaid bills remain for this admission: {'; '.join(details)}"
-            )
 
         discharge.billing_cleared = True
         discharge.billing_cleared_by = user_id
@@ -1258,7 +1273,7 @@ class DischargeService:
             fb = await self.final_bill_repo.get_by_id_with_items(discharge.final_bill_id)
             if fb and fb.items:
                 for item in fb.items:
-                    if item.item_type == "pharmacy_invoice" and item.reference_id:
+                    if item.item_type in ("pharmacy_invoice", "pharmacy_item") and item.reference_id:
                         pharm_invoice_ids.add(item.reference_id)
 
         rx_stmt = select(Prescription.id).where(
@@ -1274,7 +1289,7 @@ class DischargeService:
         if rx_ids:
             pharm_conditions.append(PharmacyInvoice.prescription_id.in_(rx_ids))
         if discharge.admission_date:
-            admission_end = discharge.discharge_date or now_dt
+            admission_end = discharge.discharge_date or utc_now()
             pharm_conditions.append(
                 (PharmacyInvoice.patient_id == discharge.patient_id)
                 & (PharmacyInvoice.created_at >= discharge.admission_date)

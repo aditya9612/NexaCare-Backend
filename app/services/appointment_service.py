@@ -406,7 +406,7 @@ class AppointmentService:
             if not allowed_ids or appointment.patient_id not in allowed_ids:
                 raise ForbiddenException("You do not have permission to view this appointment")
         resp = AppointmentResponse.model_validate(appointment)
-        if appointment.patient_id and (appointment.appointment_type == "IPD" or appointment.admission_recommended):
+        if appointment.patient_id and (appointment.appointment_type in ("IPD", "Emergency") or appointment.admission_recommended):
             from app.models.bed_allocation_model import Bed
             from sqlalchemy import select
             bed_res = await self.db.execute(
@@ -487,14 +487,17 @@ class AppointmentService:
             appointment_data["hospital_id"] = hospital_id or (patient.hospital_id if patient else None)
 
         appt_type_str = (appointment_data.get("appointment_type") or "").strip().upper()
-        if requested_bed_id and appt_type_str != "IPD":
+        if requested_bed_id and appt_type_str not in ("IPD", "EMERGENCY"):
             appt_type_str = "IPD"
             appointment_data["appointment_type"] = "IPD"
 
-        if appt_type_str == "IPD":
-            from app.core.constants import AdmissionStatus, AppointmentType
+        if appt_type_str in ("IPD", "EMERGENCY"):
+            from app.core.constants import AdmissionStatus, AppointmentType, AppointmentType
             from app.utils.helpers import generate_admission_number
-            appointment_data["appointment_type"] = AppointmentType.IPD.value
+            if appt_type_str == "IPD":
+                appointment_data["appointment_type"] = AppointmentType.IPD.value
+            else:
+                appointment_data["appointment_type"] = AppointmentType.EMERGENCY.value
             appointment_data["admission_recommended"] = True
             if not appointment_data.get("admission_status"):
                 appointment_data["admission_status"] = AdmissionStatus.ADMIT_RECOMMENDED
@@ -670,10 +673,13 @@ class AppointmentService:
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
-        if (appointment.appointment_type or "").strip().upper() == "IPD":
-            from app.core.constants import AdmissionStatus, AppointmentType
+        if (appointment.appointment_type or "").strip().upper() in ("IPD", "EMERGENCY"):
+            from app.core.constants import AdmissionStatus, AppointmentType, AppointmentType
             from app.utils.helpers import generate_admission_number
-            appointment.appointment_type = AppointmentType.IPD.value
+            if (appointment.appointment_type or "").strip().upper() == "IPD":
+                appointment.appointment_type = AppointmentType.IPD.value
+            else:
+                appointment.appointment_type = AppointmentType.EMERGENCY.value
             appointment.admission_recommended = True
             if not appointment.admission_status:
                 appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
@@ -1779,7 +1785,7 @@ class AppointmentService:
         if not appointment.check_in_time and appointment.appointment_status not in (AppointmentStatus.COMPLETED, "Checked-In", "In-Progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
             raise BadRequestException("Cannot recommend admission for a patient who has not checked in. Please check in the patient first.")
 
-        from app.core.constants import AdmissionStatus, EmergencyDisposition
+        from app.core.constants import AdmissionStatus, AppointmentType, EmergencyDisposition
         from app.utils.helpers import generate_admission_number
         appointment.appointment_type = "IPD"
         appointment.appointment_status = AppointmentStatus.COMPLETED
@@ -1910,7 +1916,7 @@ class AppointmentService:
         from app.models.bed_allocation_model import Bed
         from app.models.doctor_model import Doctor
         from app.models.patient_model import Patient
-        from app.core.constants import AdmissionStatus
+        from app.core.constants import AdmissionStatus, AppointmentType
         from app.core.dependencies import resolve_tenant_id
         from sqlalchemy import select, and_, not_, exists, or_
         from sqlalchemy.orm import selectinload
@@ -1966,7 +1972,7 @@ class AppointmentService:
                         ),
                     ),
                     and_(
-                        Appointment.appointment_type == "IPD",
+                        Appointment.appointment_type.in_(["IPD", "Emergency", "emergency", AppointmentType.IPD.value, AppointmentType.EMERGENCY.value]),
                         or_(
                             Appointment.admission_status.is_(None),
                             Appointment.admission_status.notin_(
@@ -2083,8 +2089,8 @@ class AppointmentService:
                     appointment_number=a.appointment_number,
                     appointment_date=a.appointment_date,
                     appointment_status=a.appointment_status,
-                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if (a.admission_recommended or (a.appointment_type or "").upper() == "IPD") else None),
-                    admission_recommended=bool(a.admission_recommended or (a.appointment_type or "").upper() == "IPD"),
+                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if (a.admission_recommended or (a.appointment_type or "").upper() in ("IPD", "EMERGENCY")) else None),
+                    admission_recommended=bool(a.admission_recommended or (a.appointment_type or "").upper() in ("IPD", "EMERGENCY")),
                     admission_reason=a.admission_reason,
                     expected_los=a.expected_los,
                     recommended_ward=a.recommended_ward,

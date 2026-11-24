@@ -497,13 +497,13 @@ class BedAllocationService:
             raise BadRequestException("Admission date cannot be in the past.")
 
         if not appointment:
-            # 1. Search for appointment where admission was recommended or admitted with IPD type
+            # 1. Search for appointment where admission was recommended or admitted with IPD or Emergency type
             stmt = (
                 select(Appointment)
                 .where(
                     Appointment.patient_id == patient.id,
                     (
-                        (Appointment.appointment_type == AppointmentType.IPD.value)
+                        (Appointment.appointment_type.in_([AppointmentType.IPD.value, AppointmentType.EMERGENCY.value, "IPD", "Emergency", "emergency"]))
                         | (Appointment.admission_recommended == True)
                         | (Appointment.admission_status.in_([AdmissionStatus.ADMIT_RECOMMENDED, AdmissionStatus.ADMITTED]))
                         | (Appointment.appointment_status.in_([AppointmentStatus.ADMIT_RECOMMENDED, AppointmentStatus.ADMITTED]))
@@ -515,13 +515,13 @@ class BedAllocationService:
             res = await self.db.execute(stmt)
             appointment = res.scalar_one_or_none()
 
-            # 2. Fallback to latest IPD appointment
+            # 2. Fallback to latest IPD or Emergency appointment
             if not appointment:
                 stmt = (
                     select(Appointment)
                     .where(
                         Appointment.patient_id == patient.id,
-                        Appointment.appointment_type == AppointmentType.IPD.value,
+                        Appointment.appointment_type.in_([AppointmentType.IPD.value, AppointmentType.EMERGENCY.value, "IPD", "Emergency", "emergency"]),
                     )
                     .order_by(desc(Appointment.id))
                     .limit(1)
@@ -546,10 +546,11 @@ class BedAllocationService:
             )
 
         # Business Rule Validations
-        # Check 1: Appointment Type MUST be IPD
+        # Check 1: Appointment Type MUST be IPD or Emergency
         appt_type_raw = appointment.appointment_type or ""
         appt_type_norm = appt_type_raw.strip().upper()
-        if appt_type_norm != AppointmentType.IPD.value:
+        valid_bed_types = (AppointmentType.IPD.value.upper(), AppointmentType.EMERGENCY.value.upper())
+        if appt_type_norm not in valid_bed_types:
             if appointment.admission_recommended or (appointment.admission_status or "").strip().lower() in ("admit recommended", "admit_recommended"):
                 appointment.appointment_type = AppointmentType.IPD.value
                 appt_type_norm = AppointmentType.IPD.value
@@ -557,16 +558,16 @@ class BedAllocationService:
                 if appt_type_raw.strip().lower() in ("follow-up", "followup", "follow up"):
                     raise BadRequestException(
                         "Bed allocation is not allowed for Follow-up appointments. "
-                        "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
+                        "Bed allocation is permitted ONLY when the appointment type is IPD or Emergency and admission has been recommended."
                     )
-                elif appt_type_norm == AppointmentType.OPD.value:
+                elif appt_type_norm == AppointmentType.OPD.value.upper():
                     raise BadRequestException(
                         "Bed allocation is not allowed for OPD appointments. "
-                        "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
+                        "Bed allocation is permitted ONLY when the appointment type is IPD or Emergency and admission has been recommended."
                     )
                 else:
                     raise BadRequestException(
-                        f"Bed allocation is only allowed for IPD appointments. Current appointment type: {appointment.appointment_type or 'None'}."
+                        f"Bed allocation is only allowed for IPD or Emergency appointments. Current appointment type: {appointment.appointment_type or 'None'}."
                     )
 
         status_norm = (appointment.appointment_status or "").strip().lower()
@@ -587,13 +588,13 @@ class BedAllocationService:
             bool(appointment.admission_recommended)
             or adm_status_norm in ("admit recommended", "admit_recommended", "admitted")
             or status_norm in ("admit recommended", "admit_recommended", "admitted")
-            or (appt_type_norm == AppointmentType.IPD.value and not is_explicitly_not_rec and not is_term)
+            or (appt_type_norm in valid_bed_types and not is_explicitly_not_rec and not is_term)
         ) and not is_explicitly_not_rec and not is_term
 
         if not is_admission_valid:
             raise BadRequestException(
                 "Bed allocation requires a valid admission recommendation. "
-                "Admission has not been recommended or created for this IPD appointment."
+                "Admission has not been recommended or created for this appointment."
             )
 
         # Check 4: Check-in / Pending Check

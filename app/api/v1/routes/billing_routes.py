@@ -125,7 +125,7 @@ async def list_billings(
     sort_order: str = "desc",
     status: str | None = None,
     patient_id: int | None = None,
-    bill_type: BillType | None = Query(None, description="Filter by bill type ('pharmacy' or 'consultation')"),
+    bill_type: BillType | None = Query(None, description="Filter by bill type ('pharmacy', 'consultation', 'lab', or 'ipd')"),
     q: str | None = None,
     date_filter: str | None = Query(
         None,
@@ -231,9 +231,10 @@ async def get_billing(
     billing_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    source: str | None = Query(None, description="Optional bill source ('billing', 'pharmacy', 'lab')"),
     _: User = Depends(require_permission("billing", "read")),
 ):
-    billing = await BillingService(db).get_by_id(billing_id, current_user=current_user)
+    billing = await BillingService(db).get_by_id(billing_id, source=source, current_user=current_user)
     return APIResponse(message="Bill retrieved", data=billing)
 
 

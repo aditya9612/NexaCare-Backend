@@ -136,15 +136,25 @@ def resolve_tenant_id(user: User | None, x_hospital_id: int | None = None) -> in
     if x_hospital_id is not None and x_hospital_id <= 0:
         raise BadRequestException("Invalid hospital ID provided in X-Hospital-Id header")
 
-    role = getattr(user, "role", None)
-    role_name = role.name.lower() if role and getattr(role, "name", None) else ""
+    role = user.__dict__.get("role") if hasattr(user, "__dict__") else None
+
+    role_name = ""
+    if role and hasattr(role, "name") and role.name:
+        role_name = str(role.name).lower()
+    elif hasattr(user, "__dict__") and user.__dict__.get("role_name"):
+        role_name = str(user.__dict__["role_name"]).lower()
+    elif not hasattr(user, "_sa_instance_state") and getattr(user, "role_name", None):
+        role_name = str(user.role_name).lower()
+
     if role_name in ("super admin", "super_admin"):
         if x_hospital_id is not None:
             return x_hospital_id
-        return getattr(user, "active_hospital_id", None) or getattr(user, "hospital_id", None)
+        active_hid = user.__dict__.get("active_hospital_id") if hasattr(user, "__dict__") else getattr(user, "active_hospital_id", None)
+        hid = user.__dict__.get("hospital_id") if hasattr(user, "__dict__") else getattr(user, "hospital_id", None)
+        return active_hid or hid
 
     # For non-super-admin users:
-    user_hospital_id = getattr(user, "hospital_id", None)
+    user_hospital_id = user.__dict__.get("hospital_id") if hasattr(user, "__dict__") and "hospital_id" in user.__dict__ else getattr(user, "hospital_id", None)
     if x_hospital_id is not None and (user_hospital_id is None or x_hospital_id != user_hospital_id):
         raise ForbiddenException("Access denied: Cannot access or specify another hospital's tenant context")
 

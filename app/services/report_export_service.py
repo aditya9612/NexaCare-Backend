@@ -34,22 +34,28 @@ class ReportExportService:
 
 
     @staticmethod
-    def resolve_hospital_logo(logo_path_attr: str | None) -> str | None:
-        if logo_path_attr:
-            raw_path = str(logo_path_attr).strip()
-            candidates = [
-                raw_path,
-                os.path.abspath(raw_path),
-                os.path.join(os.getcwd(), raw_path),
-                os.path.join("app", raw_path),
-                os.path.abspath(os.path.join("app", raw_path)),
-            ]
-            for cand in candidates:
-                if os.path.isfile(cand):
-                    return os.path.abspath(cand).replace("\\", "/")
-        for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
-            if os.path.isfile(fb):
-                return os.path.abspath(fb).replace("\\", "/")
+    def resolve_hospital_logo(logo_path_attr: str | None, fallback: bool = False) -> str | None:
+        if not logo_path_attr:
+            if fallback:
+                for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
+                    if os.path.isfile(fb):
+                        return os.path.abspath(fb).replace("\\", "/")
+            return None
+        raw_path = str(logo_path_attr).strip()
+        candidates = [
+            raw_path,
+            os.path.abspath(raw_path),
+            os.path.join(os.getcwd(), raw_path),
+            os.path.join("app", raw_path),
+            os.path.abspath(os.path.join("app", raw_path)),
+        ]
+        for cand in candidates:
+            if os.path.isfile(cand):
+                return os.path.abspath(cand).replace("\\", "/")
+        if fallback:
+            for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.isfile(fb):
+                    return os.path.abspath(fb).replace("\\", "/")
         return None
 
     @staticmethod

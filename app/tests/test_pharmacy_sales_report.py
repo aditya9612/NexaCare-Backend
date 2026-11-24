@@ -293,11 +293,13 @@ async def test_pharmacy_sales_report_all_cases():
         from app.main import app
         from app.models.user_model import User
         from app.core.dependencies import get_current_active_user, get_current_user
-        from unittest.mock import patch
+        from unittest.mock import patch, MagicMock
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             u = User(id=1, email=f"user_{uid}@test.com", is_active=True, is_verified=True, hashed_password="pw", user_code=f"U_{uid}", hospital_id=hosp1.id)
+            u.role = MagicMock()
+            u.role.name = "Hospital Admin"
             app.dependency_overrides[get_current_active_user] = lambda: u
             app.dependency_overrides[get_current_user] = lambda: u
 

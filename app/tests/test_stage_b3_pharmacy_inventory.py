@@ -92,6 +92,7 @@ class TestStageB3(unittest.IsolatedAsyncioTestCase):
         db.begin_nested = MagicMock()
         db.begin_nested.return_value.__aenter__ = AsyncMock()
         db.begin_nested.return_value.__aexit__ = AsyncMock()
+        db.get = AsyncMock(return_value=None)
 
         mock_res_empty = MagicMock()
         mock_res_empty.scalars().first.return_value = None
@@ -124,7 +125,7 @@ class TestStageB3(unittest.IsolatedAsyncioTestCase):
     def test_migration_statically(self):
         with open("alembic/versions/b7d5f0e9c1a2_phase_11_consolidated_stock_tenant_architecture.py", "r") as f:
             content = f.read()
-            self.assertIn("down_revision: Union[str, None] = 'f7a1c2d3e4b5'", content)
+            self.assertIn("down_revision: Union[str, None] = '7f9a1b2c3d4e'", content)
             self.assertIn("revision: str = 'b7d5f0e9c1a2'", content)
             self.assertIn(
                 """op.create_unique_constraint(

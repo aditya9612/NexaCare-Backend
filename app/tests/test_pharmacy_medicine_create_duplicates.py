@@ -13,45 +13,52 @@ async def test_duplicate_validation():
     mfg_name = f"Mfg_{uid}"
     batch = f"Batch_{uid}"
     
+    import random
+    barcode_base = random.randint(1000000000000, 8999999999999)
     async with AsyncSessionLocal() as session:
         service = PharmacyService(session)
         
-        # 1. Create first medicine
+        from datetime import date
         data1 = MedicineCreate(
             name=med_name,
+            generic_name=f"Gen_{uid}",
+            barcode=str(barcode_base),
             category="Tablet",
             unit="Strip",
             unit_price=10.0,
             stock_quantity=100,
             reorder_level=10,
             manufacturer=mfg_name,
-            batch_number=batch
+            batch_number=batch,
+            expiry_date=date(2030, 1, 1),
         )
-        await service.create_medicine(data1, 1)
+        await service.create_medicine(data1, 1, hospital_id=1)
         
         # 2. Try to create exactly the same -> Conflict
         data2 = data1.model_copy()
         with pytest.raises(ConflictException):
-            await service.create_medicine(data2, 1)
+            await service.create_medicine(data2, 1, hospital_id=1)
             
         # 3. Same med, mfg, but different case batch -> Conflict
         data3 = data1.model_copy()
         data3.batch_number = batch.upper()
         with pytest.raises(ConflictException):
-            await service.create_medicine(data3, 1)
+            await service.create_medicine(data3, 1, hospital_id=1)
             
         # 4. Same batch, different medicine -> Allowed
         data4 = data1.model_copy()
         data4.name = f"Med_Diff_{uid}"
+        data4.barcode = str(barcode_base + 1)
         try:
-            await service.create_medicine(data4, 1)
+            await service.create_medicine(data4, 1, hospital_id=1)
         except ConflictException:
             pytest.fail("Should allow same batch for different medicine")
             
         # 5. Same batch, same medicine, different manufacturer -> Allowed
         data5 = data1.model_copy()
         data5.manufacturer = f"Mfg_Diff_{uid}"
+        data5.barcode = str(barcode_base + 2)
         try:
-            await service.create_medicine(data5, 1)
+            await service.create_medicine(data5, 1, hospital_id=1)
         except ConflictException:
             pytest.fail("Should allow same batch for different manufacturer")

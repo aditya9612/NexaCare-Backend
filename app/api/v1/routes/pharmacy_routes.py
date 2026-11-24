@@ -516,18 +516,19 @@ async def dispense_prescription(
     prescription_id: int,
     db: DbSession,
     current_user: CurrentUser,
-    data: PrescriptionDispenseRequest,
+    data: Optional[PrescriptionDispenseRequest] = None,
     hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("pharmacy", "update")),
 ):
     result = await PharmacyService(db).dispense_prescription(
         prescription_id=prescription_id,
         user_id=current_user.id,
-        data=data,
+        data=data or PrescriptionDispenseRequest(),
         current_user=current_user,
         hospital_id=hospital_id,
     )
-    return APIResponse(message="Prescription dispensed and invoice generated successfully", data=result)
+    message = "Prescription dispensed and invoice generated successfully" if result.get("invoice") else "Prescription dispensed successfully"
+    return APIResponse(message=message, data=result)
 
 
 @router.delete("/prescriptions/{prescription_id}", response_model=APIResponse[MessageResponse])

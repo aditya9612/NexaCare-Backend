@@ -50,7 +50,7 @@ async def test_bed_transfer_notifies_patient_and_attending_doctor():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -97,7 +97,7 @@ async def test_bed_transfer_excludes_doctor_from_different_hospital():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -132,7 +132,7 @@ async def test_bed_transfer_cross_tenant_doctor_and_appointment_records():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -168,7 +168,7 @@ async def test_bed_transfer_handles_walkin_patient_without_user_id():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -672,7 +672,7 @@ async def test_bed_transfer_fail_closed_when_both_beds_null_hospital_id():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -708,7 +708,7 @@ async def test_bed_transfer_patient_from_another_hospital_not_notified():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -747,7 +747,7 @@ async def test_bed_transfer_target_has_hospital_source_bed_null_hospital():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -787,7 +787,7 @@ async def test_bed_transfer_target_null_hospital_source_bed_has_hospital():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -822,7 +822,7 @@ async def test_bed_transfer_doctor_user_hospital_mismatch_fails_closed():
     target_bed.room = Room(id=2, name="Room-2", floor=Floor(id=2, name="2nd Floor"))
 
     service.repo = AsyncMock()
-    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None: source_bed if bed_id == 1 else target_bed)
+    service.get_bed = AsyncMock(side_effect=lambda bed_id, current_user=None, **kwargs: source_bed if bed_id == 1 else target_bed)
     service.get_patient = AsyncMock(return_value=patient)
     service.repo.create_activity_log = AsyncMock()
 
@@ -3332,9 +3332,10 @@ async def test_staff_missing_user_safely_skips():
     service.repo.get_by_id = AsyncMock(return_value=created_staff)
     service.audit_repo.create = AsyncMock()
 
-    current_user = User(id=999, hospital_id=None, is_active=True)
+    current_user = User(id=999, hospital_id=10, is_active=True)
 
     data = StaffCreate(
+        hospital_id=10,
         full_name="Ramesh Sharma",
         email="ramesh7@example.com",
         phone="9876543216",

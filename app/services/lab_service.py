@@ -384,6 +384,7 @@ class LabService:
 
         # Prepare the TestOrder data dictionary
         order_data = data.model_dump()
+        order_data.pop("hospital_id", None)
         order_data["doctor_id"] = resolved_doctor_id
 
         order = TestOrder(
@@ -1667,14 +1668,15 @@ class LabService:
     ) -> LabReportResponse:
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
-        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
-        if not report:
-            raise NotFoundException("Lab report not found")
 
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
         is_admin = role_name in [r.lower() for r in UserRole.ADMIN_ROLES]
         if not is_admin and role_name != "doctor":
             raise ForbiddenException("Only doctors or pathologists can perform doctor verification.")
+
+        report = await self.report_repo.get_by_id(report_id, hospital_id=hospital_id)
+        if not report:
+            raise NotFoundException("Lab report not found")
 
         if report.status == LabReportStatus.APPROVED:
             raise BadRequestException("Report already approved")

@@ -93,7 +93,7 @@ async def test_dashboard_tenant_isolation():
                 "app.repositories.rbac_repository.RBACRepository.get_user_permissions",
                 new=AsyncMock(return_value=["inventory:read"]),
             ):
-                resp = await ac.get("/api/v1/inventory/dashboard")
+                resp = await ac.get("/api/v1/inventory/dashboard", headers={"X-Hospital-Id": str(hA_id)})
 
     app.dependency_overrides.clear()
 

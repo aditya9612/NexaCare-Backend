@@ -84,7 +84,15 @@ class NotificationRepository:
             query = query.where(Notification.notification_type.in_(["CRITICAL_VALUE"]))
         elif cat == "updates":
             query = query.where(
-                Notification.notification_type.in_(["PATIENT_UPDATE", "SHIFT_UPDATE", "PENDING_TEST"])
+                Notification.notification_type.in_([
+                    "PATIENT_UPDATE",
+                    "SHIFT_UPDATE",
+                    "PENDING_TEST",
+                    "INVOICE_CREATED",
+                    "PAYMENT_RECEIVED",
+                    "PATIENT_REFUND_PROCESSED",
+                    "INVOICE_CANCELLED",
+                ])
             )
         elif cat == "tasks":
             query = query.where(

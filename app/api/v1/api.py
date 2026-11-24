@@ -21,6 +21,7 @@ from app.api.v1.routes import (
     voice_assistant_routes,
     voice_routes,
     whatsapp_routes,
+    email_routes,
     super_admin_routes,
     subscription_routes,
     platform_routes,
@@ -87,6 +88,7 @@ api_router.include_router(
     tags=["Hospital Voice AI"],
 )
 api_router.include_router(whatsapp_routes.router, prefix="/whatsapp", tags=["WhatsApp"])
+api_router.include_router(email_routes.router, prefix="/email", tags=["Email"])
 api_router.include_router(analytics_routes.router, prefix="/analytics", tags=["Analytics"])
 api_router.include_router(super_admin_routes.router, prefix="/super-admin", tags=["Super Admin"])
 api_router.include_router(subscription_routes.router, prefix="/subscriptions", tags=["Subscriptions"])

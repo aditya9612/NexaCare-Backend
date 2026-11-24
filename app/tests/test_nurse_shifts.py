@@ -140,7 +140,7 @@ async def test_create_nurse_shift(client):
     }
 
     with patch("app.api.v1.routes.nurse_routes.NurseService", return_value=mock_service):
-        response = await client.post("/api/v1/nurses/1/shifts", json=payload)
+        response = await client.post("/api/v1/nurses/1/shifts", json=payload, headers={"X-Hospital-Id": "1"})
         assert response.status_code == 201
         data = response.json()
         assert data["success"] is True
@@ -165,5 +165,5 @@ async def test_create_nurse_shift_nurse_not_found(client):
     }
 
     with patch("app.api.v1.routes.nurse_routes.NurseService", return_value=mock_service):
-        response = await client.post("/api/v1/nurses/99999/shifts", json=payload)
+        response = await client.post("/api/v1/nurses/99999/shifts", json=payload, headers={"X-Hospital-Id": "1"})
         assert response.status_code == 404

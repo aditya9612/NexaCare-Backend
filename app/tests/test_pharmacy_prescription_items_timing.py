@@ -200,7 +200,7 @@ async def test_create_prescription_with_both_meal_timing_and_time_of_day():
         ]
     )
 
-    response = await service.create_prescription(payload, user_id=1)
+    response = await service.create_prescription(payload, user_id=1, hospital_id=1)
 
     assert response.id == 101
     assert len(response.items) == 1
@@ -284,7 +284,7 @@ async def test_create_prescription_without_optional_fields_backward_compatibilit
         ]
     )
 
-    response = await service.create_prescription(payload, user_id=1)
+    response = await service.create_prescription(payload, user_id=1, hospital_id=1)
 
     assert response.id == 102
     assert len(response.items) == 1

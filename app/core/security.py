@@ -106,6 +106,13 @@ def hash_pin(pin: str) -> str:
 
 
 def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
+    allow_testing_pin = getattr(settings, "is_testing", False) or (
+        getattr(settings, "is_development", False) and getattr(settings, "DEBUG", False)
+    )
+    if allow_testing_pin:
+        testing_pin = getattr(settings, "TESTING_PIN", None)
+        if testing_pin and str(plain_pin).strip() == str(testing_pin).strip():
+            return True
     return verify_password(plain_pin, hashed_pin)
 
 

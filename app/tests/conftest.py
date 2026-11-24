@@ -43,7 +43,13 @@ async def cleanup_db_engine():
 
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
+    from unittest.mock import MagicMock
     mock_session = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    mock_result.scalar_one_or_none.return_value = None
+    mock_result.scalar.return_value = None
+    mock_session.execute = AsyncMock(return_value=mock_result)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield mock_session

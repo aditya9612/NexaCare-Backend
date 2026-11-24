@@ -42,6 +42,7 @@ def build_admin_user() -> User:
         email="admin_test@nexacare.com",
         full_name="Admin Test User",
         role_id=role.id,
+        hospital_id=1,
         is_active=True,
         is_verified=True,
         hashed_password="hashed_password",
@@ -50,9 +51,10 @@ def build_admin_user() -> User:
     return user
 
 
-async def create_test_environment(db):
+async def create_test_environment(db, hospital_id: int | None = None):
     """Creates a fresh Floor, Room, Bed, Doctor, and Patient for isolated testing."""
     floor = Floor(
+        hospital_id=hospital_id,
         number=random.randint(10000, 99999),
         name=f"Floor {uuid.uuid4().hex[:4]}",
         type="General",
@@ -61,6 +63,7 @@ async def create_test_environment(db):
     await db.flush()
 
     room = Room(
+        hospital_id=hospital_id,
         floor_id=floor.id,
         number=random.randint(100, 999),
         name=f"Room {uuid.uuid4().hex[:4]}",
@@ -71,6 +74,7 @@ async def create_test_environment(db):
     await db.flush()
 
     bed = Bed(
+        hospital_id=hospital_id,
         room_id=room.id,
         name=f"Bed-{uuid.uuid4().hex[:4].upper()}",
         type="General",
@@ -82,6 +86,7 @@ async def create_test_environment(db):
     doctor = (await db.execute(select(Doctor))).scalars().first()
     if not doctor:
         doctor = Doctor(
+            hospital_id=hospital_id,
             doctor_code=f"DOC-{uuid.uuid4().hex[:6].upper()}",
             first_name="Doctor",
             last_name="Test",
@@ -93,6 +98,7 @@ async def create_test_environment(db):
         await db.flush()
 
     patient = Patient(
+        hospital_id=hospital_id,
         patient_code=f"PAT-{uuid.uuid4().hex[:6].upper()}",
         first_name="Test",
         last_name="Patient",
@@ -515,9 +521,10 @@ async def test_direct_api_endpoint_bed_allocation():
     2. Valid IPD admission appointment returns HTTP 200 with allocated bed.
     """
     async with AsyncSessionLocal() as db:
-        floor, room, bed, doctor, patient = await create_test_environment(db)
+        floor, room, bed, doctor, patient = await create_test_environment(db, hospital_id=1)
 
         followup_appt = Appointment(
+            hospital_id=1,
             appointment_number=f"APT-{uuid.uuid4().hex[:8].upper()}",
             patient_id=patient.id,
             doctor_id=doctor.id,
@@ -565,6 +572,7 @@ async def test_direct_api_endpoint_bed_allocation():
 
             # 2. Add valid IPD appointment
             ipd_appt = Appointment(
+                hospital_id=1,
                 appointment_number=f"APT-{uuid.uuid4().hex[:8].upper()}",
                 patient_id=patient.id,
                 doctor_id=doctor.id,

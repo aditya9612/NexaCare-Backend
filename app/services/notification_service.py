@@ -1022,3 +1022,59 @@ class NotificationService:
             if notif:
                 notifications.append(notif)
         return notifications
+
+    async def notify_accountants(
+        self,
+        hospital_id: int | None,
+        title: str,
+        message: str,
+        notification_type: str,
+        reference_type: str | None = None,
+        reference_id: int | None = None,
+        priority: str = "NORMAL",
+    ) -> list[Notification]:
+        """Dispatch a notification to all active Accountants in the tenant hospital."""
+        if not self.db:
+            return []
+        from sqlalchemy import or_
+        from app.models.user_model import User
+        from app.models.role_model import Role
+        from app.core.constants import UserRole
+
+        query = (
+            select(User)
+            .join(User.role)
+            .where(
+                or_(
+                    func.lower(Role.name) == "accountant",
+                    User.role_id == 3,
+                ),
+                User.is_active.is_(True),
+            )
+        )
+        if hospital_id is not None:
+            query = query.where(
+                or_(
+                    User.hospital_id == hospital_id,
+                    User.hospital_id.is_(None),
+                )
+            )
+
+        result = await self.db.execute(query)
+        accountants = result.scalars().all()
+
+        notifications = []
+        for acc in accountants:
+            notif = await self.dispatch_notification(
+                user_id=acc.id,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                priority=priority,
+                hospital_id=acc.hospital_id or hospital_id,
+            )
+            if notif:
+                notifications.append(notif)
+        return notifications

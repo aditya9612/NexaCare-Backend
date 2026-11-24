@@ -30,11 +30,14 @@ def build_test_user(role_name: str) -> User:
 def get_base_payload():
     return {
         "name": "Test Med",
+        "generic_name": "Paracetamol",
+        "barcode": "8901234567890",
         "category": "Tablet",
         "unit": "Strip",
         "unit_price": 10.0,
         "stock_quantity": 100,
-        "reorder_level": 10
+        "reorder_level": 10,
+        "expiry_date": "2030-01-01",
     }
 
 @pytest.mark.asyncio
@@ -77,7 +80,7 @@ async def test_create_medicine_valid_batch(client, batch_number):
     with patch("app.api.v1.routes.pharmacy_routes.PharmacyService", return_value=mock_service):
         payload = get_base_payload()
         payload["batch_number"] = batch_number
-        response = await client.post("/api/v1/pharmacy/medicines", json=payload)
+        response = await client.post("/api/v1/pharmacy/medicines", json=payload, headers={"X-Hospital-Id": "1"})
         assert response.status_code == 201
 
 @pytest.mark.asyncio
@@ -103,7 +106,7 @@ async def test_create_medicine_invalid_batch(client, batch_number):
     payload = get_base_payload()
     payload["batch_number"] = batch_number
     
-    response = await client.post("/api/v1/pharmacy/medicines", json=payload)
+    response = await client.post("/api/v1/pharmacy/medicines", json=payload, headers={"X-Hospital-Id": "1"})
     assert response.status_code == 422
     
 @pytest.mark.asyncio
@@ -112,5 +115,5 @@ async def test_create_medicine_missing_batch(client):
     override_current_user(user)
 
     payload = get_base_payload()
-    response = await client.post("/api/v1/pharmacy/medicines", json=payload)
+    response = await client.post("/api/v1/pharmacy/medicines", json=payload, headers={"X-Hospital-Id": "1"})
     assert response.status_code == 422

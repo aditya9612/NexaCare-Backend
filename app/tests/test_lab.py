@@ -20,6 +20,7 @@ def build_test_user(role_name: str) -> User:
         email="user@test.com",
         full_name="Test User",
         role_id=role.id,
+        hospital_id=1,
         is_active=True,
         is_verified=True,
         hashed_password="hashed_password",
@@ -113,6 +114,7 @@ async def test_create_test_order_as_lab_technician(client):
     mock_service.create_order = AsyncMock(return_value=mock_order)
 
     with patch("app.repositories.rbac_repository.RBACRepository.get_user_permissions", return_value={"lab:read", "lab:create"}), \
+         patch("app.repositories.rbac_repository.RBACRepository.get_user_effective_permissions", return_value={"lab:read", "lab:create"}), \
          patch("app.api.v1.routes.lab_routes.LabService", return_value=mock_service):
         response = await client.post(
             "/api/v1/lab/orders",
@@ -302,6 +304,7 @@ async def test_create_lab_test_as_lab_technician(client):
     mock_service.create_test = AsyncMock(return_value=mock_test)
 
     with patch("app.repositories.rbac_repository.RBACRepository.get_user_permissions", return_value={"lab:create"}), \
+         patch("app.repositories.rbac_repository.RBACRepository.get_user_effective_permissions", return_value={"lab:create"}), \
          patch("app.api.v1.routes.lab_routes.LabService", return_value=mock_service):
         response = await client.post(
             "/api/v1/lab/tests",

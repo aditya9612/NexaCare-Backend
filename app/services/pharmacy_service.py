@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-from app.core.constants import PharmacyStatus, PurchaseStatus
+from app.core.constants import PharmacyPaymentStatus, PharmacyStatus, PurchaseStatus
 from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.inventory_model import Warehouse, WarehouseStock
 from app.models.pharmacy_model import (
@@ -217,6 +217,7 @@ class PharmacyService:
 
         sku = generate_medicine_sku()
         med_dict = data.model_dump()
+        med_dict.pop("hospital_id", None)
         purchase_cost = med_dict.pop("purchase_cost", None)
         avg_cost = None
         if purchase_cost is not None and (data.stock_quantity or 0) > 0:
@@ -501,7 +502,7 @@ class PharmacyService:
             hospital_id=hospital_id,
             prescription_number=generate_prescription_number(),
             instructions=data.instructions,
-            start_date=data.start_date,
+            start_date=data.start_date or date.today(),
             status="pending",
         )
         prescription = await self.prescription_repo.create(prescription, prescription_items)
@@ -792,7 +793,7 @@ class PharmacyService:
         # 1. Lock the prescription row
         prescription = None
         try:
-            query = select(Prescription).where(Prescription.id == prescription_id)
+            query = select(Prescription).options(selectinload(Prescription.items)).where(Prescription.id == prescription_id)
             if hospital_id is not None:
                 query = query.where(Prescription.hospital_id == hospital_id)
             res = await self.db.execute(query.with_for_update())
@@ -928,6 +929,7 @@ class PharmacyService:
 
         res = await self.db.execute(
             select(Prescription)
+            .options(selectinload(Prescription.items))
             .where(Prescription.id == prescription_id, Prescription.hospital_id == hospital_id)
             .with_for_update()
         )
@@ -1027,8 +1029,9 @@ class PharmacyService:
         current_user: Any | None = None,
         hospital_id: int | None = None,
     ) -> dict:
-        if not data or not data.payment_mode or not data.payment_mode.strip():
-            raise BadRequestException("Payment mode is required")
+        if data and getattr(data, "generate_invoice", False):
+            if not data.payment_mode or not data.payment_mode.strip():
+                raise BadRequestException("Payment mode is required when generating an invoice")
 
         from app.core.dependencies import resolve_tenant_id
         target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
@@ -1112,22 +1115,25 @@ class PharmacyService:
                 )
             )
 
-        prescription.status = "completed"
+        prescription.status = "dispensed"
         prescription.dispensed_at = utc_now()
         await self.prescription_repo.update(prescription)
 
-        # Generate PharmacyInvoice
-        invoice_create = PharmacyInvoiceCreate(
-            patient_id=prescription.patient_id,
-            prescription_id=prescription.id,
-            payment_mode=data.payment_mode.strip(),
-            payment_status=data.payment_status,
-            discount_amount=data.discount_amount,
-            discount_percentage=data.discount_percentage,
-            tax_percentage=data.tax_percentage,
-            items=invoice_items_create,
-        )
-        invoice_res = await self._create_invoice_internal(invoice_create, user_id, deduct_stock=False, current_user=current_user)
+        # Generate PharmacyInvoice only if explicitly requested (default: False)
+        invoice_res = None
+        should_generate_invoice = bool(data and getattr(data, "generate_invoice", False))
+        if should_generate_invoice:
+            invoice_create = PharmacyInvoiceCreate(
+                patient_id=prescription.patient_id,
+                prescription_id=prescription.id,
+                payment_mode=((data.payment_mode or "Cash") if data else "Cash").strip(),
+                payment_status=data.payment_status if data else PharmacyPaymentStatus.PAID,
+                discount_amount=data.discount_amount if data else 0.0,
+                discount_percentage=data.discount_percentage if data else 0.0,
+                tax_percentage=data.tax_percentage if data else 0.0,
+                items=invoice_items_create,
+            )
+            invoice_res = await self._create_invoice_internal(invoice_create, user_id, deduct_stock=False, current_user=current_user)
 
         await self.audit_repo.create(
             "dispense",
@@ -1171,6 +1177,14 @@ class PharmacyService:
             PrescriptionItemResponse.model_validate(i)
             for i in prescription.items
         ]
+        from datetime import timedelta
+        from app.utils.helpers import get_today_ist
+        today = get_today_ist()
+        start = prescription.start_date or (prescription.created_at.date() if prescription.created_at else today)
+        durations = [i.duration_days for i in prescription.items if getattr(i, "duration_days", None)]
+        max_duration = max(durations) if durations else 1
+        end_date = start + timedelta(days=max_duration)
+        resp.prescription_status = "active" if today <= end_date else "completed"
         return resp
 
     # --- Invoices ---
@@ -1186,6 +1200,7 @@ class PharmacyService:
         hospital_id: int | None = None,
     ) -> PharmacyInvoiceResponse:
         from app.models.inventory_model import Warehouse
+        from app.models.user_model import User
         from app.services.stock_movement_service import StockMovementService
         from app.services.settings_service import SettingsService
         from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
@@ -1207,11 +1222,39 @@ class PharmacyService:
             prescription = await self.prescription_repo.get_by_id(data.prescription_id, hospital_id=hospital_id)
             if not prescription:
                 raise NotFoundException("Prescription not found")
-            if prescription.patient_id != data.patient_id:
+            if data.patient_id is not None and prescription.patient_id != data.patient_id:
                 raise BadRequestException("Prescription does not belong to this patient")
-            # Enforce prescription must be dispensed to avoid skipping stock deduction.
+            if data.patient_id is None:
+                data.patient_id = prescription.patient_id
+
+            # Prevent duplicate invoices for the same prescription
+            existing_invoice = await self.invoice_repo.get_by_prescription_id(data.prescription_id, hospital_id=hospital_id)
+            if existing_invoice:
+                raise BadRequestException(
+                    f"Invoice '{existing_invoice.invoice_number}' has already been generated for Prescription #{prescription.prescription_number or prescription.id}"
+                )
+
+            # Enforce prescription must be dispensed before creating an invoice
             if prescription.status.lower() not in ("dispensed", "completed"):
                 raise BadRequestException("Prescription must be dispensed before creating an invoice")
+
+            # CRITICAL: Medicines were already physically deducted on dispense! Do NOT double-deduct stock!
+            deduct_stock = False
+
+            # Auto-populate items from prescription if items not supplied
+            if not data.items and prescription.items:
+                data.items = [
+                    PharmacyInvoiceItemCreate(
+                        medicine_id=p_item.medicine_id,
+                        quantity=p_item.dispensed_quantity or p_item.quantity,
+                        unit_price=None,
+                        batch_number=p_item.batch_number,
+                    )
+                    for p_item in prescription.items
+                ]
+
+        if not data.items:
+            raise BadRequestException("Invoice must contain at least one item")
 
         subtotal = 0.0
         invoice_items: list[PharmacyInvoiceItem] = []
@@ -1367,9 +1410,10 @@ class PharmacyService:
                 # Legacy mirror sync
                 await self.medicine_repo.update_stock(item.medicine_id, -item.quantity)
 
-        if prescription and deduct_stock:
+        if prescription:
             prescription.status = "completed"
-            prescription.dispensed_at = utc_now()
+            if not prescription.dispensed_at:
+                prescription.dispensed_at = utc_now()
             await self.prescription_repo.update(prescription)
 
         await self.audit_repo.create("create", "pharmacy_invoice", user_id=user_id, resource_id=str(invoice.id))
@@ -1399,6 +1443,21 @@ class PharmacyService:
                 user_id=user_id,
                 hospital_id=invoice.hospital_id,
             )
+
+        try:
+            from app.services.notification_service import NotificationService
+            await NotificationService(self.db).notify_accountants(
+                hospital_id=invoice.hospital_id,
+                title="New Pharmacy Bill Generated",
+                message=f"Pharmacy invoice ({invoice.invoice_number}) of ₹{invoice.total_amount:,.2f} generated.",
+                notification_type="INVOICE_CREATED",
+                reference_type="PHARMACY_INVOICE",
+                reference_id=invoice.id,
+                priority="NORMAL",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to dispatch pharmacy invoice notification to accountants: %s", exc)
 
         return self._invoice_response(invoice)
 
@@ -3138,7 +3197,9 @@ class PharmacyService:
                     await self.db.flush()
 
                     # Create the medicine
-                    medicine = Medicine(hospital_id=hospital_id, sku=sku, inventory_item_id=inv_item.id, **validated_data.model_dump())
+                    val_dict = validated_data.model_dump()
+                    val_dict.pop("hospital_id", None)
+                    medicine = Medicine(hospital_id=hospital_id, sku=sku, inventory_item_id=inv_item.id, **val_dict)
                     medicine = await self.medicine_repo.create(medicine)
 
                     if hospital_id is not None and (medicine.stock_quantity or 0) > 0:

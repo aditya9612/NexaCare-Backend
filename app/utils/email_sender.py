@@ -1,7 +1,9 @@
 import asyncio
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, make_msgid
+import os
 import re
 import smtplib
 
@@ -9,17 +11,53 @@ from app.core.config import settings
 from app.core.logger import logger
 
 
-def _send_sync_email(to: str, subject: str, html_body: str, plain_body: str | None = None) -> bool:
-    if not settings.SMTP_USER or not settings.SMTP_HOST:
-        logger.warning("SMTP not configured; skipping email delivery to %s", to)
+def _send_sync_email(
+    to: str,
+    subject: str,
+    html_body: str,
+    plain_body: str | None = None,
+    attachment_path: str | None = None,
+) -> bool:
+    if not getattr(settings, "ENABLE_EMAIL_OTP", False) and not getattr(settings, "is_production", False):
+        logger.info("ENABLE_EMAIL_OTP is False; skipping email delivery to %s", to)
+        return True
+
+    smtp_user = settings.SMTP_USERNAME or settings.SMTP_USER
+    if not smtp_user or not settings.SMTP_HOST:
+        logger.warning("SMTP not configured (SMTP_HOST or SMTP_USERNAME missing); skipping email delivery to %s", to)
         return False
 
-    from_addr = settings.SMTP_FROM or settings.SMTP_USER
+    from_addr = settings.SMTP_FROM_EMAIL or settings.SMTP_FROM or smtp_user
     sender_name = settings.APP_NAME or "NexaCare"
     smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
 
     try:
-        msg = MIMEMultipart("alternative")
+        if attachment_path and os.path.exists(attachment_path):
+            msg = MIMEMultipart("mixed")
+            body_container = MIMEMultipart("alternative")
+            if plain_body:
+                body_container.attach(MIMEText(plain_body, "plain", "utf-8"))
+            else:
+                clean_text = re.sub(r"<[^>]+>", " ", html_body)
+                clean_text = re.sub(r"\s+", " ", clean_text).strip()
+                body_container.attach(MIMEText(clean_text, "plain", "utf-8"))
+            body_container.attach(MIMEText(html_body, "html", "utf-8"))
+            msg.attach(body_container)
+
+            with open(attachment_path, "rb") as f:
+                part = MIMEApplication(f.read(), Name=os.path.basename(attachment_path))
+            part["Content-Disposition"] = f'attachment; filename="{os.path.basename(attachment_path)}"'
+            msg.attach(part)
+        else:
+            msg = MIMEMultipart("alternative")
+            if plain_body:
+                msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+            else:
+                clean_text = re.sub(r"<[^>]+>", " ", html_body)
+                clean_text = re.sub(r"\s+", " ", clean_text).strip()
+                msg.attach(MIMEText(clean_text, "plain", "utf-8"))
+            msg.attach(MIMEText(html_body, "html", "utf-8"))
+
         msg["From"] = formataddr((sender_name, from_addr))
         msg["To"] = to
         msg["Subject"] = subject
@@ -29,17 +67,6 @@ def _send_sync_email(to: str, subject: str, html_body: str, plain_body: str | No
         msg["Auto-Submitted"] = "auto-generated"
         msg["X-Auto-Response-Suppress"] = "All"
         msg["MIME-Version"] = "1.0"
-
-        # Attach plain-text fallback first
-        if plain_body:
-            msg.attach(MIMEText(plain_body, "plain", "utf-8"))
-        else:
-            clean_text = re.sub(r"<[^>]+>", " ", html_body)
-            clean_text = re.sub(r"\s+", " ", clean_text).strip()
-            msg.attach(MIMEText(clean_text, "plain", "utf-8"))
-
-        # Attach HTML content
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
 
         # 1. Attempt STARTTLS on configured port (e.g. 587)
         try:
@@ -76,9 +103,15 @@ def _send_sync_email(to: str, subject: str, html_body: str, plain_body: str | No
         return False
 
 
-async def send_email(to: str, subject: str, body: str, plain_body: str | None = None) -> bool:
+async def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    plain_body: str | None = None,
+    attachment_path: str | None = None,
+) -> bool:
     """
     Asynchronously send an email using Gmail SMTP via asyncio.to_thread
-    to prevent blocking the event loop.
+    to prevent blocking the event loop. Supports optional file attachments (e.g. PDF reports).
     """
-    return await asyncio.to_thread(_send_sync_email, to, subject, body, plain_body)
+    return await asyncio.to_thread(_send_sync_email, to, subject, body, plain_body, attachment_path)

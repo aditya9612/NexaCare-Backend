@@ -77,8 +77,20 @@ from app.models.discharge_model import Discharge
 from app.models.room_tariff_model import RoomTariff
 from app.models.transaction_history_model import TransactionHistory
 from app.models.final_bill_model import IPDFinalBill, IPDFinalBillItem
+from app.models.email_model import (
+    EmailBatch,
+    EmailCampaign,
+    EmailDelivery,
+    EmailMessage,
+    EmailTemplate,
+)
  
 __all__ = [
+    "EmailBatch",
+    "EmailCampaign",
+    "EmailDelivery",
+    "EmailMessage",
+    "EmailTemplate",
     "Discharge",
     "RoomTariff",
     "TransactionHistory",

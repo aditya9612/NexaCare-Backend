@@ -105,14 +105,14 @@ async def test_dispense_prescription_properly_reserved(mock_service):
     mock_service.medicine_repo.update_stock = AsyncMock()
     mock_service.prescription_repo.update = AsyncMock()
 
-    request_data = PrescriptionDispenseRequest(payment_mode="Cash", payment_status="paid")
+    request_data = PrescriptionDispenseRequest(generate_invoice=True, payment_mode="Cash", payment_status="paid")
     result = await mock_service.dispense_prescription(3, user_id=1, data=request_data)
 
     # Should release reservation directly (-5) without needing reconciliation (+5)
     mock_service.medicine_repo.update_reserved_stock.assert_called_once_with(40, -5)
     mock_service.medicine_repo.update_stock.assert_called_once_with(40, -5)
     assert item.dispensed_quantity == 5
-    assert rx.status == "completed"
+    assert rx.status == "dispensed"
     assert rx.dispensed_at is not None
     assert result["invoice"] == {"invoice_number": "PHR-001"}
 
@@ -144,7 +144,7 @@ async def test_dispense_prescription_missing_reservation_reconciles_safely(mock_
     # Step 3: Physical stock deducted
     mock_service.medicine_repo.update_stock.assert_called_once_with(40, -5)
     assert item.dispensed_quantity == 5
-    assert rx.status == "completed"
+    assert rx.status == "dispensed"
 
 
 # =====================================================================

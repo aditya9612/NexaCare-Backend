@@ -534,10 +534,12 @@ class BedAllocationService:
                 select(Appointment)
                 .where(
                     Appointment.patient_id == patient.id,
-                    Appointment.appointment_type == AppointmentType.IPD.value,
-                    (Appointment.admission_recommended == True)
-                    | (Appointment.admission_status.in_([AdmissionStatus.ADMIT_RECOMMENDED, AdmissionStatus.ADMITTED]))
-                    | (Appointment.appointment_status.in_([AppointmentStatus.ADMIT_RECOMMENDED, AppointmentStatus.ADMITTED]))
+                    (
+                        (Appointment.appointment_type == AppointmentType.IPD.value)
+                        | (Appointment.admission_recommended == True)
+                        | (Appointment.admission_status.in_([AdmissionStatus.ADMIT_RECOMMENDED, AdmissionStatus.ADMITTED]))
+                        | (Appointment.appointment_status.in_([AppointmentStatus.ADMIT_RECOMMENDED, AppointmentStatus.ADMITTED]))
+                    )
                 )
             )
             if effective_hospital_id is not None:
@@ -583,20 +585,24 @@ class BedAllocationService:
         appt_type_raw = appointment.appointment_type or ""
         appt_type_norm = appt_type_raw.strip().upper()
         if appt_type_norm != AppointmentType.IPD.value:
-            if appt_type_raw.strip().lower() in ("follow-up", "followup", "follow up"):
-                raise BadRequestException(
-                    "Bed allocation is not allowed for Follow-up appointments. "
-                    "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
-                )
-            elif appt_type_norm == AppointmentType.OPD.value:
-                raise BadRequestException(
-                    "Bed allocation is not allowed for OPD appointments. "
-                    "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
-                )
+            if appointment.admission_recommended or (appointment.admission_status or "").strip().lower() in ("admit recommended", "admit_recommended"):
+                appointment.appointment_type = AppointmentType.IPD.value
+                appt_type_norm = AppointmentType.IPD.value
             else:
-                raise BadRequestException(
-                    f"Bed allocation is only allowed for IPD appointments. Current appointment type: {appointment.appointment_type or 'None'}."
-                )
+                if appt_type_raw.strip().lower() in ("follow-up", "followup", "follow up"):
+                    raise BadRequestException(
+                        "Bed allocation is not allowed for Follow-up appointments. "
+                        "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
+                    )
+                elif appt_type_norm == AppointmentType.OPD.value:
+                    raise BadRequestException(
+                        "Bed allocation is not allowed for OPD appointments. "
+                        "Bed allocation is permitted ONLY when the appointment type is IPD and admission has been recommended."
+                    )
+                else:
+                    raise BadRequestException(
+                        f"Bed allocation is only allowed for IPD appointments. Current appointment type: {appointment.appointment_type or 'None'}."
+                    )
 
         status_norm = (appointment.appointment_status or "").strip().lower()
         adm_status_norm = (appointment.admission_status or "").strip().lower()

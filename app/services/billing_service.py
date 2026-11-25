@@ -285,14 +285,16 @@ class BillingService:
         if not patient:
             raise NotFoundException("Patient not found")
 
-        if data.appointment_id is not None:
+        appointment_id = data.appointment_id if (data.appointment_id and data.appointment_id > 0) else None
+
+        if appointment_id is not None:
             from sqlalchemy import select
             from app.models.appointment_model import Appointment
-            stmt = select(Appointment).where(Appointment.id == data.appointment_id)
+            stmt = select(Appointment).where(Appointment.id == appointment_id)
             apt_result = await self.db.execute(stmt)
             appointment = apt_result.scalar_one_or_none()
             if not appointment:
-                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+                raise NotFoundException(f"Appointment with ID {appointment_id} not found")
             
             if appointment.patient_id != data.patient_id:
                 raise BadRequestException("Appointment does not belong to the supplied patient")
@@ -319,7 +321,7 @@ class BillingService:
                     "Billing can only be created for completed appointments."
                 )
 
-            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
+            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, appointment_id)
             if existing_billing:
                 raise ConflictException("Billing already exists for this patient and appointment.")
 
@@ -342,7 +344,7 @@ class BillingService:
             due_date=due_date,
             notes=data.notes,
             insurance_id=None,
-            appointment_id=data.appointment_id,
+            appointment_id=appointment_id,
             created_by=user_id,
         )
         billing = await self.repo.create(billing)
@@ -1344,7 +1346,7 @@ class BillingService:
                     "hospital_phone": hospital_phone,
                     "hospital_email": hospital_email,
                     "hospital_website": hospital_website,
-                    "hospital_logo": hospital_logo or logo_data_uri,
+                    "hospital_logo": logo_data_uri or None,
                     "logo_data_uri": logo_data_uri,
                     "logo_base64": logo_base64,
                     "patient_name": patient_name,
@@ -1415,9 +1417,9 @@ class BillingService:
                 "hospital_phone": hospital_phone,
                 "hospital_email": hospital_email,
                 "hospital_website": hospital_website,
-                    "hospital_logo": hospital_logo or logo_data_uri,
-                    "logo_data_uri": logo_data_uri,
-                    "logo_base64": logo_base64,
+                "hospital_logo": logo_data_uri or None,
+                "logo_data_uri": logo_data_uri,
+                "logo_base64": logo_base64,
                 "patient_name": patient_name,
                 "patient_phone": patient_phone,
                 "patient_email": patient_email,

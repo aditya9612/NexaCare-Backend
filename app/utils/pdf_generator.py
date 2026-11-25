@@ -35,30 +35,43 @@ def html_to_pdf(html_content: str) -> bytes:
             dejavu_path = (font_dir / "DejaVuSans.ttf").as_posix()
             noto_path = (font_dir / "NotoSansDevanagari-Regular.ttf").as_posix()
             
+            dejavu_url = f"file://{dejavu_path}" if dejavu_path.startswith("/") else f"file:///{dejavu_path}"
+            noto_url = f"file://{noto_path}" if noto_path.startswith("/") else f"file:///{noto_path}"
+
             font_css = f'''
             <style>
             @font-face {{
                 font-family: 'DejaVuSans';
-                src: url('file:///{dejavu_path}') format('truetype');
+                src: url('{dejavu_url}') format('truetype');
             }}
             @font-face {{
                 font-family: 'NotoSansDevanagari';
-                src: url('file:///{noto_path}') format('truetype');
+                src: url('{noto_url}') format('truetype');
             }}
             </style>
             '''
             
-            nonlocal html_content
-            if '</head>' in html_content:
-                html_content = html_content.replace('</head>', font_css + '</head>')
+            processed_html = html_content
+            if '</head>' in processed_html:
+                processed_html = processed_html.replace('</head>', font_css + '</head>')
             else:
-                html_content = font_css + html_content
+                processed_html = font_css + processed_html
 
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-zygote",
+                        "--allow-file-access-from-files",
+                    ]
+                )
                 try:
                     page = await browser.new_page()
-                    await page.set_content(html_content, wait_until='networkidle')
+                    await page.set_content(processed_html, wait_until='load', timeout=30000)
                     
                     pdf_data = await page.pdf(
                         prefer_css_page_size=True,
@@ -74,60 +87,72 @@ def html_to_pdf(html_content: str) -> bytes:
         except Exception as e:
             exc = e
 
-    t = threading.Thread(target=worker)
+    t = threading.Thread(target=worker, daemon=True)
     t.start()
-    t.join()
+    t.join(timeout=5)
 
-    if exc:
+    if t.is_alive():
+        logger.warning("Playwright PDF generation timed out after 5s. Falling back to xhtml2pdf.")
+        exc = TimeoutError("Playwright PDF generation timed out")
+
+    if exc or not pdf_bytes:
+        logger.warning("Playwright PDF generation failed: %s. Falling back to xhtml2pdf.", exc)
         try:
             import io
             from xhtml2pdf import pisa
             result = io.BytesIO()
             pdf = pisa.pisaDocument(io.StringIO(html_content), result)
             if not pdf.err:
+                logger.info("xhtml2pdf successfully generated PDF fallback.")
                 return result.getvalue()
-        except Exception:
-            pass
-        raise Exception("PDF generation failed") from exc
+            else:
+                logger.error("xhtml2pdf failed with err=%s", pdf.err)
+        except Exception as pisa_exc:
+            logger.error("xhtml2pdf fallback exception: %s", pisa_exc)
+        raise Exception(f"PDF generation failed: {exc}") from exc
     
     return pdf_bytes
 
 
-def resolve_logo_as_data_uri(logo_path: str | None) -> str | None:
+def resolve_logo_as_data_uri(logo_path: str | None, fallback: bool = True) -> str | None:
     """
     Converts a local image path or existing data URI to a Base64 Data URI.
     Supports PNG, JPG, and JPEG files.
     Verifies that the file exists before reading.
-    Returns None if logo_path is missing, invalid, or file does not exist.
+    Returns default logo if logo_path is missing/invalid and fallback=True.
+    Returns None if logo cannot be resolved.
     """
-    if not logo_path or not isinstance(logo_path, str):
-        return None
-
-    stripped_path = logo_path.strip()
-    if not stripped_path:
-        return None
-
-    if stripped_path.startswith("data:"):
-        return stripped_path
-
     import base64
     import mimetypes
     import os
 
-    norm_path = stripped_path.lstrip("/\\")
-    candidates = [
-        stripped_path,
-        norm_path,
-        os.path.join("app", norm_path),
-        os.path.abspath(stripped_path),
-        os.path.abspath(norm_path),
-        os.path.abspath(os.path.join("app", norm_path)),
-    ]
     resolved = None
-    for c in candidates:
-        if os.path.exists(c) and os.path.isfile(c):
-            resolved = c
-            break
+
+    if logo_path and isinstance(logo_path, str):
+        stripped_path = logo_path.strip()
+        if stripped_path and stripped_path.lower() not in ("string", "none", "null", "undefined", "false"):
+            if stripped_path.startswith("data:"):
+                return stripped_path
+
+            norm_path = stripped_path.lstrip("/\\")
+            candidates = [
+                stripped_path,
+                norm_path,
+                os.path.join("app", norm_path),
+                os.path.abspath(stripped_path),
+                os.path.abspath(norm_path),
+                os.path.abspath(os.path.join("app", norm_path)),
+            ]
+            for c in candidates:
+                if os.path.exists(c) and os.path.isfile(c):
+                    resolved = c
+                    break
+
+    if not resolved and fallback:
+        for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
+            if os.path.exists(fb) and os.path.isfile(fb):
+                resolved = os.path.abspath(fb)
+                break
 
     if not resolved:
         return None
@@ -154,7 +179,10 @@ def resolve_logo_as_data_uri(logo_path: str | None) -> str | None:
 async def generate_invoice_html(bill_number: str, data: dict) -> str:
     template = env.get_template("invoice_template.html")
     render_data = dict(data)
-    render_data["hospital_logo"] = resolve_logo_as_data_uri(render_data.get("hospital_logo"))
+    logo_uri = resolve_logo_as_data_uri(render_data.get("logo_data_uri") or render_data.get("hospital_logo"))
+    render_data["hospital_logo"] = logo_uri
+    render_data["logo_data_uri"] = logo_uri
+    render_data["logo_base64"] = logo_uri.split(",", 1)[1] if (logo_uri and "," in logo_uri) else None
     html = template.render(invoice_number=bill_number, **render_data)
     output_dir = _ensure_output_dir("invoices")
     file_path = output_dir / f"{bill_number}.html"
@@ -166,7 +194,10 @@ async def generate_invoice_html(bill_number: str, data: dict) -> str:
 async def generate_invoice_pdf(bill_number: str, data: dict) -> tuple[str, bytes]:
     template = env.get_template("invoice_template.html")
     render_data = dict(data)
-    render_data["hospital_logo"] = resolve_logo_as_data_uri(render_data.get("hospital_logo"))
+    logo_uri = resolve_logo_as_data_uri(render_data.get("logo_data_uri") or render_data.get("hospital_logo"))
+    render_data["hospital_logo"] = logo_uri
+    render_data["logo_data_uri"] = logo_uri
+    render_data["logo_base64"] = logo_uri.split(",", 1)[1] if (logo_uri and "," in logo_uri) else None
     html = template.render(invoice_number=bill_number, **render_data)
     pdf_bytes = await run_in_threadpool(html_to_pdf, html)
     output_dir = _ensure_output_dir("invoices")

@@ -110,6 +110,31 @@ async def init_db():
                 "ALTER TABLE room_tariffs ADD COLUMN hospital_id INT NULL",
                 "ALTER TABLE room_tariffs DROP INDEX ix_room_tariffs_room_type",
                 "ALTER TABLE room_tariffs ADD UNIQUE KEY uq_room_tariffs_hospital_room_type (hospital_id, room_type)",
+                "ALTER TABLE roles ADD COLUMN hospital_id INT NULL",
+                "ALTER TABLE roles ADD COLUMN base_role_type VARCHAR(50) NULL",
+                "ALTER TABLE roles ADD COLUMN is_system TINYINT(1) NOT NULL DEFAULT 0",
+                """CREATE TABLE IF NOT EXISTS role_permission_overrides (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    hospital_id INT NOT NULL,
+                    role_id INT NOT NULL,
+                    permission_id INT NOT NULL,
+                    is_granted TINYINT(1) NOT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_hospital_role_override (hospital_id, role_id, permission_id),
+                    KEY ix_role_overrides_lookup (hospital_id, role_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;""",
+                """CREATE TABLE IF NOT EXISTS hospital_modules (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    hospital_id INT NOT NULL,
+                    module_code VARCHAR(100) NOT NULL,
+                    is_active TINYINT(1) NOT NULL DEFAULT 1,
+                    status VARCHAR(50) NOT NULL DEFAULT 'active',
+                    activated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_hospital_module (hospital_id, module_code),
+                    KEY ix_hospital_modules_lookup (hospital_id, is_active)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;""",
             ]:
                 try:
                     await session.execute(text(col_stmt))
@@ -184,6 +209,7 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         "billing", "pharmacy", "lab", "inventory",
         "ai_chat", "voice_reminder", "whatsapp", "analytics", "departments",
         "bed_allocation", "icu_telemetry", "expense", "vendor",
+        "discharges", "email", "clinical_records",
     ]
     actions = [
         PermissionAction.CREATE,
@@ -259,6 +285,9 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         _grant(doc_role, "bed_allocation", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.ASSIGN])
         _grant(doc_role, "icu_telemetry", [PermissionAction.READ, PermissionAction.UPDATE])
         _grant(doc_role, "ai_chat", [PermissionAction.CREATE, PermissionAction.READ])
+        _grant(doc_role, "billing", [PermissionAction.READ])
+        _grant(doc_role, "discharges", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.APPROVE])
+        _grant(doc_role, "clinical_records", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
 
     # 3. Receptionist Role Permissions
     rec_role = roles.get(UserRole.RECEPTIONIST)
@@ -271,6 +300,8 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         _grant(rec_role, "billing", [PermissionAction.CREATE, PermissionAction.READ])
         _grant(rec_role, "bed_allocation", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE, PermissionAction.ASSIGN])
         _grant(rec_role, "dashboard", [PermissionAction.READ])
+        _grant(rec_role, "pharmacy", [PermissionAction.READ])
+        _grant(rec_role, "discharges", [PermissionAction.READ])
 
     # 4. Nurse Role Permissions
     nurse_role = roles.get(UserRole.NURSE)
@@ -284,6 +315,9 @@ async def _seed_roles_and_permissions(session: AsyncSession) -> None:
         _grant(nurse_role, "icu_telemetry", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
         _grant(nurse_role, "pharmacy", [PermissionAction.READ])
         _grant(nurse_role, "dashboard", [PermissionAction.READ])
+        _grant(nurse_role, "billing", [PermissionAction.READ])
+        _grant(nurse_role, "discharges", [PermissionAction.READ])
+        _grant(nurse_role, "clinical_records", [PermissionAction.CREATE, PermissionAction.READ, PermissionAction.UPDATE])
 
     # 5. Accountant Role Permissions
     acc_role = roles.get(UserRole.ACCOUNTANT)

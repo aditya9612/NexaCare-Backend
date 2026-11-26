@@ -273,12 +273,15 @@ class BillingService:
         return await self.repo.update(billing)
 
     async def create(self, data: BillingCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> BillingResponse:
-        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        from app.core.dependencies import resolve_tenant_id
         target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
         if target_hospital_id is None:
             raise BadRequestException("Target hospital tenant must be specified for billing creation.")
-        if getattr(data, "hospital_id", None) is not None:
-            validate_tenant_body_match(data.hospital_id, target_hospital_id)
+        if getattr(data, "hospital_id", None) is not None and data.hospital_id != target_hospital_id:
+            raise BadRequestException(
+                f"Conflicting hospital_id in request body ({data.hospital_id}) "
+                f"does not match authorized hospital context ({target_hospital_id})"
+            )
         hospital_id = target_hospital_id
 
         patient = await self.patient_repo.get_by_id(data.patient_id, hospital_id=hospital_id)
@@ -716,7 +719,7 @@ class BillingService:
         return self._to_response(billing)
 
     async def update(self, billing_id: int, data: BillingUpdate, user_id: int, current_user = None, hospital_id: int | None = None) -> BillingResponse:
-        from app.core.dependencies import resolve_tenant_id, validate_tenant_body_match
+        from app.core.dependencies import resolve_tenant_id
         target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
         hospital_id = target_hospital_id
         billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
@@ -1279,10 +1282,28 @@ class BillingService:
 
         return PaymentResponse.model_validate(payment)
 
-    async def generate_invoice(self, billing_id: int, user_id: int, current_user = None) -> tuple[str, bytes]:
+    async def generate_invoice(self, billing_id: int, user_id: int, current_user = None, source: str | None = None) -> tuple[str, bytes]:
         hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
-        if not billing:
+
+        billing = None
+        invoice = None
+        test_order = None
+
+        if source == "lab":
+            from app.models.lab_model import TestOrder, LabTest
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt_lab = select(TestOrder).where(
+                TestOrder.id == billing_id,
+                TestOrder.is_deleted == False
+            ).options(selectinload(TestOrder.lab_test))
+            if hospital_id is not None:
+                stmt_lab = stmt_lab.where(TestOrder.hospital_id == hospital_id)
+            res_lab = await self.db.execute(stmt_lab)
+            test_order = res_lab.scalar_one_or_none()
+            if not test_order:
+                raise NotFoundException("Billing record not found")
+        elif source == "pharmacy":
             from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
             from sqlalchemy import select
             from sqlalchemy.orm import selectinload
@@ -1298,6 +1319,121 @@ class BillingService:
             invoice = res.scalar_one_or_none()
             if not invoice:
                 raise NotFoundException("Billing record not found")
+        elif source == "billing":
+            billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+            if not billing:
+                raise NotFoundException("Billing record not found")
+        else:
+            # Fallback across billing -> pharmacy -> lab
+            billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+            if not billing:
+                from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+                from sqlalchemy import select
+                from sqlalchemy.orm import selectinload
+                stmt = select(PharmacyInvoice).where(
+                    PharmacyInvoice.id == billing_id,
+                    PharmacyInvoice.is_deleted == False
+                ).options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+                if hospital_id is not None:
+                    stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+                res = await self.db.execute(stmt)
+                invoice = res.scalar_one_or_none()
+                if not invoice:
+                    from app.models.lab_model import TestOrder, LabTest
+                    stmt_lab = select(TestOrder).where(
+                        TestOrder.id == billing_id,
+                        TestOrder.is_deleted == False
+                    ).options(selectinload(TestOrder.lab_test))
+                    if hospital_id is not None:
+                        stmt_lab = stmt_lab.where(TestOrder.hospital_id == hospital_id)
+                    res_lab = await self.db.execute(stmt_lab)
+                    test_order = res_lab.scalar_one_or_none()
+                    if not test_order:
+                        raise NotFoundException("Billing record not found")
+
+        if test_order:
+            issuing_hospital_id = getattr(test_order, "hospital_id", None) or hospital_id
+            hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
+
+            if hospital and hasattr(hospital, "name") and hospital.name:
+                hospital_name = (hospital.name or "").strip()
+                hospital_address = (hospital.address or "").strip() if hospital.address else ""
+                hospital_phone = (hospital.phone or "").strip() if hospital.phone else ""
+                hospital_email = (hospital.email or "").strip() if hospital.email else ""
+                hospital_website = (hospital.website or "").strip() if getattr(hospital, "website", None) else ""
+                hospital_logo = getattr(hospital, "logo_path", None)
+                from app.utils.pdf_generator import resolve_logo_as_data_uri
+                logo_data_uri = resolve_logo_as_data_uri(hospital_logo)
+                logo_base64 = logo_data_uri.split(",", 1)[1] if (logo_data_uri and "," in logo_data_uri) else None
+            else:
+                hospital_name = ""
+                hospital_address = ""
+                hospital_phone = ""
+                hospital_email = ""
+                hospital_website = ""
+                hospital_logo = None
+                logo_data_uri = None
+                logo_base64 = None
+
+            patient = await self.patient_repo.get_by_id(test_order.patient_id) if test_order.patient_id else None
+            patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+            patient_phone = patient.phone if patient else "-"
+            patient_email = patient.email if patient else "-"
+
+            test = test_order.lab_test if hasattr(test_order, "lab_test") and test_order.lab_test else None
+            test_name = test.test_name if test else f"Lab Test #{test_order.lab_test_id}"
+            test_price = float(test.price) if test and test.price is not None else 0.0
+
+            order_status = str(test_order.status or "").lower()
+            bill_status = "Paid" if order_status in ("completed", "verified", "approved") else "Pending"
+            paid_amt = test_price if bill_status == "Paid" else 0.0
+            balance_amt = 0.0 if bill_status == "Paid" else test_price
+
+            items = [
+                {
+                    "description": f"Lab Test: {test_name}",
+                    "quantity": 1,
+                    "unit_price": f"{test_price:.2f}",
+                    "gst_rate": "0.0",
+                    "line_total": f"{test_price:.2f}",
+                }
+            ]
+
+            path, pdf_bytes = await generate_invoice_pdf(
+                test_order.order_number,
+                {
+                    "hospital_name": hospital_name,
+                    "hospital_address": hospital_address,
+                    "hospital_phone": hospital_phone,
+                    "hospital_email": hospital_email,
+                    "hospital_website": hospital_website,
+                    "hospital_logo": logo_data_uri or None,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
+                    "patient_name": patient_name,
+                    "patient_phone": patient_phone,
+                    "patient_email": patient_email,
+                    "date": (test_order.ordered_at or test_order.created_at or utc_now()).strftime("%Y-%m-%d"),
+                    "items": items,
+                    "subtotal": f"{test_price:.2f}",
+                    "discount_percent": "0.0",
+                    "discount_amount": "0.00",
+                    "gst_rate": "0.0",
+                    "gst_amount": "0.00",
+                    "tax_amount": "0.00",
+                    "total_amount": f"{test_price:.2f}",
+                    "paid_amount": f"{paid_amt:.2f}",
+                    "balance_amount": f"{balance_amt:.2f}",
+                    "status": bill_status,
+                    "notes": f"Lab Test Order ({test_order.order_number}) - Priority: {test_order.priority or 'Normal'}",
+                },
+            )
+            await self.audit_repo.create("export", "lab_invoice", user_id=user_id, resource_id=str(test_order.id))
+            return path, pdf_bytes
+
+        if invoice:
 
             issuing_hospital_id = getattr(invoice, "hospital_id", None) or hospital_id
             hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None

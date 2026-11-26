@@ -8,6 +8,22 @@ from app.core.dependencies import (
     DbSession,
     TenantWriteHospitalId,
     require_permission,
+)
+try:
+    from app.core.dependencies import validate_tenant_body_match
+except ImportError:
+    def validate_tenant_body_match(body_id: int | None, tenant_id: int) -> int:
+        if body_id is not None and tenant_id is not None and body_id != tenant_id:
+            from app.core.exceptions import BadRequestException
+            raise BadRequestException(
+                f"Conflicting hospital_id in request body ({body_id}) does not match authorized hospital context ({tenant_id})"
+            )
+        return tenant_id
+from app.core.dependencies import (
+    CurrentUser,
+    DbSession,
+    TenantWriteHospitalId,
+    require_permission,
     validate_tenant_body_match,
 )
 from app.models.user_model import User
@@ -56,6 +72,7 @@ async def upload_billing_bulk(
     current_user: CurrentUser,
     file: UploadFile = File(...),
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "create")),
 ):
     if not file.filename.endswith(".xlsx"):
@@ -64,6 +81,7 @@ async def upload_billing_bulk(
             detail="Unsupported file format. Only .xlsx files are supported."
         )
         
+    result = await BillingService(db).import_billing_from_excel(file, current_user.id, current_user=current_user, hospital_id=hospital_id)
     result = await BillingService(db).import_billing_from_excel(file, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Billings bulk upload processed", data=result)
 
@@ -114,8 +132,11 @@ async def create_billing(
     db: DbSession,
     current_user: CurrentUser,
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "create")),
 ):
+    validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
+    billing = await BillingService(db).create(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     validate_tenant_body_match(getattr(data, "hospital_id", None), hospital_id)
     billing = await BillingService(db).create(data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Bill created successfully", data=billing)
@@ -254,8 +275,10 @@ async def update_billing(
     db: DbSession,
     current_user: CurrentUser,
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
+    billing = await BillingService(db).update(billing_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     billing = await BillingService(db).update(billing_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Bill updated", data=billing)
 
@@ -267,8 +290,10 @@ async def cancel_billing(
     db: DbSession,
     current_user: CurrentUser,
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
+    billing = await BillingService(db).cancel(billing_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     billing = await BillingService(db).cancel(billing_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Bill cancelled successfully", data=billing)
 
@@ -278,8 +303,10 @@ async def delete_billing(
     db: DbSession,
     current_user: CurrentUser,
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "delete")),
 ):
+    await BillingService(db).delete(billing_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     await BillingService(db).delete(billing_id, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Bill deleted", data=MessageResponse(message="Soft deleted"))
 
@@ -291,8 +318,10 @@ async def collect_payment(
     db: DbSession,
     current_user: CurrentUser,
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "update")),
 ):
+    payment = await BillingService(db).collect_payment(billing_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     payment = await BillingService(db).collect_payment(billing_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Payment collected", data=payment)
 
@@ -304,8 +333,10 @@ async def process_refund(
     db: DbSession,
     current_user: CurrentUser,
     hospital_id: TenantWriteHospitalId = None,
+    hospital_id: TenantWriteHospitalId = None,
     _: User = Depends(require_permission("billing", "approve")),
 ):
+    payment = await BillingService(db).process_refund(billing_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     payment = await BillingService(db).process_refund(billing_id, data, current_user.id, current_user=current_user, hospital_id=hospital_id)
     return APIResponse(message="Refund processed", data=payment)
 
@@ -315,23 +346,18 @@ async def download_invoice(
     billing_id: int,
     db: DbSession,
     current_user: CurrentUser,
+    source: str | None = Query(None, description="Optional bill source ('billing', 'pharmacy', 'lab')"),
     _: User = Depends(require_permission("billing", "export")),
 ):
-    _, pdf_bytes = await BillingService(db).generate_invoice(billing_id, current_user.id, current_user=current_user)
-    print("DEBUG: type(pdf_bytes) =", type(pdf_bytes))
-    if isinstance(pdf_bytes, bytes):
-        print("DEBUG: len(pdf_bytes) =", len(pdf_bytes))
-        print("DEBUG: pdf_bytes starts with:", pdf_bytes[:20])
-    else:
-        print("DEBUG: pdf_bytes value:", str(pdf_bytes)[:100])
-
-    response = Response(
+    import os
+    path, pdf_bytes = await BillingService(db).generate_invoice(
+        billing_id, current_user.id, current_user=current_user, source=source
+    )
+    filename = os.path.basename(path) if path else f"invoice_{billing_id}.pdf"
+    return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=invoice_{billing_id}.pdf"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         }
     )
-    print("DEBUG: response.media_type =", response.media_type)
-    print("DEBUG: response.headers =", dict(response.headers))
-    return response

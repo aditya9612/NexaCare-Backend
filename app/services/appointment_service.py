@@ -1131,23 +1131,60 @@ class AppointmentService:
         if not is_checked_in:
             raise BadRequestException("Appointment must be checked in first")
 
-        # Enforce that patient cannot check out before the appointment start time (unless already completed by doctor)
+        # Check if consultation has been conducted / completed
+        is_consultation_completed = (
+            appointment.queue_status in ("COMPLETED", "CALLED", "IN_PROGRESS", "IN_CONSULTATION")
+            or status in (
+                AppointmentStatus.COMPLETED,
+                "Completed",
+                "completed",
+                "In-Progress",
+                "in-progress",
+                AppointmentStatus.ADMITTED,
+                "Admitted",
+                AppointmentStatus.ADMIT_RECOMMENDED,
+                "Admit Recommended",
+                "admit recommended",
+            )
+            or bool(appointment.admission_recommended or appointment.disposition)
+        )
+
+        if not is_consultation_completed:
+            from sqlalchemy import select, func
+            from app.models.clinical_record_model import ClinicalRecord
+            from app.models.doctor_model import DoctorMedicalRecord
+            from app.models.pharmacy_model import Prescription
+
+            has_clinical = await self.db.scalar(
+                select(func.count(ClinicalRecord.id)).where(ClinicalRecord.appointment_id == appointment.id)
+            ) or 0
+            has_medical = await self.db.scalar(
+                select(func.count(DoctorMedicalRecord.id)).where(DoctorMedicalRecord.appointment_id == appointment.id)
+            ) or 0
+            has_rx = await self.db.scalar(
+                select(func.count(Prescription.id)).where(Prescription.appointment_id == appointment.id)
+            ) or 0
+
+            if has_clinical > 0 or has_medical > 0 or has_rx > 0:
+                is_consultation_completed = True
+
+        # Enforce that patient cannot check out before the appointment start time without completed consultation
         if (
             appointment.appointment_date
             and appointment.appointment_time
-            and appointment.queue_status != "COMPLETED"
-            and status not in ("Completed", "completed", AppointmentStatus.COMPLETED)
+            and not is_consultation_completed
         ):
             from datetime import timezone, timedelta
             ist_tz = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist_tz).replace(tzinfo=None)
             appt_start_datetime = datetime.combine(appointment.appointment_date, appointment.appointment_time)
             if now_ist < appt_start_datetime:
-                raise BadRequestException("Patient cannot check out before the appointment start time")
+                raise BadRequestException("Patient cannot check out before the appointment start time without completed consultation")
 
-        appointment.appointment_status = "Checked-Out"
+        if appointment.appointment_status not in (AppointmentStatus.ADMITTED, "Admitted"):
+            appointment.appointment_status = AppointmentStatus.COMPLETED
         appointment.check_out_time = datetime.now()
-        if not appointment.queue_status or appointment.queue_status in ("WAITING", "CALLED", "IN_PROGRESS"):
+        if not appointment.queue_status or appointment.queue_status in ("WAITING", "CALLED", "IN_PROGRESS", "IN_CONSULTATION"):
             appointment.queue_status = "COMPLETED"
 
         await self.db.flush()
@@ -1291,11 +1328,12 @@ class AppointmentService:
         if not appointment.check_in_time or not appointment.queue_token:
             raise BadRequestException("Appointment must be checked in before completing token.")
 
-        if not appointment.check_out_time and status not in ("Checked-Out", "Checked_Out", "checked-out", "checked_out"):
+        if not appointment.check_out_time and status not in ("Checked-Out", "Checked_Out", "checked-out", "checked_out", AppointmentStatus.COMPLETED, "Completed", "completed"):
             raise BadRequestException("Please check out the appointment first before completing it.")
 
         appointment.queue_status = "COMPLETED"
-        appointment.appointment_status = AppointmentStatus.COMPLETED
+        if appointment.appointment_status not in (AppointmentStatus.ADMITTED, "Admitted"):
+            appointment.appointment_status = AppointmentStatus.COMPLETED
             
         await self.db.flush()
         return appointment

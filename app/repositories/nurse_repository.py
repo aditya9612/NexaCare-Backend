@@ -731,23 +731,110 @@ class NursePatientVitalRepository:
         await self.db.refresh(vital)
         return vital
 
+    def _apply_filters(
+        self,
+        query,
+        patient_id: int,
+        search: str | None = None,
+        status: str | None = None,
+    ):
+        from sqlalchemy import and_, cast, func, or_, String
+        from app.models.nurse_model import Nurse
+        from app.models.user_model import User
+
+        query = query.where(PatientVital.patient_id == patient_id)
+
+        if search and str(search).strip():
+            term = f"%{str(search).strip().lower()}%"
+            raw_s = str(search).strip().lower()
+
+            conditions = [
+                func.lower(PatientVital.notes).like(term),
+                func.lower(PatientVital.blood_pressure).like(term),
+                func.lower(User.full_name).like(term),
+                cast(PatientVital.temperature, String).like(term),
+                cast(PatientVital.pulse_rate, String).like(term),
+                cast(PatientVital.oxygen_saturation, String).like(term),
+            ]
+
+            if "abnormal" in raw_s:
+                conditions.append(
+                    or_(
+                        PatientVital.temperature < 36.5,
+                        PatientVital.temperature > 37.5,
+                        PatientVital.pulse_rate < 60,
+                        PatientVital.pulse_rate > 100,
+                        PatientVital.oxygen_saturation < 95.0,
+                        PatientVital.oxygen_saturation > 100.0,
+                    )
+                )
+            elif "normal" in raw_s:
+                conditions.append(
+                    and_(
+                        PatientVital.temperature >= 36.5,
+                        PatientVital.temperature <= 37.5,
+                        PatientVital.pulse_rate >= 60,
+                        PatientVital.pulse_rate <= 100,
+                        PatientVital.oxygen_saturation >= 95.0,
+                        PatientVital.oxygen_saturation <= 100.0,
+                    )
+                )
+
+            query = query.outerjoin(Nurse, PatientVital.nurse_id == Nurse.id).outerjoin(
+                User, Nurse.user_id == User.id
+            ).where(or_(*conditions))
+
+        if status and str(status).strip():
+            raw_st = str(status).strip().lower()
+            if raw_st == "abnormal":
+                query = query.where(
+                    or_(
+                        PatientVital.temperature < 36.5,
+                        PatientVital.temperature > 37.5,
+                        PatientVital.pulse_rate < 60,
+                        PatientVital.pulse_rate > 100,
+                        PatientVital.oxygen_saturation < 95.0,
+                        PatientVital.oxygen_saturation > 100.0,
+                    )
+                )
+            elif raw_st == "normal":
+                query = query.where(
+                    and_(
+                        PatientVital.temperature >= 36.5,
+                        PatientVital.temperature <= 37.5,
+                        PatientVital.pulse_rate >= 60,
+                        PatientVital.pulse_rate <= 100,
+                        PatientVital.oxygen_saturation >= 95.0,
+                        PatientVital.oxygen_saturation <= 100.0,
+                    )
+                )
+
+        return query
+
     async def list_by_patient_id(
-        self, patient_id: int, skip: int = 0, limit: int = 20
+        self,
+        patient_id: int,
+        skip: int = 0,
+        limit: int = 20,
+        search: str | None = None,
+        status: str | None = None,
     ) -> list[PatientVital]:
         from sqlalchemy import select
-        stmt = (
-            select(PatientVital)
-            .where(PatientVital.patient_id == patient_id)
-            .order_by(PatientVital.recorded_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
+        stmt = select(PatientVital)
+        stmt = self._apply_filters(stmt, patient_id=patient_id, search=search, status=status)
+        stmt = stmt.order_by(PatientVital.recorded_at.desc()).offset(skip).limit(limit)
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
 
-    async def count_by_patient_id(self, patient_id: int) -> int:
+    async def count_by_patient_id(
+        self,
+        patient_id: int,
+        search: str | None = None,
+        status: str | None = None,
+    ) -> int:
         from sqlalchemy import select, func
-        stmt = select(func.count(PatientVital.id)).where(PatientVital.patient_id == patient_id)
+        stmt = select(func.count(PatientVital.id))
+        stmt = self._apply_filters(stmt, patient_id=patient_id, search=search, status=status)
         return await self.db.scalar(stmt) or 0
 
 
@@ -759,27 +846,39 @@ class NurseTaskRepository:
         self,
         query,
         nurse_id: int,
-        due_date: date,
+        due_date: date | None = None,
         patient_id: int | None = None,
         status: str | None = None,
         priority: str | None = None,
+        search: str | None = None,
     ):
-        query = query.where(
-            NurseTask.nurse_id == nurse_id,
-            NurseTask.due_date == due_date,
-        )
+        query = query.where(NurseTask.nurse_id == nurse_id)
+        if due_date is not None:
+            query = query.where(NurseTask.due_date == due_date)
         if patient_id is not None:
             query = query.where(NurseTask.patient_id == patient_id)
         if status is not None:
             query = query.where(NurseTask.status == status)
         if priority is not None:
             query = query.where(NurseTask.priority == priority)
+        if search and str(search).strip():
+            term = f"%{str(search).strip().lower()}%"
+            query = query.outerjoin(Patient, NurseTask.patient_id == Patient.id).where(
+                or_(
+                    func.lower(NurseTask.title).like(term),
+                    func.lower(NurseTask.description).like(term),
+                    func.lower(Patient.first_name).like(term),
+                    func.lower(Patient.last_name).like(term),
+                    func.lower(Patient.patient_code).like(term),
+                    func.lower(func.concat(Patient.first_name, " ", Patient.last_name)).like(term),
+                )
+            )
         return query
 
     async def list_by_nurse(
         self,
         nurse_id: int,
-        due_date: date,
+        due_date: date | None = None,
         skip: int = 0,
         limit: int = 20,
         patient_id: int | None = None,
@@ -787,6 +886,7 @@ class NurseTaskRepository:
         priority: str | None = None,
         sort_by: str = "due_date",
         sort_order: str = "asc",
+        search: str | None = None,
     ) -> list[NurseTask]:
         query = select(NurseTask)
         query = self._apply_filters(
@@ -796,6 +896,7 @@ class NurseTaskRepository:
             patient_id=patient_id,
             status=status,
             priority=priority,
+            search=search,
         )
         column = getattr(NurseTask, sort_by, NurseTask.due_date)
         query = query.order_by(column.desc() if sort_order == "desc" else column.asc())
@@ -805,10 +906,11 @@ class NurseTaskRepository:
     async def count_by_nurse(
         self,
         nurse_id: int,
-        due_date: date,
+        due_date: date | None = None,
         patient_id: int | None = None,
         status: str | None = None,
         priority: str | None = None,
+        search: str | None = None,
     ) -> int:
         query = select(func.count(NurseTask.id))
         query = self._apply_filters(
@@ -818,6 +920,7 @@ class NurseTaskRepository:
             patient_id=patient_id,
             status=status,
             priority=priority,
+            search=search,
         )
         return await self.db.scalar(query) or 0
 

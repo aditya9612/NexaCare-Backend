@@ -341,19 +341,20 @@ PrescriptionListWithCountsResponse = PrescriptionListResponse
 
 
 class PrescriptionDispenseRequest(BaseSchema):
-    payment_mode: str = Field(..., min_length=1, description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
+    payment_mode: Optional[str] = Field("Cash", description="Optional payment mode if auto-generating invoice")
     payment_status: PharmacyPaymentStatus = Field(PharmacyPaymentStatus.PAID, description="Payment status of generated invoice")
     discount_amount: float = Field(0.0, ge=0)
     discount_percentage: float = Field(0.0, ge=0, le=100)
     tax_percentage: float = Field(0.0, ge=0, le=100)
     notes: Optional[str] = None
+    generate_invoice: bool = Field(False, description="Whether to automatically generate invoice on dispense (default: False)")
 
     @field_validator("payment_mode")
     @classmethod
-    def validate_payment_mode(cls, v: str) -> str:
-        if v is None or not str(v).strip():
-            raise ValueError("payment_mode cannot be empty or whitespace")
-        return str(v).strip()
+    def validate_payment_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not str(v).strip():
+            return "Cash"
+        return str(v).strip() if v else "Cash"
 
 
 class PrescriptionUpdate(BaseSchema):
@@ -379,12 +380,12 @@ class PharmacyInvoiceCreate(BaseSchema):
     patient_id: int | None = Field(None, gt=0)
     prescription_id: int | None = Field(None, gt=0)
     payment_mode: str | None = Field("Cash", description="Payment mode (Cash, Card, UPI, Net Banking, Online, etc.)")
-    payment_status: PharmacyPaymentStatus = Field(..., description="Payment status of the invoice (paid, pending, cancelled)")
+    payment_status: PharmacyPaymentStatus = Field(PharmacyPaymentStatus.PAID, description="Payment status of the invoice (paid, pending, cancelled)")
     discount_amount: float = Field(0.0, ge=0)
     discount_percentage: float = Field(0.0, ge=0, le=100)
     tax_percentage: float = Field(0.0, ge=0, le=100)
     tax_amount: float = Field(0.0, ge=0)
-    items: List[PharmacyInvoiceItemCreate] = Field(..., min_length=1)
+    items: List[PharmacyInvoiceItemCreate] = Field(default_factory=list, description="Items to invoice. If omitted when prescription_id is provided, prescription items are auto-invoiced.")
 
 
 class PharmacyInvoiceUpdate(BaseSchema):

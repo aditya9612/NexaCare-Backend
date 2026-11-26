@@ -53,6 +53,7 @@ class AppointmentCreate(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    bed_id: int | None = Field(None, gt=0, description="Optional Bed ID for immediate bed allocation upon IPD booking")
 
     # Emergency Triage (ESI 1-5) & Disposition
     triage_level: int | None = Field(None, ge=1, le=5, description="ESI 1 (Resuscitation) to 5 (Non-Urgent)")
@@ -110,6 +111,7 @@ class AppointmentUpdate(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    bed_id: int | None = Field(None, gt=0, description="Optional Bed ID for immediate bed allocation upon IPD booking")
 
     # Emergency Triage (ESI 1-5) & Disposition
     triage_level: int | None = Field(None, ge=1, le=5)
@@ -191,6 +193,8 @@ class AppointmentResponse(BaseSchema):
     admission_reason: str | None = None
     expected_los: int | None = None
     recommended_ward: str | None = None
+    allocated_bed_id: int | None = None
+    allocated_bed_name: str | None = None
 
     # Emergency Triage & Disposition fields
     triage_level: int | None = None
@@ -231,6 +235,7 @@ class AdmitRecommendationRequest(BaseSchema):
     admission_reason: str = Field(..., min_length=1)
     expected_los: int | None = Field(None, ge=1)
     recommended_ward: str | None = None
+    bed_id: int | None = Field(None, gt=0, description="Optional Bed ID for immediate bed allocation upon admission recommendation")
     notes: str | None = None
 
 
@@ -248,6 +253,8 @@ class AdmitRecommendationResponse(BaseSchema):
     diagnosis: str | None = None
     notes: str | None = None
     disposition: str | None = None
+    allocated_bed_id: int | None = None
+    allocated_bed_name: str | None = None
 
 
 class PendingAdmissionPatientInfo(BaseSchema):

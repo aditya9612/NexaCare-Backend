@@ -192,3 +192,57 @@ async def cache_incr(key: str, ttl: int = 300) -> int:
             _mark_unavailable(str(exc))
         return 1
 
+
+_RELEASE_LOCK_LUA = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def acquire_lock(lock_key: str, token: str, expire_seconds: int = 60) -> bool:
+    """
+    Acquire a distributed lock with a unique token and expiry in seconds.
+    Returns True if lock acquired or Redis unavailable (fails-open to DB idempotency).
+    Returns False if lock is actively held by another process.
+    """
+    client = await get_redis()
+    if not client:
+        return True
+    try:
+        acquired = await client.set(lock_key, token, ex=expire_seconds, nx=True)
+        return bool(acquired)
+    except Exception as exc:
+        logger.warning("Redis acquire_lock failed: %s; allowing DB idempotency fallback", exc)
+        if _is_connection_error(exc):
+            _mark_unavailable(str(exc))
+        return True
+
+
+async def release_lock(lock_key: str, token: str) -> bool:
+    """
+    Safely release a distributed lock only if the stored token matches the caller's token.
+    Uses Lua script to ensure atomicity.
+    """
+    client = await get_redis()
+    if not client:
+        return True
+    try:
+        if hasattr(client, "eval"):
+            res = await client.eval(_RELEASE_LOCK_LUA, 1, lock_key, token)
+            return bool(res)
+        else:
+            current = await client.get(lock_key)
+            if current == token:
+                await client.delete(lock_key)
+                return True
+            return False
+    except Exception as exc:
+        logger.warning("Redis release_lock failed: %s", exc)
+        if _is_connection_error(exc):
+            _mark_unavailable(str(exc))
+        return False
+
+

@@ -34,7 +34,7 @@ class ReportExportService:
 
 
     @staticmethod
-    def resolve_hospital_logo(logo_path_attr: str | None) -> str | None:
+    def resolve_hospital_logo(logo_path_attr: str | None, fallback: bool = False) -> str | None:
         if logo_path_attr:
             raw_path = str(logo_path_attr).strip()
             candidates = [
@@ -47,9 +47,10 @@ class ReportExportService:
             for cand in candidates:
                 if os.path.isfile(cand):
                     return os.path.abspath(cand).replace("\\", "/")
-        for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
-            if os.path.isfile(fb):
-                return os.path.abspath(fb).replace("\\", "/")
+        if fallback:
+            for fb in ["app/static/images/logo.png", "app/static/logo.png"]:
+                if os.path.isfile(fb):
+                    return os.path.abspath(fb).replace("\\", "/")
         return None
 
     @staticmethod

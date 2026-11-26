@@ -115,7 +115,15 @@ class InventoryService:
             if dept and dept.hospital_id:
                 item_hospital_id = dept.hospital_id
 
-        item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **data.model_dump(exclude={"sku"}))
+        item_data = data.model_dump(exclude={"sku", "status"})
+        if getattr(data, "status", None) is not None:
+            item_data["is_active"] = str(data.status).strip().lower() == "active"
+        elif getattr(data, "is_active", None) is not None:
+            item_data["is_active"] = bool(data.is_active)
+        else:
+            item_data["is_active"] = True
+
+        item = InventoryItem(sku=sku, hospital_id=item_hospital_id, **item_data)
         item = await self.item_repo.create(item)
         if item.warehouse_id:
             ws = WarehouseStock(
@@ -210,8 +218,15 @@ class InventoryService:
             if existing_barcode and existing_barcode.id != item_id:
                 raise ConflictException("Inventory item with this barcode already exists")
 
-        for key, value in data.model_dump(exclude_unset=True).items():
-            setattr(item, key, value)
+        update_data = data.model_dump(exclude_unset=True)
+        if "status" in update_data and update_data["status"] is not None:
+            update_data["is_active"] = str(update_data.pop("status")).strip().lower() == "active"
+        elif "status" in update_data:
+            update_data.pop("status")
+
+        for key, value in update_data.items():
+            if hasattr(item, key):
+                setattr(item, key, value)
         item = await self.item_repo.update(item)
 
         # Synchronize updates to linked Medicine if it exists

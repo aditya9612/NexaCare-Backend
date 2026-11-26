@@ -90,15 +90,26 @@ class BillingService:
         data = BillingResponse.model_validate(billing)
         data.items = [BillItemResponse.model_validate(i) for i in billing.items]
         data.source = "billing"
-        if billing.bill_number and (
-            str(billing.bill_number).upper().startswith("REC")
-            or str(billing.bill_number).upper().startswith("PHR")
-        ):
+        bill_num_upper = str(billing.bill_number or "").upper()
+        if bill_num_upper.startswith("REC") or bill_num_upper.startswith("PHR"):
             data.bill_type = "pharmacy"
-        elif billing.bill_number and str(billing.bill_number).upper().startswith("IPD"):
+        elif bill_num_upper.startswith("IPD"):
             data.bill_type = "ipd"
+        elif bill_num_upper.startswith("LAB"):
+            data.bill_type = "lab"
         else:
             data.bill_type = "consultation"
+
+        if billing.items:
+            doctor_sum = sum(i.line_total for i in billing.items if getattr(i, "item_type", "") in ("doctor_round", "opd_consultation", "consultation"))
+            lab_sum = sum(i.line_total for i in billing.items if getattr(i, "item_type", "") in ("lab_test", "radiology_order"))
+            pharm_sum = sum(i.line_total for i in billing.items if getattr(i, "item_type", "") in ("pharmacy_invoice", "pharmacy_item"))
+            bed_sum = sum(i.line_total for i in billing.items if getattr(i, "item_type", "") in ("bed_charge", "nursing_charge"))
+            if doctor_sum or lab_sum or pharm_sum or bed_sum:
+                data.doctor_charges = round(doctor_sum, 2)
+                data.lab_charges = round(lab_sum, 2)
+                data.pharmacy_charges = round(pharm_sum, 2)
+                data.bed_charges = round(bed_sum, 2)
         return data
 
     def _pharmacy_invoice_to_billing_response(self, invoice) -> BillingResponse:
@@ -143,6 +154,56 @@ class BillingService:
             updated_at=invoice.updated_at or utc_now(),
             source="pharmacy",
             bill_type="pharmacy",
+            pharmacy_charges=invoice.total_amount,
+        )
+
+    def _test_order_to_billing_response(self, order) -> BillingResponse:
+        test = order.lab_test if hasattr(order, "lab_test") and order.lab_test else None
+        test_name = test.test_name if test else f"Lab Test #{order.lab_test_id}"
+        test_price = float(test.price) if test and test.price is not None else 0.0
+
+        order_status = str(order.status or "").lower()
+        bill_status = "paid" if order_status in ("completed", "verified", "approved") else "pending"
+        paid_amt = test_price if bill_status == "paid" else 0.0
+        balance_amt = 0.0 if bill_status == "paid" else test_price
+
+        bill_item = BillItemResponse(
+            id=order.id,
+            billing_id=order.id,
+            description=f"Lab Test: {test_name} (Order #{order.order_number})",
+            quantity=1,
+            unit_price=test_price,
+            gst_rate=0.0,
+            gst_amount=0.0,
+            line_total=test_price,
+            item_type="lab_test",
+            created_at=order.ordered_at or order.created_at or utc_now(),
+        )
+
+        return BillingResponse(
+            id=order.id,
+            patient_id=order.patient_id or 0,
+            bill_number=order.order_number,
+            subtotal=test_price,
+            discount_percent=0.0,
+            discount_amount=0.0,
+            gst_rate=0.0,
+            gst_amount=0.0,
+            tax_amount=0.0,
+            total_amount=test_price,
+            paid_amount=paid_amt,
+            balance_amount=balance_amt,
+            status=bill_status,
+            due_date=order.ordered_at,
+            notes=f"Lab Test Order #{order.order_number} ({order.status})",
+            invoice_path=None,
+            appointment_id=order.appointment_id,
+            items=[bill_item],
+            created_at=order.ordered_at or order.created_at or utc_now(),
+            updated_at=order.updated_at or utc_now(),
+            source="lab",
+            bill_type="lab",
+            lab_charges=test_price,
         )
 
     async def _recalculate_billing(self, billing: Billing) -> Billing:
@@ -211,20 +272,32 @@ class BillingService:
             billing.status = BillingStatus.PENDING
         return await self.repo.update(billing)
 
-    async def create(self, data: BillingCreate, user_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
+    async def create(self, data: BillingCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> BillingResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        if target_hospital_id is None:
+            raise BadRequestException("Target hospital tenant must be specified for billing creation.")
+        if getattr(data, "hospital_id", None) is not None and data.hospital_id != target_hospital_id:
+            raise BadRequestException(
+                f"Conflicting hospital_id in request body ({data.hospital_id}) "
+                f"does not match authorized hospital context ({target_hospital_id})"
+            )
+        hospital_id = target_hospital_id
+
         patient = await self.patient_repo.get_by_id(data.patient_id, hospital_id=hospital_id)
         if not patient:
             raise NotFoundException("Patient not found")
 
-        if data.appointment_id is not None:
+        appointment_id = data.appointment_id if (data.appointment_id and data.appointment_id > 0) else None
+
+        if appointment_id is not None:
             from sqlalchemy import select
             from app.models.appointment_model import Appointment
-            stmt = select(Appointment).where(Appointment.id == data.appointment_id)
+            stmt = select(Appointment).where(Appointment.id == appointment_id)
             apt_result = await self.db.execute(stmt)
             appointment = apt_result.scalar_one_or_none()
             if not appointment:
-                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+                raise NotFoundException(f"Appointment with ID {appointment_id} not found")
             
             if appointment.patient_id != data.patient_id:
                 raise BadRequestException("Appointment does not belong to the supplied patient")
@@ -251,7 +324,7 @@ class BillingService:
                     "Billing can only be created for completed appointments."
                 )
 
-            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, data.appointment_id)
+            existing_billing = await self.repo.get_by_patient_and_appointment(data.patient_id, appointment_id)
             if existing_billing:
                 raise ConflictException("Billing already exists for this patient and appointment.")
 
@@ -260,14 +333,10 @@ class BillingService:
             from datetime import timezone as py_timezone
             due_date = due_date.astimezone(py_timezone.utc).replace(tzinfo=None)
 
-        from app.models.user_model import User
         from app.services.settings_service import SettingsService
-        from sqlalchemy import select
         from app.utils.helpers import generate_code
 
-        user = await self.db.scalar(select(User).where(User.id == user_id))
-        hospital_id = (user.hospital_id if user and user.hospital_id else None) or (patient.hospital_id if patient else None)
-        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id or 1)
+        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
 
         billing = Billing(
             patient_id=data.patient_id,
@@ -278,7 +347,7 @@ class BillingService:
             due_date=due_date,
             notes=data.notes,
             insurance_id=None,
-            appointment_id=data.appointment_id,
+            appointment_id=appointment_id,
             created_by=user_id,
         )
         billing = await self.repo.create(billing)
@@ -368,6 +437,7 @@ class BillingService:
     ):
         from app.models.billing_model import Billing
         from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+        from app.models.lab_model import TestOrder, LabTest
         from app.core.dependencies import resolve_tenant_id
         from sqlalchemy import select, or_, not_, func, union_all
         from sqlalchemy.sql.expression import literal
@@ -377,16 +447,20 @@ class BillingService:
 
         sort_field_b = None
         sort_field_p = None
+        sort_field_l = None
         
         if sort_by in ["created_at", "status", "total_amount"]:
             sort_field_b = getattr(Billing, sort_by)
             sort_field_p = getattr(PharmacyInvoice, sort_by)
+            sort_field_l = TestOrder.ordered_at if sort_by == "created_at" else (TestOrder.status if sort_by == "status" else TestOrder.id)
         elif sort_by == "bill_number":
             sort_field_b = Billing.bill_number
             sort_field_p = PharmacyInvoice.invoice_number
+            sort_field_l = TestOrder.order_number
         else:
             sort_field_b = Billing.created_at
             sort_field_p = PharmacyInvoice.created_at
+            sort_field_l = TestOrder.ordered_at
 
         b_query = select(
             Billing.id.label("id"),
@@ -402,24 +476,39 @@ class BillingService:
             PharmacyInvoice.id.label("tie_breaker")
         ).where(PharmacyInvoice.is_deleted == False)
 
+        l_query = select(
+            TestOrder.id.label("id"),
+            literal("lab").label("source"),
+            sort_field_l.label("sort_val"),
+            TestOrder.id.label("tie_breaker")
+        ).where(TestOrder.is_deleted == False)
+
         if hospital_id is not None:
             b_query = b_query.where(Billing.hospital_id == hospital_id)
             p_query = p_query.where(PharmacyInvoice.hospital_id == hospital_id)
+            l_query = l_query.where(TestOrder.hospital_id == hospital_id)
 
         if status:
             b_query = b_query.where(Billing.status == status)
             p_query = p_query.where(PharmacyInvoice.status == status)
+            if status.lower() == "paid":
+                l_query = l_query.where(func.lower(TestOrder.status).in_(["completed", "verified", "approved"]))
+            elif status.lower() in ("pending", "unpaid"):
+                l_query = l_query.where(not_(func.lower(TestOrder.status).in_(["completed", "verified", "approved"])))
         if patient_id:
             b_query = b_query.where(Billing.patient_id == patient_id)
             p_query = p_query.where(PharmacyInvoice.patient_id == patient_id)
+            l_query = l_query.where(TestOrder.patient_id == patient_id)
         if start_date:
             start_datetime = datetime.combine(start_date, datetime.min.time())
             b_query = b_query.where(Billing.created_at >= start_datetime)
             p_query = p_query.where(PharmacyInvoice.created_at >= start_datetime)
+            l_query = l_query.where(TestOrder.ordered_at >= start_datetime)
         if end_date:
             end_datetime = datetime.combine(end_date, datetime.max.time())
             b_query = b_query.where(Billing.created_at <= end_datetime)
             p_query = p_query.where(PharmacyInvoice.created_at <= end_datetime)
+            l_query = l_query.where(TestOrder.ordered_at <= end_datetime)
         if bill_type:
             bt_val = bill_type.value if hasattr(bill_type, "value") else str(bill_type).lower().strip()
             if bt_val == "pharmacy":
@@ -430,16 +519,24 @@ class BillingService:
                     )
                 )
                 p_query = p_query.where(PharmacyInvoice.id > 0)
+                l_query = l_query.where(TestOrder.id == -1)
+            elif bt_val == "lab":
+                b_query = b_query.where(func.lower(Billing.bill_number).like("lab%"))
+                p_query = p_query.where(PharmacyInvoice.id == -1)
+                l_query = l_query.where(TestOrder.id > 0)
             elif bt_val in ("consultation", "consult"):
                 b_query = b_query.where(
                     not_(func.lower(Billing.bill_number).like("ipd%")),
                     not_(func.lower(Billing.bill_number).like("rec%")),
                     not_(func.lower(Billing.bill_number).like("phr%")),
+                    not_(func.lower(Billing.bill_number).like("lab%")),
                 )
                 p_query = p_query.where(PharmacyInvoice.id == -1)
+                l_query = l_query.where(TestOrder.id == -1)
             elif bt_val in ("ipd", "final_bill"):
                 b_query = b_query.where(func.lower(Billing.bill_number).like("ipd%"))
                 p_query = p_query.where(PharmacyInvoice.id == -1)
+                l_query = l_query.where(TestOrder.id == -1)
         if q:
             pattern = f"%{q.lower()}%"
             b_query = b_query.where(
@@ -451,8 +548,14 @@ class BillingService:
             p_query = p_query.where(
                 func.lower(PharmacyInvoice.invoice_number).like(pattern)
             )
+            l_query = l_query.where(
+                or_(
+                    func.lower(TestOrder.order_number).like(pattern),
+                    func.lower(TestOrder.notes).like(pattern),
+                )
+            )
 
-        combined_query = union_all(b_query, p_query)
+        combined_query = union_all(b_query, p_query, l_query)
 
         subq = combined_query.subquery()
         count_query = select(func.count()).select_from(subq)
@@ -470,6 +573,7 @@ class BillingService:
         
         billing_ids = [r[0] for r in id_source_list if r[1] == "billing"]
         pharmacy_ids = [r[0] for r in id_source_list if r[1] == "pharmacy"]
+        lab_ids = [r[0] for r in id_source_list if r[1] == "lab"]
 
         billing_map = {}
         if billing_ids:
@@ -491,12 +595,24 @@ class BillingService:
             for p in p_full.scalars().unique().all():
                 pharmacy_map[p.id] = self._pharmacy_invoice_to_billing_response(p)
 
+        lab_map = {}
+        if lab_ids:
+            l_full = await self.db.execute(
+                select(TestOrder).where(TestOrder.id.in_(lab_ids)).options(
+                    selectinload(TestOrder.lab_test)
+                )
+            )
+            for o in l_full.scalars().unique().all():
+                lab_map[o.id] = self._test_order_to_billing_response(o)
+
         ordered_items = []
         for r_id, r_source in id_source_list:
             if r_source == "billing" and r_id in billing_map:
                 ordered_items.append(billing_map[r_id])
             elif r_source == "pharmacy" and r_id in pharmacy_map:
                 ordered_items.append(pharmacy_map[r_id])
+            elif r_source == "lab" and r_id in lab_map:
+                ordered_items.append(lab_map[r_id])
 
         return build_paginated_result(ordered_items, total, page, size)
 
@@ -534,8 +650,43 @@ class BillingService:
             current_user=current_user,
         )
 
-    async def get_by_id(self, billing_id: int, current_user = None) -> BillingResponse:
+    async def get_by_id(self, billing_id: int, source: str | None = None, current_user = None) -> BillingResponse:
         hospital_id = resolve_tenant_id(current_user)
+
+        if source == "lab":
+            from app.models.lab_model import TestOrder, LabTest
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt_lab = select(TestOrder).where(
+                TestOrder.id == billing_id,
+                TestOrder.is_deleted == False
+            ).options(selectinload(TestOrder.lab_test))
+            if hospital_id is not None:
+                stmt_lab = stmt_lab.where(TestOrder.hospital_id == hospital_id)
+            res_lab = await self.db.execute(stmt_lab)
+            test_order = res_lab.scalar_one_or_none()
+            if test_order:
+                return self._test_order_to_billing_response(test_order)
+            raise NotFoundException("Billing record not found")
+
+        if source == "pharmacy":
+            from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt = select(PharmacyInvoice).where(
+                PharmacyInvoice.id == billing_id,
+                PharmacyInvoice.is_deleted == False
+            ).options(
+                selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+            )
+            if hospital_id is not None:
+                stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+            res = await self.db.execute(stmt)
+            invoice = res.scalar_one_or_none()
+            if invoice:
+                return self._pharmacy_invoice_to_billing_response(invoice)
+            raise NotFoundException("Billing record not found")
+
         billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
         if not billing:
             from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
@@ -552,12 +703,25 @@ class BillingService:
             res = await self.db.execute(stmt)
             invoice = res.scalar_one_or_none()
             if not invoice:
+                from app.models.lab_model import TestOrder, LabTest
+                stmt_lab = select(TestOrder).where(
+                    TestOrder.id == billing_id,
+                    TestOrder.is_deleted == False
+                ).options(selectinload(TestOrder.lab_test))
+                if hospital_id is not None:
+                    stmt_lab = stmt_lab.where(TestOrder.hospital_id == hospital_id)
+                res_lab = await self.db.execute(stmt_lab)
+                test_order = res_lab.scalar_one_or_none()
+                if test_order:
+                    return self._test_order_to_billing_response(test_order)
                 raise NotFoundException("Billing record not found")
             return self._pharmacy_invoice_to_billing_response(invoice)
         return self._to_response(billing)
 
-    async def update(self, billing_id: int, data: BillingUpdate, user_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
+    async def update(self, billing_id: int, data: BillingUpdate, user_id: int, current_user = None, hospital_id: int | None = None) -> BillingResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
         if not billing:
             from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
@@ -633,8 +797,8 @@ class BillingService:
         from sqlalchemy import select
         
         user = await self.db.scalar(select(User).where(User.id == user_id))
-        hospital_id = user.hospital_id if user and user.hospital_id else 1
-        billing_settings = await SettingsService(self.db).get_billing_settings(hospital_id)
+        effective_hospital_id = target_hospital_id or (billing.hospital_id if billing else None) or (user.hospital_id if user and user.hospital_id else None)
+        billing_settings = await SettingsService(self.db).get_billing_settings(effective_hospital_id)
 
         if "items" in dump:
             items_data = dump.pop("items")
@@ -671,8 +835,10 @@ class BillingService:
         await self.audit_repo.create("update", "billing", user_id=user_id, resource_id=str(billing.id))
         return self._to_response(billing)
 
-    async def cancel(self, billing_id: int, user_id: int, current_user = None) -> BillingResponse:
-        hospital_id = resolve_tenant_id(current_user)
+    async def cancel(self, billing_id: int, user_id: int, current_user = None, hospital_id: int | None = None) -> BillingResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
         if not billing:
             from app.models.pharmacy_model import PharmacyInvoice
@@ -731,8 +897,10 @@ class BillingService:
 
         return self._to_billing_response(billing)
 
-    async def delete(self, billing_id: int, user_id: int, current_user = None) -> None:
-        hospital_id = resolve_tenant_id(current_user)
+    async def delete(self, billing_id: int, user_id: int, current_user = None, hospital_id: int | None = None) -> None:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
         if not billing:
             from app.models.pharmacy_model import PharmacyInvoice
@@ -751,8 +919,10 @@ class BillingService:
         await self.repo.soft_delete(billing)
         await self.audit_repo.create("delete", "billing", user_id=user_id, resource_id=str(billing.id))
 
-    async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int, current_user = None) -> PaymentResponse:
-        hospital_id = resolve_tenant_id(current_user)
+    async def collect_payment(self, billing_id: int, data: PaymentCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> PaymentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
         if not billing:
             from app.models.pharmacy_model import PharmacyInvoice
@@ -952,8 +1122,10 @@ class BillingService:
 
         return PaymentResponse.model_validate(payment)
 
-    async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int, current_user = None) -> PaymentResponse:
-        hospital_id = resolve_tenant_id(current_user)
+    async def process_refund(self, billing_id: int, data: RefundCreate, user_id: int, current_user = None, hospital_id: int | None = None) -> PaymentResponse:
+        from app.core.dependencies import resolve_tenant_id
+        target_hospital_id = hospital_id if hospital_id is not None else resolve_tenant_id(current_user)
+        hospital_id = target_hospital_id
         billing = await self.repo.get_by_id_for_update(billing_id, hospital_id=hospital_id)
         if not billing:
             from app.models.pharmacy_model import PharmacyInvoice, PharmacyReturn
@@ -1071,29 +1243,67 @@ class BillingService:
                         priority="NORMAL",
                     )
 
-            from app.services.notification_service import NotificationService
-            await NotificationService(self.db).notify_accountants(
-                hospital_id=billing.hospital_id,
-                title="Refund Processed",
-                message=f"Refund of ₹{payment.amount:,.2f} processed for bill {billing.bill_number}.",
-                notification_type="PATIENT_REFUND_PROCESSED",
-                reference_type="PAYMENT",
-                reference_id=payment.id,
-                priority="NORMAL",
-            )
+            if billing.hospital_id is not None:
+                from app.models.role_model import Role
+                from app.models.user_model import User
+                from app.services.notification_service import NotificationService
+                from sqlalchemy import func, select
+
+                staff_query = (
+                    select(User)
+                    .join(Role, User.role_id == Role.id)
+                    .where(
+                        User.hospital_id == billing.hospital_id,
+                        User.is_active.is_(True),
+                        func.lower(Role.name).in_(["accountant", "hospital admin", "hospital_admin"]),
+                    )
+                )
+                res_staff = await self.db.execute(staff_query)
+                finance_admins = res_staff.scalars().all()
+                unique_staff = {u.id: u for u in finance_admins}.values()
+                notif_service = NotificationService(self.db)
+                for staff_user in unique_staff:
+                    await notif_service.dispatch_notification(
+                        user_id=staff_user.id,
+                        title="Refund Processed",
+                        message=f"A refund of ₹{payment.amount:,.2f} has been processed for bill {billing.bill_number}.",
+                        notification_type="REFUND_PROCESSED",
+                        reference_type="PAYMENT",
+                        reference_id=payment.id,
+                        priority="HIGH",
+                        hospital_id=billing.hospital_id,
+                    )
         except Exception as notif_exc:
             import logging
             logging.getLogger(__name__).warning(
-                "Failed to dispatch patient refund processed notification: %s",
+                "Failed to dispatch refund processed notification: %s",
                 notif_exc,
             )
 
         return PaymentResponse.model_validate(payment)
 
-    async def generate_invoice(self, billing_id: int, user_id: int, current_user = None) -> tuple[str, bytes]:
+    async def generate_invoice(self, billing_id: int, user_id: int, current_user = None, source: str | None = None) -> tuple[str, bytes]:
         hospital_id = resolve_tenant_id(current_user)
-        billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
-        if not billing:
+
+        billing = None
+        invoice = None
+        test_order = None
+
+        if source == "lab":
+            from app.models.lab_model import TestOrder, LabTest
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            stmt_lab = select(TestOrder).where(
+                TestOrder.id == billing_id,
+                TestOrder.is_deleted == False
+            ).options(selectinload(TestOrder.lab_test))
+            if hospital_id is not None:
+                stmt_lab = stmt_lab.where(TestOrder.hospital_id == hospital_id)
+            res_lab = await self.db.execute(stmt_lab)
+            test_order = res_lab.scalar_one_or_none()
+            if not test_order:
+                raise NotFoundException("Billing record not found")
+        elif source == "pharmacy":
             from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
             from sqlalchemy import select
             from sqlalchemy.orm import selectinload
@@ -1109,6 +1319,121 @@ class BillingService:
             invoice = res.scalar_one_or_none()
             if not invoice:
                 raise NotFoundException("Billing record not found")
+        elif source == "billing":
+            billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+            if not billing:
+                raise NotFoundException("Billing record not found")
+        else:
+            # Fallback across billing -> pharmacy -> lab
+            billing = await self.repo.get_by_id(billing_id, hospital_id=hospital_id)
+            if not billing:
+                from app.models.pharmacy_model import PharmacyInvoice, PharmacyInvoiceItem
+                from sqlalchemy import select
+                from sqlalchemy.orm import selectinload
+                stmt = select(PharmacyInvoice).where(
+                    PharmacyInvoice.id == billing_id,
+                    PharmacyInvoice.is_deleted == False
+                ).options(
+                    selectinload(PharmacyInvoice.items).selectinload(PharmacyInvoiceItem.medicine)
+                )
+                if hospital_id is not None:
+                    stmt = stmt.where(PharmacyInvoice.hospital_id == hospital_id)
+                res = await self.db.execute(stmt)
+                invoice = res.scalar_one_or_none()
+                if not invoice:
+                    from app.models.lab_model import TestOrder, LabTest
+                    stmt_lab = select(TestOrder).where(
+                        TestOrder.id == billing_id,
+                        TestOrder.is_deleted == False
+                    ).options(selectinload(TestOrder.lab_test))
+                    if hospital_id is not None:
+                        stmt_lab = stmt_lab.where(TestOrder.hospital_id == hospital_id)
+                    res_lab = await self.db.execute(stmt_lab)
+                    test_order = res_lab.scalar_one_or_none()
+                    if not test_order:
+                        raise NotFoundException("Billing record not found")
+
+        if test_order:
+            issuing_hospital_id = getattr(test_order, "hospital_id", None) or hospital_id
+            hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
+
+            if hospital and hasattr(hospital, "name") and hospital.name:
+                hospital_name = (hospital.name or "").strip()
+                hospital_address = (hospital.address or "").strip() if hospital.address else ""
+                hospital_phone = (hospital.phone or "").strip() if hospital.phone else ""
+                hospital_email = (hospital.email or "").strip() if hospital.email else ""
+                hospital_website = (hospital.website or "").strip() if getattr(hospital, "website", None) else ""
+                hospital_logo = getattr(hospital, "logo_path", None)
+                from app.utils.pdf_generator import resolve_logo_as_data_uri
+                logo_data_uri = resolve_logo_as_data_uri(hospital_logo)
+                logo_base64 = logo_data_uri.split(",", 1)[1] if (logo_data_uri and "," in logo_data_uri) else None
+            else:
+                hospital_name = ""
+                hospital_address = ""
+                hospital_phone = ""
+                hospital_email = ""
+                hospital_website = ""
+                hospital_logo = None
+                logo_data_uri = None
+                logo_base64 = None
+
+            patient = await self.patient_repo.get_by_id(test_order.patient_id) if test_order.patient_id else None
+            patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() if patient else "Walk-in Patient"
+            patient_phone = patient.phone if patient else "-"
+            patient_email = patient.email if patient else "-"
+
+            test = test_order.lab_test if hasattr(test_order, "lab_test") and test_order.lab_test else None
+            test_name = test.test_name if test else f"Lab Test #{test_order.lab_test_id}"
+            test_price = float(test.price) if test and test.price is not None else 0.0
+
+            order_status = str(test_order.status or "").lower()
+            bill_status = "Paid" if order_status in ("completed", "verified", "approved") else "Pending"
+            paid_amt = test_price if bill_status == "Paid" else 0.0
+            balance_amt = 0.0 if bill_status == "Paid" else test_price
+
+            items = [
+                {
+                    "description": f"Lab Test: {test_name}",
+                    "quantity": 1,
+                    "unit_price": f"{test_price:.2f}",
+                    "gst_rate": "0.0",
+                    "line_total": f"{test_price:.2f}",
+                }
+            ]
+
+            path, pdf_bytes = await generate_invoice_pdf(
+                test_order.order_number,
+                {
+                    "hospital_name": hospital_name,
+                    "hospital_address": hospital_address,
+                    "hospital_phone": hospital_phone,
+                    "hospital_email": hospital_email,
+                    "hospital_website": hospital_website,
+                    "hospital_logo": logo_data_uri or None,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_base64": logo_base64,
+                    "patient_name": patient_name,
+                    "patient_phone": patient_phone,
+                    "patient_email": patient_email,
+                    "date": (test_order.ordered_at or test_order.created_at or utc_now()).strftime("%Y-%m-%d"),
+                    "items": items,
+                    "subtotal": f"{test_price:.2f}",
+                    "discount_percent": "0.0",
+                    "discount_amount": "0.00",
+                    "gst_rate": "0.0",
+                    "gst_amount": "0.00",
+                    "tax_amount": "0.00",
+                    "total_amount": f"{test_price:.2f}",
+                    "paid_amount": f"{paid_amt:.2f}",
+                    "balance_amount": f"{balance_amt:.2f}",
+                    "status": bill_status,
+                    "notes": f"Lab Test Order ({test_order.order_number}) - Priority: {test_order.priority or 'Normal'}",
+                },
+            )
+            await self.audit_repo.create("export", "lab_invoice", user_id=user_id, resource_id=str(test_order.id))
+            return path, pdf_bytes
+
+        if invoice:
 
             issuing_hospital_id = getattr(invoice, "hospital_id", None) or hospital_id
             hospital = await self.hospital_repo.get_by_id(issuing_hospital_id) if issuing_hospital_id else None
@@ -1723,7 +2048,7 @@ class BillingService:
         stream.seek(0)
         return stream
 
-    async def import_billing_from_excel(self, file, user_id: int) -> dict:
+    async def import_billing_from_excel(self, file, user_id: int, current_user = None, hospital_id: int | None = None) -> dict:
         from io import BytesIO
         from pydantic import ValidationError
         import openpyxl
@@ -1959,7 +2284,7 @@ class BillingService:
                 )
                 
                 # Call billing create service method
-                await self.create(bill_create, user_id)
+                await self.create(bill_create, user_id, current_user=current_user, hospital_id=hospital_id)
                 created += 1
                 
             except ValidationError as e:

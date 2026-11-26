@@ -408,7 +408,18 @@ class AppointmentService:
             allowed_ids = await PatientService(self.db)._resolve_allowed_patient_ids(current_user)
             if not allowed_ids or appointment.patient_id not in allowed_ids:
                 raise ForbiddenException("You do not have permission to view this appointment")
-        return AppointmentResponse.model_validate(appointment)
+        resp = AppointmentResponse.model_validate(appointment)
+        if appointment.patient_id and (appointment.appointment_type in ("IPD", "Emergency") or appointment.admission_recommended):
+            from app.models.bed_allocation_model import Bed
+            from sqlalchemy import select
+            bed_res = await self.db.execute(
+                select(Bed).where(Bed.patient_id == appointment.patient_id, Bed.status == "Occupied").limit(1)
+            )
+            bed_obj = bed_res.scalar_one_or_none()
+            if bed_obj:
+                resp.allocated_bed_id = bed_obj.id
+                resp.allocated_bed_name = bed_obj.name
+        return resp
 
     async def get_token(self, appointment_id: int, current_user = None) -> TokenResponse:
         from app.core.dependencies import resolve_tenant_id
@@ -470,7 +481,8 @@ class AppointmentService:
 
         token = await self.repo.get_next_token(data.doctor_id, data.appointment_date)
         queue_tok = await self.repo.get_next_queue_token(data.appointment_date)
-        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number"})
+        requested_bed_id = getattr(data, "bed_id", None)
+        appointment_data = data.model_dump(exclude={"patient_name", "age", "patient_mobile_number", "bed_id"})
         if not appointment_data.get("booking_source"):
             appointment_data["booking_source"] = BookingSource.STAFF
         if not appointment_data.get("hospital_id"):
@@ -478,10 +490,17 @@ class AppointmentService:
             appointment_data["hospital_id"] = hospital_id or (patient.hospital_id if patient else None)
 
         appt_type_str = (appointment_data.get("appointment_type") or "").strip().upper()
-        if appt_type_str == "IPD":
-            from app.core.constants import AdmissionStatus, AppointmentType
+        if requested_bed_id and appt_type_str not in ("IPD", "EMERGENCY"):
+            appt_type_str = "IPD"
+            appointment_data["appointment_type"] = "IPD"
+
+        if appt_type_str in ("IPD", "EMERGENCY"):
+            from app.core.constants import AdmissionStatus, AppointmentType, AppointmentType
             from app.utils.helpers import generate_admission_number
-            appointment_data["appointment_type"] = AppointmentType.IPD.value
+            if appt_type_str == "IPD":
+                appointment_data["appointment_type"] = AppointmentType.IPD.value
+            else:
+                appointment_data["appointment_type"] = AppointmentType.EMERGENCY.value
             appointment_data["admission_recommended"] = True
             if not appointment_data.get("admission_status"):
                 appointment_data["admission_status"] = AdmissionStatus.ADMIT_RECOMMENDED
@@ -503,6 +522,26 @@ class AppointmentService:
         await self.audit_repo.create("create", "appointments", user_id=user_id, resource_id=str(appointment.id), hospital_id=appointment.hospital_id)
         await self._notify_confirmation_safely(appointment, user_id)
 
+        allocated_bed = None
+        if requested_bed_id:
+            from app.services.bed_allocation_service import BedAllocationService
+            from app.schemas.bed_allocation_schema import BedAllocationRequest
+            from datetime import timezone
+
+            bed_alloc_service = BedAllocationService(self.db)
+            admission_time = appointment.appointment_time if isinstance(appointment.appointment_time, time) else time(0, 0)
+            admission_dt = datetime.combine(appointment.appointment_date, admission_time, tzinfo=timezone.utc)
+            allocated_bed = await bed_alloc_service.allocate_bed(
+                bed_id=requested_bed_id,
+                data=BedAllocationRequest(
+                    patientId=appointment.patient_id,
+                    appointmentId=appointment.id,
+                    admissionDate=admission_dt,
+                    notes=f"Auto-allocated during IPD appointment creation #{appointment.appointment_number}",
+                ),
+                current_user=current_user,
+            )
+
         try:
             doctor = await self.doctor_repo.get_by_id(appointment.doctor_id)
             if doctor and doctor.user_id:
@@ -522,7 +561,11 @@ class AppointmentService:
             import logging
             logging.getLogger(__name__).warning("Failed to dispatch doctor new appointment notification: %s", notif_exc)
 
-        return AppointmentResponse.model_validate(appointment)
+        resp = AppointmentResponse.model_validate(appointment)
+        if allocated_bed:
+            resp.allocated_bed_id = allocated_bed.id
+            resp.allocated_bed_name = allocated_bed.name
+        return resp
 
 
     async def update(self, appointment_id: int, data: AppointmentUpdate, user_id: int, current_user = None) -> AppointmentResponse:
@@ -633,10 +676,13 @@ class AppointmentService:
 
         for key, value in update_data.items():
             setattr(appointment, key, value)
-        if (appointment.appointment_type or "").strip().upper() == "IPD":
-            from app.core.constants import AdmissionStatus, AppointmentType
+        if (appointment.appointment_type or "").strip().upper() in ("IPD", "EMERGENCY"):
+            from app.core.constants import AdmissionStatus, AppointmentType, AppointmentType
             from app.utils.helpers import generate_admission_number
-            appointment.appointment_type = AppointmentType.IPD.value
+            if (appointment.appointment_type or "").strip().upper() == "IPD":
+                appointment.appointment_type = AppointmentType.IPD.value
+            else:
+                appointment.appointment_type = AppointmentType.EMERGENCY.value
             appointment.admission_recommended = True
             if not appointment.admission_status:
                 appointment.admission_status = AdmissionStatus.ADMIT_RECOMMENDED
@@ -1742,7 +1788,7 @@ class AppointmentService:
         if not appointment.check_in_time and appointment.appointment_status not in (AppointmentStatus.COMPLETED, "Checked-In", "In-Progress") and (appointment.queue_status or "").upper() not in ("CHECKED_IN", "IN_CONSULTATION", "COMPLETED"):
             raise BadRequestException("Cannot recommend admission for a patient who has not checked in. Please check in the patient first.")
 
-        from app.core.constants import AdmissionStatus, EmergencyDisposition
+        from app.core.constants import AdmissionStatus, AppointmentType, EmergencyDisposition
         from app.utils.helpers import generate_admission_number
         appointment.appointment_type = "IPD"
         appointment.appointment_status = AppointmentStatus.COMPLETED
@@ -1784,6 +1830,24 @@ class AppointmentService:
 
         await self.db.flush()
 
+        allocated_bed = None
+        if getattr(data, "bed_id", None):
+            from app.services.bed_allocation_service import BedAllocationService
+            from app.schemas.bed_allocation_schema import BedAllocationRequest
+            from app.utils.helpers import utc_now
+
+            bed_alloc_service = BedAllocationService(self.db)
+            allocated_bed = await bed_alloc_service.allocate_bed(
+                bed_id=data.bed_id,
+                data=BedAllocationRequest(
+                    patientId=appointment.patient_id,
+                    appointmentId=appointment.id,
+                    admissionDate=utc_now(),
+                    notes=data.notes or f"Allocated upon admission recommendation for appointment #{appointment.appointment_number}",
+                ),
+                current_user=current_user,
+            )
+
         patient_name = appointment.patient_name or f"Patient ID {appointment.patient_id}"
         await self._create_queue_notification(
             appointment,
@@ -1804,6 +1868,8 @@ class AppointmentService:
             diagnosis=diagnosis_val or (appointment.patient.diagnosis if appointment.patient else None),
             notes=data.notes,
             disposition=appointment.disposition,
+            allocated_bed_id=allocated_bed.id if allocated_bed else None,
+            allocated_bed_name=allocated_bed.name if allocated_bed else None,
         )
 
     async def update_triage(
@@ -1853,7 +1919,7 @@ class AppointmentService:
         from app.models.bed_allocation_model import Bed
         from app.models.doctor_model import Doctor
         from app.models.patient_model import Patient
-        from app.core.constants import AdmissionStatus
+        from app.core.constants import AdmissionStatus, AppointmentType
         from app.core.dependencies import resolve_tenant_id
         from sqlalchemy import select, and_, not_, exists, or_
         from sqlalchemy.orm import selectinload
@@ -1909,7 +1975,7 @@ class AppointmentService:
                         ),
                     ),
                     and_(
-                        Appointment.appointment_type == "IPD",
+                        Appointment.appointment_type.in_(["IPD", "Emergency", "emergency", AppointmentType.IPD.value, AppointmentType.EMERGENCY.value]),
                         or_(
                             Appointment.admission_status.is_(None),
                             Appointment.admission_status.notin_(
@@ -2026,8 +2092,8 @@ class AppointmentService:
                     appointment_number=a.appointment_number,
                     appointment_date=a.appointment_date,
                     appointment_status=a.appointment_status,
-                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if (a.admission_recommended or (a.appointment_type or "").upper() == "IPD") else None),
-                    admission_recommended=bool(a.admission_recommended or (a.appointment_type or "").upper() == "IPD"),
+                    admission_status=a.admission_status or (AdmissionStatus.ADMIT_RECOMMENDED if (a.admission_recommended or (a.appointment_type or "").upper() in ("IPD", "EMERGENCY")) else None),
+                    admission_recommended=bool(a.admission_recommended or (a.appointment_type or "").upper() in ("IPD", "EMERGENCY")),
                     admission_reason=a.admission_reason,
                     expected_los=a.expected_los,
                     recommended_ward=a.recommended_ward,

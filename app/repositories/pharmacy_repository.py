@@ -566,6 +566,11 @@ class PharmacyInvoiceRepository:
         result = await self.db.execute(self._base_query(hospital_id=hospital_id).where(PharmacyInvoice.id == invoice_id))
         return result.scalar_one_or_none()
 
+    async def get_by_prescription_id(self, prescription_id: int, hospital_id: int | None = None) -> PharmacyInvoice | None:
+        query = self._base_query(hospital_id=hospital_id).where(PharmacyInvoice.prescription_id == prescription_id)
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def create(self, invoice: PharmacyInvoice, items: list[PharmacyInvoiceItem]) -> PharmacyInvoice:
         self.db.add(invoice)
         await self.db.flush()

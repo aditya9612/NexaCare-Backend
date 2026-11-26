@@ -156,6 +156,7 @@ async def test_appointment_service_export_does_not_modify_clean_interface():
 
     mock_user = MagicMock()
     mock_user.role.name = "admin"
+    mock_user.hospital_id = 6
 
     with patch("app.repositories.hospital_repository.HospitalRepository.get_by_id", new_callable=AsyncMock) as mock_get_hosp:
         mock_get_hosp.return_value = MagicMock(name="Test Hospital", logo_url=None, address=None, phone=None, email=None)

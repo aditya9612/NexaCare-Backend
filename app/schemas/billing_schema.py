@@ -11,6 +11,7 @@ class BillType(str, Enum):
     PHARMACY = "pharmacy"
     CONSULTATION = "consultation"
     IPD = "ipd"
+    LAB = "lab"
 
 
 class BillingDateFilter(str, Enum):
@@ -50,8 +51,16 @@ class BillingCreate(BaseSchema):
     discount_amount: float = Field(0.0, ge=0)
     due_date: datetime | None = None
     notes: str | None = None
-    appointment_id: Optional[int] = None
+    appointment_id: Optional[int] = Field(None, description="Optional appointment ID. Can be null or omitted.")
+    hospital_id: Optional[int] = None
     items: List[BillItemCreate] = Field(..., min_length=1)
+
+    @field_validator("appointment_id", mode="before")
+    @classmethod
+    def sanitize_appointment_id(cls, v):
+        if v is None or v == "" or v == 0 or v == "0" or v == "null":
+            return None
+        return v
 
 
 class BillingUpdate(BaseSchema):
@@ -87,6 +96,10 @@ class BillingResponse(BaseSchema):
     updated_at: datetime
     source: Optional[str] = "billing"
     bill_type: Optional[str] = "consultation"
+    doctor_charges: Optional[float] = None
+    lab_charges: Optional[float] = None
+    pharmacy_charges: Optional[float] = None
+    bed_charges: Optional[float] = None
 
 
 class PaymentCreate(BaseSchema):

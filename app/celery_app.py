@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.tasks.lab_tasks",
         "app.tasks.notification_tasks",
         "app.tasks.faq_ai_tasks",
+        "app.tasks.email_tasks",
     ],
 )
 
@@ -74,6 +75,10 @@ celery_app.conf.update(
         },
         "process-medication-reminders": {
             "task": "app.tasks.reminder_tasks.process_medication_reminders",
+            "schedule": 60.0,
+        },
+        "check-due-email-campaigns": {
+            "task": "app.tasks.email_tasks.check_due_scheduled_campaigns",
             "schedule": 60.0,
         },
     },

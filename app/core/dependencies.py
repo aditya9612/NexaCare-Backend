@@ -162,4 +162,5 @@ def resolve_tenant_id(user: User | None, x_hospital_id: int | None = None) -> in
 
 
 TenantHospitalId = Annotated[int | None, Depends(get_tenant_hospital_id)]
+TenantWriteHospitalId = TenantHospitalId
 

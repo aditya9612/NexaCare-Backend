@@ -33,6 +33,8 @@ from app.services.doctor_service import DoctorService
 from app.services.doctor_medical_record_service import DoctorMedicalRecordService
 from app.utils.pagination import PaginatedResult
 from app.schemas.clinical_record_schema import ClinicalRecordResponse
+from app.schemas.nurse_communication_schema import EmergencyAlertResponse
+from app.services.nurse_communication_service import NurseCommunicationService
 from fastapi import Query
 
 router = APIRouter()
@@ -880,3 +882,23 @@ async def list_doctor_clinical_records(
         page=page, size=size, doctor_id=doctor_id, hospital_id=hospital_id
     )
     return APIResponse(message="Records fetched successfully", data=result)
+
+
+@router.post(
+    "/emergency-alerts/{alert_id}/acknowledge",
+    response_model=APIResponse[EmergencyAlertResponse],
+    summary="Acknowledge Emergency Alert",
+    description="Allows the assigned doctor to acknowledge a patient emergency alert.",
+)
+@router.post(
+    "/emergency-alert/{alert_id}/acknowledge",
+    response_model=APIResponse[EmergencyAlertResponse],
+    include_in_schema=False,
+)
+async def acknowledge_emergency_alert(
+    alert_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    result = await NurseCommunicationService(db).acknowledge_emergency_alert(alert_id, current_user)
+    return APIResponse(message="Emergency alert acknowledged successfully", data=result)

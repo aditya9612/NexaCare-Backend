@@ -41,4 +41,7 @@ class EmergencyAlertResponse(BaseSchema):
     appointment_id: int | None = None
     emergency_type: str
     message: str
+    status: str = "pending"
+    acknowledged_at: datetime | None = None
+    acknowledged_by: int | None = None
     created_at: datetime

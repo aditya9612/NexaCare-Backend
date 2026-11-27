@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -257,6 +259,7 @@ class NurseCommunicationService:
             appointment_id=data.appointment_id,
             emergency_type=data.emergency_type,
             message=data.message,
+            status="pending",
         )
         await self.repo.create_emergency_alert(alert)
 
@@ -270,6 +273,9 @@ class NurseCommunicationService:
             appointment_id=alert.appointment_id,
             emergency_type=alert.emergency_type,
             message=alert.message,
+            status=alert.status or "pending",
+            acknowledged_at=alert.acknowledged_at,
+            acknowledged_by=alert.acknowledged_by,
             created_at=alert.created_at,
         )
 
@@ -284,6 +290,9 @@ class NurseCommunicationService:
                 appointment_id=alert.appointment_id,
                 emergency_type=alert.emergency_type,
                 message=alert.message,
+                status=alert.status or "pending",
+                acknowledged_at=alert.acknowledged_at,
+                acknowledged_by=alert.acknowledged_by,
                 created_at=alert.created_at,
             )
             for alert in alerts
@@ -301,6 +310,9 @@ class NurseCommunicationService:
             appointment_id=alert.appointment_id,
             emergency_type=alert.emergency_type,
             message=alert.message,
+            status=alert.status or "pending",
+            acknowledged_at=alert.acknowledged_at,
+            acknowledged_by=alert.acknowledged_by,
             created_at=alert.created_at,
         )
 
@@ -335,6 +347,89 @@ class NurseCommunicationService:
             appointment_id=alert.appointment_id,
             emergency_type=alert.emergency_type,
             message=alert.message,
+            status=alert.status or "pending",
+            acknowledged_at=alert.acknowledged_at,
+            acknowledged_by=alert.acknowledged_by,
+            created_at=alert.created_at,
+        )
+
+    async def acknowledge_emergency_alert(self, alert_id: int, current_user: User) -> EmergencyAlertResponse:
+        alert = await self.repo.get_emergency_alert(alert_id)
+        if not alert:
+            raise NotFoundException("Emergency alert not found")
+
+        # 1. Prevent repeated acknowledgement of an already acknowledged alert
+        if alert.status == "acknowledged":
+            raise BadRequestException("Emergency alert has already been acknowledged")
+
+        # 2. Check if user is a registered doctor or super admin
+        role_name = current_user.role.name if getattr(current_user, "role", None) else getattr(current_user, "role_name", "")
+        doctor_stmt = select(Doctor).where(Doctor.user_id == current_user.id)
+        doctor = await self.db.scalar(doctor_stmt)
+        if not doctor and role_name != "Super Admin":
+            raise ForbiddenException("Only registered doctors can acknowledge emergency alerts")
+
+        # 3. Only the doctor assigned to the alert should be allowed to acknowledge it
+        assigned_doctor_user_id = await self.get_assigned_doctor_user_id(
+            alert.patient_id, appointment_id=alert.appointment_id
+        )
+
+        is_assigned = False
+        if assigned_doctor_user_id and current_user.id == assigned_doctor_user_id:
+            is_assigned = True
+        elif alert.appointment_id and doctor:
+            appt_doc = await self.db.scalar(
+                select(Appointment.doctor_id).where(
+                    Appointment.id == alert.appointment_id,
+                    Appointment.doctor_id == doctor.id,
+                )
+            )
+            if appt_doc:
+                is_assigned = True
+
+        if not is_assigned and role_name != "Super Admin":
+            raise ForbiddenException("Only the doctor assigned to this alert can acknowledge it")
+
+        # 4. Update status and acknowledgment timestamps
+        now_dt = datetime.now(timezone.utc)
+        alert.status = "acknowledged"
+        alert.acknowledged_at = now_dt
+        alert.acknowledged_by = current_user.id
+        await self.repo.update_emergency_alert(alert)
+
+        # 5. Notify the nurse who raised the alert
+        if alert.nurse_id:
+            try:
+                nurse_stmt = select(Nurse.user_id).where(Nurse.id == alert.nurse_id)
+                nurse_user_id = await self.db.scalar(nurse_stmt)
+                if nurse_user_id:
+                    nurse_user = await self.db.get(User, nurse_user_id)
+                    doc_name = current_user.full_name or "Doctor"
+                    notif_service = NotificationService(self.db)
+                    await notif_service.dispatch_notification(
+                        user_id=nurse_user_id,
+                        title="Emergency Alert Acknowledged",
+                        message=f"Dr. {doc_name} has acknowledged the emergency alert for patient ID {alert.patient_id}.",
+                        notification_type="PATIENT_EMERGENCY_ACKNOWLEDGED",
+                        reference_type="PATIENT",
+                        reference_id=alert.patient_id,
+                        priority="HIGH",
+                        email=nurse_user.email if nurse_user else None,
+                        phone=nurse_user.phone if nurse_user else None,
+                    )
+            except Exception:
+                pass
+
+        return EmergencyAlertResponse(
+            id=alert.id,
+            patient_id=alert.patient_id,
+            nurse_id=alert.nurse_id,
+            appointment_id=alert.appointment_id,
+            emergency_type=alert.emergency_type,
+            message=alert.message,
+            status=alert.status,
+            acknowledged_at=alert.acknowledged_at,
+            acknowledged_by=alert.acknowledged_by,
             created_at=alert.created_at,
         )
 

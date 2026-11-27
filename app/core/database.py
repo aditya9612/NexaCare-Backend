@@ -100,6 +100,9 @@ async def init_db():
             from sqlalchemy import text
             for col_stmt in [
                 "ALTER TABLE patient_vitals ADD COLUMN notes TEXT NULL",
+                "ALTER TABLE emergency_alerts ADD COLUMN status VARCHAR(50) DEFAULT 'pending'",
+                "ALTER TABLE emergency_alerts ADD COLUMN acknowledged_at DATETIME NULL",
+                "ALTER TABLE emergency_alerts ADD COLUMN acknowledged_by INT NULL",
                 "ALTER TABLE lab_reports ADD COLUMN technician_verified_by INT NULL",
                 "ALTER TABLE lab_reports ADD COLUMN technician_verified_at DATETIME NULL",
                 "ALTER TABLE lab_reports ADD COLUMN technician_remarks TEXT NULL",

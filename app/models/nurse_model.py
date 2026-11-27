@@ -287,10 +287,16 @@ class EmergencyAlert(Base, TimestampMixin):
     )
     emergency_type: Mapped[str] = mapped_column(String(100), index=True)
     message: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="pending", server_default="pending", index=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     patient = relationship("Patient")
     nurse = relationship("Nurse")
     appointment = relationship("Appointment")
+    acknowledged_by_user = relationship("User", foreign_keys=[acknowledged_by])
 
 
 __all__ = [

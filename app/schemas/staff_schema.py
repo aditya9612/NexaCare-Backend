@@ -200,6 +200,7 @@ class StaffResponse(BaseSchema):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    license_number: str | None = None
 
     department: DepartmentResponse | None = None
     role: RoleResponse | None = None

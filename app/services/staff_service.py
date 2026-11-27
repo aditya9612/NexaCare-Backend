@@ -148,7 +148,30 @@ class StaffService:
         # Create audit log
         await self.audit_repo.create("create", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
-        return StaffResponse.model_validate(staff)
+        response = StaffResponse.model_validate(staff)
+        if is_nurse and nurse_license:
+            response.license_number = nurse_license
+        return response
+
+    async def _attach_nurse_licenses(self, staff_items: list[StaffResponse]) -> list[StaffResponse]:
+        from app.models.nurse_model import Nurse
+        nurse_items = [s for s in staff_items if (s.role_name or "").strip() == "Nurse"]
+        if not nurse_items:
+            return staff_items
+        emails = [s.email.lower() for s in nurse_items if s.email]
+        if not emails:
+            return staff_items
+        users = (await self.db.execute(select(User).where(func.lower(User.email).in_(emails)))).scalars().all()
+        user_map = {u.email.lower(): u.id for u in users if u.email}
+        if not user_map:
+            return staff_items
+        nurses = (await self.db.execute(select(Nurse).where(Nurse.user_id.in_(user_map.values())))).scalars().all()
+        license_map = {n.user_id: n.license_number for n in nurses if n.user_id}
+        for s in nurse_items:
+            u_id = user_map.get((s.email or "").lower())
+            if u_id and u_id in license_map:
+                s.license_number = license_map[u_id]
+        return staff_items
 
     async def list_staff(
         self,
@@ -175,8 +198,10 @@ class StaffService:
         inactive_staff = await self.repo.count_all(status=0, hospital_id=hospital_id)
         role_counts = await self.repo.get_role_counts(hospital_id=hospital_id)
 
+        staff_items = [StaffResponse.model_validate(item) for item in items]
+        await self._attach_nurse_licenses(staff_items)
         paginated = build_paginated_result(
-            [StaffResponse.model_validate(item) for item in items],
+            staff_items,
             total,
             page,
             size
@@ -211,7 +236,14 @@ class StaffService:
         staff = await self.repo.get_by_id(staff_id, hospital_id=hospital_id)
         if not staff:
             raise NotFoundException("Staff member not found")
-        return StaffResponse.model_validate(staff)
+        response = StaffResponse.model_validate(staff)
+        if (staff.role_name or "").strip() == "Nurse":
+            user = await self.db.scalar(select(User).where(func.lower(User.email) == staff.email.lower()))
+            if user:
+                nurse = await self.nurse_repo.get_by_user_id(user.id)
+                if nurse:
+                    response.license_number = nurse.license_number
+        return response
 
     async def update_staff(
         self, staff_id: int, data: StaffUpdate, current_user_id: int, current_user: Any | None = None
@@ -278,7 +310,17 @@ class StaffService:
             
         await self.audit_repo.create("update", "staff", user_id=current_user_id, resource_id=str(staff.id))
         
-        return StaffResponse.model_validate(staff)
+        response = StaffResponse.model_validate(staff)
+        if effective_role == "Nurse":
+            if 'nurse' in locals() and nurse:
+                response.license_number = nurse.license_number
+            else:
+                user = await self.db.scalar(select(User).where(func.lower(User.email) == staff.email.lower()))
+                if user:
+                    n = await self.nurse_repo.get_by_user_id(user.id)
+                    if n:
+                        response.license_number = n.license_number
+        return response
 
     async def update_staff_status(
         self, staff_id: int, status: int, current_user_id: int, current_user: Any | None = None

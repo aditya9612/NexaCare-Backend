@@ -1,7 +1,7 @@
 """merge main and faq-ai heads
 
 Revision ID: c2454a050e1c
-Revises: 405fd210ac69, 6e628fdd70ba
+Revises: fa1b2c3d4e5f, 6e628fdd70ba
 Create Date: 2026-09-07 11:49:47.292010
 
 """

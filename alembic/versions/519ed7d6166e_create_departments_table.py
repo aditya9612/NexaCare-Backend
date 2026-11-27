@@ -1,7 +1,7 @@
 """create_departments_table
 
 Revision ID: 519ed7d6166e
-Revises: 
+Revises: 180acdfb2046
 Create Date: 2026-05-27 17:28:59.539906
 
 """

@@ -1,6 +1,6 @@
 """add_emergency_alert_status_and_ack
 
-Revision ID: e7f8a9b0c1d2
+Revision ID: 3bbe62a6935a
 Revises: 9f8e7d6c5b4a
 Create Date: 2026-11-26 18:30:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "e7f8a9b0c1d2"
+revision: str = "3bbe62a6935a"
 down_revision: Union[str, None] = "9f8e7d6c5b4a"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -1,7 +1,7 @@
 """create_base_tables
 
 Revision ID: 180acdfb2046
-Revises: d37ebcb2dc69
+Revises: 
 Create Date: 2026-06-05 13:16:36.343495
 
 """

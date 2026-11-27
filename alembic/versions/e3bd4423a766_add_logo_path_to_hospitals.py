@@ -1,7 +1,7 @@
 """add_logo_path_to_hospitals
 
 Revision ID: e3bd4423a766
-Revises: e7f8a9b0c1d2
+Revises: f1a2b3c4d5e6
 Create Date: 2026-10-07 12:49:18.811912
 
 """

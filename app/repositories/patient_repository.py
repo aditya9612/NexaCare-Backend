@@ -379,12 +379,15 @@ class PatientRepository:
         result = await self.db.execute(query)
         row = result.one()
 
-        # 2. IPD: Unique active patients currently admitted/inpatient (not discharged/cancelled)
+        # 2. IPD: Unique active patients currently admitted/inpatient or having active IPD/Emergency appointment
         admitted_subq = (
             select(Appointment.patient_id)
             .where(
                 Appointment.patient_id.isnot(None),
-                func.lower(Appointment.admission_status) == "admitted",
+                or_(
+                    func.lower(Appointment.admission_status) == "admitted",
+                    func.lower(Appointment.appointment_type).in_(["ipd", "emergency"]),
+                ),
                 Appointment.appointment_status.notin_(["Cancelled", "cancelled", "CANCELLED"]),
             )
         )

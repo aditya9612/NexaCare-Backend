@@ -195,9 +195,14 @@ class AppointmentRepository:
         if end_date:
             query = query.where(Appointment.appointment_date <= end_date)
         if appointment_type:
-            query = query.where(
-                func.lower(Appointment.appointment_type) == func.lower(appointment_type.strip())
-            )
+            if isinstance(appointment_type, (list, tuple, set)):
+                query = query.where(
+                    func.lower(Appointment.appointment_type).in_([str(t).strip().lower() for t in appointment_type])
+                )
+            else:
+                query = query.where(
+                    func.lower(Appointment.appointment_type) == func.lower(str(appointment_type).strip())
+                )
         if booking_source:
             query = query.where(
                 func.lower(Appointment.booking_source) == func.lower(str(booking_source).strip())

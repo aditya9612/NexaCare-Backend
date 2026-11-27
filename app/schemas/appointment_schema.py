@@ -406,6 +406,8 @@ class AppointmentListWithCountsResponse(PaginatedResponse[AppointmentResponse]):
     waiting: int = 0
     total_today_tokens: int = 0
     total_today_discharged: int = 0
+    ipd: int = 0
+    opd: int = 0
 
 
 class TodayAppointmentsResponse(BaseSchema):
@@ -423,6 +425,8 @@ class TodayAppointmentsResponse(BaseSchema):
     confirmed: int = 0
     in_progress: int = 0
     admitted: int = 0
+    ipd: int = 0
+    opd: int = 0
 
 class ConfirmedVisitResponse(BaseSchema):
     appointment_id: int

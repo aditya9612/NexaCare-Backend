@@ -365,6 +365,18 @@ class AppointmentService:
             appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
             hospital_id=hospital_id,
         )
+        ipd = await self.repo.count_all(
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            appointment_type="IPD",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
+            hospital_id=hospital_id,
+        )
+        opd = await self.repo.count_all(
+            patient_id=effective_patient_id, doctor_id=doctor_id, department_id=department_id,
+            appointment_type="OPD",
+            appointment_date=status_appt_date, start_date=status_start, end_date=status_end,
+            hospital_id=hospital_id,
+        )
 
         paginated = build_paginated_result(
             [AppointmentResponse.model_validate(a) for a in items], total, page, size
@@ -390,6 +402,8 @@ class AppointmentService:
             "waiting": waiting,
             "admit_recommended": admit_recommended,
             "admitted": admitted,
+            "ipd": ipd,
+            "opd": opd,
         }
 
     async def get_by_id(self, appointment_id: int, current_user = None) -> AppointmentResponse:
@@ -1023,6 +1037,8 @@ class AppointmentService:
         confirmed_count = sum(1 for a in items if (a.appointment_status or "").lower() == "confirmed")
         in_progress_count = sum(1 for a in items if (a.appointment_status or "").lower() in ("in-progress", "in_progress") or (a.queue_status or "").upper() in ("CALLED", "IN_PROGRESS", "IN_CONSULTATION"))
         admitted_count = sum(1 for a in items if (a.admission_status or "").lower() in ("admitted", "admit recommended", "admit-recommended"))
+        ipd_count = sum(1 for a in items if (a.appointment_type or "").upper() in ("IPD", "EMERGENCY"))
+        opd_count = sum(1 for a in items if (a.appointment_type or "").upper() == "OPD")
 
         return {
             "items": items,
@@ -1039,6 +1055,8 @@ class AppointmentService:
             "confirmed": confirmed_count,
             "in_progress": in_progress_count,
             "admitted": admitted_count,
+            "ipd": ipd_count,
+            "opd": opd_count,
         }
 
     async def get_upcoming(self, limit: int = 20, current_user = None):

@@ -92,40 +92,82 @@ class LabDashboardService:
     ) -> LabDashboardResponse:
         start_dt, end_dt = self.get_date_range(time_filter, start_date, end_date)
 
-        # Get status counts for test orders
+        # Get status counts for test orders in date range
         order_counts = await self.repo.get_test_order_status_counts(start_dt, end_dt, department_id, hospital_id=hospital_id)
-        total_test_orders = sum(order_counts.values())
-        pending_tests = order_counts.get(LabOrderStatus.ORDERED, 0)
-        tests_in_progress = (
+        
+        # Get active uncompleted / open backlog in the hospital
+        active_counts = await self.repo.get_active_test_order_status_counts(department_id, hospital_id=hospital_id)
+        active_pending = active_counts.get("ordered", 0) + active_counts.get("pending", 0)
+        active_in_progress = (
+            active_counts.get("in_progress", 0)
+            + active_counts.get("sample_collected", 0)
+            + active_counts.get("technician_verified", 0)
+        )
+
+        period_pending = order_counts.get(LabOrderStatus.ORDERED, 0) + order_counts.get("pending", 0)
+        period_in_progress = (
             order_counts.get(LabOrderStatus.IN_PROGRESS, 0)
             + order_counts.get(LabOrderStatus.SAMPLE_COLLECTED, 0)
             + order_counts.get(LabOrderStatus.TECHNICIAN_VERIFIED, 0)
         )
+
+        # Active workload is open tasks waiting for the technician
+        pending_tests = max(active_pending, period_pending)
+        tests_in_progress = max(active_in_progress, period_in_progress)
         completed_tests = order_counts.get(LabOrderStatus.COMPLETED, 0) + order_counts.get("approved", 0)
+        
+        if time_filter == "overall" or not start_dt:
+            total_test_orders = sum(order_counts.values())
+        else:
+            total_test_orders = max(sum(order_counts.values()), pending_tests + tests_in_progress + completed_tests)
 
         # Get samples collected count
         samples_collected = await self.repo.get_samples_collected_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        if samples_collected == 0:
+            active_samples = (
+                active_counts.get("sample_collected", 0)
+                + active_counts.get("in_progress", 0)
+                + active_counts.get("technician_verified", 0)
+            )
+            if active_samples > 0:
+                samples_collected = active_samples
 
         # Get report counts and verification metrics
         report_counts = await self.repo.get_report_status_counts(start_dt, end_dt, department_id, hospital_id=hospital_id)
-        reports_pending_approval = (
+        period_reports_pending = (
             report_counts.get(LabReportStatus.PENDING_APPROVAL, 0)
             + report_counts.get(LabReportStatus.TECHNICIAN_VERIFIED, 0)
             + report_counts.get(LabReportStatus.DRAFT, 0)
         )
+        active_reports_pending = await self.repo.get_active_pending_report_approvals_count(department_id, hospital_id=hospital_id)
+        reports_pending_approval = max(period_reports_pending, active_reports_pending)
+
         verification_counts = await self.repo.get_report_verification_counts(start_dt, end_dt, department_id, hospital_id=hospital_id)
         technician_verified_reports = verification_counts.get("technician_verified", 0)
         doctor_approved_reports = verification_counts.get("doctor_approved", 0)
+        if technician_verified_reports == 0:
+            technician_verified_reports = active_counts.get("technician_verified", 0)
         approved_reports = doctor_approved_reports
 
         # Get critical and delivered counts
         critical_reports = await self.repo.get_critical_reports_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
+        if critical_reports == 0 and start_dt:
+            critical_reports = await self.repo.get_critical_reports_count(None, None, department_id, hospital_id=hospital_id)
+
         reports_delivered = await self.repo.get_reports_delivered_count(start_dt, end_dt, department_id, hospital_id=hospital_id)
 
-        # Fetch detailed lists
+        # Fetch detailed lists (with fallback to recent records if date range is empty)
         recent_orders_data = await self.repo.get_recent_test_orders(start_dt, end_dt, department_id=department_id, hospital_id=hospital_id)
+        if not recent_orders_data and start_dt:
+            recent_orders_data = await self.repo.get_recent_test_orders(None, None, department_id=department_id, hospital_id=hospital_id)
+
         critical_alerts_data = await self.repo.get_critical_alerts(start_dt, end_dt, department_id=department_id, hospital_id=hospital_id)
+        if not critical_alerts_data and start_dt:
+            critical_alerts_data = await self.repo.get_critical_alerts(None, None, department_id=department_id, hospital_id=hospital_id)
+
         pending_approvals_data = await self.repo.get_pending_report_approvals(start_dt, end_dt, department_id=department_id, hospital_id=hospital_id)
+        if not pending_approvals_data and start_dt:
+            pending_approvals_data = await self.repo.get_pending_report_approvals(None, None, department_id=department_id, hospital_id=hospital_id)
 
         # Convert to Pydantic responses
         recent_test_orders = [RecentTestOrder(**o) for o in recent_orders_data]

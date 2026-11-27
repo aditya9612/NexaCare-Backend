@@ -38,20 +38,36 @@ def _validate_section_param(section: Optional[str]) -> str:
         raise BadRequestException(f"Invalid section. Allowed values: {', '.join(sorted(ALLOWED_SECTIONS))}")
     return normalized_section
 
-async def _get_technician_department_id(db: DbSession, current_user: User) -> Optional[int]:
-    role_name = current_user.role.name.lower() if current_user and current_user.role else ""
-    if role_name in ["lab technician", "lab_technician"]:
-        query = select(Staff).where(
-            Staff.email == current_user.email,
-            Staff.is_deleted.is_(False)
+async def _resolve_dashboard_context(
+    db: DbSession,
+    current_user: User,
+    x_hospital_id: Optional[int] = None,
+    department_id: Optional[int] = None,
+) -> tuple[Optional[int], Optional[int]]:
+    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
+    if not hospital_id and current_user:
+        staff_res = await db.execute(
+            select(Staff.hospital_id).where(Staff.email == current_user.email, Staff.is_deleted.is_(False))
         )
-        if current_user.hospital_id:
-            query = query.where(Staff.hospital_id == current_user.hospital_id)
-        staff_result = await db.execute(query)
-        staff = staff_result.scalars().first()
-        if staff and staff.department_id:
-            return staff.department_id
-    return None
+        hospital_id = staff_res.scalar_one_or_none()
+
+    dept_id = department_id
+    if dept_id is None and current_user and current_user.role:
+        clean_role = current_user.role.name.lower().strip().replace("_", " ")
+        if clean_role not in [
+            "lab technician", "lab user", "lab", "lab staff", "super admin", "hospital admin", "admin"
+        ]:
+            staff_res = await db.execute(
+                select(Staff.department_id).where(Staff.email == current_user.email, Staff.is_deleted.is_(False))
+            )
+            dept_id = staff_res.scalar_one_or_none()
+
+    return hospital_id, dept_id
+
+
+async def _get_technician_department_id(db: DbSession, current_user: User) -> Optional[int]:
+    _, dept_id = await _resolve_dashboard_context(db, current_user)
+    return dept_id
 
 @router.get("", response_model=APIResponse[LabDashboardResponse])
 async def get_lab_dashboard(
@@ -60,13 +76,13 @@ async def get_lab_dashboard(
     time_filter: str = Query("overall", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    department_id: Optional[int] = Query(None),
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     _validate_filter_params(time_filter, start_date, end_date)
     
-    dept_id = await _get_technician_department_id(db, current_user)
-    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
+    hospital_id, dept_id = await _resolve_dashboard_context(db, current_user, x_hospital_id, department_id)
     dashboard_data = await LabDashboardService(db).get_dashboard_data(
         time_filter=time_filter,
         start_date=start_date,
@@ -84,13 +100,13 @@ async def get_lab_analytics_dashboard(
     time_filter: str = Query("7_days", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    department_id: Optional[int] = Query(None),
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
 ):
     _validate_filter_params(time_filter, start_date, end_date)
 
-    dept_id = await _get_technician_department_id(db, current_user)
-    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
+    hospital_id, dept_id = await _resolve_dashboard_context(db, current_user, x_hospital_id, department_id)
     analytics_data = await LabDashboardService(db).get_analytics_data(
         time_filter=time_filter,
         start_date=start_date,
@@ -108,6 +124,7 @@ async def download_lab_dashboard_pdf(
     time_filter: str = Query("overall", alias="filter"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    department_id: Optional[int] = Query(None),
     section: Optional[str] = Query("all"),
     x_hospital_id: Optional[int] = Header(None, alias="X-Hospital-Id"),
     _: User = Depends(require_permission("lab", "read")),
@@ -115,8 +132,7 @@ async def download_lab_dashboard_pdf(
     _validate_filter_params(time_filter, start_date, end_date)
     validated_section = _validate_section_param(section)
     
-    dept_id = await _get_technician_department_id(db, current_user)
-    hospital_id = await get_tenant_hospital_id(current_user, x_hospital_id)
+    hospital_id, dept_id = await _resolve_dashboard_context(db, current_user, x_hospital_id, department_id)
     service = LabDashboardService(db)
     dashboard_data = await service.get_dashboard_data(
         time_filter=time_filter,

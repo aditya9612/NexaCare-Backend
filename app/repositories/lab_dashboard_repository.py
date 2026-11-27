@@ -38,6 +38,46 @@ class LabDashboardRepository:
         counts = {status: count for status, count in result.all()}
         return counts
 
+    async def get_active_test_order_status_counts(
+        self,
+        department_id: Optional[int] = None,
+        hospital_id: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Get status counts for all uncompleted / active test orders across the hospital (open backlog)."""
+        query = select(TestOrder.status, func.count(TestOrder.id)).where(
+            TestOrder.is_deleted.is_(False),
+            func.lower(TestOrder.status).in_([
+                "ordered", "pending", "in_progress", "sample_collected", "technician_verified"
+            ])
+        )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
+        query = query.group_by(TestOrder.status)
+        result = await self.db.execute(query)
+        return {status.lower(): count for status, count in result.all()}
+
+    async def get_active_pending_report_approvals_count(
+        self,
+        department_id: Optional[int] = None,
+        hospital_id: Optional[int] = None,
+    ) -> int:
+        """Count active reports pending approval, technician verification, or in draft."""
+        query = select(func.count(LabReport.id)).join(TestOrder, LabReport.test_order_id == TestOrder.id).where(
+            TestOrder.is_deleted.is_(False),
+            LabReport.status.in_([
+                LabReportStatus.PENDING_APPROVAL,
+                LabReportStatus.TECHNICIAN_VERIFIED,
+                LabReportStatus.DRAFT,
+            ])
+        )
+        if hospital_id is not None:
+            query = query.where(TestOrder.hospital_id == hospital_id)
+        if department_id is not None:
+            query = query.where(TestOrder.department_id == department_id)
+        return (await self.db.scalar(query)) or 0
+
     async def get_samples_collected_count(
         self,
         start_date: Optional[datetime],

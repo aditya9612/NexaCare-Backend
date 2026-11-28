@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import UserRole
 from app.core.database import get_db
-from app.core.exceptions import BadRequestException, ForbiddenException, UnauthorizedException
+from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException
 from app.core.security import decode_token
 from app.models.user_model import User
 from app.repositories.auth_repository import AuthRepository
@@ -123,6 +123,40 @@ async def get_tenant_hospital_id(
     return resolve_tenant_id(user, x_hospital_id)
 
 
+def _extract_user_attr(user: User, attr: str):
+    """Safely read an attribute from User or mock object without triggering SQLAlchemy lazy loads."""
+    user_dict = getattr(user, "__dict__", None)
+    if user_dict is not None:
+        if attr in user_dict:
+            return user_dict[attr]
+        if "_sa_instance_state" in user_dict:
+            return None
+    return getattr(user, attr, None)
+
+
+def _extract_user_role_name(user: User) -> str:
+    """Safely extract lowercased role name from User or mock object without triggering lazy loads."""
+    role = _extract_user_attr(user, "role")
+    if role and getattr(role, "name", None):
+        return str(role.name).lower()
+    role_name = _extract_user_attr(user, "role_name")
+    return str(role_name).lower() if role_name else ""
+
+
+def validate_tenant_body_match(body_hospital_id: int | None, validated_hospital_id: int) -> int:
+    """
+    Enforces that if a request body contains an explicit hospital_id,
+    it must match the validated tenant context. Otherwise, raises HTTP 400 Bad Request.
+    Returns the authoritative validated_hospital_id.
+    """
+    if body_hospital_id is not None and validated_hospital_id is not None and body_hospital_id != validated_hospital_id:
+        raise BadRequestException(
+            f"Conflicting hospital_id in request body ({body_hospital_id}) "
+            f"does not match authorized hospital context ({validated_hospital_id})"
+        )
+    return validated_hospital_id
+
+
 def resolve_tenant_id(user: User | None, x_hospital_id: int | None = None) -> int | None:
     """
     Convenience function to extract tenant hospital_id from a User instance.
@@ -136,25 +170,17 @@ def resolve_tenant_id(user: User | None, x_hospital_id: int | None = None) -> in
     if x_hospital_id is not None and x_hospital_id <= 0:
         raise BadRequestException("Invalid hospital ID provided in X-Hospital-Id header")
 
-    role = user.__dict__.get("role") if hasattr(user, "__dict__") else None
-
-    role_name = ""
-    if role and hasattr(role, "name") and role.name:
-        role_name = str(role.name).lower()
-    elif hasattr(user, "__dict__") and user.__dict__.get("role_name"):
-        role_name = str(user.__dict__["role_name"]).lower()
-    elif not hasattr(user, "_sa_instance_state") and getattr(user, "role_name", None):
-        role_name = str(user.role_name).lower()
+    role_name = _extract_user_role_name(user)
 
     if role_name in ("super admin", "super_admin"):
         if x_hospital_id is not None:
             return x_hospital_id
-        active_hid = user.__dict__.get("active_hospital_id") if hasattr(user, "__dict__") else getattr(user, "active_hospital_id", None)
-        hid = user.__dict__.get("hospital_id") if hasattr(user, "__dict__") else getattr(user, "hospital_id", None)
+        active_hid = _extract_user_attr(user, "active_hospital_id")
+        hid = _extract_user_attr(user, "hospital_id")
         return active_hid or hid
 
     # For non-super-admin users:
-    user_hospital_id = user.__dict__.get("hospital_id") if hasattr(user, "__dict__") and "hospital_id" in user.__dict__ else getattr(user, "hospital_id", None)
+    user_hospital_id = _extract_user_attr(user, "hospital_id")
     if x_hospital_id is not None and (user_hospital_id is None or x_hospital_id != user_hospital_id):
         raise ForbiddenException("Access denied: Cannot access or specify another hospital's tenant context")
 
@@ -163,4 +189,57 @@ def resolve_tenant_id(user: User | None, x_hospital_id: int | None = None) -> in
 
 TenantHospitalId = Annotated[int | None, Depends(get_tenant_hospital_id)]
 TenantWriteHospitalId = TenantHospitalId
+
+
+def resolve_tenant_write_id(user: User | None, x_hospital_id: int | None = None) -> int:
+    """
+    Resolves tenant hospital_id specifically for tenant-bound write operations (create, update, delete).
+    - Super Admin: MUST provide X-Hospital-Id (or active_hospital_id). If missing or None, raises HTTP 400 Bad Request.
+    - Tenant Users: Strictly restricted to their assigned user.hospital_id. If missing, raises HTTP 403 Forbidden.
+    - Invalid hospital ID (<= 0) raises HTTP 400 Bad Request.
+    """
+    if not user:
+        raise BadRequestException("User context required for tenant write operation")
+
+    if x_hospital_id is not None and x_hospital_id <= 0:
+        raise BadRequestException("Invalid hospital ID provided in X-Hospital-Id header")
+
+    role_name = _extract_user_role_name(user)
+    if role_name in ("super admin", "super_admin"):
+        tenant_id = x_hospital_id if x_hospital_id is not None else _extract_user_attr(user, "active_hospital_id")
+        if tenant_id is None:
+            raise BadRequestException(
+                "Super Admin must explicitly specify a target hospital via X-Hospital-Id header for tenant write operations."
+            )
+        return tenant_id
+
+    # For non-super-admin users:
+    user_hospital_id = _extract_user_attr(user, "hospital_id")
+    if not user_hospital_id:
+        raise ForbiddenException("User is not assigned to any hospital tenant")
+
+    if x_hospital_id is not None and x_hospital_id != user_hospital_id:
+        raise ForbiddenException("Access denied: Cannot access or specify another hospital's tenant context")
+
+    return user_hospital_id
+
+
+async def get_tenant_write_hospital_id(
+    db: DbSession,
+    user: CurrentUser,
+    x_hospital_id: Annotated[int | None, Header(alias="X-Hospital-Id", description="Tenant Hospital ID (Required for Super Admin writes)")] = None,
+) -> int:
+    """
+    Async dependency that resolves and validates hospital_id for tenant write operations.
+    Validates that the target hospital exists and is active in the database.
+    """
+    tenant_id = resolve_tenant_write_id(user, x_hospital_id)
+    from app.models.hospital_model import Hospital
+    hospital = await db.get(Hospital, tenant_id)
+    if not hospital or not getattr(hospital, "is_active", True) or getattr(hospital, "is_deleted", False):
+        raise NotFoundException(f"Hospital with ID {tenant_id} does not exist or is inactive.")
+    return tenant_id
+
+
+TenantWriteHospitalId = Annotated[int, Depends(get_tenant_write_hospital_id)]
 

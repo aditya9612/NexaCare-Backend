@@ -2748,6 +2748,11 @@ class NurseService:
         if not patient or patient.is_deleted:
             raise NotFoundException("Patient not found")
 
+        # Validate that the patient is actively allocated to this nurse
+        assignment = await self.assignment_repo.get_active_assignment(nurse_id, data.patient_id)
+        if not assignment:
+            raise BadRequestException("Task can only be assigned to allocated patients only")
+
         task = NurseTask(
             nurse_id=nurse_id,
             patient_id=data.patient_id,

@@ -829,8 +829,32 @@ class NurseDashboardResponse(BaseSchema):
     alerts: list[CriticalAlertResponse] = []
 
 
+COMMONLY_USED_NURSE_TASKS = [
+    "Check Patient Vitals",
+    "Administer Medication",
+    "Monitor Patient Condition",
+    "Wound Dressing",
+    "Monitor IV Fluid",
+    "Other (Create Custom Task)",
+    "Lab Sample Collection",
+]
+
+
 class NurseTaskCreate(BaseSchema):
-    title: str = Field(..., min_length=1, max_length=255)
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description=(
+            "Task title. Commonly used options: 'Check Patient Vitals', 'Administer Medication', "
+            "'Monitor Patient Condition', 'Wound Dressing', 'Monitor IV Fluid', "
+            "'Lab Sample Collection', or custom title when 'Other (Create Custom Task)' is selected."
+        ),
+        json_schema_extra={
+            "example": "Check Patient Vitals",
+            "options": COMMONLY_USED_NURSE_TASKS,
+        },
+    )
     description: str | None = None
     patient_id: int
     due_date: date

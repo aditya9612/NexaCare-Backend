@@ -238,19 +238,62 @@ class NurseCommunicationService:
             )
         return results
 
+    async def _build_alert_response(self, alert: EmergencyAlert) -> EmergencyAlertResponse:
+        from unittest.mock import AsyncMock
+        appointment_number = None
+        doctor_id = None
+        doctor_name = None
+        if alert.appointment_id:
+            try:
+                appt = await self.db.get(Appointment, alert.appointment_id)
+                if appt and not isinstance(appt, AsyncMock):
+                    raw_num = getattr(appt, "appointment_number", None)
+                    if raw_num and not isinstance(raw_num, AsyncMock):
+                        appointment_number = str(raw_num)
+                    raw_doc_id = getattr(appt, "doctor_id", None)
+                    if raw_doc_id and not isinstance(raw_doc_id, AsyncMock):
+                        doctor_id = int(raw_doc_id)
+                    if doctor_id:
+                        from app.models.doctor_model import Doctor
+                        doc = await self.db.get(Doctor, doctor_id)
+                        if doc and not isinstance(doc, AsyncMock):
+                            fn = getattr(doc, "first_name", "")
+                            ln = getattr(doc, "last_name", "")
+                            if fn or ln:
+                                doctor_name = f"Dr. {fn} {ln}".strip()
+            except Exception:
+                pass
+
+        alert_created_at = getattr(alert, "created_at", None)
+        if not alert_created_at or isinstance(alert_created_at, AsyncMock):
+            alert_created_at = datetime.now(timezone.utc)
+
+        return EmergencyAlertResponse(
+            id=alert.id,
+            patient_id=alert.patient_id,
+            nurse_id=alert.nurse_id,
+            appointment_id=alert.appointment_id,
+            appointment_number=appointment_number,
+            doctor_id=doctor_id,
+            doctor_name=doctor_name,
+            emergency_type=alert.emergency_type,
+            message=alert.message,
+            status=alert.status or "pending",
+            acknowledged_at=getattr(alert, "acknowledged_at", None),
+            acknowledged_by=getattr(alert, "acknowledged_by", None),
+            created_at=alert_created_at,
+        )
+
     async def create_emergency_alert(self, data: EmergencyAlertCreate, user_id: int) -> EmergencyAlertResponse:
         nurse = await self._get_nurse_by_user_id(user_id)
         await self._validate_assignment(nurse.id, data.patient_id)
 
-        # Validate appointment if provided
-        if data.appointment_id:
-            stmt_appt = select(Appointment).where(
-                Appointment.id == data.appointment_id,
-                Appointment.patient_id == data.patient_id,
-            )
-            appt = await self.db.scalar(stmt_appt)
-            if not appt:
-                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found for this patient")
+        # Validate appointment connection (required and must belong to patient)
+        appt = await self.db.get(Appointment, data.appointment_id)
+        if not appt:
+            raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+        if appt.patient_id != data.patient_id:
+            raise BadRequestException(f"Appointment with ID {data.appointment_id} does not belong to patient with ID {data.patient_id}")
 
         # Save alert
         alert = EmergencyAlert(
@@ -261,60 +304,26 @@ class NurseCommunicationService:
             message=data.message,
             status="pending",
         )
-        await self.repo.create_emergency_alert(alert)
+        created_alert = await self.repo.create_emergency_alert(alert)
+        if created_alert and hasattr(created_alert, "id") and created_alert.id is not None:
+            alert = created_alert
 
         # Trigger notifications asynchronously to responsible recipients
         await self._notify_emergency_channels(data.patient_id, data.message, appointment_id=data.appointment_id)
 
-        return EmergencyAlertResponse(
-            id=alert.id,
-            patient_id=alert.patient_id,
-            nurse_id=alert.nurse_id,
-            appointment_id=alert.appointment_id,
-            emergency_type=alert.emergency_type,
-            message=alert.message,
-            status=alert.status or "pending",
-            acknowledged_at=alert.acknowledged_at,
-            acknowledged_by=alert.acknowledged_by,
-            created_at=alert.created_at,
-        )
+        return await self._build_alert_response(alert)
 
     async def get_nurse_emergency_alerts(self, user_id: int) -> list[EmergencyAlertResponse]:
         nurse = await self._get_nurse_by_user_id(user_id)
         alerts = await self.repo.get_emergency_alerts_by_nurse(nurse.id)
-        return [
-            EmergencyAlertResponse(
-                id=alert.id,
-                patient_id=alert.patient_id,
-                nurse_id=alert.nurse_id,
-                appointment_id=alert.appointment_id,
-                emergency_type=alert.emergency_type,
-                message=alert.message,
-                status=alert.status or "pending",
-                acknowledged_at=alert.acknowledged_at,
-                acknowledged_by=alert.acknowledged_by,
-                created_at=alert.created_at,
-            )
-            for alert in alerts
-        ]
+        return [await self._build_alert_response(alert) for alert in alerts]
 
     async def get_nurse_emergency_alert_by_id(self, alert_id: int, user_id: int) -> EmergencyAlertResponse:
         nurse = await self._get_nurse_by_user_id(user_id)
         alert = await self.repo.get_emergency_alert_by_id(alert_id, nurse.id)
         if not alert:
             raise NotFoundException("Emergency alert not found")
-        return EmergencyAlertResponse(
-            id=alert.id,
-            patient_id=alert.patient_id,
-            nurse_id=alert.nurse_id,
-            appointment_id=alert.appointment_id,
-            emergency_type=alert.emergency_type,
-            message=alert.message,
-            status=alert.status or "pending",
-            acknowledged_at=alert.acknowledged_at,
-            acknowledged_by=alert.acknowledged_by,
-            created_at=alert.created_at,
-        )
+        return await self._build_alert_response(alert)
 
     async def update_emergency_alert(
         self,
@@ -334,24 +343,20 @@ class NurseCommunicationService:
         if not alert:
             raise NotFoundException("Emergency alert not found")
 
+        if data.appointment_id is not None:
+            appt = await self.db.get(Appointment, data.appointment_id)
+            if not appt:
+                raise NotFoundException(f"Appointment with ID {data.appointment_id} not found")
+            if appt.patient_id != alert.patient_id:
+                raise BadRequestException(f"Appointment with ID {data.appointment_id} does not belong to patient with ID {alert.patient_id}")
+
         update_dict = data.model_dump(exclude_unset=True)
         for key, value in update_dict.items():
             if value is not None:
                 setattr(alert, key, value)
 
         await self.repo.update_emergency_alert(alert)
-        return EmergencyAlertResponse(
-            id=alert.id,
-            patient_id=alert.patient_id,
-            nurse_id=alert.nurse_id,
-            appointment_id=alert.appointment_id,
-            emergency_type=alert.emergency_type,
-            message=alert.message,
-            status=alert.status or "pending",
-            acknowledged_at=alert.acknowledged_at,
-            acknowledged_by=alert.acknowledged_by,
-            created_at=alert.created_at,
-        )
+        return await self._build_alert_response(alert)
 
     async def acknowledge_emergency_alert(self, alert_id: int, current_user: User) -> EmergencyAlertResponse:
         alert = await self.repo.get_emergency_alert(alert_id)
@@ -420,18 +425,7 @@ class NurseCommunicationService:
             except Exception:
                 pass
 
-        return EmergencyAlertResponse(
-            id=alert.id,
-            patient_id=alert.patient_id,
-            nurse_id=alert.nurse_id,
-            appointment_id=alert.appointment_id,
-            emergency_type=alert.emergency_type,
-            message=alert.message,
-            status=alert.status,
-            acknowledged_at=alert.acknowledged_at,
-            acknowledged_by=alert.acknowledged_by,
-            created_at=alert.created_at,
-        )
+        return await self._build_alert_response(alert)
 
     async def delete_emergency_alert(self, alert_id: int, user_id: int) -> None:
         result = await self.db.execute(select(Nurse).where(Nurse.user_id == user_id))

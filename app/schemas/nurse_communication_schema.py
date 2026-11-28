@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Literal
+from pydantic import Field
 
 from app.schemas.common_schema import BaseSchema
 
@@ -23,9 +24,9 @@ class PatientUpdateResponse(BaseSchema):
 
 class EmergencyAlertCreate(BaseSchema):
     patient_id: int
-    appointment_id: int | None = None
-    emergency_type: str
-    message: str
+    appointment_id: int = Field(..., description="Appointment ID (Required, cannot be null)")
+    emergency_type: str = Field(..., min_length=1, max_length=100)
+    message: str = Field(..., min_length=1)
 
 
 class EmergencyAlertUpdate(BaseSchema):
@@ -39,6 +40,9 @@ class EmergencyAlertResponse(BaseSchema):
     patient_id: int
     nurse_id: int
     appointment_id: int | None = None
+    appointment_number: str | None = None
+    doctor_id: int | None = None
+    doctor_name: str | None = None
     emergency_type: str
     message: str
     status: str = "pending"

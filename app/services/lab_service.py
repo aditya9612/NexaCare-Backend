@@ -628,21 +628,6 @@ class LabService:
             raise ConflictException("Sample has already been collected for this test order")
 
         user_id = current_user.id
-        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
-
-        if role_name in ["lab technician", "lab_technician"]:
-            result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = result.scalar_one_or_none()
-
-            if not staff or not staff.department_id:
-                raise BadRequestException("Lab technician department is not assigned")
-
-            if order.department_id != staff.department_id:
-                raise BadRequestException(
-                    "You can collect samples only for test orders of your department"
-                )
         sample = Sample(
             test_order_id=data.test_order_id,
             sample_code=generate_sample_code(),
@@ -652,6 +637,7 @@ class LabService:
             collected_by=user_id,
             status=SampleStatus.COLLECTED,
             volume=data.volume,
+            vial_condition=data.vial_condition,
             notes=data.notes,
         )
         sample = await self.sample_repo.create(sample)
@@ -690,11 +676,7 @@ class LabService:
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
-            result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = result.scalar_one_or_none()
-            department_id = staff.department_id if staff else None
+            pass  # Lab technicians can view all samples in their hospital
 
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -854,22 +836,6 @@ class LabService:
         if order.status in [LabOrderStatus.COMPLETED, LabOrderStatus.CANCELLED]:
             raise BadRequestException("Cannot enter result for a completed or cancelled test order")
 
-        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
-
-        if role_name in ["lab technician", "lab_technician"]:
-            result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = result.scalar_one_or_none()
-
-            if not staff or not staff.department_id:
-                raise BadRequestException("Lab technician department is not assigned")
-
-            if order.department_id != staff.department_id:
-                raise BadRequestException(
-                    "You can enter test results only for test orders of your department"
-                )
-
         existing_result = await self.result_repo.get_by_test_order(sample.test_order_id, hospital_id=hospital_id)
         if existing_result:
             raise BadRequestException("Test result already exists for this test order.")
@@ -919,13 +885,7 @@ class LabService:
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
-            result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = result.scalar_one_or_none()
-            if not staff or not staff.department_id:
-                raise BadRequestException("Lab technician department is not assigned")
-            department_id = staff.department_id
+            pass  # Lab technicians can view all results in their hospital
 
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -1003,15 +963,7 @@ class LabService:
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
-            result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = result.scalar_one_or_none()
-
-            if not staff or not staff.department_id:
-                raise BadRequestException("Lab technician department is not assigned")
-
-            department_id = staff.department_id
+            pass  # Lab technicians can view all critical alerts in their hospital
 
         from app.core.dependencies import resolve_tenant_id
         hospital_id = resolve_tenant_id(current_user)
@@ -1195,22 +1147,6 @@ class LabService:
                 f"Lab report already exists for this test order (Report #{existing_report.report_number})"
             )
 
-        role_name = current_user.role.name.lower() if current_user and current_user.role else ""
-
-        if role_name in ["lab technician", "lab_technician"]:
-            staff_result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = staff_result.scalar_one_or_none()
-
-            if not staff or not staff.department_id:
-                raise BadRequestException("Lab technician department is not assigned")
-
-            if order.department_id != staff.department_id:
-                raise BadRequestException(
-                    "You can create lab reports only for test orders of your department"
-                )
-
         remarks = getattr(data, "remarks", None) or data.summary or (result.remark if result else None)
         summary = data.summary or (result.remark if result else None)
 
@@ -1251,16 +1187,7 @@ class LabService:
         role_name = current_user.role.name.lower() if current_user and current_user.role else ""
 
         if role_name in ["lab technician", "lab_technician"]:
-            staff_result = await self.db.execute(
-                select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-            )
-            staff = staff_result.scalar_one_or_none()
-
-            if not staff or not staff.department_id:
-                raise BadRequestException("Lab technician department is not assigned")
-
-            department_id = staff.department_id
-            generated_by = current_user.id
+            pass  # Lab technicians can view all lab reports in the hospital
         elif role_name == "doctor":
             pass
         elif role_name == "pharmacist" or role_name in [r.lower() for r in UserRole.ADMIN_ROLES]:
@@ -1383,33 +1310,10 @@ class LabService:
         if role_name not in ["lab technician", "lab_technician"]:
             return
 
-        staff_result = await self.db.execute(
-            select(Staff).where(func.lower(Staff.email) == func.lower(current_user.email))
-        )
-        staff = staff_result.scalar_one_or_none()
-
-        if not staff or not staff.department_id:
-            raise BadRequestException(
-                "Lab technician department is not assigned"
-            )
-
         order = await self.order_repo.get_by_id(report.test_order_id, hospital_id=hospital_id)
 
         if not order:
             raise NotFoundException("Test order not found")
-
-        generated_by_him = (
-            getattr(report, "generated_by", None) == current_user.id
-        )
-
-        same_department = (
-            order.department_id == staff.department_id
-        )
-
-        if not generated_by_him and not same_department:
-            raise BadRequestException(
-                f"You can {action} only reports generated by you or reports of your department"
-            )
 
     async def verify_by_technician(
         self,

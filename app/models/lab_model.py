@@ -75,6 +75,7 @@ class Sample(Base, TimestampMixin):
     collected_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
     volume: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    vial_condition: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     test_order: Mapped["TestOrder"] = relationship(back_populates="samples")

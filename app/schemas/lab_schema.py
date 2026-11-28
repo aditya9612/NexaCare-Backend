@@ -109,6 +109,7 @@ class SampleCreate(BaseSchema):
     collection_date: datetime | None = None
     status: str = "collected"
     volume: str | None = None
+    vial_condition: str | None = None
     notes: str | None = None
 
     @field_validator("status")
@@ -134,6 +135,7 @@ class SampleUpdate(BaseSchema):
     collection_date: datetime | None = None
     status: str | None = None
     volume: str | None = None
+    vial_condition: str | None = None
     notes: str | None = None
 
     @field_validator("status")
@@ -163,6 +165,7 @@ class SampleResponse(BaseSchema):
     collected_by: int | None
     status: str
     volume: str | None
+    vial_condition: str | None = None
     notes: str | None
     created_at: datetime
 

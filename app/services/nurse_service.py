@@ -1712,11 +1712,41 @@ class NurseService:
         data: NurseTaskStatusUpdate,
         user_id: int,
     ) -> NurseTaskResponse:
+        from app.models.patient_model import Patient
+
         await self._get_nurse_or_raise(nurse_id)
         task = await self.task_repo.get_by_id(task_id, nurse_id)
         if not task:
             raise NotFoundException("Task not found")
-        task.status = data.status
+
+        # If patient_id is provided and changed, validate allocation
+        if data.patient_id is not None and data.patient_id != task.patient_id:
+            patient = await self.db.get(Patient, data.patient_id)
+            if not patient or patient.is_deleted:
+                raise NotFoundException("Patient not found")
+            assignment = await self.assignment_repo.get_active_assignment(nurse_id, data.patient_id)
+            if not assignment:
+                raise BadRequestException("Task can only be assigned to allocated patients only")
+            task.patient_id = data.patient_id
+
+        if data.title is not None:
+            title = data.title.strip()
+            if not title:
+                raise BadRequestException("Task title cannot be empty")
+            task.title = title
+
+        if data.description is not None:
+            task.description = data.description
+
+        if data.due_date is not None:
+            task.due_date = data.due_date
+
+        if data.priority is not None:
+            task.priority = data.priority
+
+        if data.status is not None:
+            task.status = data.status
+
         task = await self.task_repo.update(task)
         await self.audit_repo.create(
             "update", "nurses", user_id=user_id, resource_id=str(task.id)

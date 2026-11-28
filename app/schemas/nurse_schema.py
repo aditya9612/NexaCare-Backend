@@ -649,10 +649,42 @@ class NurseTaskListWithCountsResponse(PaginatedResponse[NurseTaskResponse]):
 
 
 
+COMMONLY_USED_NURSE_TASKS = [
+    "Check Patient Vitals",
+    "Administer Medication",
+    "Monitor Patient Condition",
+    "Wound Dressing",
+    "Monitor IV Fluid",
+    "Other (Create Custom Task)",
+    "Lab Sample Collection",
+]
+
+
 class NurseTaskStatusUpdate(BaseSchema):
-    status: Literal["Pending", "Completed", "Delayed"] = Field(
-        ..., description="Task status (Pending, Completed, or Delayed)"
+    title: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description=(
+            "Task title. Commonly used options: 'Check Patient Vitals', 'Administer Medication', "
+            "'Monitor Patient Condition', 'Wound Dressing', 'Monitor IV Fluid', "
+            "'Lab Sample Collection', or custom title when 'Other (Create Custom Task)' is selected."
+        ),
+        json_schema_extra={
+            "example": "Check Patient Vitals",
+            "options": COMMONLY_USED_NURSE_TASKS,
+        },
     )
+    description: str | None = Field(None, description="Detailed task description or special instructions")
+    patient_id: int | None = Field(None, description="Patient ID (must be allocated to this nurse)")
+    due_date: date | None = Field(None, description="Due date for completing the task")
+    priority: Literal["Low", "Medium", "High"] | None = Field("Medium", description="Task priority")
+    status: Literal["Pending", "Completed", "Delayed"] | None = Field(
+        None, description="Task status (Pending, Completed, or Delayed)"
+    )
+
+
+NurseTaskUpdate = NurseTaskStatusUpdate
 
 
 class NursePatientLabTestResponse(BaseSchema):
@@ -827,17 +859,6 @@ class NurseDashboardResponse(BaseSchema):
     assigned_patients_list: list[NurseAssignedPatientStatusResponse] = []
     shift_details: list[NurseShiftResponse] = []
     alerts: list[CriticalAlertResponse] = []
-
-
-COMMONLY_USED_NURSE_TASKS = [
-    "Check Patient Vitals",
-    "Administer Medication",
-    "Monitor Patient Condition",
-    "Wound Dressing",
-    "Monitor IV Fluid",
-    "Other (Create Custom Task)",
-    "Lab Sample Collection",
-]
 
 
 class NurseTaskCreate(BaseSchema):
